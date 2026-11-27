@@ -6,21 +6,26 @@ description: Define the production boundary and start a Narwhal primary and stan
 
 ## Production boundary
 
-A production deployment divides the work between Narwhal and the site's components:
+On SSH hosts, `narwhal deploy` starts and supervises the fleet's processes, and the site keeps the hosts and everything around the fleet:
 
-| Component | Responsibility |
-| --- | --- |
-| Site automation | Provisions GPU hosts and engine processes |
-| Public ingress | TLS, client authentication, rate limits, model routing, streaming proxy settings |
-| Load balancer | Polls `/ready`, routes to the router that returns HTTP 200, and retries requests through a takeover |
-| Narwhal | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
-| Engine supervisor | Engine and attestation sidecar starts and stops, resource limits, restart policy, log retention |
-| Lease store | One lease both routers reach: a file on shared storage on SSH hosts, or a Kubernetes Lease |
-| Monitoring | Metric scraping, journal retention, and paging per site policy |
+| Component | Owner | Responsibility |
+| --- | --- | --- |
+| Engines | Narwhal | `narwhal deploy run` starts each engine container from a checked launch plan and checks it on every run. The container has no restart policy, so an engine that stops stays down until the next `run` restarts it, as [Engine restart and process replacement](03-Restart-Engines.md) describes |
+| Attestation sidecars and routers | Narwhal | Transient systemd user units that systemd restarts on failure. `run` and `status` check each restarted unit before they record its new identity |
+| Load balancer | Narwhal | HAProxy from the shipped configuration, in a container that Docker restarts on failure. It polls `/ready`, routes to the router that returns HTTP 200, and retries requests through a takeover |
+| Prometheus and Grafana | Narwhal | The monitoring stack on the primary router's host, in containers that Docker restarts |
+| Router | Narwhal | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
+| Hosts | Site | Provisioning, the operating system, drivers, the container runtime, Docker, systemd lingering for the SSH user, SSH access and host keys, firewalls, clocks, and the staged checkpoint and engine image |
+| Lease store | Site | One shared mount both router hosts reach at the lease path, which `lease-check` and `router-start` check |
+| Recovery | Site | Running `narwhal deploy run` again after a host reboot, a stopped engine or a new release, as [After a host reboot](../Deploy.md#after-a-host-reboot) and [Deploying a new release](../Deploy.md#deploying-a-new-release) describe |
+| Public ingress | Site | TLS, client authentication, rate limits, model routing, streaming proxy settings |
+| Alerting and logs | Site | The Alertmanager and its paging, the dead man's switch for `NarwhalWatchdog`, and retention of the unit logs, container logs and request journals, which Narwhal does not rotate |
+
+On Kubernetes, the lease store is a Kubernetes `Lease`, and the [Helm chart](../deploy/Kubernetes.md) runs the engines, sidecars, routers and HAProxy.
 
 ## Keeping one deployment set
 
-Install on both router hosts, with the same release identifier:
+`narwhal deploy run` installs one release on every host, and its `fleet-limits` stage copies one fleet, profile store and calibration to both router hosts. A pair you start yourself needs the same on both router hosts, with the same release identifier:
 
 - the Narwhal release
 - the fleet configuration
@@ -80,7 +85,7 @@ A router that does not hold the lease answers the fleet-state reads, such as `GE
 
 ## Starting a router pair
 
-Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set.
+`narwhal deploy run` starts the pair in its [`router-start` stage](../deploy/07-Serve-and-Measure.md#starting-the-router-pair), with the options below. To run a pair under your own supervisor instead, run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set first.
 
 The shared lease path must support POSIX `flock`, coherent reads, and atomic rename. The host clock offset must stay below `--lease-safety-margin`. `--lease-ttl` must exceed the sum of `--lease-renew-interval` and `--lease-safety-margin`.
 

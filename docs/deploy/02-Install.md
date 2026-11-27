@@ -4,7 +4,7 @@ description: Package a checked Narwhal wheel with each host's role files and ins
 
 # Install Narwhal on the hosts
 
-Run these commands from the management checkout after discovery. `narwhal deploy package` writes the package that `narwhal deploy install` copies to each host.
+The second gate runs two stages. `package` checks the release wheel and its dependency lock against their SHA-256 values and writes the package: the wheel, the lock, each host's role files and a private manifest. `install` copies the package to every host and installs it into a virtual environment in the host's deployment directory. Narwhal installs nothing else on a host: Python, Docker, systemd and the GPU tools are the site's, as [Getting started](Getting-Started.md#preparing-ssh-hosts) lists.
 
 ## Building the deployment package
 
@@ -15,30 +15,22 @@ python -m pip download --no-deps --only-binary :all: --dest dist 'narwhal-infere
 sha256sum dist/narwhal_inference-<version>-py3-none-any.whl
 ```
 
-`package` refuses a wheel whose version is not `<major>.<minor>.<patch>`. Keep the wheel's SHA-256 in the private record.
+`package` refuses a wheel whose version is not `<major>.<minor>.<patch>`. Compile the hash-pinned lock of the wheel's dependencies, as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes, and keep both SHA-256 values in the private record. Then set the four inputs:
 
-Compile the hash-pinned lock of the wheel's dependencies, as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes, and keep its SHA-256 with the wheel's.
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_WHEEL` | Path of the wheel, such as `dist/narwhal_inference-<version>-py3-none-any.whl` |
+| `NARWHAL_WHEEL_SHA256` | The wheel's SHA-256 |
+| `NARWHAL_REQUIREMENTS` | Path of the dependency lock |
+| `NARWHAL_REQUIREMENTS_SHA256` | The lock's SHA-256 |
 
-In the management checkout:
+These four are the run's `revision` input. A new release changes them, and the next `run` repeats `package` and every stage after it, as [Upgrade and rollback](../operate/04-Upgrade-and-Validate.md) describes. `package` runs once on the workstation after `discover`, from the configuration discovery wrote, and writes the package to `stages/package/attempt-<n>/package/`. To run it alone, with `.env` and `config/deployment.env` loaded:
 
-1. Load `.env` and `config/deployment.env` from deployment discovery.
-2. Set `NARWHAL_WHEEL` to the path of the wheel, such as `dist/narwhal_inference-<version>-py3-none-any.whl`.
-3. Set `NARWHAL_WHEEL_SHA256` to the wheel's SHA-256 from the private record.
-4. Set `NARWHAL_REQUIREMENTS` to the dependency lock and `NARWHAL_REQUIREMENTS_SHA256` to its SHA-256.
-5. Set management credentials in the workstation environment.
-6. Build the package into a new `--out` directory:
-
-    ```bash
-    narwhal deploy package --out runs/deployment-env/first-deploy
-    ```
-
-`package` refuses a wheel or lock whose SHA-256 differs from its input. It also refuses a fleet whose `hardware.accelerator`, `hardware.accelerators_per_engine` or `hardware.tensor_parallel` differs from an engine's launch record `accelerator`, number of `gpu_ids` or `tensor_parallel_size`, naming the role and the field. [Inspecting every engine host](03-Validate-Engines.md#inspecting-every-engine-host) then checks each launch record against its host's GPUs. On success it prints:
-
-```text
-Packaged <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready
+```bash
+narwhal deploy package --out runs/deployment-env/first-deploy
 ```
 
-Keep the `--out` directory until the deployment finishes.
+`package` refuses a wheel or lock whose SHA-256 differs from its input. It also refuses a fleet whose `hardware.accelerator`, `hardware.accelerators_per_engine` or `hardware.tensor_parallel` differs from an engine's launch record `accelerator`, number of `gpu_ids` or `tensor_parallel_size`, naming the role and the field. [Inspecting every engine host](03-Validate-Engines.md#inspecting-every-engine-host) then checks each launch record against its host's GPUs. Alone, it prints `Packaged <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready` on success.
 
 The package holds these files at mode 0600:
 
@@ -72,22 +64,9 @@ Engine hosts of a backend that captures its cache layout or measures its handoff
 
 `package` takes the snapshots from the wheel, so engine hosts run the helpers of the release they install. The snapshots run with the engine host's `python3` and the standard library only. `narwhal-engine prepare` and `narwhal deploy fabric` check a snapshot against its SHA-256 before they use it.
 
-## Installing engine 1 and the remaining hosts
+## Installing Narwhal on each host
 
-Each host needs Python 3.11 or later with `venv`, coreutils, and access to a Python package index for the locked dependencies.
-
-1. Install the engine 1 host:
-
-    ```bash
-    narwhal deploy install --run runs/deployment-env/first-deploy --role engine-1
-    ```
-
-2. Confirm that the installer prints `<host-id>: installation ready`.
-3. Install the remaining hosts:
-
-    ```bash
-    narwhal deploy install --run runs/deployment-env/first-deploy
-    ```
+`install` runs once for each host of the inventory after `package`. Each host needs Python 3.11 or later with `venv`, coreutils, and access to a Python package index for the locked dependencies.
 
 On each host, `install` copies the package into `~/Narwhal-deploy/<id>/package/`, checking each file's SHA-256 after the transfer. It then checks the SHA-256 of the wheel and the lock again, creates `.venv` in the deployment directory `~/Narwhal-deploy/<id>/`, and installs them into it:
 
@@ -97,41 +76,44 @@ On each host, `install` copies the package into `~/Narwhal-deploy/<id>/package/`
 .venv/bin/python -m pip check
 ```
 
-It checks that the installed `narwhal-inference` version matches the wheel, and copies each role file to its working path in the deployment directory.
+It checks that the installed `narwhal-inference` version matches the wheel, and copies each role file to its working path in the deployment directory. On a host with router and engine roles, it installs every role environment together. Each host's log is in `stages/install/<host-id>/attempt-<n>/logs/`.
 
-`install` reuses a finished installation or a matching transferred file. It stops at a host with a transferred file that differs from the manifest, a working file that differs from the package, or an installation of another wheel. On a host with router and engine roles, it installs every role environment together.
+`install` reuses a finished installation or a matching transferred file, and a run whose inputs did not change skips the stage, so it neither repackages nor reinstalls. It stops at a host with a transferred file that differs from the manifest, a working file that differs from the package, or an installation of another wheel.
+
+To run it alone, for every host or for the hosts that `--host` or `--role` select:
+
+```bash
+narwhal deploy install --run runs/deployment-env/first-deploy
+narwhal deploy install --run runs/deployment-env/first-deploy --role engine-1
+```
+
+Each host prints `<host-id>: installation ready`.
 
 ## Recovering a failed installation
 
 If transfer validation fails, compare the packaged hashes with the existing remote file before modifying it.
 
-If the installed version differs from the wheel, check that `NARWHAL_WHEEL` named the intended release, then build a new package.
+If the installed version differs from the wheel, check that `NARWHAL_WHEEL` named the intended release.
 
-If `pip` cannot find a locked file for the host's platform or Python version, or `pip check` reports a missing dependency, compile the lock again as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes and build a new package.
+If `pip` cannot find a locked file for the host's platform or Python version, or `pip check` reports a missing dependency, compile the lock again as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes and set its new SHA-256. The next `run` packages again.
 
-If a dependency installation stops early, rerun the same `install --run` until the installed `narwhal-check --help` responds.
+If a dependency installation stops early, run `narwhal deploy run` again. `install` resumes on that host.
 
-An installer that was killed can leave `.install-lock` in the deployment directory. `install` then stops with `<path>/.install-lock exists, taken by process <pid> on <host> at <time>`. Check that the process has exited, then remove the directory with `rm -r` and rerun `install`.
+An installer that was killed can leave `.install-lock` in the deployment directory. `install` then stops with `<path>/.install-lock exists, taken by process <pid> on <host> at <time>`. Check that the process has exited, then remove the directory with `rm -r` and run again.
 
 ## Opening installed role shells
 
-Open the router shell:
+`narwhal deploy shell` opens a login shell on a role's host in the deployment directory, with the role environment loaded and `.venv` active. The commands that run a stage alone run there. For a host that `narwhal deploy run` installed, pass the inventory and the package from the run directory:
 
 ```bash
-narwhal deploy shell --run runs/deployment-env/first-deploy --role router
+narwhal deploy shell --role engine-1 \
+  --hosts runs/deploy/first-deploy/stages/discover/attempt-1/config/hosts.local.json \
+  --run runs/deploy/first-deploy/stages/package/attempt-1/package
 ```
 
-Open the engine 1 shell:
+Use the attempt numbers of the last passed `discover` and `package`, which `narwhal deploy status` prints. For a package built alone, pass its directory to `--run` and leave out `--hosts`. The router shell takes `--role router`.
 
-```bash
-narwhal deploy shell --run runs/deployment-env/first-deploy --role engine-1
-```
-
-Each shell opens with:
-
-- the deployment directory `~/Narwhal-deploy/<id>/` as working directory
-- the role environment loaded
-- `.venv` active
+Each stage of the run works in `runs/deploy/<run-id>/stages/<stage>/<instance>/attempt-<n>/` under the deployment directory, so an engine's launch directory is `runs/deploy/<run-id>/stages/engine-prepare/engine-<n>/attempt-<k>/launch`. The run ID is in the run record.
 
 The wheel also holds the monitoring stack and the [fleet control service](../operate/06-Controlling-the-Fleet.md), so the router shell runs them from `.venv` with no repository checkout.
 

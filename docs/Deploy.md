@@ -1,45 +1,21 @@
 ---
-description: Deploy Narwhal on a multi-node vLLM, SGLang or TensorRT-LLM fleet, from host discovery to live serving.
+description: Deploy a Narwhal fleet of vLLM, SGLang or TensorRT-LLM engines on SSH hosts with narwhal deploy, from host discovery to a serving router or router pair.
 ---
 
 # Deploying a fleet
 
-## Requirements
+`narwhal deploy run` takes engine hosts that hold a staged checkpoint and engine image to a serving fleet: the engines checked, started and attested, the fabric qualified, the engines profiled and calibrated, preflight passed, and one router, or a router pair behind HAProxy, with the monitoring stack running. It runs from a management workstation, needs no shell on a host and asks no questions. [Getting started](deploy/Getting-Started.md) takes a first fleet through it on one host or several.
 
-Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector. TensorRT-LLM transfers KV through its C++ cache transceiver, over UCX or NIXL.
-
-| Host | Responsibilities | Required software and inputs |
-| --- | --- | --- |
-| Management workstation | Generate private configuration, inspect hosts, package and install the Narwhal wheel, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH 8.5 or later, `uv`, and your site's access tools. The private `.env`, the release wheel, its dependency lock and their SHA-256 values, the known-hosts file, engine image, model paths and tree digest, fabric interface, run directory, ports, and credentials. |
-| Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv` and access to a Python package index, coreutils, Git, Make, curl, Docker Engine, and Compose. The verified package, engine and attestation URLs, API credential, model settings, and SLOs. |
-| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv` and access to a Python package index, coreutils, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
-
-### Concurrency
-
-`narwhal-engine start-shared` starts engines that share a GPU one at a time and waits for each to answer before it starts the next. Measure each directed fabric edge while the fleet is idle.
-
-Per-engine and per-host rules:
-
-- Compare each engine allocation with the GPU inventory collected on that engine host.
-- Install once per physical host.
-- Capture each vLLM and TensorRT-LLM engine's live cache layout.
-
-### Deployment record
-
-Create a private deployment record before the first command. For every stage, retain the host or stable host alias, the wheel's SHA-256, starting state, executed commands, exit status, and generated artifacts.
-
-On failure, record the state before changing it, retain the failed evidence, and remove only files and processes from that attempt. Replace private addresses, paths, and credentials with stable aliases before exporting evidence.
-
-## Running the deployment
-
-`narwhal deploy run` runs every stage of the [stage table](#rerunning-after-a-change) from host access to a ready router pair behind HAProxy with the monitoring stack running, and keeps each stage's evidence in its run directory. With `.env` loaded, check the inputs and hosts first:
+With the inputs in the environment, from the directory that holds the run directories:
 
 ```bash
 narwhal deploy plan --run runs/deploy/first-deploy
 narwhal deploy run --run runs/deploy/first-deploy
+narwhal deploy status --run runs/deploy/first-deploy
+narwhal deploy down --run runs/deploy/first-deploy
 ```
 
-A failed stage prints its recovery section and evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose result still holds. `narwhal deploy status` shows each stage and checks the processes the run started, and `narwhal deploy down` stops them. [Running the stage graph](cli/Deploy.md#running-the-stage-graph) describes what each stage runs and the inputs it reads.
+`plan` checks every input before it touches a host, then checks each host's systemd user manager and lingering, and Docker Compose on the primary router's host. It prints each stage with whether `run` would run it and why. `run` runs every stage of the [stage table](#rerunning-after-a-change) in order, records each attempt in the run directory, and stops at the first stage that fails, printing its cause, its recovery section and its evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose inputs, outputs and live processes still verify. `status` reports each stage and checks every process the run started, and `down` stops only those processes. [`narwhal deploy`](cli/Deploy.md) lists every option and exit code.
 
 With `--trial`, `run` continues past the monitoring stack with the [capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) of the workload and thresholds in the trial file:
 
@@ -47,11 +23,27 @@ With `--trial`, `run` continues past the monitoring stack with the [capacity tri
 narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.json
 ```
 
-On a Kubernetes cluster, the same commands take `--target kubernetes` and run each stage through the Narwhal Helm chart; [Deploying on Kubernetes](deploy/Kubernetes.md) covers its inputs and stages.
+With `--target kubernetes`, the same commands run the stages through the Narwhal Helm chart, as [Deploying on Kubernetes](deploy/Kubernetes.md) describes.
+
+## Requirements
+
+Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector. TensorRT-LLM transfers KV through its C++ cache transceiver, over UCX or NIXL. `narwhal deploy` runs container engines.
+
+| Host | What `narwhal deploy` runs there | What the host needs |
+| --- | --- | --- |
+| Management workstation | `narwhal deploy` itself, the run directory, and the capacity trial's load client | Python 3.11 or later with Narwhal installed, OpenSSH 8.5 or later, and `uv` to compile the dependency lock. The private `.env`, the known-hosts file, the release wheel and its lock |
+| Router host | The router as a systemd user unit. On the primary router's host, Prometheus and Grafana, and HAProxy unless the load balancer has a host of its own | Python 3.11 or later with `venv` and access to a Python package index, coreutils, systemd 240 or later with a user manager and lingering for the SSH user, and Docker Engine with Compose v2 on the primary router's host. For a router pair, Docker on the load balancer's host and the lease directory mounted on both router hosts |
+| Engine host | The engine containers, and their attestation sidecars as systemd user units | Python 3.11 or later with `venv` and access to a Python package index, coreutils, systemd 240 or later with a user manager and lingering for the SSH user, Docker usable by the SSH user, the accelerator driver and container runtime, `ip`, `rocminfo` or `nvidia-smi`, `iperf3` or `perftest`, `util-linux`, and the transfer devices. The pinned engine image and the staged checkpoint |
+
+One host can hold every role. Preparing a host needs root, which `narwhal deploy` never uses; [Preparing SSH hosts](deploy/Getting-Started.md#preparing-ssh-hosts) lists what to prepare.
+
+### Deployment record
+
+The run directory is the deployment record. `run.json` records each stage instance's latest attempt with its inputs as digests, the SHA-256 of every file it wrote and the identity of every process it started. Earlier attempts' directories stay under `stages/`, and each attempt's directory holds its evidence and the log of every command it ran on a host. Archive the run directory with the private `.env` and the known-hosts file. Replace private addresses, paths, and credentials with stable aliases before exporting evidence.
 
 ## Deployment sequence
 
-Each gate page below runs its stages by hand. Record each gate's result before the next gate.
+The stages fall into seven gates. Each gate page lists its stages with what they run, their inputs, their evidence and their recovery, and the command that runs each stage alone.
 
 <div class="grid cards" markdown>
 
@@ -59,53 +51,57 @@ Each gate page below runs its stages by hand. Record each gate's result before t
 
     ---
 
-    Freeze inputs and discover the deployment.
+    `access` and `discover`: log in to every host and inspect the engine hosts.
 
 -   [Install Narwhal on the hosts](deploy/02-Install.md)
 
     ---
 
-    Package and install the Narwhal wheel.
+    `package` and `install`: check the release wheel and install it on every host.
 
 -   [Validate and start engines](deploy/03-Validate-Engines.md)
 
     ---
 
-    Validate and start every engine.
+    Inspect each engine host, then prepare, check, start and probe each engine.
 
 -   [Qualify the transfer fabric](deploy/04-Qualify-Fabric.md)
 
     ---
 
-    Prove the transfer fabric against the serving cache.
+    Measure every directed edge between engine hosts against its KV budget.
 
 -   [Attest live engines](deploy/05-Attest.md)
 
     ---
 
-    Attest the live engine processes.
+    Capture, serve and verify each engine's attestation, and finalize the fleet contract.
 
 -   [Profile engines and run preflight](deploy/06-Profile-and-Preflight.md)
 
     ---
 
-    Profile once and run the live KV contract.
+    Profile, calibrate the first-token deadline, set the SLOs and run preflight.
 
 -   [Serve and measure](deploy/07-Serve-and-Measure.md)
 
     ---
 
-    Start the service and validate capacity through the private path.
+    Start the routers, HAProxy and monitoring, and run the capacity trial.
 
 </div>
 
-After the capacity trial passes, run [advisory mode](configuration/02-Serving-and-Role-Control.md#advisory-rollout) on representative traffic before you allow production role movement. Then archive the fleet configuration, the private inputs and the launch evidence in the private deployment record.
+After the capacity trial passes, run [advisory mode](configuration/02-Serving-and-Role-Control.md#advisory-rollout) on representative traffic before you allow production role movement.
+
+### Running one stage alone
+
+`run --until <stage>` stops after that stage. Stages whose result holds are skipped, so on a run that passed up to there, it runs only the stages that changed. Each gate page also gives the command a stage runs, which you can run alone, usually in the [role shell](deploy/02-Install.md#opening-installed-role-shells) of the stage's host. A command run alone writes where you point it and changes nothing in the run record.
 
 ### Rerunning after a change
 
 Each stage in the first table runs one section of a gate page. The stage runner keeps a [run record](telemetry/06-Deployment-Runs.md) of every stage: its input digests and the SHA-256 of each file it wrote. On the next run it skips a stage whose last attempt passed, whose digests still match and whose files are unchanged. Engine, sidecar and router processes and fabric routes are checked live first, and a stage whose process is gone runs again.
 
-A change reruns the stages its row lists and no others. A change that touches several rows reruns all of them: an engine restart that changes the engine's attested binding digest reruns the engine process row and the binding digest row. A changed output file reruns its stage and every stage after it. When you repeat gates by hand, repeat the sections of the stages a change lists.
+A change reruns the stages its row lists and no others. A change that touches several rows reruns all of them: an engine restart that changes the engine's attested binding digest reruns the engine process row and the binding digest row. A changed output file reruns its stage and every stage after it.
 
 An engine whose container stopped or restarted also spends its launch directory, which starts one engine. `engine-prepare` writes a fresh directory, then `engine-check` and `engine-start` run from it, and the engine process row follows. A fresh directory of an unchanged launch record attests the same planned launch, so the binding digest row adds its stages only when the live captures differ.
 
@@ -116,7 +112,7 @@ An engine whose container stopped or restarted also spends its launch directory,
 | `access` | Once for each host in the inventory |  | [Running discovery and access checks](deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `discover` | Once per run, on the management workstation | `access` | [Running discovery and access checks](deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `package` | Once per run, on the management workstation | `discover` | [Building the deployment package](deploy/02-Install.md#building-the-deployment-package) |
-| `install` | Once for each host in the inventory | `package` | [Installing engine 1 and the remaining hosts](deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
+| `install` | Once for each host in the inventory | `package` | [Installing Narwhal on each host](deploy/02-Install.md#installing-narwhal-on-each-host) |
 | `engine-inspect` | Once for each engine role, on its engine host | `install` | [Inspecting every engine host](deploy/03-Validate-Engines.md#inspecting-every-engine-host) |
 | `engine-prepare` | Once for each engine role, on its engine host | `engine-inspect` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
 | `engine-check` | Once for each engine role, on its engine host | `engine-prepare` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
@@ -171,32 +167,44 @@ An engine whose container stopped or restarted also spends its launch directory,
 
 <!-- End of the generated stage tables. -->
 
-## Evidence and recovery index
+## Evidence and recovery
 
-Record these inputs and artifacts in the private deployment record:
+Each attempt writes its evidence to `stages/<stage>/<instance>/attempt-<n>/` in the run directory, or `stages/<stage>/attempt-<n>/` for a stage that runs once per run, with the log of every command it ran on each host in `logs/<host-id>.log`. On a host, the attempt works in `runs/deploy/<run-id>/` of the same path under the deployment directory, and the files it names come back to the workstation, a failed attempt's included. `narwhal deploy status` prints each stage's evidence directory, and each gate page lists the files.
 
-| Stage | Inputs | Evidence to retain |
-| --- | --- | --- |
-| Discovery and access | `.env`, installed image and model, the checkpoint tree digest, GPU inspection utilities, launch policy, SSH route and key, the known-hosts file | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
-| Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
-| Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
-| Fabric | Idle engines, fabric routes, test port, transport and RDMA GID entries, representative cache layouts or handoffs, workload budget | The `narwhal deploy fabric` output: `fabric.json`, each group's `budget.json` and its sources, and the route, link, sample and evidence files of every directed sample |
-| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | In each `ENGINE_RUN` directory, the `attestation/` attempt directories [`capture`](deploy/05-Attest.md#capturing-the-attestation) writes, `published-attestation.json` and the `attestation-check-*` directory from `verify`; `runs/deployment/fleet.json`, `runs/deployment/fleet.before-attestation-<id>.json` |
-| Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
-| Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |
-| Router | Bind address, model, engine count, and role split | Router env, fleet config, endpoint captures |
-| Capacity trial | Workstation load client, the monitoring stack, SSH forwards, prefix caching off, the trial file's workload and thresholds | `stages/trial/attempt-<n>/` in the run directory |
-
-Recover a failed stage with the steps on its page:
+A failed stage prints the link to its section, whose recovery applies:
 
 - Discovery and access: [Access failure handling](deploy/01-Discover.md#access-failure-handling).
 - Package and install: [Recovering a failed installation](deploy/02-Install.md#recovering-a-failed-installation).
+- Engines: the section of the failed stage in [Validate and start engines](deploy/03-Validate-Engines.md).
 - Fabric: [Troubleshooting an edge below its budget](deploy/04-Qualify-Fabric.md#troubleshooting-an-edge-below-its-budget).
-- Attestation: when `capture` fails, fix the cause it names and run `capture` again, as in [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation). When `verify` or `finalize-fleet` fails, fix the failing engine, restart its sidecar against the checked process, and run `finalize-fleet` again.
+- Attestation: when `capture` fails, fix the cause it names, as in [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation). When `verify` or `finalize-fleet` fails, fix the failing engine. Then run again.
 - Profiling: [Reusing or repeating profiles](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles).
 - Preflight: follow the reported engine, transfer leg or budget into [Troubleshooting a fleet](Troubleshoot.md).
-- Router: [Troubleshooting the tunnel](deploy/07-Serve-and-Measure.md#troubleshooting-the-tunnel).
+- Routers: [Checking the shared lease path](deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) and [Starting the router pair](deploy/07-Serve-and-Measure.md#starting-the-router-pair).
 - Capacity trial: [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial).
+
+## After a host reboot
+
+`narwhal deploy` does not bring a fleet back by itself after a host reboots. The sidecar and router units are transient, so they do not survive the reboot, and the engine containers have no restart policy, so they stay stopped. HAProxy runs with Docker's `on-failure` policy and may stay stopped too. The monitoring containers run with the `always` policy, so Docker starts them again when it starts. The lease directory must come back from the host's own mount configuration, such as `/etc/fstab`.
+
+While an engine host is down, `NarwhalHostDown` fires, and while the standby router's host is down, `NarwhalStandbyRouterDown`, as [Monitor](operate/02-Monitor.md) lists. Prometheus runs on the primary router's host, so no rule fires while that host is down: route `NarwhalWatchdog` to a dead man's switch outside the fleet. Once the hosts are back, run `narwhal deploy run` again. It finds each recorded process gone, prepares and starts the engines from fresh launch directories, captures and verifies their attestations, starts the sidecars, finalizes the fleet, runs preflight and starts the routers. It profiles and calibrates again only when an engine's attested binding digest changed. `router-start` refuses a host whose lease directory came back without the shared mount. [Needs verification: task 13 runs this recovery on the live fleet]
+
+## Deploying a new release
+
+`narwhal deploy` has no rolling upgrade. A new release is a new `NARWHAL_WHEEL` and `NARWHAL_WHEEL_SHA256`, and its lock, and the next `run` repeats `package` and every stage after it: it installs the new wheel on every host, then inspects, prepares, starts and attests every engine again, profiles, calibrates and restarts the routers. `engine-inspect` stops the running engines and sidecars first, so the fleet serves nothing until `router-start` passes. [Upgrade and rollback](operate/04-Upgrade-and-Validate.md) covers the router pair.
+
+## Where each process logs
+
+| Process | Log |
+| --- | --- |
+| `narwhal deploy` | Its own output, and in the run directory each attempt's `logs/<host-id>.log` with the scripts it ran on each host, their exit status and output. `live/` holds the logs of the process checks of `run`, `status` and `down` |
+| Engine container | `docker logs <container>` on the engine host, with the container ID in the `engine-start` attempt's `container.id`. A start that fails keeps the last 200 lines in the attempt's `engine.log` |
+| Attestation sidecar | `sidecar-<n>.log` in the `sidecar-start` attempt directory on the engine host, which keeps the output of every automatic restart |
+| Router | `router.log` and the request journal `journal.jsonl` in the `router-start` attempt directory on the router host |
+| HAProxy | `docker logs narwhal-<run-id>-load-balancer` on the load balancer's host |
+| Prometheus and Grafana | `docker logs` of each container of the Compose project `observability` on the primary router's host |
+
+The systemd journal records each start, stop and automatic restart of a unit, `narwhal-<run-id>-router.service` or `narwhal-<run-id>-sidecar-<n>.service`. Read it on the host with `journalctl --user -u <unit>`. The unit's own output goes to its log file, not the journal. The run ID is the run record's `run_id`.
 
 ## Runtime and tooling references
 

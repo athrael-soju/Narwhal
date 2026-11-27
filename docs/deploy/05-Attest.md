@@ -4,34 +4,46 @@ description: Generate and serve attestation documents for the live vLLM, SGLang 
 
 # Attest live engines
 
+The fifth gate binds each live engine to its checked plan, serves that binding from an attestation sidecar, and writes the attested engine contract into each router's fleet. It runs five stages:
+
+| Stage | Runs | Evidence in its attempt |
+| --- | --- | --- |
+| `fleet-inventory` | Once for each router host, after `install` | `inventory.json` |
+| `attest-capture` | Once for each engine role, after `fabric-edge` and `fleet-inventory` | `published-attestation.json` and `attestation/`, the published capture attempt |
+| `sidecar-start` | Once for each engine role, after `attest-capture` | The sidecar unit's identity in the run record |
+| `sidecar-verify` | Once for each engine role, after `sidecar-start` | `check/`, the verification's captures |
+| `finalize-fleet` | Once for each router host, after every `sidecar-verify` | `host/`: the fleet with its `engine_contract`, and the copy from before |
+
+Each engine's binding digest and contract fields are products of `attest-capture`. A changed binding digest repeats profiling, calibration, preflight and the routers, and changed contract fields repeat every capture, as the [rerun table](../Deploy.md#rerunning-after-a-change) lists. To run a stage alone, run its command in the role shell of its host.
+
 ## Checking the router inventory
 
-On the router, confirm that `runs/deployment/fleet.json` lists:
+`fleet-inventory` reads the router host's packaged fleet and role environment, and fails, naming each problem, when:
 
-- Each running engine with URL and attestation URL references that resolve in `.env.router`.
-- The model.
-- The initial roles.
-- The SLO values.
-- The profile path.
+- the fleet's engines differ from the engines of the launch records
+- an engine's `url` or `attestation_url` reference is unset in the router's role environment
+- the installed `runs/deployment/fleet.json` on the router host differs from the package's
+
+It writes the engines, the model, the initial roles and the installed fleet's SHA-256 to `inventory.json`. Restore a changed fleet file, or correct the input behind an unset reference, and run again. The stage has no command of its own: `narwhal deploy run --until fleet-inventory` runs it once the stages before it hold.
 
 ## Capturing the attestation
 
-In each engine's role shell, capture the engine's attestation inputs and generate its document:
+`attest-capture` captures the engine's attestation inputs and generates its document, in the engine's role environment:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture --run "$ENGINE_RUN"
+python -m narwhal.deployment.attestation_contract.cli capture --run <launch>
 ```
 
-For a vLLM engine that uses another engine's [fabric budget](04-Qualify-Fabric.md#building-the-source-budget), also pass `--representative-layout` with the resolved layout you retained for that representative:
+A launch directory that already published an attestation keeps it, so the stage only reads the published attempt back. For a vLLM engine that uses another engine's [fabric budget](04-Qualify-Fabric.md#building-the-source-budget), the stage also passes `--representative-layout` with the one layout named in the representative's `cache-layout.json`:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture --run "$ENGINE_RUN" \
+python -m narwhal.deployment.attestation_contract.cli capture --run <launch> \
   --representative-layout '<layout name from the representative cache-layout.json>'
 ```
 
-`capture` reads the engine's `ENGINE_RUN` directory: `launch.json`, `checked.json` and the check log, and `container.id` and `container-start.json`, or the start records of a native engine. A vLLM engine also needs the `cache-layout.json` from [Capturing the live cache layout](03-Validate-Engines.md#capturing-the-live-cache-layout).
+`capture` reads the engine's launch directory: `launch.json`, `checked.json` and the check log, and `container.id` and `container-start.json`, or the start records of a native engine. A vLLM engine also needs the `cache-layout.json` from [Capturing the live cache layout](03-Validate-Engines.md#capturing-the-live-cache-layout).
 
-Each run of `capture` writes its captures to a new attempt directory, `ENGINE_RUN/attestation/<UTC time>-<id>/`. It runs these captures in order and stops at the first that fails:
+Each run of `capture` writes its captures to a new attempt directory, `<launch>/attestation/<UTC time>-<id>/`. It runs these captures in order and stops at the first that fails:
 
 | Capture | Engines | Writes or checks |
 | --- | --- | --- |
@@ -46,9 +58,9 @@ Each run of `capture` writes its captures to a new attempt directory, `ENGINE_RU
 | `server-info` | SGLang, TensorRT-LLM | `server-info.json` |
 | `document` | All | `engine-attestation.json` |
 
-When every capture passes, `capture` publishes the attempt: it writes `ENGINE_RUN/published-attestation.json` with the attempt's name and the SHA-256 of its `engine-attestation.json`, and prints `Generated private engine attestation in <attempt>/engine-attestation.json`. `serve` and `verify` read the published attempt. Once an attempt is published, `capture` refuses to run again for that launch directory. When two captures run at once, the first to finish publishes, and the other exits with `Attempt <name> already published ...` and records the attempt that won in its `capture-failure.json`.
+When every capture passes, `capture` publishes the attempt: it writes `<launch>/published-attestation.json` with the attempt's name and the SHA-256 of its `engine-attestation.json`, and prints `Generated private engine attestation in <attempt>/engine-attestation.json`. `serve` and `verify` read the published attempt. Once an attempt is published, `capture` refuses to run again for that launch directory. When two captures run at once, the first to finish publishes, and the other exits with `Attempt <name> already published ...` and records the attempt that won in its `capture-failure.json`.
 
-A failure exits with status 1 and names the capture, its output and the cause, such as `Capture transfer-mode (transfer-mode.json) failed: ...`. The attempt directory stays as evidence, with the cause in `capture-failure.json`. Fix the cause and run `capture` again: the next attempt starts from the first capture.
+A failure exits with status 1 and names the capture, its output and the cause, such as `Capture transfer-mode (transfer-mode.json) failed: ...`. The attempt directory stays as evidence on the engine host, with the cause in `capture-failure.json`. Fix the cause and run again: the next attempt starts from the first capture.
 
 Every capture checks that the container in `container.id` still runs the checked image and that its `State.StartedAt` matches `container-start.json`. When the container has started again since `narwhal-engine` started it, the engine's earlier evidence, such as `cache-layout.json`, describes another process, so prepare, check and start the engine in a fresh launch directory. On vLLM, `http-identity` also requires the process start in `/metrics` to be within 2 seconds of the container start, or to equal the native start record.
 
@@ -107,25 +119,60 @@ For a GGUF model, the document's `launch` records the file's `model_sha256` from
 
 ### Starting the sidecar
 
-Run the sidecar in the engine's role shell, as the user that started the engine. For a container engine, that user needs Docker access, as `narwhal-engine start` already requires.
+`sidecar-start` runs the sidecar as the systemd user unit `narwhal-<run-id>-sidecar-<n>.service` on the engine host, from the deployment directory with the engine's role environment, as the SSH user that started the engine. For a container engine, that user needs Docker access, as `narwhal-engine start` already requires. The unit runs:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli serve --run "$ENGINE_RUN"
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli serve --run <launch>
 ```
+
+The stage stops the previous attempt's unit first, then waits up to 60 seconds for the engine's attestation URL to answer. The unit's output goes to `sidecar-<n>.log` in the stage's attempt directory on the engine host, and systemd restarts the unit when it fails. The run records the unit's name, invocation ID, main PID, start ticks and boot ID. After an automatic restart, the next `run` or `status` repeats `sidecar-verify` before it records the new identity, as [Running the stage graph](../cli/Deploy.md#running-the-stage-graph) describes. Run alone in the role shell, the same command serves in the foreground with no supervisor.
 
 `serve` refuses to start when the published `engine-attestation.json` differs from the launch directory's current evidence or the container has started again. On vLLM, it also reads the live `/metrics` and refuses when the process start differs from the attempt's `metrics.txt`, which means the engine process started again inside its container. [`narwhal-attest`](../cli/Attest.md) exits when the engine's version differs from the document's. When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
 
 ### Verifying the sidecar
 
-In a second shell for the same engine role:
+`sidecar-verify` runs, in the engine's role environment:
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli verify --run "$ENGINE_RUN"
+python -m narwhal.deployment.attestation_contract.cli verify --run <launch>
 ```
 
 `verify` requests the sidecar's `/health` and `/v1/attestation` at `NARWHAL_NODE_<n>_ATTESTATION_URL`, reads the live engine's version and process start, and checks the attestation against them and against the contract in the published `engine-attestation.json`. On SGLang and TensorRT-LLM, which publish no process start, it reads the start from the sidecar's `/v1/process`.
 
-It writes a new `attestation-check-XXXXXX` directory in `ENGINE_RUN` with `health.json`, `health.status`, `attestation.json`, `attestation.status` and `identity.json`. On success it prints `Sidecar attestation matches the live engine and contract; captures in <directory>`. It exits with status 1 when a sidecar route returns a status other than HTTP 200, naming the route, or when the attestation fails a check, naming the failed checks.
+It writes a new `attestation-check-XXXXXX` directory in the launch directory with `health.json`, `health.status`, `attestation.json`, `attestation.status` and `identity.json`. The stage copies that directory to `check/` in its attempt. On success it prints `Sidecar attestation matches the live engine and contract; captures in <directory>`. It exits with status 1 when a sidecar route returns a status other than HTTP 200, naming the route, or when the attestation fails a check, naming the failed checks.
+
+## Finalizing the fleet contract
+
+`finalize-fleet` runs on each router host once every engine's `sidecar-verify` passes. It copies the installed `runs/deployment/fleet.json` into its attempt directory and finalizes the copy, in the router's role environment:
+
+```bash
+python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet <attempt>/fleet.json
+```
+
+The installed file stays as `package` wrote it, which `fleet-inventory` checks. Run alone, point `--fleet` at a copy too.
+
+`finalize-fleet` requests every sidecar's attestation from the router over the trusted control network, and requires:
+
+- Each sidecar's attestation matches its engine's live identity.
+- Every engine carries the same complete contract.
+- Every engine attests the same model files: the same `model_config_sha256`, `model_tree_sha256` and `model_sha256` in its `launch` evidence.
+
+`finalize-fleet` writes:
+
+- `engine_contract` in the fleet file it was given.
+- A copy of the previous fleet file beside it, as `fleet.before-attestation-<id>.json`.
+
+Both come back to `host/` in the attempt, and `profile` starts from the primary router's fleet.
+
+If the fleet file already has an `engine_contract`, `finalize-fleet` checks it against the live contract instead. On a mismatch, `finalize-fleet` exits with status 1 and prints `Existing router contract differs from the live sidecars`.
+
+On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
+
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's published `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
+
+To recover, fix the failing engine and run again. The run repeats the engine's stages from the one that no longer holds, restarts its sidecar against the checked process, and finalizes the fleet again.
+
+Leave every engine and sidecar running through profiling, preflight, and the trial.
 
 ## Attesting an engine pod
 
@@ -155,38 +202,5 @@ kubectl exec <pod> -c attestation -- python3 -I -m narwhal.deployment.attestatio
 `verify` reads the pod through the Kubernetes API, takes the attestation of the engine container that runs now, and refuses when that container has published none, when the pod is no longer the checked pod, or when the container ID, image ID or start differs from the identity its attestation binds. It also refuses a served attestation whose `launch.image_id` or process start differs from that identity. It writes its `attestation-check-XXXXXX` directory beside the container's attempts.
 
 `capture`, `serve` and `verify` take `--pod-evidence` for a Kubernetes plan and refuse a Kubernetes plan without it, and they refuse `--pod-evidence` for other plans. They read only `launch.json` for that, so the refusal comes before any check of the launch directory, and `serve --pod-evidence` refuses a host plan as soon as its `launch.json` appears.
-
-### Finalizing the fleet contract
-
-Run once from the router shell after `verify` passes for every engine:
-
-```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
-```
-
-`finalize-fleet` requests every sidecar's attestation from the router over the trusted control network, and requires:
-
-- Each sidecar's attestation matches its engine's live identity.
-- Every engine carries the same complete contract.
-- Every engine attests the same model files: the same `model_config_sha256`, `model_tree_sha256` and `model_sha256` in its `launch` evidence.
-
-`finalize-fleet` writes:
-
-- `engine_contract` in `runs/deployment/fleet.json`.
-- A copy of the previous fleet file beside it, at `runs/deployment/fleet.before-attestation-<id>.json`.
-
-If the fleet file already has an `engine_contract`, `finalize-fleet` checks it against the live contract instead. On a mismatch, `finalize-fleet` exits with status 1 and prints `Existing router contract differs from the live sidecars`.
-
-On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
-
-If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's published `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
-
-Recovery:
-
-1. Fix the failing engine.
-2. Restart its sidecar against the checked process.
-3. Run `finalize-fleet` again.
-
-Leave every engine and sidecar running through profiling, preflight, and the trial.
 
 [Profile engines and run preflight](06-Profile-and-Preflight.md)

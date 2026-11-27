@@ -17,17 +17,7 @@ A run record belongs to one target. Resuming a run directory with the other targ
 
 ## Inputs
 
-The run reads the [Kubernetes launch inputs](../configuration/04-Deployment-Inputs.md#kubernetes-launch-inputs), the engine and fabric inputs, the [deployment run inputs](../configuration/04-Deployment-Inputs.md#deployment-run-inputs) and these:
-
-| Variable | Value |
-| --- | --- |
-| `NARWHAL_KUBERNETES_NAMESPACE` | The namespace the fleet runs in. One fleet per namespace. |
-| `NARWHAL_KUBERNETES_VALUES` | A JSON file of chart values for `images`, `state`, `routers`, `haproxy`, `credentials` and `monitoring`. The run sets `engines`, `placement`, `gates`, `routers.enabled`, `routers.fleet` and `state.claimName` itself, and refuses a file that sets the first three. `images.narwhal` and `images.fabric` must be registry digests. |
-| `NARWHAL_NODE_<n>_KUBERNETES_NODE` | The node engine `n` runs on. Each one names an engine role; at least two are required. |
-| `NARWHAL_KUBERNETES_RELEASE` | Optional. The Helm release name, `narwhal` by default. |
-| `NARWHAL_KUBERNETES_CONTEXT` | Optional. The kubeconfig context; the current one by default. |
-| `NARWHAL_KUBERNETES_CHART` | Optional. The chart directory; `deploy/helm/narwhal` of the checkout by default. |
-| `NARWHAL_KUBECTL`, `NARWHAL_HELM` | Optional. The `kubectl` and `helm` executables. |
+The run reads the [Kubernetes launch inputs](../configuration/04-Deployment-Inputs.md#kubernetes-launch-inputs), the engine and fabric inputs, the [deployment run inputs](../configuration/04-Deployment-Inputs.md#deployment-run-inputs) and the cluster inputs that [Kubernetes target inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) lists: the namespace, the chart values file, each engine's node, and optionally the release, the kubeconfig context, the chart directory and the `kubectl` and `helm` executables.
 
 The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/model`. `NARWHAL_ROUTER_URL` defaults to the HAProxy Service, `http://haproxy:8000`.
 

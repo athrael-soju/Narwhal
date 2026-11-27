@@ -4,7 +4,17 @@ description: Start the Narwhal router and validate fleet capacity through the pr
 
 # Serve and measure
 
-`narwhal deploy run` starts a router pair after preflight: the primary router on the router host, its standby on the standby router host, HAProxy in front of both, and the monitoring stack. With `--trial`, it then runs the [capacity trial](#running-the-initial-capacity-trial). The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair).
+The last gate starts the routers, the load balancer and the monitoring stack, and with `--trial` runs the capacity trial:
+
+| Stage | Runs | Evidence in its attempt |
+| --- | --- | --- |
+| `lease-check` | Once per run on the workstation, after `install`, on fleets with a standby router | `lease-check.json` |
+| `router-start` | Once for each router host, the primary first, after `preflight` and `lease-check` | `router.json`, `overhead.json` and `router/`; the router's log and journal stay on its host |
+| `load-balancer` | Once per run, after `router-start`, on fleets with a standby router | `haproxy.cfg` and `router/` |
+| `monitoring` | Once per run, after `load-balancer` | The monitoring containers' identities in the run record |
+| `trial` | Once per run, after `monitoring`, with `--trial` | The files under [Running the initial capacity trial](#running-the-initial-capacity-trial) |
+
+The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair). None of these stages has a command of its own besides the monitoring stack's: `narwhal deploy run --until <stage>` runs one once the stages before it hold.
 
 A fleet without `NARWHAL_STANDBY_ROUTER_SSH` runs one router instead, with no router failover. `lease-check` and `load-balancer` do not run. `router-start` starts the router at `NARWHAL_ROUTER_URL` without `--standby-of`, `--lease-path` or `--first-start-primary`, waits for it to control the fleet and measures its overhead as below. Monitoring scrapes that router and reads its targets from it.
 
@@ -45,7 +55,16 @@ The stage names each offending option and its fix. Other file systems pass this 
 - The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). It claims the lease when no lease file exists, or when the lease expired more than 30 seconds ago, the standby's `--standby-max-handoff-age`, so no standby can still take it over. Otherwise it starts as the standby of its peer. When the lease expired more recently, as when the pair stopped moments before, the stage waits until no standby can take it over before it starts the primary.
 - The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary.
 
-The stage never removes the lease. It reads the lease's holder and expiry on the router's host before the start and keeps them in `router.json`. Both routers use `--lease-path NARWHAL_LEASE_PATH`, `--lease-witness` with the witness `lease-check` left, and the host's ID as `--router-id`. Each router must pass `/health`. The stage then waits up to 180 seconds for one router of the pair to control the fleet, and keeps that router's health, readiness, state, metrics and lifecycle responses and one completion under `router/`. The router's log and journal stay on its host in the attempt directory.
+The stage never removes the lease. It reads the lease's holder and expiry on the router's host before the start and keeps them in `router.json`. The unit `narwhal-<run-id>-router.service` runs, from the deployment directory with the router's role environment:
+
+```bash
+.venv/bin/narwhal-serve --fleet <fleet-limits attempt>/fleet.json --host <host> --port <port> \
+  --journal <attempt>/journal.jsonl --lease-path "$NARWHAL_LEASE_PATH" \
+  --lease-witness <lease directory>/.narwhal-lease-witness --router-id <host-id> \
+  --standby-of <other router's URL> --deployment-status runs/deployment/deployment-status.json
+```
+
+with `--first-start-primary` added for the primary. A single router runs without the lease, witness and `--standby-of` options. Each router must pass `/health` within 60 seconds. The stage then waits up to 180 seconds for one router of the pair to control the fleet, and keeps that router's health, readiness, state, metrics and lifecycle responses and one completion under `router/`. The router's output goes to `router.log`, and its request journal to `journal.jsonl`, both in the stage's attempt directory on its host. systemd restarts the unit when it fails, and the next `run` or `status` checks the router's health before it records the new identity.
 
 Every `router-start`, including a readmission and a primary that rejoins as the standby, then measures the router overhead under load on the router that controls the fleet. It sends 64 completions, 8 at a time, and reads that router's `/metrics` before and after. Over the completions that reached a first token, the overhead is the router's time to first token less the time in the prefill legs and in the admission and prefill seat queues, per completion:
 
@@ -63,13 +82,13 @@ When an engine restarts and the routers still run on an unchanged fleet, the rou
 
 ## Starting the load balancer
 
-The `load-balancer` stage renders [`deploy/ha/haproxy.cfg`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg), which the wheel carries, with `bind` set to the `NARWHAL_LOAD_BALANCER_URL` address and the two `server` lines set to the routers' origins. On the load balancer's host, it checks the file with `haproxy -c`, then starts `NARWHAL_HAPROXY_IMAGE` as the container `narwhal-<run ID>-load-balancer`, with host networking and Docker's `on-failure` restart policy. HAProxy reads the file from the attempt directory as the deployment user.
+The `load-balancer` stage renders [`deploy/ha/haproxy.cfg`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg), which the wheel carries, with `bind` set to the `NARWHAL_LOAD_BALANCER_URL` address and the two `server` lines set to the routers' origins. On the load balancer's host, it checks the file with `haproxy -c`, then starts `NARWHAL_HAPROXY_IMAGE` as the container `narwhal-<run-id>-load-balancer`, with host networking and Docker's `on-failure` restart policy. HAProxy reads the file from the attempt directory as the deployment user.
 
-The stage passes when `/ready` answers HTTP 200 through HAProxy. It keeps `haproxy.cfg` and the health, readiness, state, metrics, lifecycle and completion responses through HAProxy under `router/`. Clients and the capacity trial use `NARWHAL_LOAD_BALANCER_URL`.
+The stage passes when `/ready` answers HTTP 200 through HAProxy within 180 seconds. It keeps `haproxy.cfg` and the health, readiness, state, metrics, lifecycle and completion responses through HAProxy under `router/`. A container that fails to start keeps its last 200 log lines in `haproxy.log` in the attempt directory on its host, and a running container's logs are in `docker logs narwhal-<run-id>-load-balancer`. A container that starts but does not answer `/ready` within 180 seconds is removed without keeping its logs. Clients and the capacity trial use `NARWHAL_LOAD_BALANCER_URL`.
 
 ## Starting the monitoring stack
 
-The `monitoring` stage starts the [monitoring stack](../observability/01-Start-and-Verify.md) on the primary router's host from the installed wheel, in the deployment directory:
+The `monitoring` stage starts the [monitoring stack](../observability/01-Start-and-Verify.md) on the primary router's host from the installed wheel, in the deployment directory. The same command, run in the router's role shell, starts it alone:
 
 ```bash
 .venv/bin/python -m narwhal.observability.stack.start.cli \
@@ -78,42 +97,27 @@ The `monitoring` stage starts the [monitoring stack](../observability/01-Start-a
   --sidecar-url http://<engine-1 sidecar host>:<port> --sidecar-url http://<engine-2 sidecar host>:<port>
 ```
 
-The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the listen addresses from the deployment inputs in its environment. Prometheus scrapes both routers and each engine's attestation sidecar, and reads the engine targets through the load balancer. Every series carries the `fleet` label. Prometheus sends alerts to the Alertmanager when `NARWHAL_ALERTMANAGER_URL` is set; without one, they show only on the Prometheus alerts page. Prometheus runs on the primary router's host, so route `NarwhalWatchdog` to a dead man's switch that pages while that host is down, as in [Monitor](../operate/02-Monitor.md). After every run, the command uploads the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to both router hosts, and the dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows it. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory.
+The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the listen addresses from the deployment inputs in its environment. Prometheus scrapes both routers and each engine's attestation sidecar, and reads the engine targets through the load balancer. Every series carries the `fleet` label. Prometheus sends alerts to the Alertmanager when `NARWHAL_ALERTMANAGER_URL` is set; without one, they show only on the Prometheus alerts page. Prometheus runs on the primary router's host, so route `NarwhalWatchdog` to a dead man's switch that pages while that host is down, as in [Monitor](../operate/02-Monitor.md). After every run, the command uploads the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to both router hosts, and the dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows it. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. Docker Compose runs each container with the `always` restart policy. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory, and each service's output is in `docker logs` of its container.
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 
-1. On the workstation, open a terminal in the management checkout with `.env` and `config/deployment.env` loaded.
-2. Open the tunnel:
+The routers, Prometheus and Grafana listen on the private network. To reach them from the workstation, with `.env` loaded, open a tunnel to the primary router's host and keep its terminal open:
 
-    ```bash
-    narwhal deploy tunnel --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
-    ```
+```bash
+narwhal deploy tunnel --hosts runs/deploy/first-deploy/stages/discover/attempt-1/config/hosts.local.json \
+  --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
+```
 
-3. Keep the tunnel terminal open.
-4. From another workstation shell, check through the tunnel:
+`--hosts` names the inventory of the run's last passed `discover`, as in [Opening installed role shells](02-Install.md#opening-installed-role-shells). Replace the remote ports with the router's port and the monitoring stack's listen ports. From another workstation shell:
 
-    ```bash
-    export NARWHAL_TRIAL_URL=http://127.0.0.1:18000
-    curl -fsS "$NARWHAL_TRIAL_URL/health"
-    curl -fsS "$NARWHAL_TRIAL_URL/ready"
-    curl -fsSG http://127.0.0.1:19090/api/v1/query \
-      --data-urlencode 'query=up{job=~"narwhal-router|engines"}' \
-      | python3 -m json.tool
-    ```
+```bash
+curl -fsS http://127.0.0.1:18000/health
+curl -fsS http://127.0.0.1:18000/ready
+curl -fsSG http://127.0.0.1:19090/api/v1/query \
+  --data-urlencode 'query=up{job=~"narwhal-router|engines"}' | python3 -m json.tool
+```
 
-5. Open Grafana at:
-
-    ```text
-    http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator
-    ```
-
-6. To run a load client by hand, as the [measurement pages](../Measure.md) do, point it at `$NARWHAL_TRIAL_URL`.
-7. Record:
-
-    - The router role assignment.
-    - The workstation hostname.
-    - The wheel's SHA-256.
-    - The tunnel mappings.
+Open Grafana at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`. To run a load client by hand, as the [measurement pages](../Measure.md) do, point it at `http://127.0.0.1:18000`.
 
 The tunnel listens on workstation loopback ports and forwards them to `127.0.0.1` on the router. It verifies the router against its key in `NARWHAL_SSH_KNOWN_HOSTS`, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
 

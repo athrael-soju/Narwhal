@@ -4,28 +4,35 @@ description: Run the narwhal-check preflight gates against profiled, idle Narwha
 
 # Profile engines and run preflight
 
+The sixth gate measures the idle engines, calibrates the first-token deadline, writes the service-level objective (SLO) targets and the deadline into the routers' fleet, and runs the preflight checks on each router host:
+
+| Stage | Runs | Evidence in its attempt |
+| --- | --- | --- |
+| `profile` | Once per run on the primary router's host, after `finalize-fleet` | `fleet.json`, the fleet it profiled, and `host/`: `profiles.json` and `profiles.samples.json` |
+| `calibrate` | Once per run on the primary router's host, after `profile` | `host/`: `first-token-calibration.json` and the fleet it read |
+| `fleet-limits` | Once per run on the workstation, after `calibrate` | `fleet.json`, the routers' fleet, with copies of the profiles and the calibration |
+| `preflight` | Once for each router host, after `fleet-limits` | `host/preflight-evidence.json` and the `narwhal-check` output in `logs/` |
+
+Their inputs are the profiling, calibration, SLO and margin variables of [Deployment run inputs](../configuration/04-Deployment-Inputs.md#deployment-run-inputs). The engines must be otherwise idle: no router serves them until `router-start`.
+
 ## Profiling idle engines
 
-Run these steps from the router shell, with the engines reserved for profiling and otherwise idle.
+`profile` runs on the primary router's host, in its role environment, with the fleet that `finalize-fleet` wrote and the profile store in its attempt directory:
 
-1. Warm the model.
-2. Choose the sweep from your production traffic:
+```bash
+narwhal-profile --fleet <attempt>/fleet.json --limits runs/deployment/profiling-limits.json \
+  --prefill-lens "$NARWHAL_PROFILE_PREFILL_LENS" \
+  --decode-input-lens "$NARWHAL_PROFILE_DECODE_INPUT_LENS" \
+  --warmup-requests "$NARWHAL_PROFILE_WARMUP_REQUESTS"
+```
 
-    - `--prefill-lens` values that meet the [`ttft_split` length rules](../measure/01-Profile.md#prefill-sweep).
-    - `--decode-input-lens` values near the input lengths you serve.
-    - `--decode-concurrency` values near the concurrency you serve, when it differs from the default `1,4,16,48`.
+It adds `--decode-concurrency "$NARWHAL_PROFILE_DECODE_CONCURRENCY"` when that is set, and `--no-router` on SGLang, whose sweep switches each engine's peer while no router serves them. Choose the sweep from your production traffic:
 
-3. Run the profiler:
+- `NARWHAL_PROFILE_PREFILL_LENS` values that meet the [`ttft_split` length rules](../measure/01-Profile.md#prefill-sweep).
+- `NARWHAL_PROFILE_DECODE_INPUT_LENS` values near the input lengths you serve.
+- `NARWHAL_PROFILE_DECODE_CONCURRENCY` values near the concurrency you serve, when it differs from the default `1,4,16,48`.
 
-    ```bash
-    .venv/bin/narwhal-profile \
-      --fleet runs/deployment/fleet.json \
-      --limits runs/deployment/profiling-limits.json \
-      --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
-      --decode-input-lens 512,4096,8192
-    ```
-
-4. Compare the line printed for each engine, `<iid>: max_model_len <n>; prefill up to <x>, decode input up to <y>, decode concurrency up to <z>`, with the `max_model_len` and sequence limit in that engine's checked serving plan.
+For each engine the profiler prints `<iid>: max_model_len <n>; prefill up to <x>, decode input up to <y>, decode concurrency up to <z>`, which shows how far the sweep reached within that engine's checked serving plan.
 
 `narwhal deploy package` writes each engine's `runtime.max_sequences` to `profiling-limits.json`. An SGLang engine without the setting gets 256 and a TensorRT-LLM engine without it gets 64.
 
@@ -35,25 +42,22 @@ Prefix caching can stay on during profiling. On an SGLang fleet, `narwhal-profil
 
 When an engine refuses a decode measurement request, reports an error in its stream, or times out or drops the stream (for example after a lost KV transfer), the profiler discards that cohort's measurement and runs it again, up to twice. The log shows each rerun as `rerun after engine error`. A third consecutive error stops the profile.
 
-If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit leaves fewer than two decode concurrency points, change the engine launch policy.
+If the live context leaves fewer than three prefill lengths or two decode input lengths, the stage fails: set shorter `NARWHAL_PROFILE_PREFILL_LENS` and `NARWHAL_PROFILE_DECODE_INPUT_LENS` and run again. If the sequence limit leaves fewer than two decode concurrency points, change the engine launch policy.
 
-Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
+The profiler's `.samples.json` sidecar stays beside the `profiles.path` store, and `fleet-limits` copies both.
 
 Preflight warns when an engine's profile measures decode below its sequence limit. It reads that limit from the profile's sidecar (recorded by `--limits`) and, on a fleet with an engine contract, from the engine's attestation when the sidecar records a lower limit or none. Decode seats stop at the profiled maximum, as [Engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) describes. To clear the warning, re-profile the engine with `--limits`, after you:
 
 - regenerate the limits file, when the sidecar records a lower limit than the attestation.
-- pass shorter `--decode-input-lens`, or lower the engine's sequence limit and regenerate the limits file, when the sweep skipped cohorts that exceed the engine's KV capacity.
+- set shorter decode input lengths, or lower the engine's sequence limit and regenerate the limits file, when the sweep skipped cohorts that exceed the engine's KV capacity.
 
 Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. A standby router also starts when its store has profiles for engines outside the fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 
-Set the service-level objective (SLO) targets before preflight:
-
-1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#setting-production-slos) from the service requirement and the measured engine curves.
-2. Keep the time per output token (TPOT) target above the measured per-token floor.
+Set `NARWHAL_TTFT_S` and `NARWHAL_TPOT_S`, which `fleet-limits` writes as `slo.ttft_s` and `slo.tpot_s`, from the service requirement and the measured engine curves, as [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) describes. Keep the time per output token (TPOT) target above the measured per-token floor.
 
 ### Reusing or repeating profiles
 
-After a change to the fleet or its engines, run preflight. Re-profile only the engines the `profile` gate names, with the same sweep options, and merge the new store into the current `profiles.path` store:
+A run profiles every engine again when the profiling inputs or an engine's attested binding digest change, as the [rerun table](../Deploy.md#rerunning-after-a-change) lists. On a fleet in service, re-profile only the engines the `profile` gate of preflight names, with the same sweep options, and merge the new store into the current `profiles.path` store:
 
 ```bash
 .venv/bin/narwhal-profile \
@@ -75,27 +79,27 @@ Set `profiles.path` to the merged store and run preflight. To load it into a run
 
 ## Calibrating the first-token deadline
 
-Calibrate with the engines idle. `narwhal-check --calibrate-first-token` takes these inputs:
+`calibrate` runs on the primary router's host after `profile`, with the fleet and profiles `profile` wrote and the engines idle:
 
-| Flag                      | Value                                                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--input-tokens`          | Lengths spanning the served range, up to the longest input that leaves room for two output tokens on both engines |
-| `--observation-timeout-s` | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`                                            |
-| `--calibration-out`       | A fresh artifact path under the ignored `runs/` tree                                                                    |
-| `--samples`               | 100, the default and the minimum for qualifying evidence                                                                |
+```bash
+narwhal-check --fleet <attempt>/fleet.json --calibrate-first-token \
+  --input-tokens "$NARWHAL_CALIBRATION_INPUT_TOKENS" \
+  --samples "$NARWHAL_CALIBRATION_SAMPLES" \
+  --observation-timeout-s "$NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S" \
+  --calibration-out <attempt>/first-token-calibration.json
+```
+
+Choose the inputs:
+
+| Input | Value |
+| --- | --- |
+| `NARWHAL_CALIBRATION_INPUT_TOKENS` | Lengths spanning the served range, up to the longest input that leaves room for two output tokens on both engines. For engines whose live context limit is 16,384 tokens, `256,8192,16382` |
+| `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | Above the fleet's `engine.first_token_timeout_s` and at most `serving.request_timeout_s`, which the command requires |
+| `NARWHAL_CALIBRATION_SAMPLES` | At least 100, the minimum for qualifying evidence |
 
 On SGLang the live context limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length.
 
-For engines whose live context limit is 16,384 tokens, run the calibration from the router shell:
-
-```bash
-.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16382 \
-  --samples 100 --observation-timeout-s 20 \
-  --calibration-out runs/deployment/first-token-calibration.json
-```
-
-The command exits 0 when the artifact is [`complete`](../cli/Check.md#calibration-artifact) and every engine returns to its starting role. Otherwise it exits 1.
+The command exits 0 when the artifact is [`complete`](../cli/Check.md#calibration-artifact) and every engine returns to its starting role. Otherwise it exits 1 and the stage fails.
 
 `serving.request_timeout_s` bounds each attempt's prompt sizing, prefill, and decode completion. Each attempt records one of these statuses:
 
@@ -119,7 +123,7 @@ candidate deadline: above 1.840s
 duration 1200s
 ```
 
-Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
+Diagnose failed transfers and observation expiries from the attempt's log before you rely on the candidate.
 
 The client time to first token (TTFT) target must hold the deadline, the slowest engine's prefill of the longest calibrated input and the router overhead. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) fails with each term when they exceed `slo.ttft_s`:
 
@@ -129,7 +133,15 @@ first-token deadline 2.100s + n3 prefill of 4096 tokens 0.412s + router overhead
 
 ### Reusing or repeating the calibration
 
-After a change to the fleet or its engines, run preflight. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
+`fleet-limits` runs on the workstation after `calibrate`. It writes into the primary router's fleet:
+
+- `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` from `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S` and `NARWHAL_ROUTER_OVERHEAD_S`
+- `engine.first_token_timeout_s`, the calibrated candidate plus `NARWHAL_FIRST_TOKEN_MARGIN_S`
+- `engine.first_token_calibration_path`, `profiles.path` and `recovery.state_path`, in its attempt directory
+
+It then copies that fleet, the calibration and the profiles to the same path on every router host, and prints the deadline it chose. A calibration without a candidate deadline fails the stage. The stage has no command of its own: `narwhal deploy run --until fleet-limits` runs it once the stages before it hold. A changed SLO or margin repeats `fleet-limits` and what follows, without profiling or calibrating again.
+
+A run calibrates again when the calibration inputs, the profiles, a fabric route or an engine's binding digest change. On a fleet in service, run preflight after a change to the fleet or its engines. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
 
 - the fabric route or host behind an unchanged engine URL
 - an engine's context limit, when it exceeds the longest calibrated input by more than two tokens
@@ -146,21 +158,17 @@ To measure only the groups a previous artifact lacks or did not complete, pass t
   --calibration-out runs/deployment/first-token-calibration-2.json
 ```
 
-For each new calibration:
-
-1. Use a fresh artifact path.
-2. Update the fleet config.
-3. Copy the artifact and the fleet config to every router host before preflight.
-
-Retain the fleet file, the raw artifact, the command, and the process identities together.
+Point `engine.first_token_calibration_path` at the new artifact on every router host before preflight.
 
 ## Running preflight
 
-With the engines otherwise idle, run the preflight from the router shell:
+`preflight` runs on each router host after `fleet-limits`, in its role environment, with the fleet `fleet-limits` wrote:
 
 ```bash
-.venv/bin/narwhal-check --fleet runs/deployment/fleet.json
+narwhal-check --fleet <fleet-limits attempt>/fleet.json --evidence-out <attempt>/preflight-evidence.json
 ```
+
+A failed gate fails the stage. Follow the reported engine, transfer leg or budget into [Troubleshooting a fleet](../Troubleshoot.md), fix the cause and run again.
 
 The full preflight runs these gates:
 
@@ -230,7 +238,5 @@ The gate reports the first-token time for each passing transfer.
 [Fabric qualification](04-Qualify-Fabric.md) measures KV between hosts. Preflight checks KV between engines of one host when those engines send it through their HCAs: their launches set `transfer.transport` to `ucx_rdma`, `transfer.gpu_tls` to `cuda_copy` and `UCX_SHM_DEVICES` to `none`, with one HCA port in `transfer.net_devices`. For each probed pair of such engines on one host, the producer's HCA transmit counter must grow during the transfer, or the pair fails because UCX moved the KV through shared memory or CUDA IPC. An engine with no peer on its host needs no counter. [Same-host HCA path](../cli/Check.md#same-host-hca-path) gives the lines it prints. Under `--ring`, an engine whose same-host pair the ring never probes is skipped, so run the full mesh to qualify the path.
 
 If the first-token deadline expires, check the calibration artifact and the deadline. For any other failure, keep the pair, the error, and the engine logs.
-
-Keep the command, fleet file, preflight output, process identities, and profile store together.
 
 [Serve and measure](07-Serve-and-Measure.md)

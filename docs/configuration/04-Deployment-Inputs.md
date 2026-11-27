@@ -6,7 +6,7 @@ description: The deployment environment, trust inputs, generated artifacts, host
 
 ## Deployment inputs and generated artifacts
 
-The workstation `.env` holds the engine image, model and run paths, service ports, SSH destinations, the trust inputs below, and [launch-policy overrides](../deploy/01-Discover.md#confirming-the-launch-policy).
+`narwhal deploy` reads its inputs from the environment of the workstation, which a private `.env` file sets, as [Loading the private environment](../deploy/01-Discover.md#loading-the-private-environment) shows. This page lists every input. `plan` and `run` name each one that is missing or malformed before they reach a host.
 
 The trust inputs pin what the deployment accepts. The commands that read them refuse to run without them:
 
@@ -20,6 +20,39 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 | `NARWHAL_REQUIREMENTS_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that lock |
 
 `NARWHAL_SSH_JUMP` is optional. It names the one jump host, an alias or `user@host`, through which every connection reaches its destination, as in [Jump host](#jump-host).
+
+### Hosts and roles
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_NODE_<n>_SSH` | SSH destination of engine `<n>`'s host, an alias or `user@host`. Set one for each engine; engines with the same destination share a host |
+| `NARWHAL_ROUTER_SSH` | Optional destination of the primary router's host. It defaults to the lowest-numbered engine's destination |
+| `NARWHAL_STANDBY_ROUTER_SSH`, `NARWHAL_LOAD_BALANCER_SSH` | The hosts of the [router pair](#router-pair)'s standby and load balancer |
+| `<destination variable>_PASSWORD` | Optional SSH password of that destination, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Without one, the connection uses a key or the SSH agent |
+
+[Host inventory and SSH trust](#host-inventory-and-ssh-trust) describes the inventory that discovery builds from them.
+
+### Engine and discovery inputs
+
+Discovery reads these, and each engine's role environment carries the engine values. `NARWHAL_NODE_<n>_<field>` sets a field for engine `<n>` alone, such as `NARWHAL_NODE_2_ENGINE_PORT`.
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_ENGINE_IMAGE` | The engine image, pinned by image ID or registry digest |
+| `NARWHAL_ENGINE_MODEL_NAME` | The served model name |
+| `NARWHAL_MODEL_DIR` | The checkpoint directory on each engine host, which the engine mounts read-only at `/model` |
+| `NARWHAL_MODEL_PATH`, `NARWHAL_MODEL_SHA256` | For a [GGUF model](../deploy/01-Discover.md#staging-a-gguf-model-on-vllm), the `.gguf` file in `NARWHAL_MODEL_DIR`, and an optional SHA-256 that discovery checks it against |
+| `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256`, `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` | For a GGUF model, the plugin digests the engine image build prints |
+| `NARWHAL_RUN_DIR` | An existing directory on each engine host |
+| `NARWHAL_FABRIC_INTERFACE` | The interface that carries KV, whose global address gives the engine and attestation URLs |
+| `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT` | The engine's HTTP port and its attestation sidecar's port |
+| `NARWHAL_KV_SIDE_CHANNEL_PORT` | The vLLM NIXL side channel, SGLang bootstrap server or TensorRT-LLM transfer port |
+| `NARWHAL_UCX_TCP_PORT_RANGE` | `LOW-HIGH`, the ports UCX TCP listeners take |
+| `NARWHAL_NODE_<n>_IP`, `NARWHAL_NODE_<n>_URL`, `NARWHAL_NODE_<n>_ATTESTATION_URL` | Optional overrides of the fabric address and the service URLs, as [Loading the private environment](../deploy/01-Discover.md#loading-the-private-environment) lists |
+| `NARWHAL_ENGINE_BACKEND`, `NARWHAL_ENGINE_CONNECTOR`, `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`, `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`, `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`, `NARWHAL_CONTEXT_LENGTH`, `NARWHAL_MAX_SEQUENCES`, `NARWHAL_PREFIX_CACHING`, `NARWHAL_KV_EVENTS`, `NARWHAL_TOKENIZER`, `NARWHAL_LANGUAGE_MODEL_ONLY`, `NARWHAL_ENGINE_ARGS`, `NARWHAL_ENGINE_ENV`, `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES`, `NARWHAL_ENGINE_KEY` | The optional launch policy, as [Confirming the launch policy](../deploy/01-Discover.md#confirming-the-launch-policy) lists |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S` | The fleet's initial latency targets, which `fleet-limits` later sets as the SLO |
+
+Discovery writes each engine's `NARWHAL_NODE_<n>_IP`, `NARWHAL_NODE_<n>_URL` and `NARWHAL_NODE_<n>_ATTESTATION_URL`, its observed image ID as `NARWHAL_NODE_<n>_ENGINE_IMAGE`, and its model digests as `NARWHAL_NODE_<n>_MODEL_CONFIG_SHA256` and `NARWHAL_NODE_<n>_MODEL_SHA256` to `deployment.env`, which `package` reads.
 
 Discovery writes one private set of files per fleet at mode 0600:
 
@@ -134,7 +167,19 @@ Export fails when:
 
 A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod. `NARWHAL_NODE_<n>_ATTESTATION_URL` must name the pod's sidecar route, `http://<pod>:<NARWHAL_ATTEST_PORT>/v1/attestation`, which the plan pins.
 
-`narwhal deploy --target kubernetes` reads these as well, with the cluster inputs that [Deploying on Kubernetes](../deploy/Kubernetes.md#inputs) lists.
+### Kubernetes target inputs
+
+`narwhal deploy --target kubernetes` reads the Kubernetes launch inputs above, the engine and fabric inputs, the [deployment run inputs](#deployment-run-inputs) and these, as [Deploying on Kubernetes](../deploy/Kubernetes.md#inputs) describes:
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_KUBERNETES_NAMESPACE` | The namespace the fleet runs in. One fleet per namespace |
+| `NARWHAL_KUBERNETES_VALUES` | A JSON file of chart values for `images`, `state`, `routers`, `haproxy`, `credentials` and `monitoring`. The run sets `engines`, `placement`, `gates`, `routers.enabled`, `routers.fleet` and `state.claimName` itself, and refuses a file that sets the first three. `images.narwhal` and `images.fabric` must be registry digests |
+| `NARWHAL_NODE_<n>_KUBERNETES_NODE` | The node engine `n` runs on. Each one names an engine role; at least two are required |
+| `NARWHAL_KUBERNETES_RELEASE` | Optional. The Helm release name, `narwhal` by default |
+| `NARWHAL_KUBERNETES_CONTEXT` | Optional. The kubeconfig context; the current one by default |
+| `NARWHAL_KUBERNETES_CHART` | Optional. The chart directory; `deploy/helm/narwhal` of the checkout by default |
+| `NARWHAL_KUBECTL`, `NARWHAL_HELM` | Optional. The `kubectl` and `helm` executables |
 
 ### Fabric qualification inputs
 
@@ -196,6 +241,34 @@ Without it, the fleet runs one router at `NARWHAL_ROUTER_URL` with no standby, n
 | `NARWHAL_HAPROXY_IMAGE` | HAProxy image pinned by image ID or registry digest, such as `haproxy@sha256:<digest>` |
 
 Each router binds its own port, so a router and HAProxy on one host need different ports.
+
+### Stage time limits
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS` | Optional time limit of one stage, in seconds, with `-` written as `_`, such as `NARWHAL_STAGE_FABRIC_EDGE_TIMEOUT_SECONDS`. [Host keys and time limits](../cli/Deploy.md#host-keys-and-time-limits) lists each stage's default |
+| `NARWHAL_STAGE_TIMEOUT_SECONDS` | Optional time limit of every stage |
+| `NARWHAL_STAGE_CLEANUP_GRACE_SECONDS`, `NARWHAL_STAGE_KILL_GRACE_SECONDS` | Optional cleanup budgets of the commands a stage runs on the workstation, as [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery) describes |
+
+None of these is a run input, so changing one reruns no stage.
+
+### Variables that are not inputs
+
+Narwhal sets these itself, in the role environments, the units and containers it starts, or the processes it runs. Leave them out of `.env`.
+
+| Variables | Set by and for |
+| --- | --- |
+| `NARWHAL_HOSTS`, `NARWHAL_LAUNCH_CONFIG`, `NARWHAL_FLEET` | `run` points them at each stage's generated files. The subcommands run alone read them, as in [Deployment inputs and generated artifacts](#deployment-inputs-and-generated-artifacts) |
+| `NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_ENGINE_LAUNCH_CONFIG`, `NARWHAL_ENGINE_API_KEY`, `NARWHAL_CACHE_CAPTURE_HOOK`, `NARWHAL_CACHE_CAPTURE_HOOK_SHA256`, `NARWHAL_TRANSFER_MEASURE_TOOL`, `NARWHAL_TRANSFER_MEASURE_SHA256` | `package`, in each role environment, as [Generated host-side files](#generated-host-side-files) lists |
+| `NARWHAL_DEPLOY` | Every SSH connection, set to `1` on the host |
+| `NARWHAL_SUPERVISOR_UNIT` | Each systemd unit, naming the unit whose restart count its process exports |
+| `NARWHAL_SGLANG_API_KEY`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT`, `NARWHAL_TRTLLM_API_KEY`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT`, `NARWHAL_CACHE_PLAN`, `NARWHAL_CACHE_OUTPUT`, `NARWHAL_CAPTURE_CACHE` | The launcher, in the engine container, as [Engine endpoints and launch](05-Engine-Launch.md) describes |
+| `NARWHAL_POD_IP`, `NARWHAL_POD_NAME`, `NARWHAL_POD_UID`, `NARWHAL_NODE_NAME`, `NARWHAL_ROLE` | The engine pod's specification, from the pod's own fields |
+| `NARWHAL_GATE_KEEP` | A Kubernetes gate Job, for the directory that keeps its returned files |
+| `NARWHAL_KUBERNETES_FLEET_UID`, `NARWHAL_KUBERNETES_HAPROXY_IMAGE`, `NARWHAL_KUBERNETES_FABRIC_IMAGE`, `NARWHAL_KUBERNETES_ROUTERS`, `NARWHAL_KUBERNETES_HAPROXY` | The in-cluster controller, from a `NarwhalFleet` resource. [Needs verification: task 26] |
+| `NARWHAL_PROMETHEUS_URL`, `NARWHAL_GRAFANA_URL`, `NARWHAL_RENDERER_ADDRESS`, `NARWHAL_RENDERER_TOKEN`, `NARWHAL_PROMETHEUS_CONFIG_DIGEST` | The monitoring stack's start, for Docker Compose |
+
+Other commands read their own variables: `NARWHAL_TARGETS_URL` and `NARWHAL_SIDECAR_URLS` the [monitoring stack](../observability/01-Start-and-Verify.md) started by hand, `NARWHAL_TOOL_METRICS_URL` [`narwhal-check`](../cli/Check.md) and [`narwhal-profile`](../cli/Profile.md), `NARWHAL_MODEL_REVISION` [`narwhal-engine`](../cli/Engine.md), `NARWHAL_DOCKER_RECONCILE_SECONDS` the [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation) of `narwhal dev`, the `NARWHAL_CONTROL_` variables the [fleet control service](../operate/fleet-control/09-Configuration-Reference.md), and the `NARWHAL_TRIAL_` variables the [measurement pages](../Measure.md).
 
 ### Profiling limits
 

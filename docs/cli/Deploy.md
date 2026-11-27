@@ -16,7 +16,7 @@ narwhal deploy down --run runs/deploy/first-deploy
 
 With `--target kubernetes`, `plan`, `run`, `status` and `down` run the same graph on a Kubernetes cluster through `helm` and `kubectl`, as [Deploying on Kubernetes](../deploy/Kubernetes.md) describes. The other subcommands work on SSH hosts only.
 
-The other subcommands run single steps by hand: discovery, the access check, packaging, installation, SGLang handoff measurement, the cache-equivalence groups and fabric qualification. They also open role shells and port tunnels:
+The other subcommands run one stage, or one gate's stages, alone: discovery, the access check, packaging, installation, SGLang handoff measurement, the cache-equivalence groups and fabric qualification. They also open role shells and port tunnels:
 
 ```bash
 narwhal deploy discover --out runs/discovery/first-deploy
@@ -38,11 +38,11 @@ narwhal deploy tunnel --forward 18000:8000
 | `plan` | Checks every input and the `--trial` file, each host's systemd user manager and Docker Compose on the primary router's host, then prints each stage instance up to `--until` with whether `run` would run it, and why. Reaches each host once, and runs no stage. | [Running the stage graph](#running-the-stage-graph) |
 | `run` | Runs every stage up to `--until`, skipping each stage whose recorded result still holds, and stops at the first stage that fails. | [Running the stage graph](#running-the-stage-graph) |
 | `status` | Prints each stage's state, attempt and evidence directory from the run record, with the recovery section of a failed stage, then checks each engine, sidecar, router and fabric route the run recorded. | [Running the stage graph](#running-the-stage-graph) |
-| `down` | Stops the router, then the sidecars, then the engine containers the run started, each only while its recorded identity still matches. | [Running the stage graph](#running-the-stage-graph) |
+| `down` | Stops the monitoring containers, HAProxy, the routers, the sidecars and the engine containers the run started, in that order, each only while its recorded identity still matches. | [Running the stage graph](#running-the-stage-graph) |
 | `discover` | Logs in to every host that the `NARWHAL_NODE_<n>_SSH` and `NARWHAL_ROUTER_SSH` destinations name, inspects the GPUs, the engine image and the checkpoint on each engine host, checks each checkpoint against `NARWHAL_MODEL_TREE_SHA256`, and writes the host inventory, launch records, fleet and `deployment.env`. | [Running discovery and access checks](../deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `access` | Checks the inventory, then logs in once to each host and records its `hostname` output. Prints each host ID with its roles. | [Running discovery and access checks](../deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `package` | Checks the release wheel that `NARWHAL_WHEEL` names and the dependency lock that `NARWHAL_REQUIREMENTS` names against their SHA-256 values, then writes them, the helper snapshots from it and each host's role files into a new directory with a private manifest. | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
-| `install` | Copies a package to each selected host, checking the SHA-256 of every file, and installs the locked dependencies and the wheel into a virtual environment in the host's deployment directory. | [Installing engine 1 and the remaining hosts](../deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
+| `install` | Copies a package to each selected host, checking the SHA-256 of every file, and installs the locked dependencies and the wheel into a virtual environment in the host's deployment directory. | [Installing Narwhal on each host](../deploy/02-Install.md#installing-narwhal-on-each-host) |
 | `transfer-measure` | Measures eight KV handoffs from every engine whose backend sizes its fabric budget from them, on SGLang, to the next engine role with the same launch inputs, and writes each engine's `transfer.json`. | [Measuring KV handoffs](../deploy/04-Qualify-Fabric.md#measuring-kv-handoffs) |
 | `cache-groups` | Groups the engine roles of the launch records that `NARWHAL_LAUNCH_CONFIG` names, else `config/engine-launch.local.json`, by their discovered image and model configuration, their allocation, runtime and transport, and each engine's captured cache layout or measured KV handoff, and writes `cache-groups.json`. Prints each group's ID, representative and roles. | [Deriving cache-equivalence groups](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) |
 | `fabric` | Sizes each cache group's KV budget, then checks the tools, routes, test port and RDMA GID entries of every directed edge between engine hosts and measures it with `iperf3` or `ib_write_bw`, or reuses a retained sample whose link record is unchanged, against the budget of every source role. | [Qualify the transfer fabric](../deploy/04-Qualify-Fabric.md) |
@@ -62,14 +62,14 @@ Each stage runs on its hosts:
 | Stage | What `run` does |
 | --- | --- |
 | `access` | Logs in to the host and keeps its `hostname` output. |
-| `discover` | Runs discovery into the attempt and writes `hosts.local.json`, `fleet.local.json`, `engine-launch.local.json` and `deployment.env` there. Later stages read these instead of `config/`. |
+| `discover` | Runs discovery into the attempt and writes `hosts.local.json`, `fleet.json`, `engine-launch.local.json`, `engine-launch.sources.json` and `deployment.env` to its `config/`. Later stages read these instead of your `config/`. |
 | `package`, `install` | Builds the package from the discovered files and installs it on each host. |
 | `engine-inspect`, `engine-prepare`, `engine-check`, `engine-probe`, `cache-capture` | Runs `narwhal-engine inspect-host`, `prepare`, `check`, `probe` or `capture-cache` for the engine. `engine-prepare` writes a new launch directory in its attempt. Before `engine-inspect` runs again, the run stops its own sidecar and engine container of that role, whose ports the inspection checks. |
 | `engine-start` | Removes the container of the engine's previous start, then runs `narwhal-engine start --ready-seconds` with the stage limit less 60 seconds. A container that fails to answer is removed after its logs are kept. A launch directory starts one engine: when `engine-start` reruns on a directory that already started one, it stops nothing, `engine-prepare` writes a fresh directory and the run continues from there. |
 | `transfer-measure`, `cache-groups`, `fabric-budget`, `fabric-edge` | Measures the engine's KV handoffs, derives the groups and qualifies each edge as the matching subcommand does. `fabric-edge` reuses the previous attempt's sample while its link record holds. |
 | `fleet-inventory` | Checks that the router's installed fleet names every engine of the inventory and that its role environment defines every `${...}` reference of the fleet. |
 | `attest-capture`, `sidecar-verify`, `finalize-fleet` | Captures and publishes the engine's attestation, verifies its sidecar, and writes the attested `engine_contract` into the router's fleet. |
-| `sidecar-start` | Starts the attestation sidecar as a systemd user unit of the run, in place of the previous attempt's unit, and waits for `/health`. |
+| `sidecar-start` | Starts the attestation sidecar as a systemd user unit of the run, in place of the previous attempt's unit, and waits for its attestation URL to answer HTTP 200. |
 | `profile`, `calibrate`, `preflight` | Runs `narwhal-profile` or `narwhal-check --calibrate-first-token` once on the primary router's host, or `narwhal-check` on each router host, with the fleet that `fleet-limits` or the stage before it wrote. |
 | `lease-check` | Checks the lease path on both router hosts with the router's lease code, as [Checking the shared lease path](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) describes. |
 | `router-start` | Starts each router of the pair as a systemd user unit, the primary first, and measures the router overhead, as [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) describes. |
@@ -91,7 +91,7 @@ Evidence: runs/deploy/first-deploy/stages/engine-check/engine-1/attempt-1
 
 Fix the cause and run `run` again. It resumes at the failed stage. `down` stops each process only while its recorded identity matches, so it never stops a process another run started.
 
-Only container engines run on SSH hosts. `down` removes the monitoring and HAProxy containers too, and keeps the monitoring volumes.
+Only container engines run on SSH hosts. `down` keeps the monitoring volumes, the deployment directories on the hosts and the run directory.
 
 `run --trial` takes the stages to `trial`, and `plan --trial` decides them. Without `--trial`, `run` stops at `monitoring` and leaves a recorded trial as it is. `--trial` needs the default SSH target, and `--until trial` needs `--trial`; both refusals exit with code `2`.
 
@@ -131,7 +131,7 @@ The host runs each command under coreutils `timeout`, which sends SIGTERM to the
 
 OpenSSH does not signal a command that has no terminal when its client dies. When you stop `discover` or `run` with Ctrl+C or SIGTERM, or a host does not answer, the workstation opens a second connection to every host whose command was still running, all at once, and stops each command the same way within 30 seconds. Each host command records the process ID of its `timeout` under `~/.cache/narwhal-commands/` on the host while it runs, at mode 0600, and the host's shell uses that record for the SIGKILL at the limit. A host where that directory cannot be created or written refuses every command before it runs, with `cannot create $HOME/.cache/narwhal-commands to record the command; make it writable`. So does a host where the directory is a symbolic link or belongs to another user, and one where other users can write to it, with `$HOME/.cache/narwhal-commands is writable by other users; run chmod go-w on it`. OpenSSH gives up on a connection after 30 seconds. `shell` and `tunnel` run until you leave them.
 
-Each host's log holds the scripts that ran there, their exit status or time limit, and their output, at mode 0600. The log directory is `logs/` in the discovery output, the package directory or the `transfer-measure` or `fabric` output, `logs/` in each stage attempt of `run`, `live/` in the run directory for the checks of `run`, `status` and `down`, or `runs/access-<id>/` for `access`, `plan`, `tunnel`, and `shell` without `--run`.
+Each host's log holds the scripts that ran there, their exit status or time limit, and their output, at mode 0600. The log directory is `logs/` in the discovery output, the package directory or the `transfer-measure` or `fabric` output, `logs/` in each stage attempt of `run`, `live/` in the run directory for the checks of `run`, `status` and `down`, or `runs/access-<id>/` for `access`, `plan`, `tunnel`, and `shell` without `--run`. [Where each process logs](../Deploy.md#where-each-process-logs) lists the logs of the engines, sidecars, routers, HAProxy and monitoring that a run leaves running.
 
 ## Fabric qualification
 
@@ -165,7 +165,7 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 
 ## Options
 
-`--format` applies to every subcommand except `shell` and `tunnel`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` and `--trial` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
+`--format` applies to every subcommand except `shell` and `tunnel`, `--target` to `plan`, `run`, `status` and `down`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` and `--trial` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
