@@ -168,8 +168,8 @@ The load client runs on the workstation from the installed wheel. For the length
 
 1. Refuses to run when an engine's `checked.json` shows `prefix_caching` other than `false`, and when the workload leaves an engine's profiled domain: a prompt outside the profile's `prefill_min_tokens` to `prefill_max_tokens`, an output outside `decode_min_output_tokens` to `decode_max_output_tokens`, or one request's tokens above `decode_max_kv_tokens`.
 2. Prepares the workload from the router's served model with `load_trial prepare`.
-3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state` and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees.
-4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the first rate to the query:
+3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees.
+4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query:
 
     | Series | Passes when |
     | --- | --- |
@@ -177,7 +177,7 @@ The load client runs on the workstation from the installed wheel. For the length
     | `request` | `narwhal_served_total` grew |
     | `token` | `narwhal_decode_tokens_observed_total` grew, and the engines computed prompt tokens and generated output tokens |
     | `role` | Every engine held a role in a pool, as `narwhal_instance_role` shows |
-    | `pool-load` | `narwhal_pool_load` rose above 0 for the prefill and the decode pool |
+    | `pool-load` | The prefill and the decode pool each reported `narwhal_pool_load`. A pool whose engines run at their idle pace reports 0, which passes |
 
 5. Runs the post-load KV ring on the primary router's host, with the fleet that `fleet-limits` wrote:
 

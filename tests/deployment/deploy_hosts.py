@@ -203,6 +203,7 @@ class Fleet:
         self.lost_rows = 0
         self.missing_series: set[tuple[str, str]] = set()
         self.queries: list[str] = []
+        self.prometheus_clients: list[Any] = []
 
     def mount(self, host: str) -> str:
         """`lease_check mount` on `host`: the lease directory's mount."""
@@ -532,11 +533,13 @@ class Fleet:
             "journal_run_after": "j1" if host == self.active_router else f"j-{host}",
         }
 
-    def prometheus(self, origin: str) -> Any:
+    def prometheus(self, origin: str, client: Any) -> Any:
         host, address = self._forwarded(origin)
         assert (host, address) == ("node-1", "127.0.0.1:9090"), (host, address)
+        self.prometheus_clients.append(client)
 
         def query(expression: str) -> list[dict]:
+            assert not client.is_closed
             # The stage runs the checks in their listed order.
             series = deploy.capacity.SERIES[len(self.queries) % len(deploy.capacity.SERIES)]
             self.queries.append(expression)

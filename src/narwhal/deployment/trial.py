@@ -26,6 +26,7 @@ from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
 
 from ..contracts import TRIAL, ContractVersionError, validate_document
+from ..diagnostics.bundle import DIAGNOSTIC_HEADERS
 
 # The optional fields of a definition and their defaults, the load client's own.
 DEFAULTS = {"max_inflight": 64, "max_lag_s": 0.05, "timeout_s": 120.0}
@@ -181,7 +182,8 @@ def domain_problems(definition: Definition, rows: Sequence[Mapping[str, Any]]) -
 
 def router_sample(client: httpx.Client, origin: str) -> dict[str, Any]:
     """One router's state, metrics and state again; the second state read vouches that the
-    metrics belong to the same journal run."""
+    metrics belong to the same journal run. The state reads are diagnostic, so a standby
+    answers them with its own state instead of refusing."""
     item: dict[str, Any] = {
         "at": datetime.now(UTC).isoformat(),
         "monotonic": time.monotonic(),
@@ -194,7 +196,7 @@ def router_sample(client: httpx.Client, origin: str) -> dict[str, Any]:
         ("state_after", "/narwhal/state", True),
     ):
         try:
-            response = client.get(origin + path)
+            response = client.get(origin + path, headers=DIAGNOSTIC_HEADERS if decoded else None)
             response.raise_for_status()
             item[name] = response.json() if decoded else response.text
         except (httpx.HTTPError, ValueError) as error:
@@ -211,12 +213,12 @@ def router_sample(client: httpx.Client, origin: str) -> dict[str, Any]:
 Query = Callable[[str], list[dict[str, Any]]]
 
 
-def prometheus(origin: str, client: httpx.Client | None = None) -> Query:
-    """A `Query` against the Prometheus HTTP API at `origin`, evaluated at the current time."""
-    session = client or httpx.Client(timeout=30, trust_env=False)
+def prometheus(origin: str, client: httpx.Client) -> Query:
+    """A `Query` against the Prometheus HTTP API at `origin` through `client`, evaluated at the
+    current time."""
 
     def query(expression: str) -> list[dict[str, Any]]:
-        response = session.get(origin + "/api/v1/query", params={"query": expression})
+        response = client.get(origin + "/api/v1/query", params={"query": expression})
         response.raise_for_status()
         body = response.json()
         if body.get("status") != "success" or body.get("data", {}).get("resultType") != "vector":
@@ -268,24 +270,34 @@ SERIES = (
         f"max by (iid) (last_over_time(narwhal_instance_role{{{_ROUTER}}}[@window]))",
         "iid",
     ),
+    # A pool's load reads 0 while its engines run at their idle pace, as at a low rate, so the
+    # check asks that each pool reported its load, not that the load rose.
     Series(
         "pool-load",
-        "the prefill and decode pools each carried load",
-        f"max by (role) (max_over_time(narwhal_pool_load{{{_ROUTER}}}[@window])) > bool 0",
+        "the prefill and decode pools each reported their load",
+        f"max by (role) (max_over_time(narwhal_pool_load{{{_ROUTER}}}[@window])) >= bool 0",
         "role",
     ),
 )
 POOLS = ("prefill", "decode")
 
 
-def _engine_series(name: str, selector: str, window: str) -> str:
-    """Every engine backend's dashboard query for `name`, joined with `or`."""
+def _engine_series(name: str, selector: str, window: str, routers: str) -> str:
+    """Every engine backend's dashboard query for `name`, joined with `or`, with the dashboard's
+    variables replaced: the engine selector, the window, and the fleet's routers."""
     queries = []
     for backend in backend_names():
         metrics = load_backend(backend).metrics
         mapping = metrics.dashboard_series if metrics is not None else {}
         if name in mapping:
-            query = mapping[name].replace("@sel", selector).replace("$__rate_interval", window)
+            query = (
+                mapping[name]
+                .replace("@sel", selector)
+                .replace("$__rate_interval", window)
+                .replace('instance=~"$router"', routers)
+            )
+            if "$" in query:
+                raise ValueError(f"the {backend} {name} series keeps a dashboard variable")
             queries.append(f"({query})")
     if not queries:
         raise ValueError(f"no engine backend maps the {name} series")
@@ -300,7 +312,7 @@ def expression(series: Series, fleet: str, window_s: int) -> str:
     while "<<" in text:
         start = text.index("<<")
         end = text.index(">>", start)
-        engines = _engine_series(text[start + 2 : end], f'job="engines",{scope}', window)
+        engines = _engine_series(text[start + 2 : end], f'job="engines",{scope}', window, scope)
         text = text[:start] + engines + text[end + 2 :]
     return text.replace("@scope", scope).replace("@window", window)
 

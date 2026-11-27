@@ -81,8 +81,8 @@ from .runner import Input, Outcome, Refreshed, Runner, Spent, StageContext, chec
 # `narwhal deploy run` ends at the monitoring stack, or with `--trial` at the capacity trial.
 LAST_STAGE = "monitoring"
 TRIAL_STAGE = "trial"
-# Seconds before the trial's first rate that its series window also covers: three Prometheus
-# scrape intervals.
+# Seconds before the trial prepares its workload that its series window also covers: three
+# Prometheus scrape intervals.
 SERIES_MARGIN_S = 15
 # Seconds a started sidecar or router has to answer its health route, and a router its
 # readiness route.
@@ -2093,9 +2093,13 @@ class Deployment:
             self._offer(context, definition, fleet, client, routers, result)
             window = math.ceil(time.time() - started) + SERIES_MARGIN_S
             iids = [str(engine["iid"]) for engine in fleet["engines"]]
-            series, found = capacity.check_series(
-                capacity.prometheus(prometheus), self.env["NARWHAL_FLEET_NAME"], window, iids
-            )
+            with httpx.Client(timeout=30, trust_env=False) as session:
+                series, found = capacity.check_series(
+                    capacity.prometheus(prometheus, session),
+                    self.env["NARWHAL_FLEET_NAME"],
+                    window,
+                    iids,
+                )
             _private(context.directory / "series.json", series)
             result["series"] = [{key: row[key] for key in ("series", "passed")} for row in series]
             if found:

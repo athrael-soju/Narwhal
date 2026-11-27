@@ -73,6 +73,9 @@ class CapacityTrialTests(unittest.TestCase):
             {row["series"] for row in trial["series"]},
             {"engine", "request", "token", "role", "pool-load"},
         )
+        # The stage closes its Prometheus client once the checks are done.
+        self.assertTrue(all(client.is_closed for client in self.fleet.prometheus_clients))
+        self.assertEqual(len(self.fleet.prometheus_clients), 1)
         # The workload is prepared once, then each rate runs in order with the trial's limits,
         # through the load balancer's forward.
         self.assertEqual([argv[3] for argv in self.fleet.load_argv], ["prepare", "run", "run"])

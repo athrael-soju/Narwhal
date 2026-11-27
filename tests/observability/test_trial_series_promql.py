@@ -31,7 +31,7 @@ def engine(iid: str, fleet: str = "fleet-a") -> str:
     return f'job="engines",instance="{iid}:8100",iid="{iid}",fleet="{fleet}"'
 
 
-def trial_fleet(*, n2_up: str = "1x40", served: str = "0+2x40", decode: str = "0x10 0.3x30"):
+def trial_fleet(*, n2_up: str = "1x40", served: str = "0+2x40", decode: str | None = "0x10 0.3x30"):
     """A fleet of two engines behind a router pair through a trial, beside another fleet."""
     inputs = []
     inputs += series("up", engine("n1"), "1x40")
@@ -46,7 +46,8 @@ def trial_fleet(*, n2_up: str = "1x40", served: str = "0+2x40", decode: str = "0
         inputs += series("narwhal_instance_role", f'{router},iid="n1",role="prefill"', "1x40")
         inputs += series("narwhal_instance_role", f'{router},iid="n2",role="decode"', "1x40")
         inputs += series("narwhal_pool_load", f'{router},role="prefill"', "0x10 0.5x30")
-        inputs += series("narwhal_pool_load", f'{router},role="decode"', decode)
+        if decode is not None:
+            inputs += series("narwhal_pool_load", f'{router},role="decode"', decode)
     # The neighbour fleet serves, and its engine is down, without touching fleet-a's checks.
     inputs += series("up", engine("n3", "fleet-b"), "0x40")
     inputs += series("narwhal_served_total", OTHER, "0+5x40")
@@ -54,9 +55,9 @@ def trial_fleet(*, n2_up: str = "1x40", served: str = "0+2x40", decode: str = "0
     return inputs
 
 
-def expected(failing: dict[str, dict[str, float]] | None = None) -> list[list[str]]:
+def expected(failing: dict[str, dict[str, float | None]] | None = None) -> list[list[str]]:
     """The samples each check returns at the trial's end: every sample 1 unless `failing`
-    gives a check's samples by its meaning."""
+    gives a check's samples by its meaning, where None means the check returns no sample."""
     found = []
     for check in trial.SERIES:
         if check.per == "iid":
@@ -65,7 +66,11 @@ def expected(failing: dict[str, dict[str, float]] | None = None) -> list[list[st
             samples = {'{role="decode"}': 1.0, '{role="prefill"}': 1.0}
         else:
             samples = {"{}": 1.0}
-        samples.update((failing or {}).get(check.meaning, {}))
+        for labels, value in (failing or {}).get(check.meaning, {}).items():
+            if value is None:
+                samples.pop(labels)
+            else:
+                samples[labels] = value
         text = trial.expression(check, "fleet-a", WINDOW_S)
         found.append(samples_test(text, EVAL_S, samples))
     return found
@@ -112,15 +117,18 @@ class TrialSeriesTests(unittest.TestCase):
     def test_every_check_holds_for_a_fleet_that_served_the_trial(self):
         self.run_promtool(trial_fleet(), expected())
 
-    def test_a_down_engine_an_idle_pool_and_no_served_requests_fail_their_checks(self):
+    def test_a_pool_whose_engines_stay_at_their_idle_pace_still_shows(self):
+        self.run_promtool(trial_fleet(decode="0x40"), expected())
+
+    def test_a_down_engine_an_unreported_pool_and_no_served_requests_fail_their_checks(self):
         meanings = {check.name: check.meaning for check in trial.SERIES}
         self.run_promtool(
-            trial_fleet(n2_up="1x20 0 1x19", served="0x40", decode="0x40"),
+            trial_fleet(n2_up="1x20 0 1x19", served="0x40", decode=None),
             expected(
                 {
                     meanings["engine"]: {'{iid="n2"}': 0.0},
                     meanings["request"]: {"{}": 0.0},
-                    meanings["pool-load"]: {'{role="decode"}': 0.0},
+                    meanings["pool-load"]: {'{role="decode"}': None},
                 }
             ),
         )

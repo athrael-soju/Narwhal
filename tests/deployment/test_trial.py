@@ -139,6 +139,28 @@ class RouterSampleTests(unittest.TestCase):
         self.assertEqual(sample["router_metrics"], "narwhal_offered_total 3\n")
         self.assertEqual((sample["journal_run_after"], sample["errors"]), ("j1", {}))
 
+    def test_the_state_reads_are_diagnostic_so_a_standby_answers_them(self):
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            diagnostic = request.headers.get("x-narwhal-diagnostic")
+            seen.append((request.url.path, diagnostic))
+            if request.url.path == "/metrics":
+                return httpx.Response(200, text="narwhal_offered_total 0\n")
+            # A standby refuses a fleet-state read that is not diagnostic.
+            if diagnostic != "true":
+                return httpx.Response(503)
+            return httpx.Response(200, json={"journal_run": "standby"})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        sample = trial.router_sample(client, "http://standby")
+        self.assertEqual(sample["errors"], {})
+        self.assertEqual(sample["journal_run_after"], "standby")
+        self.assertEqual(
+            seen,
+            [("/narwhal/state", "true"), ("/metrics", None), ("/narwhal/state", "true")],
+        )
+
     def test_a_failed_read_is_kept_as_an_error(self):
         client = transport({"/narwhal/state": httpx.Response(503)})
         sample = trial.router_sample(client, "http://router")
@@ -179,7 +201,7 @@ class SeriesTests(unittest.TestCase):
                 text = trial.expression(series, "fleet-a", 615)
                 self.assertNotIn("@", text)
                 self.assertNotIn("<<", text)
-                self.assertNotIn("$__", text)
+                self.assertNotIn("$", text)
                 self.assertIn('fleet="fleet-a"', text)
                 self.assertIn("[615s]", text)
         self.assertEqual(
@@ -187,13 +209,22 @@ class SeriesTests(unittest.TestCase):
             {"engine", "request", "token", "role", "pool-load"},
         )
 
+    def test_a_backend_query_that_names_the_routers_names_the_fleets_routers(self):
+        # The sglang and TensorRT-LLM prompt-token queries leave out decode engines by the roles
+        # the dashboard's selected routers report.
+        prompt = next(series for series in trial.SERIES if "<<prompt_tokens>>" in series.expression)
+        text = trial.expression(prompt, "fleet-a", 60)
+        self.assertNotIn('instance=~"', text)
+        self.assertIn('narwhal_instance_role{job="narwhal-router",fleet="fleet-a"', text)
+
+    def test_a_pool_at_load_zero_still_shows(self):
+        pool = next(series for series in trial.SERIES if series.name == "pool-load")
+        self.assertIn(">= bool 0", trial.expression(pool, "fleet-a", 60))
+
     def test_a_check_passes_only_when_every_engine_or_pool_shows(self):
         def query(text: str) -> list[dict]:
             if "narwhal_pool_load" in text:
-                return [
-                    {"metric": {"role": "prefill"}, "value": [1, "1"]},
-                    {"metric": {"role": "decode"}, "value": [1, "0"]},
-                ]
+                return [{"metric": {"role": "prefill"}, "value": [1, "1"]}]
             if "up{" in text:
                 return [{"metric": {"iid": "n1"}, "value": [1, "1"]}]
             if "narwhal_instance_role" in text:
@@ -206,7 +237,8 @@ class SeriesTests(unittest.TestCase):
             [
                 "engine: not shown for n2: every engine's scrape target was up at every scrape "
                 "of the trial",
-                "pool-load: not shown for decode: the prefill and decode pools each carried load",
+                "pool-load: not shown for decode: the prefill and decode pools each reported "
+                "their load",
             ],
         )
         self.assertEqual(
