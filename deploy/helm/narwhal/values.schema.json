@@ -838,6 +838,50 @@
         "type": "string",
         "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
       }
+    },
+    "modelVolumeSources": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "The model volume sources a fleet may use",
+      "items": {
+        "type": "string",
+        "enum": [
+          "persistentVolumeClaim",
+          "hostPath",
+          "nfs",
+          "csi"
+        ]
+      }
+    },
+    "modelHostPathPrefixes": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Host directories a fleet's hostPath model volume may be or lie in; empty turns hostPath off",
+      "items": {
+        "type": "string",
+        "maxLength": 4096,
+        "pattern": "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+      }
+    },
+    "modelNfsServers": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The NFS servers a fleet's nfs model volume may name; empty turns nfs off",
+      "items": {
+        "type": "string",
+        "maxLength": 253,
+        "pattern": "^[A-Za-z0-9.:\\[\\]-]+$"
+      }
+    },
+    "modelCsiDrivers": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The CSI drivers a fleet's csi model volume may use; empty turns csi off",
+      "items": {
+        "type": "string",
+        "maxLength": 63,
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+      }
     }
   },
   "required": [

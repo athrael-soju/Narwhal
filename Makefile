@@ -46,7 +46,7 @@ help:
 	  '  docs-serve   Preview docs at http://127.0.0.1:8000/Narwhal/' \
 	  '  docs-build   Build documentation in strict mode' \
 	  '  chart-tools  Install the pinned helm and kubeconform into local/bin' \
-	  '  chart-check  Lint, render and validate the Helm chart, and run its tests' \
+	  '  chart-check  Lint, render and validate the Helm charts, and run their tests' \
 	  '  chart-e2e    Run the chart on a kind cluster with CPU engines and fail over its routers' \
 	  '  observe      Start provisioned Prometheus and Grafana services' \
 	  '  help         Show this command list without setting up an environment' \
@@ -112,9 +112,12 @@ docs-build: $(BOOTSTRAP)
 observe: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m narwhal.observability.stack.start.cli
 
-# The Helm chart, rendered for the synthetic fleet of the chart tests and validated against the
-# Kubernetes API schemas of CHART_KUBE_VERSION.
+# The Helm charts. The main chart is rendered for the synthetic fleet of the chart tests and
+# validated against the Kubernetes API schemas of CHART_KUBE_VERSION. kubeconform has no schema
+# for a CustomResourceDefinition, so the CRD chart's test compares its rendered CRD with the
+# one fleet_resource defines.
 CHART := deploy/helm/narwhal
+CRD_CHART := deploy/helm/narwhal-crds
 CHART_TOOLS := local/bin
 CHART_OUT := runs/chart
 CHART_KUBE_VERSION ?= 1.31.0
@@ -126,6 +129,9 @@ chart-tools:
 
 chart-check: $(BOOTSTRAP) chart-tools
 	mkdir -p $(CHART_OUT)
+	$(HELM) lint --strict $(CRD_CHART)
+	$(HELM) template narwhal-crds $(CRD_CHART) --kube-version $(CHART_KUBE_VERSION) \
+	  > $(CHART_OUT)/crds.manifests.yaml
 	$(VENV_PYTHON) -m tests.deployment.chart_fixtures $(CHART_OUT)/values.json \
 	  $(CHART_OUT)/direct-values.json
 	for fleet in values direct-values; do \
@@ -135,7 +141,8 @@ chart-check: $(BOOTSTRAP) chart-tools
 	  $(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) \
 	    $(CHART_OUT)/$$fleet.manifests.yaml || exit 1; \
 	done
-	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart
+	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart \
+	  tests.deployment.test_crd_chart
 
 chart-e2e-tools:
 	$(PYTHON) tools/maintenance/chart_tools.py --e2e $(CHART_TOOLS)

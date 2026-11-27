@@ -61,7 +61,14 @@ def errors(value: Any, node: Any, path: str = "") -> list[str]:
         elif keyword == "maximum":
             if _is(value, "number") and value > rule:
                 found.append(f"{where}: {value} is above {rule}")
-        elif keyword in ("minItems", "maxItems", "minProperties", "maxProperties", "minLength"):
+        elif keyword in (
+            "minItems",
+            "maxItems",
+            "minProperties",
+            "maxProperties",
+            "minLength",
+            "maxLength",
+        ):
             if isinstance(value, (list, dict, str)) and _is(value, _counted(keyword)):
                 size = len(value)
                 if (keyword.startswith("min") and size < rule) or (
