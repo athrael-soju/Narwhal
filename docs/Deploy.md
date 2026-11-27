@@ -30,9 +30,20 @@ Create a private deployment record before the first command. For every stage, re
 
 On failure, record the state before changing it, retain the failed evidence, and remove only files and processes from that attempt. Replace private addresses, paths, and credentials with stable aliases before exporting evidence.
 
+## Running the deployment
+
+`narwhal deploy run` runs every stage of the [stage table](#rerunning-after-a-change) from host access to a ready router, and keeps each stage's evidence in its run directory. With `.env` loaded, check the inputs and hosts first:
+
+```bash
+narwhal deploy plan --run runs/deploy/first-deploy
+narwhal deploy run --run runs/deploy/first-deploy
+```
+
+A failed stage prints its recovery section and evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose result still holds. `narwhal deploy status` shows each stage and checks the processes the run started, and `narwhal deploy down` stops them. [Running the stage graph](cli/Deploy.md#running-the-stage-graph) describes what each stage runs and the inputs it reads. The `monitoring` and `trial` stages still run by hand, as [Serve and measure](deploy/07-Serve-and-Measure.md) describes.
+
 ## Deployment sequence
 
-Record each gate's result before the next gate.
+Each gate page below runs its stages by hand. Record each gate's result before the next gate.
 
 <div class="grid cards" markdown>
 
@@ -126,7 +137,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | SSH destination of a host | Every host's SSH destination | `access`, `package` and every stage after it |
 | Hardware, model, image, checkpoint, launch policy, route or transport | The discovery fields of `.env`, the live image ID and the checkpoint tree digest | `discover` and every stage after it |
 | Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT` | `package` and every stage after it |
-| SLO targets | `slo.ttft_s` and `slo.tpot_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
+| SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
@@ -135,7 +146,8 @@ A change reruns the stages its row lists and no others. A change that touches se
 | Router settings | The bind address, port, lease path, standby options and load balancer | `router-start`, `monitoring`, `trial` |
 | Monitoring origins | The router and load balancer origins and the listen addresses | `monitoring` |
 | Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
-| Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight` |
+| Launch directory whose engine has stopped | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check`, `engine-start` for that engine |
+| Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight`, `router-start` to readmit the engine to a router that still runs |
 | Engine cache geometry | The SHA-256 of `cache-layout.json` | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a host of the engine's group |
 | Measured KV handoff size of an engine | The SHA-256 of the engine's `transfer.json` handoff measurement | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a host of the engine's group |
 | Fabric route of a directed edge | The link fingerprint: roles, addresses, interfaces, both live routes, transport, tool version and test parameters, checked live on every run | `fabric-edge` for that edge; `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
@@ -156,7 +168,7 @@ Record these inputs and artifacts in the private deployment record:
 | Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
 | Fabric | Idle engines, fabric routes, test port, transport and RDMA GID entries, representative cache layouts or handoffs, workload budget | The `narwhal deploy fabric` output: `fabric.json`, each group's `budget.json` and its sources, and the route, link, sample and evidence files of every directed sample |
-| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | In each `ENGINE_RUN` directory, the `attestation/` attempt directories [`capture`](deploy/05-Attest.md#capturing-the-attestation) writes, `published-attestation.json` and the `attestation-check-*` directory from `verify`; `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |
+| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | In each `ENGINE_RUN` directory, the `attestation/` attempt directories [`capture`](deploy/05-Attest.md#capturing-the-attestation) writes, `published-attestation.json` and the `attestation-check-*` directory from `verify`; `runs/deployment/fleet.json`, `runs/deployment/fleet.before-attestation-<id>.json` |
 | Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
 | Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |
 | Router | Bind address, model, engine count, and role split | Router env, fleet config, endpoint captures |

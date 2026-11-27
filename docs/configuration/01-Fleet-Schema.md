@@ -77,6 +77,8 @@ A fleet needs six fields:
 
 Set both targets from measurements on the deployed engine shape.
 
+`slo.router_overhead_s`, default `0`, is the time in seconds that the router adds to a request before its first token. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) checks that the first-token deadline, the slowest engine's prefill of the longest calibrated input and this overhead fit within `slo.ttft_s`.
+
 Each engine entry takes these fields:
 
 | Field             | Default    | Notes                                                                                              |

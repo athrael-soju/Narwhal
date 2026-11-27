@@ -87,7 +87,7 @@ async def run(
             roles = await _live_roles(cfg, live, switcher)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
-        await gate_calibration(cfg, rep)
+        calibration = await gate_calibration(cfg, rep)
         activity.advance()
         incompatible = await gate_contract(cfg, live, rep)
         activity.advance()
@@ -123,7 +123,7 @@ async def run(
                     cfg, live, handoffs, client, rep, mesh, repeats, evidence=rep.pairs, hca=hca
                 )
             activity.advance()
-        gate_slo(cfg, store, rep)
+        gate_slo(cfg, store, rep, calibration)
         activity.advance()
         if evidence_out is not None:
             await check_directed_evidence(

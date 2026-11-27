@@ -219,6 +219,7 @@ The `slo` gate checks each engine's profile against the SLO targets. An engine w
 | Decode bounds | The profile's measured decode request or KV-token bound is missing. |
 | TPOT | The token interval at the profile's smallest measured decode cohort exceeds `slo.tpot_s`. |
 | TTFT | `slo.ttft_s` is at or below the profile's single-token prefill time. |
+| First-token budget | With a `measured` or `reused` calibration, `engine.first_token_timeout_s` plus the slowest profiled engine's prefill of the longest calibrated input plus `slo.router_overhead_s` exceeds `slo.ttft_s`. |
 
 ## Exit codes
 

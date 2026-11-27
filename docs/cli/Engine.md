@@ -65,7 +65,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `check` | container, Kubernetes, native | Prepared launch directory, and for Kubernetes the engine pod's records | `checked.json`, and `image-check.log`, `runtime-check.log` or the pod's records under `pods/` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
-| `start` | container | Checked plan | One serving container, `container.id` and `container-start.json` |
+| `start` | container | Checked plan | One serving container, `container.id` and `container-start.json`; with `--ready-seconds`, an engine that answers `/health` |
 | `probe` | container, native | Launch directory of a running engine | The engine's HTTP responses and `probe.json` in `--out` |
 | `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
@@ -98,7 +98,7 @@ With text output, `prepare` exits 2 when it fails and 1 when its `--out` directo
 | `--pod-evidence` | | Directory with an engine pod's `checkpoint.json` and `runtime-check.json`, read by `check`. Required for a Kubernetes plan and refused for the others. |
 | `--out` | required | New launch directory for `prepare`. Evidence directory for `inspect-host` and `probe`, created at mode 0700 when absent; the action refuses one that already holds its evidence. |
 | `--run` | required | Launch directory for every action except `inspect-host` and `prepare`, given two to eight times for `start-shared` and one to eight times for `start-native`. |
-| `--ready-seconds` | 180 | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. |
+| `--ready-seconds` | 180; none for `start` | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. `start` waits only when you pass it, and fails when the container exits or `/health` does not answer in time. |
 
 ## Kubernetes plans
 

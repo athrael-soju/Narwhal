@@ -6,6 +6,7 @@ import httpx
 
 from ...backends import load as load_backend
 from ...config import FleetConfig
+from ...profiling.calibration import CalibrationCheck
 from ...profiling.generation import (
     bound_profiles,
     generation_problem,
@@ -228,7 +229,18 @@ async def gate_profile_generation(
     return unsafe
 
 
-def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
+def gate_slo(
+    cfg: FleetConfig,
+    store: ProfileStore,
+    rep: Report,
+    calibration: CalibrationCheck | None = None,
+) -> None:
+    """Check each engine's profile against the SLO targets, then the first-token budget.
+
+    With a measured or reused `calibration`, the first-token deadline, the prefill time of
+    the longest calibrated input on the slowest profiled engine and the router overhead must
+    fit within `slo.ttft_s`.
+    """
     print("slo")
     for spec in cfg.engines:
         p = store.get(spec.iid)
@@ -255,3 +267,31 @@ def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
             f"{spec.iid} holds {headroom:.0f} batch tokens across {requests} requests "
             "at the TPOT target"
         )
+    if calibration is not None:
+        _first_token_budget(cfg, store, calibration, rep)
+
+
+def _first_token_budget(
+    cfg: FleetConfig, store: ProfileStore, calibration: CalibrationCheck, rep: Report
+) -> None:
+    longest = calibration.longest_input_tokens
+    if calibration.status not in ("measured", "reused") or longest is None:
+        return
+    prefills = {
+        spec.iid: profile.prefill_time(longest)
+        for spec in cfg.engines
+        if (profile := store.get(spec.iid)) is not None
+    }
+    if not prefills:
+        return
+    slowest = max(prefills, key=lambda iid: prefills[iid])
+    deadline, overhead = cfg.first_token_timeout_s, cfg.slo.router_overhead_s
+    total = deadline + prefills[slowest] + overhead
+    figures = (
+        f"first-token deadline {deadline:.3f}s + {slowest} prefill of {longest} tokens "
+        f"{prefills[slowest]:.3f}s + router overhead {overhead:.3f}s = {total:.3f}s"
+    )
+    if total > cfg.slo.ttft_s:
+        rep.fail(f"{figures} exceeds slo.ttft_s {cfg.slo.ttft_s:.3f}s")
+    else:
+        rep.ok(f"{figures} fits slo.ttft_s {cfg.slo.ttft_s:.3f}s")

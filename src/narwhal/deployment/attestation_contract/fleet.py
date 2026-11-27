@@ -57,8 +57,9 @@ def finalize_fleet(path: Path) -> EngineContract:
             raise ValueError("Existing router contract differs from the live sidecars")
         return contracts[0]
     raw_fleet["engine_contract"] = contracts[0].fields()
-    backup = Path("runs") / f"fleet.before-attestation-{uuid.uuid4().hex}.json"
-    backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The backup sits beside the fleet file, so a run that writes the fleet into its own
+    # directory keeps the backup there too.
+    backup = path.with_name(f"{path.stem}.before-attestation-{uuid.uuid4().hex}.json")
     write_private_json(backup, read_json(path))
     temporary = path.with_name(path.name + f".tmp-{uuid.uuid4().hex}")
     try:

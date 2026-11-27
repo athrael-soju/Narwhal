@@ -169,7 +169,7 @@ Run once from the router shell after `verify` passes for every engine:
 `finalize-fleet` writes:
 
 - `engine_contract` in `runs/deployment/fleet.json`.
-- A copy of the previous fleet file at `runs/fleet.before-attestation-<id>.json`.
+- A copy of the previous fleet file beside it, at `runs/deployment/fleet.before-attestation-<id>.json`.
 
 If the fleet file already has an `engine_contract`, `finalize-fleet` checks it against the live contract instead. On a mismatch, `finalize-fleet` exits with status 1 and prints `Existing router contract differs from the live sidecars`.
 

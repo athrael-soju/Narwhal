@@ -57,6 +57,16 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(FleetConfig.load(self.path), cfg)
 
+    def test_router_overhead_defaults_to_zero_and_round_trips(self):
+        self.assertEqual(self.load(self.raw).slo.router_overhead_s, 0.0)
+        self.assertNotIn("router_overhead_s", document(self.load(self.raw))["slo"])
+        cfg = self.load(self.changed(("slo", "router_overhead_s"), 0.05))
+        self.assertEqual(cfg.slo.router_overhead_s, 0.05)
+        cfg.save(self.path)
+        self.assertEqual(FleetConfig.load(self.path), cfg)
+        with self.assertRaisesRegex(ValueError, "slo.router_overhead_s"):
+            replace(cfg, slo=replace(cfg.slo, router_overhead_s=-1)).validate()
+
     def test_packaged_example_matches_the_canonical_document(self):
         packaged = ROOT / "src/narwhal/fleet.example.json"
         canonical = ROOT / "config/fleet.example.json"

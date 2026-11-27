@@ -18,7 +18,7 @@ from ...engines.attestation import (
 )
 from ...engines.client import EngineClient, EngineError
 from ...engines.validation import can_consume, can_produce
-from ...profiling.calibration import verify_calibration
+from ...profiling.calibration import CalibrationCheck, verify_calibration
 from ...profiling.probe.engine import engine_context_limit, make_prompt
 from ...profiling.probe.pairing import paired_transport
 from ...profiling.store import ProfileStore
@@ -97,7 +97,7 @@ async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set
 
 async def gate_calibration(
     cfg: FleetConfig, rep: Report, transport: httpx.AsyncBaseTransport | None = None
-) -> None:
+) -> CalibrationCheck:
     print("calibration")
     check = await verify_calibration(cfg, transport=transport)
     if check.status == "uncalibrated":
@@ -112,6 +112,7 @@ async def gate_calibration(
     else:
         rep.ok(check.summary(cfg.first_token_timeout_s))
     rep.calibration = {**check.view(), "path": None if check.path is None else str(check.path)}
+    return check
 
 
 async def gate_contract(

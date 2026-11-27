@@ -317,6 +317,8 @@ class CalibrationCheck:
     candidate_deadline_s: float | None = None
     engines: dict[str, EngineLabel] = field(default_factory=dict)
     process_starts: dict[str, float] = field(default_factory=dict)
+    # The longest target input length the calibration measured.
+    longest_input_tokens: int | None = None
 
     def at_starts(self, starts: Mapping[str, float]) -> CalibrationCheck:
         if not self.engines:
@@ -399,6 +401,7 @@ async def verify_calibration(
         candidate_deadline_s=document["candidate_deadline_s"],
         engines=labels,
         process_starts=dict(document["process_starts"]),
+        longest_input_tokens=max(document["input_tokens"]),
     )
 
 

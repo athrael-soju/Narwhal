@@ -648,6 +648,22 @@ class EngineLauncherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "NARWHAL_MODEL_SHA256 pins a model file"):
                 prepare(root / "launch", env, backend="native")
 
+    def test_start_waits_for_health_only_when_given_ready_seconds(self):
+        plan = {"role": "engine-1"}
+        for ready, waits in ((None, []), (30, [30])):
+            run = Path(tempfile.mkdtemp())
+            waited = Mock()
+            with (
+                self.subTest(ready=ready),
+                patch.object(launch_start, "_create_container", return_value="cid"),
+                patch.object(launch_start, "docker", return_value="2026-01-01T00:00:00Z"),
+                patch.object(launch_start, "record_container_start"),
+                patch.object(launch_start, "wait_ready", waited),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                launch_start.start(run, plan, ready)
+            self.assertEqual([call.args[3] for call in waited.call_args_list], waits)
+
     def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

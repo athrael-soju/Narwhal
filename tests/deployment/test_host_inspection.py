@@ -261,11 +261,27 @@ class HostInspectionTests(unittest.TestCase):
         self.assertIn(f"model: {model} differs from NARWHAL_MODEL_SHA256", self.failures())
 
     def test_an_unavailable_planned_port_fails_with_its_address(self):
-        self.host.busy = {8000, 39002}
+        self.host.busy = {8000}
         failures = self.failures()
         port = next(f for f in failures if f.startswith("ports: "))
         self.assertIn("the engine port 8000 at 0.0.0.0 is unavailable", port)
-        self.assertIn("UCX TCP ports 39002 at 192.0.2.11 are unavailable", port)
+
+    def test_the_ucx_range_needs_one_free_port_per_listener(self):
+        # Ports that closed connections hold in TIME-WAIT are busy; the listeners need only
+        # one free port each: one per TP rank on each transfer device.
+        tp = self.record["tensor_parallel_size"]
+        self.host.busy = set(range(39000, 39004 - tp))
+        report = self.inspect()
+        self.assertEqual(report["ports"]["ucx_tcp_port_range"]["free"], tp)
+        self.assertEqual(report["ports"]["ucx_tcp_port_range"]["listeners"], tp)
+        self.host.busy = set(range(39000, 39005 - tp))
+        self.out = self.out.with_name("second-inspection")
+        port = next(f for f in self.failures() if f.startswith("ports: "))
+        self.assertIn(
+            f"NARWHAL_UCX_TCP_PORT_RANGE 39000-39003 at 192.0.2.11 has {tp - 1} free ports and "
+            f"the engine opens {tp} UCX listeners",
+            port,
+        )
 
     def test_ucx_ports_are_checked_only_for_ucx_tcp(self):
         self.record["transfer"]["transport"] = "ucx_rdma"

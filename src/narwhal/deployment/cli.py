@@ -13,10 +13,25 @@ from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
-from . import cache_groups, discovery, fabric, install
+from . import cache_groups, discovery, fabric, install, remote, run_record, supervision
+from . import deploy as stage_run
+from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
+from .launch_engine.evidence import CheckFailed
+from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed
+
+# The stages `narwhal deploy run --until` can stop after.
+RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.LAST_STAGE) + 1]
 
 DESCRIPTIONS = {
+    "plan": "Check every deployment input and each host's systemd user manager, then print "
+    "each stage up to the router start and whether run would run or skip it, and why.",
+    "run": "Run the stages from host access to a ready router in the run directory, skipping "
+    "each stage whose recorded result still holds, and stop at the first stage that fails.",
+    "status": "Print each stage's state and evidence from the run record, and check whether "
+    "each engine, sidecar and router the run started still runs or has stopped.",
+    "down": "Stop the router, sidecars and engines the run started, each only while its "
+    "recorded identity still matches, and print each as stopped or not running.",
     "discover": "Log in to every host named in the loaded environment with its pinned host key, "
     "inspect GPUs, the engine image and the checkpoint, and write the host inventory, launch "
     "records, fleet and deployment.env.",
@@ -62,8 +77,10 @@ def add_commands(commands: Any) -> None:
     """Register `deploy` beneath the installed root command."""
     deploy = commands.add_parser(
         "deploy",
-        help="Discover, package and install a fleet on SSH hosts",
-        description="Discover, package and install a fleet on SSH hosts. discover inspects the "
+        help="Deploy a fleet on SSH hosts, or run one of its stages alone",
+        description="Deploy a fleet on SSH hosts. plan checks the inputs and prints what run "
+        "would do, run takes the hosts to a ready router and resumes at the stage that did not "
+        "pass, status reports the run and down stops what it started. discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
         "writes the wheel and role files, install copies and installs them, transfer-measure "
         "measures KV handoffs, cache-groups groups the engines that share a fabric budget, "
@@ -76,6 +93,22 @@ def add_commands(commands: Any) -> None:
         action = actions.add_parser(name, help=description, description=description)
         if name not in ("shell", "tunnel"):
             results.add_format(action)
+        if name in ("plan", "run", "status", "down"):
+            action.add_argument(
+                "--run",
+                type=Path,
+                required=True,
+                help="run directory that holds the run record; run creates it",
+            )
+            if name in ("plan", "run"):
+                action.add_argument(
+                    "--until",
+                    choices=RUN_STAGES,
+                    default=stage_run.LAST_STAGE,
+                    metavar="STAGE",
+                    help="stop after this stage (default: %(default)s)",
+                )
+            continue
         if name not in ("discover", "cache-groups"):
             action.add_argument(
                 "--hosts",
@@ -332,7 +365,162 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
     return 0
 
 
+def _inputs(env: dict[str, str]) -> dict[str, Any] | None:
+    """The run's inputs, or None after reporting every missing or malformed one."""
+    try:
+        return stage_run.inputs(env)
+    except stage_run.InputError as error:
+        for problem in error.problems:
+            results.record_error("invalid_input", problem, stage="inputs")
+            print(f"narwhal: deploy: {problem}", file=sys.stderr)
+        results.set_status("invalid_input")
+        return None
+
+
+def _decisions(decisions: Any) -> list[dict[str, Any]]:
+    rows = []
+    for decision in decisions:
+        rows.append(
+            {"stage": decision.key, "runs": decision.ran, "reasons": list(decision.reasons)}
+        )
+        if decision.ran:
+            print(f"{decision.key}: runs; {'; '.join(decision.reasons)}")
+        else:
+            print(f"{decision.key}: skipped; its recorded result holds")
+    return rows
+
+
+def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
+    inputs = _inputs(env)
+    if inputs is None:
+        return 2
+    ssh = SSH(env, _access_logs())
+    problems = {}
+    for host in discovery.derive_hosts(env):
+        runner = remote.SSHRunner(ssh, host, "access")
+        if found := supervision.check_systemd_host(runner):
+            problems[host.id] = found
+    directory = args.run.resolve()
+    result = stage_run.Deployment(directory, env).runner().plan(inputs, until=args.until)
+    rows = _decisions(result.decisions)
+    results.set_data({"run": str(directory), "stages": rows, "hosts": problems})
+    if problems:
+        for name, found in problems.items():
+            for problem in found:
+                message = f"{name}: {problem}"
+                results.record_error("gate_failed", message, stage="plan")
+                print(f"narwhal: deploy plan: {message}", file=sys.stderr)
+        results.set_status("failed_gate")
+        return 1
+    return 0
+
+
+def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
+    """The command result of a failed stage: a rejected check is a failed gate.
+
+    Host commands follow the command result contract, so a host step that exits 1 was
+    rejected by its gate. Any other failure stopped the stage before it could decide.
+    """
+    if error.record["status"] == run_record.TIMEOUT:
+        return "error", "stage_timeout", 4
+    cause = error.__cause__
+    if isinstance(cause, (fabric.BelowBudget, CheckFailed)) or (
+        isinstance(cause, remote.StepFailed) and cause.context["exit_status"] == 1
+    ):
+        return "failed_gate", "gate_failed", 1
+    return "error", "operation_failed", 4
+
+
+def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
+    inputs = _inputs(env)
+    if inputs is None:
+        return 2
+    directory = args.run.resolve()
+    directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    results.add_artifact("run_record", directory / "run.json")
+    runner = stage_run.Deployment(directory, env).runner()
+    try:
+        result = runner.run(inputs, until=args.until)
+    except StageFailed as error:
+        failure = error.record["failure"]
+        recovery = stage_run.recovery_url(failure["recovery"])
+        status, code, exit_code = _stage_failure(error)
+        results.set_data({"run": str(directory), "failed_stage": error.key})
+        results.record_error(
+            code,
+            failure["message"],
+            stage=error.key,
+            context={**failure["context"], "recovery": recovery, "status": error.record["status"]},
+        )
+        results.set_status(status)
+        print(
+            f"narwhal: deploy run: {error.key} {error.record['status']}: {failure['message']}",
+            file=sys.stderr,
+        )
+        print(f"Recovery: {recovery}", file=sys.stderr)
+        print(f"Evidence: {directory / error.record['directory']}", file=sys.stderr)
+        return exit_code
+    except RunCancelled as error:
+        results.set_data({"run": str(directory), "cancelled_stage": error.key})
+        results.record_error("stage_cancelled", str(error), stage=error.key)
+        results.set_status("interrupted")
+        print(f"narwhal: deploy run: {error}", file=sys.stderr)
+        return 130
+    except (RunLocked, HelpersSurvived) as error:
+        results.record_error("operation_failed", str(error), stage="run")
+        results.set_status("error")
+        print(f"narwhal: deploy run: {error}", file=sys.stderr)
+        return 4
+    ran = [decision.key for decision in result.decisions if decision.ran]
+    results.set_data({"run": str(directory), "run_id": result.run_id, "ran": ran})
+    print(f"Run {result.run_id} reached {args.until}; {len(ran)} stage instances ran.")
+    return 0
+
+
+def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
+    directory = args.run.resolve()
+    record, checks = stage_run.Deployment(directory, env).runner().inspect(refresh=True)
+    rows = []
+    for name, entry in record["stages"].items():
+        row = {
+            "stage": name,
+            "status": entry["status"],
+            "attempt": entry["attempt"],
+            "evidence": str(directory / entry["directory"]),
+        }
+        line = f"{name}: {entry['status']}, attempt {entry['attempt']}, {row['evidence']}"
+        if entry["failure"]:
+            row["failure"] = entry["failure"]["message"]
+            row["recovery"] = stage_run.recovery_url(entry["failure"]["recovery"])
+            line += f"\n  {row['failure']}\n  Recovery: {row['recovery']}"
+        print(line)
+        rows.append(row)
+    live = [vars(check) for check in checks]
+    for check in checks:
+        print(f"{check.key}: {check.state}{': ' + check.detail if check.detail else ''}")
+    results.set_data(
+        {"run": str(directory), "run_id": record["run_id"], "stages": rows, "live": live}
+    )
+    if any(check.state != "holds" and check.state != "restarted and checked" for check in checks):
+        results.set_status("degraded")
+        return 3
+    return 0
+
+
+def _down(args: argparse.Namespace, env: dict[str, str]) -> int:
+    directory = args.run.resolve()
+    stopped = stage_run.Deployment(directory, env).down()
+    for process in stopped:
+        state = "stopped" if process["stopped"] else "not running"
+        print(f"{process['name']} on {process['host']}: {state}")
+    results.set_data({"run": str(directory), "processes": stopped})
+    return 0
+
+
 def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
+    commands = {"plan": _plan, "run": _run, "status": _status, "down": _down}
+    if args.action in commands:
+        return commands[args.action](args, env)
     if args.action in ("shell", "tunnel") and results.json_mode():
         raise ValueError(f"deploy {args.action} is interactive; run it without --format json")
     if args.action == "discover":
@@ -359,7 +547,14 @@ def run(args: argparse.Namespace) -> int:
     context = f"deploy {args.action}"
     try:
         return _dispatch(args, dict(os.environ))
-    except (RemoteError, RemoteTimeout, fabric.FabricFailure) as exc:
+    except (
+        RemoteError,
+        RemoteTimeout,
+        fabric.FabricFailure,
+        remote.StepFailed,
+        supervision.SupervisionError,
+        RunLocked,
+    ) as exc:
         if results.json_mode():
             raise
         return failure("narwhal", context, exc, 1)

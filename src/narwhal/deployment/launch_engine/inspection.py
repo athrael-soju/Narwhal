@@ -421,22 +421,41 @@ class _Inspection:
             raise CheckFailed("; ".join(problems))
 
     def ucx_ports(self, observed: dict) -> list[str]:
-        """UCX over TCP listens on a port of NARWHAL_UCX_TCP_PORT_RANGE at the fabric address."""
+        """UCX over TCP listens on a free port of NARWHAL_UCX_TCP_PORT_RANGE at the fabric address.
+
+        Each TP rank opens one listener on each transfer device and takes a port of the range
+        that it can bind, so the range needs that many free ports, not every port. A port that
+        a recently closed outgoing connection holds in TIME-WAIT cannot be bound until the
+        kernel releases it, which is why other ports of the range may be busy.
+        """
         value = self.inputs.values["UCX_TCP_PORT_RANGE"]
         source = self.inputs.env[f"NARWHAL_NODE_{self.inputs.node}_IP"]
         bounds = re.fullmatch(r"([0-9]{1,5})-([0-9]{1,5})", value)
         if bounds is None or not 1 <= int(bounds[1]) <= int(bounds[2]) <= 65535:
             return [f"NARWHAL_UCX_TCP_PORT_RANGE {value!r} is not a port range LOW-HIGH"]
+        devices = [d for d in str(self.record["transfer"]["net_devices"]).split(",") if d.strip()]
+        needed = int(self.record["tensor_parallel_size"]) * max(1, len(devices))
         busy = []
-        for port in range(int(bounds[1]), int(bounds[2]) + 1):
+        ports = range(int(bounds[1]), int(bounds[2]) + 1)
+        for port in ports:
             try:
                 check_engine_bind(source, port)
             except OSError:
                 busy.append(port)
-        observed["ucx_tcp_port_range"] = {"range": value, "host": source, "unavailable": busy}
-        if busy:
+        free = len(ports) - len(busy)
+        observed["ucx_tcp_port_range"] = {
+            "range": value,
+            "host": source,
+            "listeners": needed,
+            "free": free,
+            "unavailable": busy,
+        }
+        if free < needed:
             listed = ", ".join(map(str, busy[:10])) + (", ..." if len(busy) > 10 else "")
-            return [f"UCX TCP ports {listed} at {source} are unavailable"]
+            return [
+                f"NARWHAL_UCX_TCP_PORT_RANGE {value} at {source} has {free} free ports and the "
+                f"engine opens {needed} UCX listeners; unavailable: {listed}"
+            ]
         return []
 
     def devices(self, observed: dict) -> None:

@@ -121,7 +121,11 @@ duration 1200s
 
 Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
 
-The deadline, the measured prefill and the router overhead must fit the client time to first token (TTFT) requirement.
+The client time to first token (TTFT) target must hold the deadline, the slowest engine's prefill of the longest calibrated input and the router overhead. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) fails with each term when they exceed `slo.ttft_s`:
+
+```text
+first-token deadline 2.100s + n3 prefill of 4096 tokens 0.412s + router overhead 0.050s = 2.562s exceeds slo.ttft_s 2.500s
+```
 
 ### Reusing or repeating the calibration
 

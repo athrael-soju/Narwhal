@@ -33,6 +33,7 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.observability.tools import ToolActivity
+from narwhal.profiling.calibration import CalibrationCheck
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.probe.offline import merge_profiles
 from narwhal.profiling.store import ProfileStore
@@ -384,7 +385,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 )
                 client.aclose.assert_awaited_once()
                 store.assert_called_once_with(self.cfg, report)
-                slo.assert_called_once_with(self.cfg, "store", report)
+                slo.assert_called_once()
+                self.assertEqual(slo.call_args.args[:3], (self.cfg, "store", report))
+                self.assertEqual(slo.call_args.args[3].status, "uncalibrated")
                 self.assertEqual(
                     constructor.call_args.kwargs["prefill_timeout_s"], self.cfg.prefill_timeout_s
                 )
@@ -1703,6 +1706,44 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.failed, [])
         self.assertIn("tpot=1.00e-02q+1.00e-04b+0.0010", output.getvalue())
         self.assertIn("4890 batch tokens across 1 requests", output.getvalue())
+
+    def test_slo_gate_fits_the_deadline_longest_prefill_and_router_overhead_in_the_ttft(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        slowest = max(store.get(spec.iid).prefill_time(8192) for spec in self.cfg.engines)
+        calibration = CalibrationCheck("measured", longest_input_tokens=8192)
+        self.cfg.first_token_timeout_s = 1.0
+        fitting = 1.0 + slowest + 0.25 + 0.001
+        for ttft, overhead, passes in ((fitting, 0.25, True), (fitting, 0.5, False)):
+            with self.subTest(overhead=overhead):
+                self.cfg.slo = replace(self.cfg.slo, ttft_s=ttft, router_overhead_s=overhead)
+                report = Report()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    gate_slo(self.cfg, store, report, calibration)
+                budget = (
+                    f"first-token deadline 1.000s + e0 prefill of 8192 tokens {slowest:.3f}s + "
+                    f"router overhead {overhead:.3f}s"
+                )
+                if passes:
+                    self.assertEqual(report.failed, [])
+                    self.assertIn(budget, output.getvalue())
+                else:
+                    self.assertEqual(len(report.failed), 1)
+                    self.assertIn(budget, report.failed[0])
+                    self.assertIn(f"exceeds slo.ttft_s {ttft:.3f}s", report.failed[0])
+
+    def test_slo_gate_skips_the_first_token_budget_without_a_usable_calibration(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5, router_overhead_s=100.0)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        for calibration in (None, CalibrationCheck("uncalibrated"), CalibrationCheck("rejected")):
+            report = Report()
+            gate_slo(self.cfg, store, report, calibration)
+            self.assertEqual(report.failed, [])
 
     def test_slo_gate_accepts_a_flat_profile_at_the_measured_boundary(self):
         store = ProfileStore(self.cfg.profiles_path)

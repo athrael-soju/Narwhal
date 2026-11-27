@@ -52,7 +52,9 @@ __all__ = [
     "Decision",
     "HelpersSurvived",
     "Input",
+    "LiveCheck",
     "Outcome",
+    "Refreshed",
     "RunCancelled",
     "RunLocked",
     "RunResult",
@@ -114,10 +116,33 @@ class Command:
     outcome: Callable[[StageContext], Outcome] | None = None
 
 
+@dataclass(frozen=True)
+class Refreshed:
+    """What a probe returns for a supervised process that restarted and passed its check again.
+
+    `value` is the process's new identity. The record keeps it in place of the old one, for the
+    stage that started the process too, so that stage holds and only the stages after it that
+    the fact reruns run again.
+    """
+
+    value: Any
+
+
 Action = Callable[["StageContext"], "Outcome | None"] | Command
-# A probe reads a live fact again from the value its stage recorded, and returns None when the
-# process or route the value names is gone.
+# A probe reads a live fact again from the value its stage recorded. It returns the current
+# value, `Refreshed` for a restarted process that passed its check, or None when the process
+# or route the value names is gone.
 Probe = Callable[[str, Any], Any]
+
+
+@dataclass(frozen=True)
+class LiveCheck:
+    """What `Runner.inspect` found for one live fact a passed stage recorded."""
+
+    key: str
+    stage: str
+    state: str
+    detail: str = ""
 
 
 class Topology(Protocol):
@@ -236,6 +261,7 @@ class StageContext:
         self.attempt = attempt
         self.directory = directory
         self.run_directory = run.directory
+        self.run_id: str = run.record["run_id"]
         self.previous = previous
 
     def product(self, fact: str, instance: str = "") -> Any:
@@ -283,18 +309,8 @@ class Runner:
 
     def run(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
         """Run every stage up to and including `until`, or the whole graph."""
-        order = self.graph.order()
-        if until is not None:
-            if until not in self.graph.stages:
-                raise ValueError(f"unknown stage {until}")
-            order = order[: order.index(until) + 1]
-        if missing := [name for name in order if name not in self.actions]:
-            raise ValueError(f"no action for stages: {', '.join(missing)}")
-        expected = {name for name, fact in self.graph.facts.items() if fact.kind == INPUT}
-        if set(inputs) != expected:
-            absent = ", ".join(sorted(expected - set(inputs))) or "none"
-            extra = ", ".join(sorted(set(inputs) - expected)) or "none"
-            raise ValueError(f"inputs differ from the graph: missing {absent}; unknown {extra}")
+        order = self._order(until)
+        self._check_inputs(inputs)
         with contextlib.suppress(FileExistsError):
             self.directory.mkdir(mode=0o700)
         info = self.directory.lstat()
@@ -308,14 +324,104 @@ class Runner:
         with run_record.locked(self.directory), stages.cancellation():
             return _Run(self, inputs, until, order).execute()
 
+    def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
+        """Decide every stage up to `until` as `run` would, without running or recording one.
+
+        Each live fact is checked again, read-only. Once a stage would run, every stage after
+        it is reported as running after it, and its instances are not looked up.
+        """
+        order = self._order(until)
+        self._check_inputs(inputs)
+        return _Run(self, inputs, until, order, dry=True).execute()
+
+    def inspect(self, *, refresh: bool) -> tuple[dict[str, Any], tuple[LiveCheck, ...]]:
+        """Check the live facts of every passed stage; return the record and what was found.
+
+        With `refresh`, a restarted process that passed its check again replaces its recorded
+        identity in the record, under the run's lock.
+        """
+        if not (self.directory / run_record.RECORD).exists():
+            raise ValueError(f"{self.directory} holds no run record; run narwhal deploy run")
+        guard = run_record.locked(self.directory) if refresh else contextlib.nullcontext()
+        with guard:
+            record = run_record.read(self.directory)
+            checks = []
+            changed = False
+            for name, entry in record["stages"].items():
+                spec = self.graph.stages.get(entry["stage"])
+                if spec is None or entry["status"] != PASSED:
+                    continue
+                for fact in spec.produces:
+                    if self.graph.facts[fact].kind != LIVE:
+                        continue
+                    fact_key = key(fact, entry["instance"])
+                    try:
+                        current = self.probes[fact](entry["instance"], entry["products"][fact])
+                    except Exception as error:  # a probe's own failure is what status reports
+                        checks.append(LiveCheck(fact_key, name, "unreadable", str(error)))
+                        continue
+                    if current is None:
+                        checks.append(LiveCheck(fact_key, name, "gone"))
+                    elif isinstance(current, Refreshed):
+                        checks.append(LiveCheck(fact_key, name, "restarted and checked"))
+                        if refresh:
+                            _refresh(entry, fact_key, fact, current.value)
+                            changed = True
+                    elif canonical_digest(current) != canonical_digest(entry["products"][fact]):
+                        checks.append(LiveCheck(fact_key, name, "changed"))
+                    else:
+                        checks.append(LiveCheck(fact_key, name, "holds"))
+            if changed:
+                record["updated_at"] = time.time()
+                with _held():
+                    run_record.write(self.directory, record)
+        return record, tuple(checks)
+
+    def _order(self, until: str | None) -> tuple[str, ...]:
+        order = self.graph.order()
+        if until is not None:
+            if until not in self.graph.stages:
+                raise ValueError(f"unknown stage {until}")
+            order = order[: order.index(until) + 1]
+        if missing := [name for name in order if name not in self.actions]:
+            raise ValueError(f"no action for stages: {', '.join(missing)}")
+        return order
+
+    def _check_inputs(self, inputs: Mapping[str, Input]) -> None:
+        expected = {name for name, fact in self.graph.facts.items() if fact.kind == INPUT}
+        if set(inputs) != expected:
+            absent = ", ".join(sorted(expected - set(inputs))) or "none"
+            extra = ", ".join(sorted(set(inputs) - expected)) or "none"
+            raise ValueError(f"inputs differ from the graph: missing {absent}; unknown {extra}")
+
+
+def _refresh(entry: dict[str, Any], fact_key: str, fact: str, value: Any) -> None:
+    """Record a restarted process's checked identity in place of the identity its stage started."""
+    value = json.loads(json.dumps(value))
+    entry["products"][fact] = value
+    if fact_key in entry["input_digests"]:
+        entry["input_digests"][fact_key] = canonical_digest(value)
+
 
 class _Run:
     """One pass over the graph, holding the run record and the current value of every fact."""
 
     def __init__(
-        self, runner: Runner, inputs: Mapping[str, Input], until: str | None, order: Sequence[str]
+        self,
+        runner: Runner,
+        inputs: Mapping[str, Input],
+        until: str | None,
+        order: Sequence[str],
+        *,
+        dry: bool = False,
     ) -> None:
         self.runner = runner
+        # A dry pass decides each stage without running one or writing the record.
+        self.dry = dry
+        # In a dry pass, the first instance of each stage that would run, and the facts of
+        # stages that would run, whose values only that run decides.
+        self.pending: dict[str, str] = {}
+        self.unknown: list[str] = []
         self.graph = runner.graph
         self.directory = runner.directory
         self.inputs = inputs
@@ -331,6 +437,8 @@ class _Run:
         self.opened = False
 
     def execute(self) -> RunResult:
+        if self.dry:
+            return self._plan()
         stale = None
         try:
             stale = self._open()
@@ -349,6 +457,53 @@ class _Run:
                     self.record.update(lock=None, updated_at=time.time())
                     run_record.write(self.directory, self.record)
         return RunResult(self.record["run_id"], tuple(self.decisions), stale)
+
+    def _plan(self) -> RunResult:
+        if (self.directory / run_record.RECORD).exists():
+            self.record = run_record.read(self.directory)
+            if self.record["target"] != self.runner.target:
+                raise ValueError(f"{self.directory} holds a {self.record['target']} run")
+        else:
+            self.record = {"run_id": "0" * 32, "stages": {}}
+        # Stages whose changed outputs mark every stage after them invalidated.
+        changed: dict[str, str] = {}
+        for name in self.order:
+            spec = self.graph.stages[name]
+            pending = [stage for stage in self.pending if stage in self.graph.upstream(name)]
+            try:
+                instances = self._stage_instances(spec)
+            except (ValueError, KeyError, OSError):
+                # The topology reads this scope from a stage that has not passed yet.
+                if not pending:
+                    raise
+                self.pending[name] = name
+                self.decisions.append(
+                    Decision(name, True, (f"runs after {self.pending[pending[-1]]}",))
+                )
+                continue
+            invalidated = next((changed[stage] for stage in changed if stage in pending), None)
+            for instance in instances:
+                stage_key = key(spec.name, instance)
+                previous = self.record["stages"].get(stage_key)
+                self.unknown = []
+                reasons = self._reasons(spec, instance, previous)
+                if invalidated is not None and not reasons:
+                    reasons = [f"runs after {invalidated}, whose output changed"]
+                elif self.unknown and not reasons:
+                    fact_key = self.unknown[0]
+                    producer = self.graph.producer(fact_key.split("[", 1)[0])
+                    reasons = [f"runs after {producer} if {fact_key} changes"]
+                self.decisions.append(Decision(stage_key, bool(reasons), tuple(reasons)))
+                if reasons:
+                    self.pending.setdefault(name, stage_key)
+                    if any(reason.startswith("output ") for reason in reasons):
+                        changed.setdefault(name, stage_key)
+                else:
+                    assert previous is not None
+                    for fact in spec.produces:
+                        if self.graph.facts[fact].kind != LIVE:
+                            self.values[key(fact, instance)] = previous["products"][fact]
+        return RunResult(self.record["run_id"], tuple(self.decisions), None)
 
     def _open(self) -> dict[str, Any] | None:
         now = time.time()
@@ -503,7 +658,7 @@ class _Run:
         if previous["status"] != PASSED:
             return [f"attempt {previous['attempt']} {previous['status']}"]
         changed = [output["path"] for output in previous["outputs"] if not self._matches(output)]
-        if changed:
+        if changed and not self.dry:
             self._invalidate_later(spec, instance)
         reasons = [f"output {path} changed" for path in changed]
         if previous["definition"] != self.graph.definition(spec.name):
@@ -516,6 +671,15 @@ class _Run:
                 except Exception as error:
                     error.add_note(f"live check of {fact_key} for {key(spec.name, instance)}")
                     raise
+                if isinstance(current, Refreshed):
+                    # The process restarted and passed its check; the record keeps its new
+                    # identity, and the stages after it that the fact names run again.
+                    current = json.loads(json.dumps(current.value))
+                    if not self.dry:
+                        with _held():
+                            entry = self.record["stages"][key(spec.name, instance)]
+                            _refresh(entry, fact_key, fact, current)
+                            run_record.write(self.directory, self.record)
                 self.values[fact_key] = current
                 if current is None:
                     reasons.append(f"{fact_key} is gone")
@@ -523,7 +687,7 @@ class _Run:
         recorded = previous["input_digests"]
         reasons += [
             f"{name} changed"
-            for name in sorted(set(current_digests) | set(recorded))
+            for name in sorted((set(current_digests) | set(recorded)) - set(self.unknown))
             if current_digests.get(name) != recorded.get(name)
         ]
         return reasons
@@ -573,6 +737,9 @@ class _Run:
         for fact, rerun in self.graph.reruns_of(spec.name):
             for source in self._sources(fact, rerun, spec, instance):
                 fact_key = key(fact.name, source)
+                if self.dry and fact.kind != INPUT and fact_key not in self.values:
+                    self.unknown.append(fact_key)
+                    continue
                 digests[fact_key] = (
                     self.inputs[fact.name].digest
                     if fact.kind == INPUT
