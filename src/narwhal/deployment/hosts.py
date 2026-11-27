@@ -8,6 +8,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -661,86 +662,109 @@ class SSH:
 
     @contextmanager
     def forward(
-        self, host: Host, stage: str, forwards: Mapping[int, tuple[str, int]]
-    ) -> Iterator[None]:
-        """Hold workstation loopback ports forwarded to `host` while the block runs.
+        self, host: Host, stage: str, forwards: Mapping[str, tuple[str, int]]
+    ) -> Iterator[Forwards]:
+        """Hold workstation Unix sockets forwarded to `host` while the block runs.
 
-        `forwards` maps each local port to the address and port it reaches from the host. The
-        block starts once every local port accepts a connection; SSH failing first, or no port
-        accepting within the connection timeout, raises RemoteError. The block's end stops the
-        `ssh` process this call started, by its process handle.
+        `forwards` maps each name to the address and port it reaches from the host. Each forward
+        listens on `<name>.sock` in a directory this call creates with mode 0700, so no other
+        workstation user can listen in a forward's place or connect to it. The block starts once
+        every socket accepts a connection, with the `Forwards` that name them; SSH failing first,
+        or no socket accepting within the connection timeout, raises RemoteError. The block's
+        end stops the `ssh` process this call started, by its process handle, and removes the
+        directory.
         """
+        directory = Path(tempfile.mkdtemp(prefix="narwhal-forward-"))
+        sockets = {name: directory / f"{name}.sock" for name in forwards}
         options = [
             "-N",
             "-T",
             "-o",
             "ExitOnForwardFailure=yes",
             "-o",
+            "StreamLocalBindMask=0177",
+            "-o",
             "ServerAliveInterval=30",
             "-o",
             "ServerAliveCountMax=3",
         ]
         specs = []
-        for local, (address, port) in forwards.items():
+        for name, (address, port) in forwards.items():
             target = f"[{address}]" if ":" in address else address
-            specs.append(f"127.0.0.1:{local}:{target}:{port}")
+            specs.append(f"{sockets[name]}:{target}:{port}")
             options += ["-L", specs[-1]]
         operation = "forward " + ", ".join(specs)
-        with self._record(host, f"forwards of {stage}") as log, self._client(host) as client:
-            log.write(" ".join(specs) + "\n")
-            log.flush()
-            process = subprocess.Popen(
-                self._arguments(host, options),
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=log,
-                env=client,
+        try:
+            with self._record(host, f"forwards of {stage}") as log, self._client(host) as client:
+                log.write(" ".join(specs) + "\n")
+                log.flush()
+                process = subprocess.Popen(
+                    self._arguments(host, options),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    env=client,
+                )
+                held = Forwards(sockets, process, host.id, stage, operation, self.log(host))
+                try:
+                    pending = set(sockets.values())
+                    deadline = time.monotonic() + CONNECT_TIMEOUT_S
+                    while pending:
+                        held.check()
+                        for path in sorted(pending):
+                            with (
+                                suppress(OSError),
+                                socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe,
+                            ):
+                                probe.settimeout(0.5)
+                                probe.connect(str(path))
+                                pending.discard(path)
+                        if pending and time.monotonic() >= deadline:
+                            raise RemoteError(
+                                host.id,
+                                stage,
+                                operation,
+                                self.log(host),
+                                f": no forward listened within {CONNECT_TIMEOUT_S}s",
+                            )
+                        if pending:
+                            time.sleep(0.1)
+                    held.check()
+                    yield held
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=KILL_AFTER_S)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                    log.write(f"exit={process.returncode}\n")
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+@dataclass(frozen=True)
+class Forwards:
+    """The Unix sockets of one held `SSH.forward`, by name, and the `ssh` process behind them."""
+
+    sockets: Mapping[str, Path]
+    process: subprocess.Popen[bytes]
+    host: str
+    stage: str
+    operation: str
+    log: Path
+
+    def check(self) -> None:
+        """Raise RemoteError once the forwards' `ssh` has exited."""
+        if self.process.poll() is not None:
+            raise RemoteError(
+                self.host,
+                self.stage,
+                self.operation,
+                self.log,
+                f": ssh exited {self.process.returncode}",
             )
-            try:
-                pending = set(forwards)
-                deadline = time.monotonic() + CONNECT_TIMEOUT_S
-                while pending:
-                    if process.poll() is not None:
-                        raise RemoteError(
-                            host.id,
-                            stage,
-                            operation,
-                            self.log(host),
-                            f": ssh exited {process.returncode}",
-                        )
-                    for local in sorted(pending):
-                        with (
-                            suppress(OSError),
-                            socket.create_connection(("127.0.0.1", local), timeout=0.5),
-                        ):
-                            pending.discard(local)
-                    if pending and time.monotonic() >= deadline:
-                        raise RemoteError(
-                            host.id,
-                            stage,
-                            operation,
-                            self.log(host),
-                            f": no forward listened within {CONNECT_TIMEOUT_S}s",
-                        )
-                    if pending:
-                        time.sleep(0.1)
-                yield
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=KILL_AFTER_S)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                log.write(f"exit={process.returncode}\n")
-
-
-def free_port() -> int:
-    """A loopback port no process listens on now, for a forward to take."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 Item = TypeVar("Item")

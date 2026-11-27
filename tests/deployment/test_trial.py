@@ -1,13 +1,22 @@
 """The capacity trial's definition, prerequisites, router samples and Prometheus series checks."""
 
+import hashlib
+import http.server
 import json
+import os
+import socketserver
 import tempfile
+import threading
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
+import yaml
 
 from narwhal.deployment import trial
+from narwhal.observability.stack import artifacts
 
 DEFINITION = {
     "schema": "narwhal.capacity-trial",
@@ -78,6 +87,25 @@ class DefinitionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, f"--trial {path}: "):
             trial.load(path)
 
+    def test_a_snapshot_keeps_the_bytes_the_run_read(self):
+        path = self.write(DEFINITION)
+        taken = trial.snapshot(path)
+        path.write_text(json.dumps({**DEFINITION, "requests": 8}))
+        self.assertEqual(taken.digest, hashlib.sha256(taken.data).hexdigest())
+        self.assertEqual(trial.load(taken).requests, 200)
+        self.assertEqual(trial.load(path).requests, 8)
+
+    def test_a_snapshot_refuses_a_symbolic_link_and_a_missing_file(self):
+        path = self.write(DEFINITION)
+        link = path.with_name("link.json")
+        link.symlink_to(path)
+        for target in (link, path.with_name("missing.json")):
+            with (
+                self.subTest(target=target),
+                self.assertRaisesRegex(ValueError, f"--trial {target}"),
+            ):
+                trial.snapshot(target)
+
     def test_rate_directories_name_each_rate(self):
         self.assertEqual(
             [trial.rate_name(r) for r in (0.5, 1, 2.25)], ["rate-0.5", "rate-1", "rate-2.25"]
@@ -138,6 +166,7 @@ class RouterSampleTests(unittest.TestCase):
         self.assertEqual(sample["state"], {"journal_run": "j1"})
         self.assertEqual(sample["router_metrics"], "narwhal_offered_total 3\n")
         self.assertEqual((sample["journal_run_after"], sample["errors"]), ("j1", {}))
+        self.assertEqual(sample["ha_after"], {})
 
     def test_the_state_reads_are_diagnostic_so_a_standby_answers_them(self):
         seen = []
@@ -166,6 +195,119 @@ class RouterSampleTests(unittest.TestCase):
         sample = trial.router_sample(client, "http://router")
         self.assertEqual(set(sample["errors"]), {"state", "router_metrics", "state_after"})
         self.assertIsNone(sample["journal_run_after"])
+
+
+@contextmanager
+def unix_server(routes: dict[str, tuple[str, str]]) -> Iterator[tuple[Path, list[tuple]]]:
+    """Serve `routes`, each path's content type and body, on a Unix socket; yield the socket and
+    each request's path, query and diagnostic header."""
+    seen: list[tuple] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            path, _, query = self.path.partition("?")
+            seen.append((path, query, self.headers.get("x-narwhal-diagnostic")))
+            kind, body = routes[path]
+            data = body.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def address_string(self):
+            return "unix"
+
+        def log_message(self, *_):
+            pass
+
+    folder = Path(tempfile.mkdtemp(dir="/tmp"))
+    server = socketserver.ThreadingUnixStreamServer(str(folder / "s.sock"), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        yield folder / "s.sock", seen
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
+        os.unlink(folder / "s.sock")
+        folder.rmdir()
+
+
+class UnixSocketTests(unittest.TestCase):
+    def test_a_router_sample_goes_through_the_forwards_socket(self):
+        state = json.dumps({"journal_run": "j1", "ha": {"role": "standby", "epoch": 3}})
+        routes = {
+            "/narwhal/state": ("application/json", state),
+            "/metrics": ("text/plain", "narwhal_offered_total 1\n"),
+        }
+        with unix_server(routes) as (socket, seen):
+            sample = trial.sample_router(socket, "node-2")
+        self.assertEqual((sample["router"], sample["errors"]), ("node-2", {}))
+        self.assertEqual(sample["ha_after"], {"role": "standby", "epoch": 3})
+        self.assertEqual(
+            [(path, header) for path, _, header in seen],
+            [("/narwhal/state", "true"), ("/metrics", None), ("/narwhal/state", "true")],
+        )
+
+    def test_prometheus_is_queried_through_its_socket_and_the_client_closes(self):
+        body = {"status": "success", "data": {"resultType": "vector", "result": []}}
+        routes = {"/api/v1/query": ("application/json", json.dumps(body))}
+        with unix_server(routes) as (socket, seen):
+            with trial.prometheus_at(socket) as query:
+                self.assertEqual(query("up"), [])
+            # The block closed its client, so the next query has no connection to use.
+            with self.assertRaises(RuntimeError):
+                query("up")
+        self.assertEqual(seen, [("/api/v1/query", "query=up", None)])
+
+
+def sample(router: str, ha: dict | None, after: dict | None = None) -> dict:
+    """A router sample whose two state reads report `ha` and then `after`."""
+    state = {"journal_run": "j1", **({"ha": ha} if ha is not None else {})}
+    return {"router": router, "state": state, "ha_after": (ha or {}) if after is None else after}
+
+
+ACTIVE = {"role": "active", "epoch": 4, "holder": "a"}
+STANDBY = {"role": "standby", "epoch": 4, "holder": "a"}
+
+
+class ControlTests(unittest.TestCase):
+    def test_the_one_active_router_holds_control(self):
+        found = trial.control([sample("node-1", ACTIVE), sample("node-2", STANDBY)])
+        self.assertEqual(found, ({"router": "node-1", "epoch": 4, "holder": "a"}, ""))
+        # A single router without fencing reports no lease, and holds control at epoch 0.
+        found = trial.control([sample("node-1", None)])
+        self.assertEqual(found, ({"router": "node-1", "epoch": 0, "holder": None}, ""))
+
+    def test_no_single_holder_names_why(self):
+        unread = {"router": "node-2", "state": {}, "errors": {"state": "503"}}
+        for samples, reason in (
+            ([sample("node-1", ACTIVE), sample("node-2", ACTIVE)], "node-1 and node-2"),
+            ([sample("node-1", STANDBY), sample("node-2", STANDBY)], "no router"),
+            ([sample("node-1", ACTIVE), unread], "node-2's state could not be read"),
+            (
+                [sample("node-1", ACTIVE, {**ACTIVE, "epoch": 5})],
+                "node-1's lease changed between its two state reads",
+            ),
+        ):
+            with self.subTest(reason=reason):
+                held, problem = trial.control(samples)
+                self.assertIsNone(held)
+                self.assertIn(reason, problem)
+
+    def test_a_move_or_a_new_epoch_is_named(self):
+        before = {"router": "node-1", "epoch": 4, "holder": "a"}
+        self.assertEqual(trial.control_problem(before, dict(before)), "")
+        self.assertEqual(
+            trial.control_problem(before, {"router": "node-2", "epoch": 5, "holder": "b"}),
+            "control moved from node-1 at epoch 4 to node-2 at epoch 5",
+        )
+        self.assertEqual(
+            trial.control_problem(before, {**before, "epoch": 5, "holder": "c"}),
+            "node-1 took the lease again, from epoch 4 to 5",
+        )
 
 
 class SeriesTests(unittest.TestCase):
@@ -217,9 +359,26 @@ class SeriesTests(unittest.TestCase):
         self.assertNotIn('instance=~"', text)
         self.assertIn('narwhal_instance_role{job="narwhal-router",fleet="fleet-a"', text)
 
-    def test_a_pool_at_load_zero_still_shows(self):
-        pool = next(series for series in trial.SERIES if series.name == "pool-load")
-        self.assertIn(">= bool 0", trial.expression(pool, "fleet-a", 60))
+    def test_the_role_and_pool_load_checks_read_only_the_controlling_router_throughout(self):
+        for name in ("role", "pool-load"):
+            with self.subTest(name=name):
+                check = next(series for series in trial.SERIES if series.name == name)
+                text = trial.expression(check, "fleet-a", 600, 5)
+                self.assertIn(">= bool 119", text)
+                self.assertIn(
+                    'and on (instance) (min_over_time(narwhal_router_role{job="narwhal-router",'
+                    'fleet="fleet-a",role="active"}[600s]) == 1',
+                    text,
+                )
+
+    def test_a_series_must_hold_a_sample_for_each_scrape_of_the_window(self):
+        self.assertEqual(trial.scrapes(600, 5), 119)
+        self.assertEqual(trial.scrapes(600, 15), 39)
+        self.assertEqual(trial.scrapes(4, 5), 1)
+
+    def test_the_scrape_interval_is_the_stacks(self):
+        config = yaml.safe_load((artifacts.BASE / "prometheus.yml").read_text())
+        self.assertEqual(f"{trial.SCRAPE_INTERVAL_S}s", config["global"]["scrape_interval"])
 
     def test_a_check_passes_only_when_every_engine_or_pool_shows(self):
         def query(text: str) -> list[dict]:
@@ -237,8 +396,8 @@ class SeriesTests(unittest.TestCase):
             [
                 "engine: not shown for n2: every engine's scrape target was up at every scrape "
                 "of the trial",
-                "pool-load: not shown for decode: the prefill and decode pools each reported "
-                "their load",
+                "pool-load: not shown for decode: the controlling router reported the prefill "
+                "and decode pool loads at every scrape of the trial",
             ],
         )
         self.assertEqual(

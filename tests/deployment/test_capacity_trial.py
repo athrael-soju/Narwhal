@@ -1,6 +1,7 @@
 """`narwhal deploy run --trial` against stubbed hosts, engines, load client and Prometheus."""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -74,8 +75,7 @@ class CapacityTrialTests(unittest.TestCase):
             {"engine", "request", "token", "role", "pool-load"},
         )
         # The stage closes its Prometheus client once the checks are done.
-        self.assertTrue(all(client.is_closed for client in self.fleet.prometheus_clients))
-        self.assertEqual(len(self.fleet.prometheus_clients), 1)
+        self.assertEqual((self.fleet.prometheus_open, self.fleet.prometheus_closed), (1, 1))
         # The workload is prepared once, then each rate runs in order with the trial's limits,
         # through the load balancer's forward.
         self.assertEqual([argv[3] for argv in self.fleet.load_argv], ["prepare", "run", "run"])
@@ -94,23 +94,29 @@ class CapacityTrialTests(unittest.TestCase):
                 ("4", "2", "0.05", "0.95"),
             )
             self.assertEqual(run["--expected-model"], "served-model")
-            self.assertEqual(self.fleet._forwarded(run["--base"]), ("node-1", "10.0.0.1:8080"))
+            self.assertEqual(
+                self.fleet._forwarded(run["--unix-socket"]), ("node-1", "10.0.0.1:8080")
+            )
         # Each router and Prometheus on the primary's host are forwarded, and every forward is
         # closed before the KV ring.
         reached = {
-            (host, f"{address}:{port}")
-            for host, ports in self.fleet.forwards
-            for address, port in ports.values()
+            (host, name, f"{address}:{port}")
+            for host, sockets in self.fleet.forwards
+            for name, (_, address, port) in sockets.items()
         }
         self.assertEqual(
             reached,
             {
-                ("node-1", "10.0.0.1:8080"),
-                ("node-1", "10.0.0.1:8000"),
-                ("node-2", "10.0.0.2:8000"),
-                ("node-1", "127.0.0.1:9090"),
+                ("node-1", "load-balancer", "10.0.0.1:8080"),
+                ("node-1", "node-1", "10.0.0.1:8000"),
+                ("node-2", "node-2", "10.0.0.2:8000"),
+                ("node-1", "prometheus", "127.0.0.1:9090"),
             },
         )
+        # Each rate records the router that held control before and after it.
+        for rate in trial["rates"]:
+            control = {"router": "node-1", "epoch": 1, "holder": "node-1-1"}
+            self.assertEqual(rate["control"], {"before": control, "after": control})
         self.assertEqual(self.fleet.open_forwards, 0)
         self.assertEqual(self.fleet.calls["ring"], 1)
         # Every series query is scoped to the fleet.
@@ -302,7 +308,55 @@ class CapacityTrialTests(unittest.TestCase):
             code, result = self.deploy("run", "--trial", str(self.trial))
         self.assertEqual(code, 0, (result, self.stderr.getvalue()))
         for run in self.client_runs():
-            self.assertEqual(self.fleet._forwarded(run["--base"]), ("node-1", "10.0.0.1:8000"))
+            self.assertEqual(
+                self.fleet._forwarded(run["--unix-socket"]), ("node-1", "10.0.0.1:8000")
+            )
+
+    def test_the_stage_runs_the_trial_file_as_the_run_read_it(self):
+        original = self.trial.read_bytes()
+        changed = json.dumps({**TRIAL, "requests": 8}).encode()
+        checked = deploy.inputs
+
+        def inputs_then_edit(*args, **kwargs):
+            # The file changes on disk after the run took its inputs, before the stage reads it.
+            found = checked(*args, **kwargs)
+            self.trial.write_bytes(changed)
+            return found
+
+        with patch.object(deploy, "inputs", inputs_then_edit):
+            code, result = self.deploy("run", "--trial", str(self.trial))
+        self.assertEqual(code, 0, (result, self.stderr.getvalue()))
+        self.assertEqual((self.attempt() / "trial.json").read_bytes(), original)
+        self.assertEqual({run["--requests"] for run in self.client_runs()}, {"4"})
+        recorded = run_record.read(self.run)["inputs"]["trial"]
+        self.assertEqual(recorded["digest"], "sha256:" + hashlib.sha256(original).hexdigest())
+
+    def test_a_failover_during_a_rate_fails_it_with_the_move(self):
+        for move, cause in (
+            (("node-2", 2), "control moved from node-1 at epoch 1 to node-2 at epoch 2"),
+            (("node-1", 2), "node-1 took the lease again, from epoch 1 to 2"),
+        ):
+            with self.subTest(move=move):
+                self.setUp()
+                self.fleet.failover_after["1"] = move
+                code, result = self.deploy("run", "--trial", str(self.trial))
+                self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+                message = result["errors"][0]["message"]
+                self.assertIn(
+                    f"rate-1: the fleet's control is not one router throughout: {cause}", message
+                )
+                self.assertIn("during the rate; a failover invalidates the rate", message)
+                rates = result["data"]["trial"]["rates"]
+                self.assertEqual(rates[-1]["control"]["after"]["epoch"], 2)
+                self.assertEqual(self.fleet.calls["ring"], 0)
+
+    def test_a_forward_whose_ssh_exits_during_a_rate_fails_the_stage(self):
+        self.fleet.forward_exits_after = "rate-0.5"
+        code, result = self.deploy("run", "--trial", str(self.trial))
+        self.assertEqual((code, result["status"]), (4, "error"), result)
+        self.assertIn("ssh exited 255", result["errors"][0]["message"])
+        self.assertEqual([run["--rate"] for run in self.client_runs()], ["0.5"])
+        self.assertEqual(self.fleet.open_forwards, 0)
 
     def test_a_failed_trial_shows_in_the_published_status(self):
         self.fleet.client_exit["0.5"] = 2

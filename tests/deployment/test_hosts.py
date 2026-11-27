@@ -108,13 +108,13 @@ import os, socket, sys, time
 specs = [sys.argv[i + 1] for i, arg in enumerate(sys.argv) if arg == "-L"]
 listening = []
 for spec in specs:
-    server = socket.socket()
-    server.bind(("127.0.0.1", int(spec.split(":")[1])))
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(spec.split(":")[0])
     server.listen()
     listening.append(server)
 with open(sys.argv[1], "w") as record:
     record.write("\\n".join([str(os.getpid()), *specs]))
-time.sleep(60)
+time.sleep(float(os.environ.get("LISTEN_FOR", "60")))
 """
 
 
@@ -716,29 +716,41 @@ class SshTests(unittest.TestCase):
                 self.assertIn("timeout=0.5s; the host did not answer", ssh.log(host).read_text())
         self.assert_private_logs()
 
-    def listening_ssh(self, record: Path):
-        """A fake `ssh` that listens on each -L port, as OpenSSH does once it has logged in,
-        and writes its process ID and forwards to `record`. `ssh` gets no other environment,
-        so the script names the interpreter and the record itself."""
+    def listening_ssh(self, record: Path, listen_for: float = 60):
+        """A fake `ssh` that listens on each -L socket for `listen_for` seconds, as OpenSSH
+        does once it has logged in, and writes its process ID and forwards to `record`. `ssh`
+        gets no other environment, so the script names the interpreter and the record itself."""
         listener = self.root / "listener.py"
         listener.write_text(LISTENER)
         python, script = shlex.quote(sys.executable), shlex.quote(str(listener))
-        return self.fake_ssh(f'exec {python} {script} {shlex.quote(str(record))} "$@"')
+        return self.fake_ssh(
+            f'LISTEN_FOR={listen_for} exec {python} {script} {shlex.quote(str(record))} "$@"'
+        )
 
     def test_forwards_hold_while_the_block_runs_and_their_ssh_stops_after(self):
         record = self.root / "forward.record"
-        ports = {hosts.free_port(): ("10.0.0.1", 8080), hosts.free_port(): ("::1", 9090)}
+        ports = {"router": ("10.0.0.1", 8080), "prometheus": ("::1", 9090)}
         with self.listening_ssh(record):
             ssh = SSH(self.env, self.root / "logs")
-            with ssh.forward(self.hosts[0], "trial", ports):
+            with ssh.forward(self.hosts[0], "trial", ports) as held:
                 pid, *specs = record.read_text().splitlines()
-                for local in ports:
-                    with socket.create_connection(("127.0.0.1", local), timeout=1):
-                        pass
-        local = list(ports)
+                sockets = dict(held.sockets)
+                directory = sockets["router"].parent
+                # Only this user can reach the forwards' directory.
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                for path in sockets.values():
+                    with socket.socket(socket.AF_UNIX) as probe:
+                        probe.connect(str(path))
+                held.check()
+        self.assertEqual(set(sockets), {"router", "prometheus"})
         self.assertEqual(
-            specs, [f"127.0.0.1:{local[0]}:10.0.0.1:8080", f"127.0.0.1:{local[1]}:[::1]:9090"]
+            specs,
+            [
+                f"{sockets['router']}:10.0.0.1:8080",
+                f"{sockets['prometheus']}:[::1]:9090",
+            ],
         )
+        self.assertFalse(directory.exists())
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
@@ -752,12 +764,24 @@ class SshTests(unittest.TestCase):
         self.assertIn("[forwards of trial]", log)
         self.assert_private_logs()
 
+    def test_a_forward_whose_ssh_exits_inside_the_block_fails_its_check(self):
+        record = self.root / "forward.record"
+        with self.listening_ssh(record, listen_for=0.5):
+            ssh = SSH(self.env, self.root / "logs")
+            with ssh.forward(self.hosts[0], "trial", {"router": ("10.0.0.1", 8000)}) as held:
+                held.check()
+                deadline = time.monotonic() + 5
+                while held.process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                with self.assertRaisesRegex(RemoteError, "node-1: .*ssh exited 0"):
+                    held.check()
+
     def test_a_forward_whose_ssh_exits_names_the_host_and_status(self):
         with self.fake_ssh("exit 255"):
             ssh = SSH(self.env, self.root / "logs")
             with (
-                self.assertRaisesRegex(RemoteError, "node-2: .*forward 127.0.0.1.*ssh exited 255"),
-                ssh.forward(self.hosts[1], "trial", {hosts.free_port(): ("10.0.0.2", 8000)}),
+                self.assertRaisesRegex(RemoteError, "node-2: .*forward /.*ssh exited 255"),
+                ssh.forward(self.hosts[1], "trial", {"router": ("10.0.0.2", 8000)}),
             ):
                 self.fail("the block ran without its forward")
 
@@ -768,7 +792,7 @@ class SshTests(unittest.TestCase):
             ssh = SSH(self.env, self.root / "logs")
             with (
                 self.assertRaisesRegex(RemoteError, "no forward listened within 0.5s"),
-                ssh.forward(self.hosts[1], "trial", {hosts.free_port(): ("10.0.0.2", 8000)}),
+                ssh.forward(self.hosts[1], "trial", {"router": ("10.0.0.2", 8000)}),
             ):
                 self.fail("the block ran without its forward")
         self.assert_stopped(record)

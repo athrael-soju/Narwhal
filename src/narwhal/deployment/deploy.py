@@ -24,8 +24,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import httpx
-
 from narwhal import provenance
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 
@@ -66,7 +64,6 @@ from .hosts import (
     Host,
     RemoteError,
     RemoteTimeout,
-    free_port,
     load_hosts,
     stage_limit,
     write_private,
@@ -344,17 +341,17 @@ def _values(env: Mapping[str, str], names: Sequence[str]) -> dict[str, str]:
     return {name: env[name] for name in names if name in env}
 
 
-def inputs(env: Mapping[str, str], trial_file: Path | None = None) -> dict[str, Input]:
+def inputs(env: Mapping[str, str], trial: capacity.Snapshot | None = None) -> dict[str, Input]:
     """The digest of every input fact of the deployment graph, after checking each input.
 
-    `trial_file` is the `--trial` definition; without it the trial input is empty and the
-    trial stage does not run. Raises `InputError` naming every missing or malformed input,
-    before any host is touched.
+    `trial` is the snapshot of the `--trial` definition that the trial stage runs; without it
+    the trial input is empty and the trial stage does not run. Raises `InputError` naming every
+    missing or malformed input, before any host is touched.
     """
     problems: list[str] = []
-    if trial_file is not None:
+    if trial is not None:
         try:
-            capacity.load(trial_file)
+            capacity.load(trial)
         except ValueError as error:
             problems.append(str(error))
     for reader in (settings, pair) if paired(env) else (settings,):
@@ -394,7 +391,7 @@ def inputs(env: Mapping[str, str], trial_file: Path | None = None) -> dict[str, 
                 for field in ("MODEL_DIR", "RUN_DIR", "FABRIC_INTERFACE")
                 if not discovery.value(env, node, field)
             )
-            if trial_file is not None and discovery.value(env, node, "PREFIX_CACHING") != "false":
+            if trial is not None and discovery.value(env, node, "PREFIX_CACHING") != "false":
                 problems.append(
                     f"{role}: the capacity trial needs prefix caching off; set "
                     f"NARWHAL_PREFIX_CACHING or NARWHAL_NODE_{node}_PREFIX_CACHING to false"
@@ -448,7 +445,11 @@ def inputs(env: Mapping[str, str], trial_file: Path | None = None) -> dict[str, 
         ),
         "router": Input.value(_values(env, ROUTER_INPUTS), source),
         "monitoring": Input.value(_values(env, MONITORING), source),
-        "trial": Input.file(trial_file) if trial_file else Input.value(None, "no --trial"),
+        "trial": (
+            Input("sha256:" + trial.digest, str(trial.path))
+            if trial
+            else Input.value(None, "no --trial")
+        ),
     }
 
 
@@ -483,12 +484,12 @@ class Deployment:
         env: Mapping[str, str],
         *,
         dry: bool = False,
-        trial_file: Path | None = None,
+        trial: capacity.Snapshot | None = None,
     ) -> None:
         self.directory = directory
         self.env = dict(env)
-        # The `--trial` definition the trial stage runs.
-        self.trial_file = trial_file
+        # The snapshot of the `--trial` definition the trial stage runs.
+        self.trial_snapshot = trial
         # A dry deployment's probes change nothing on a host: `plan`, and `status` while
         # another runner holds the run.
         self.dry = dry
@@ -2023,10 +2024,12 @@ class Deployment:
         journals and counters. It then checks the engine, request, token, role and pool-load
         series in Prometheus, and runs the post-load KV ring from the primary router's host.
         """
-        if self.trial_file is None:
+        if self.trial_snapshot is None:
             raise ValueError("the trial stage runs only with --trial")
-        definition = capacity.load(self.trial_file)
-        write_private(context.directory / "trial.json", self.trial_file.read_bytes())
+        # The run's trial input is the digest of these bytes, read when the run checked its
+        # inputs, so the stage runs the trial that its rerun rule describes.
+        definition = capacity.load(self.trial_snapshot)
+        write_private(context.directory / "trial.json", self.trial_snapshot.data)
         result: dict[str, Any] = {"passed": False, "rates": [], "series": [], "ring": None}
         try:
             self._trial(context, definition, result)
@@ -2057,49 +2060,61 @@ class Deployment:
                 + "; ".join(found)
                 + "; profile a range that covers it, or change the trial"
             )
-        forwards: dict[str, dict[int, tuple[str, int]]] = {}
-
-        def forward(host_id: str, address: str, port: int) -> str:
-            taken = {local for ports in forwards.values() for local in ports}
-            local = free_port()
-            while local in taken:
-                local = free_port()
-            forwards.setdefault(host_id, {})[local] = (address, port)
-            return f"http://127.0.0.1:{local}"
-
-        routers = {}
-        for router in Topology(self).instances(ROUTER):
+        # Each host's forwards, by name: the routers by their names, then the load balancer
+        # and Prometheus.
+        forwards: dict[str, dict[str, tuple[str, int]]] = {}
+        routers = Topology(self).instances(ROUTER)
+        for router in routers:
             origin = urlsplit(self.router_url(router))
-            routers[router] = forward(router, _reachable(origin.hostname), int(origin.port or 80))
+            forwards.setdefault(router, {})[router] = (
+                _reachable(origin.hostname),
+                int(origin.port or 80),
+            )
         if paired(self.env):
             balancer = urlsplit(pair(self.env).balancer_url)
-            client = forward(
-                self.owner("load-balancer").id,
+            forwards.setdefault(self.owner("load-balancer").id, {})["load-balancer"] = (
                 _reachable(balancer.hostname),
                 int(balancer.port or 80),
             )
-        else:
-            client = routers[self.primary()]
         listener = parse_prometheus_listener(
             self.env.get("NARWHAL_PROMETHEUS_LISTEN_ADDRESS", "127.0.0.1:9090")
         )
-        prometheus = forward(self.primary(), _reachable(listener.host), listener.port)
+        forwards.setdefault(self.primary(), {})["prometheus"] = (
+            _reachable(listener.host),
+            listener.port,
+        )
         ssh = self.ssh(context)
-        with contextlib.ExitStack() as held:
-            for host_id, ports in forwards.items():
-                held.enter_context(ssh.forward(self.host(host_id), context.stage, ports))
-            self.announce(f"trial: offering load through {client} from the workstation")
+        with contextlib.ExitStack() as stack:
+            held = [
+                stack.enter_context(ssh.forward(self.host(host_id), context.stage, ports))
+                for host_id, ports in forwards.items()
+            ]
+            sockets = {name: path for item in held for name, path in item.sockets.items()}
+
+            def alive() -> None:
+                """Fail the stage once any forward's `ssh` has exited."""
+                for item in held:
+                    item.check()
+
+            client = sockets["load-balancer" if paired(self.env) else self.primary()]
+            self.announce("trial: offering load through SSH forwards from the workstation")
             started = time.time()
-            self._offer(context, definition, fleet, client, routers, result)
+            self._offer(
+                context,
+                definition,
+                fleet,
+                client,
+                {router: sockets[router] for router in routers},
+                result,
+                alive,
+            )
             window = math.ceil(time.time() - started) + SERIES_MARGIN_S
             iids = [str(engine["iid"]) for engine in fleet["engines"]]
-            with httpx.Client(timeout=30, trust_env=False) as session:
+            with capacity.prometheus_at(sockets["prometheus"]) as query:
                 series, found = capacity.check_series(
-                    capacity.prometheus(prometheus, session),
-                    self.env["NARWHAL_FLEET_NAME"],
-                    window,
-                    iids,
+                    query, self.env["NARWHAL_FLEET_NAME"], window, iids
                 )
+            alive()
             _private(context.directory / "series.json", series)
             result["series"] = [{key: row[key] for key in ("series", "passed")} for row in series]
             if found:
@@ -2120,15 +2135,28 @@ class Deployment:
         context: StageContext,
         definition: capacity.Definition,
         fleet: Mapping[str, Any],
-        client: str,
-        routers: Mapping[str, str],
+        client: Path,
+        routers: Mapping[str, Path],
         result: dict,
+        alive: Callable[[], None],
     ) -> None:
         """Prepare the workload, then offer each rate and reconcile it; stop at the first rate
-        that misses its thresholds or does not reconcile."""
+        that misses its thresholds, sees the fleet's control move, or does not reconcile.
+
+        `client` is the socket the load client offers through, and `routers` each router's
+        socket. `alive` raises once a forward's `ssh` has exited; it runs around each phase, so
+        a lost forward fails the stage instead of leaving a rate's evidence incomplete.
+        """
         limit = stage_limit(self.env, context.stage)
         workload = context.directory / "workload"
-        common = ["--base", client, "--timeout", f"{definition.timeout_s:g}"]
+        common = [
+            "--base",
+            capacity.LOCAL_ORIGIN,
+            "--unix-socket",
+            str(client),
+            "--timeout",
+            f"{definition.timeout_s:g}",
+        ]
         prepared = _load_client(
             [
                 *_LOAD_CLIENT,
@@ -2146,76 +2174,103 @@ class Deployment:
             context.directory / "workload.log",
             limit,
         )
+        alive()
         if prepared:
             raise RuntimeError(
                 f"the load client exited {prepared} preparing the workload; inspect "
                 f"{context.directory / 'workload.log'}"
             )
-        with httpx.Client(timeout=10, trust_env=False) as session:
-            for rate in definition.rates_rps:
-                name = capacity.rate_name(rate)
-                out = context.directory / name
-                log = context.directory / f"{name}.log"
-                samples = [capacity.router_sample(session, url) for url in routers.values()]
-                code = _load_client(
-                    [
-                        *_LOAD_CLIENT,
-                        "run",
-                        *common,
-                        "--workload",
-                        str(workload / "workload.json"),
-                        "--expected-model",
-                        str(fleet["model"]),
-                        "--rate",
-                        f"{rate:g}",
-                        "--requests",
-                        str(definition.requests),
-                        "--ttft",
-                        f"{definition.ttft_s:g}",
-                        "--tpot",
-                        f"{definition.tpot_s:g}",
-                        "--attainment",
-                        f"{definition.attainment:g}",
-                        "--max-inflight",
-                        str(definition.max_inflight),
-                        "--max-lag",
-                        f"{definition.max_lag_s:g}",
-                        "--out",
-                        str(out),
-                    ],
-                    log,
-                    limit,
+
+        def sample() -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+            """Sample every router, and read which router controls the fleet."""
+            taken = [capacity.sample_router(path, router) for router, path in routers.items()]
+            return taken, *capacity.control(taken)
+
+        for rate in definition.rates_rps:
+            name = capacity.rate_name(rate)
+            out = context.directory / name
+            log = context.directory / f"{name}.log"
+            samples, before, unknown_before = sample()
+            code = _load_client(
+                [
+                    *_LOAD_CLIENT,
+                    "run",
+                    *common,
+                    "--workload",
+                    str(workload / "workload.json"),
+                    "--expected-model",
+                    str(fleet["model"]),
+                    "--rate",
+                    f"{rate:g}",
+                    "--requests",
+                    str(definition.requests),
+                    "--ttft",
+                    f"{definition.ttft_s:g}",
+                    "--tpot",
+                    f"{definition.tpot_s:g}",
+                    "--attainment",
+                    f"{definition.attainment:g}",
+                    "--max-inflight",
+                    str(definition.max_inflight),
+                    "--max-lag",
+                    f"{definition.max_lag_s:g}",
+                    "--out",
+                    str(out),
+                ],
+                log,
+                limit,
+            )
+            alive()
+            after_samples, after, unknown_after = sample()
+            samples += after_samples
+            alive()
+            if code not in (0, 2):
+                raise RuntimeError(f"{name}: the load client exited {code}; inspect {log}")
+            summary = _json(out / "summary.json")
+            row = {
+                "rate_rps": rate,
+                **{key: summary[key] for key in _SUMMARY},
+                "passed": code == 0,
+            }
+            row["control"] = {"before": before, "after": after}
+            result["rates"].append(row)
+            joined = self._reconcile(context, name, out, samples)
+            row["reconciled"] = not joined["diagnostics"]
+            moved = (
+                capacity.control_problem(before, after)
+                if before is not None and after is not None
+                else ""
+            )
+            if unknown := unknown_before or unknown_after or moved:
+                when = (
+                    "before the rate"
+                    if unknown_before
+                    else "after the rate"
+                    if unknown_after
+                    else "during the rate"
                 )
-                samples += [capacity.router_sample(session, url) for url in routers.values()]
-                if code not in (0, 2):
-                    raise RuntimeError(f"{name}: the load client exited {code}; inspect {log}")
-                summary = _json(out / "summary.json")
-                row = {
-                    "rate_rps": rate,
-                    **{key: summary[key] for key in _SUMMARY},
-                    "passed": code == 0,
-                }
-                result["rates"].append(row)
-                joined = self._reconcile(context, name, out, samples)
-                row["reconciled"] = not joined["diagnostics"]
-                self.announce(
-                    f"trial: {name}: {summary['within_candidate_limits']} of "
-                    f"{summary['offered']} offers within the limits"
+                raise CheckFailed(
+                    f"{name}: the fleet's control is not one router throughout: {unknown} "
+                    f"{when}; a failover invalidates the rate. The router samples are in "
+                    f"{out / 'samples.json'}"
                 )
-                if code:
-                    cause = (
-                        "the client missed its schedule"
-                        if not summary["client_schedule_valid"]
-                        else f"attainment {summary['attainment']:g} is below "
-                        f"{definition.attainment:g}"
-                    )
-                    raise CheckFailed(f"{name}: {cause}; the offers are in {out}")
-                if joined["diagnostics"]:
-                    kinds = sorted({item["kind"] for item in joined["diagnostics"]})
-                    raise CheckFailed(
-                        f"{name}: the offers do not reconcile with the routers ({', '.join(kinds)})"
-                        f"; all router traffic must be trial traffic. See {out / 'reconcile.json'}"
-                    )
+            self.announce(
+                f"trial: {name}: {summary['within_candidate_limits']} of "
+                f"{summary['offered']} offers within the limits"
+            )
+            if code:
+                cause = (
+                    "the client missed its schedule"
+                    if not summary["client_schedule_valid"]
+                    else f"attainment {summary['attainment']:g} is below {definition.attainment:g}"
+                )
+                raise CheckFailed(f"{name}: {cause}; the offers are in {out}")
+            if joined["diagnostics"]:
+                kinds = sorted({item["kind"] for item in joined["diagnostics"]})
+                raise CheckFailed(
+                    f"{name}: the offers do not reconcile with the routers ({', '.join(kinds)})"
+                    f"; all router traffic must be trial traffic. See {out / 'reconcile.json'}"
+                )
 
     def _reconcile(
         self, context: StageContext, name: str, out: Path, samples: list[dict[str, Any]]

@@ -27,6 +27,7 @@ from . import (
     supervision,
 )
 from . import deploy as stage_run
+from . import trial as capacity
 from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 from .launch_engine.evidence import CheckFailed
@@ -411,7 +412,8 @@ def _deployment(args: argparse.Namespace, env: dict[str, str], *, dry: bool = Fa
     """The target's deployment of the run directory; on SSH hosts it carries `--trial`."""
     directory = args.run.resolve()
     if args.target == "ssh":
-        return stage_run.Deployment(directory, env, dry=dry, trial_file=args.trial)
+        trial = getattr(args, "trial_snapshot", None)
+        return stage_run.Deployment(directory, env, dry=dry, trial=trial)
     return TARGETS[args.target].Deployment(directory, env, dry=dry)
 
 
@@ -419,7 +421,13 @@ def _inputs(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any] | N
     """The run's inputs, or None after reporting every missing or malformed one."""
     try:
         if args.target == "ssh":
-            inputs: dict[str, Any] = stage_run.inputs(env, args.trial)
+            # The trial's bytes are read once: the trial input is their digest, and the trial
+            # stage runs from them.
+            try:
+                args.trial_snapshot = capacity.snapshot(args.trial) if args.trial else None
+            except ValueError as error:
+                raise stage_run.InputError([str(error)]) from None
+            inputs: dict[str, Any] = stage_run.inputs(env, args.trial_snapshot)
         else:
             inputs = TARGETS[args.target].inputs(env)
         return inputs

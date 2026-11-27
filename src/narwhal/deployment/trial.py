@@ -10,10 +10,12 @@ so tests replace Prometheus with fixtures.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
@@ -27,6 +29,7 @@ from narwhal.backends import names as backend_names
 
 from ..contracts import TRIAL, ContractVersionError, validate_document
 from ..diagnostics.bundle import DIAGNOSTIC_HEADERS
+from .launch_engine.runtime import regular_file_digest
 
 # The optional fields of a definition and their defaults, the load client's own.
 DEFAULTS = {"max_inflight": 64, "max_lag_s": 0.05, "timeout_s": 120.0}
@@ -109,14 +112,38 @@ def problems(document: Any) -> list[str]:
     return found
 
 
-def load(path: Path) -> Definition:
-    """Read and check the trial definition at `path`; a ValueError names every problem."""
+@dataclass(frozen=True)
+class Snapshot:
+    """The bytes of a `--trial` file, read once. The run's trial input is their digest and the
+    trial stage runs from them, so both describe the same file even when it changes on disk."""
+
+    path: Path
+    data: bytes
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(self.data).hexdigest()
+
+
+def snapshot(path: Path) -> Snapshot:
+    """Read the regular file at `path`, without following a symbolic link in its last component."""
     try:
-        document = json.loads(path.read_text())
+        regular_file_digest(path)
+        return Snapshot(path, path.read_bytes())
     except (OSError, ValueError) as error:
         raise ValueError(f"--trial {path}: {error}") from None
+
+
+def load(path: Path | Snapshot) -> Definition:
+    """Read and check the trial definition at `path`, or in a snapshot of it; a ValueError names
+    every problem."""
+    taken = path if isinstance(path, Snapshot) else snapshot(path)
+    try:
+        document = json.loads(taken.data)
+    except ValueError as error:
+        raise ValueError(f"--trial {taken.path}: {error}") from None
     if found := problems(document):
-        raise ValueError(f"--trial {path}: " + "; ".join(found))
+        raise ValueError(f"--trial {taken.path}: " + "; ".join(found))
     fields = {**DEFAULTS, **{k: v for k, v in document.items() if not k.startswith("schema")}}
     fields["rates_rps"] = tuple(fields["rates_rps"])
     return Definition(**fields)
@@ -177,6 +204,19 @@ def domain_problems(definition: Definition, rows: Sequence[Mapping[str, Any]]) -
     return found
 
 
+# The trial reaches the load balancer, the routers and Prometheus through SSH forwards that
+# listen on Unix sockets in a private directory, so no other workstation user can take their
+# place. The origin names no host; the socket does.
+LOCAL_ORIGIN = "http://localhost"
+
+
+def unix_client(socket: Path, timeout: float) -> httpx.Client:
+    """An HTTP client whose every request goes through the Unix socket at `socket`."""
+    return httpx.Client(
+        transport=httpx.HTTPTransport(uds=str(socket)), timeout=timeout, trust_env=False
+    )
+
+
 # Router samples, as the benchmark evidence collector takes them, for the reconciliation.
 
 
@@ -202,10 +242,65 @@ def router_sample(client: httpx.Client, origin: str) -> dict[str, Any]:
         except (httpx.HTTPError, ValueError) as error:
             item["errors"][name] = str(error)
     if "state_after" in item:
-        item["journal_run_after"] = item.pop("state_after").get("journal_run")
+        after = item.pop("state_after")
+        item["journal_run_after"] = after.get("journal_run")
+        item["ha_after"] = after.get("ha") or {}
     elif "state_after" in item["errors"]:
         item["journal_run_after"] = None
     return item
+
+
+def sample_router(socket: Path, router: str) -> dict[str, Any]:
+    """`router_sample` of the router forwarded to `socket`, recorded under its name."""
+    with unix_client(socket, 10) as client:
+        return {**router_sample(client, LOCAL_ORIGIN), "router": router}
+
+
+# The router that controls the fleet, read from the samples taken before and after a rate.
+
+
+def control(samples: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any] | None, str]:
+    """The router that held the lease across one round of samples, with its epoch and holder
+    token, or None and the reason no single router did.
+
+    A router reports `ha.role` `active` in both of its state reads; a router without `ha`, such
+    as a single router without fencing, is active at epoch 0.
+    """
+    held = []
+    for sample in samples:
+        name = str(sample.get("router"))
+        if "state" not in sample or "ha_after" not in sample:
+            return None, f"{name}'s state could not be read"
+        first = sample["state"].get("ha") or {}
+        second = sample["ha_after"]
+        leases = [
+            (ha.get("role", "active"), ha.get("epoch", 0), ha.get("holder"))
+            for ha in (first, second)
+        ]
+        if leases[0] != leases[1]:
+            return None, f"{name}'s lease changed between its two state reads"
+        role, epoch, holder = leases[0]
+        if role == "active":
+            held.append({"router": name, "epoch": epoch, "holder": holder})
+    if len(held) != 1:
+        names = " and ".join(row["router"] for row in held) or "no router"
+        return None, f"{names} reported control of the fleet"
+    return held[0], ""
+
+
+def control_problem(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
+    """Why the fleet's control moved between two rounds, or an empty string."""
+    if before["router"] != after["router"]:
+        return (
+            f"control moved from {before['router']} at epoch {before['epoch']} to "
+            f"{after['router']} at epoch {after['epoch']}"
+        )
+    if before["epoch"] != after["epoch"] or before["holder"] != after["holder"]:
+        return (
+            f"{before['router']} took the lease again, from epoch {before['epoch']} to "
+            f"{after['epoch']}"
+        )
+    return ""
 
 
 # Prometheus series checks.
@@ -228,14 +323,24 @@ def prometheus(origin: str, client: httpx.Client) -> Query:
     return query
 
 
+@contextmanager
+def prometheus_at(socket: Path) -> Iterator[Query]:
+    """A `Query` against the Prometheus forwarded to `socket`, whose client closes with the
+    block."""
+    with unix_client(socket, 30) as client:
+        yield prometheus(LOCAL_ORIGIN, client)
+
+
 @dataclass(frozen=True)
 class Series:
     """One series check: a query whose every sample is 1 when the series holds.
 
     `expression` scopes its selectors with `@scope`, the fleet, and its ranges with `@window`,
-    the trial's duration. `<<name>>` takes each engine backend's dashboard query for `name`.
-    `per` names the label whose values must each appear: `iid` for every engine, `role` for
-    each pool. Without it the query returns one fleet-wide sample.
+    the trial's duration. `@scrapes` is the fewest samples a series scraped through the whole
+    window holds, and `@controlling` matches the router that reported the active lease role at
+    every scrape of the window. `<<name>>` takes each engine backend's dashboard query for
+    `name`. `per` names the label whose values must each appear: `iid` for every engine, `role`
+    for each pool. Without it the query returns one fleet-wide sample.
     """
 
     name: str
@@ -245,11 +350,18 @@ class Series:
 
 
 _ROUTER = 'job="narwhal-router",@scope'
+# The router that held the active role at every scrape of the window. A standby's series and a
+# router that took over partway through do not match it.
+_ACTIVE = f'narwhal_router_role{{{_ROUTER},role="active"}}'
+_CONTROLLING = (
+    f"(min_over_time({_ACTIVE}[@window]) == 1 and count_over_time({_ACTIVE}[@window]) >= @scrapes)"
+)
 SERIES = (
     Series(
         "engine",
         "every engine's scrape target was up at every scrape of the trial",
-        'min by (iid) (min_over_time(up{job="engines",@scope}[@window]))',
+        'min by (iid) (min_over_time(up{job="engines",@scope}[@window]) * '
+        '(count_over_time(up{job="engines",@scope}[@window]) >= bool @scrapes))',
         "iid",
     ),
     Series(
@@ -264,21 +376,29 @@ SERIES = (
     ),
     Series("token", "the engines computed prompt tokens", "sum(<<prompt_tokens>>) > bool 0"),
     Series("token", "the engines generated output tokens", "sum(<<output_tokens>>) > bool 0"),
+    # An engine may change pool during the trial, so its scrapes count across both roles.
     Series(
         "role",
-        "every engine held a role in a pool",
-        f"max by (iid) (last_over_time(narwhal_instance_role{{{_ROUTER}}}[@window]))",
+        "the controlling router reported every engine in a pool at every scrape of the trial",
+        "max by (iid) ((sum by (instance, iid) "
+        f"(count_over_time(narwhal_instance_role{{{_ROUTER}}}[@window])) >= bool @scrapes) "
+        "and on (instance) @controlling)",
         "iid",
     ),
     # A pool's load reads 0 while its engines run at their idle pace, as at a low rate, so the
-    # check asks that each pool reported its load, not that the load rose.
+    # check asks that the controlling router reported each pool's load throughout, not that the
+    # load rose.
     Series(
         "pool-load",
-        "the prefill and decode pools each reported their load",
-        f"max by (role) (max_over_time(narwhal_pool_load{{{_ROUTER}}}[@window])) >= bool 0",
+        "the controlling router reported the prefill and decode pool loads at every scrape of "
+        "the trial",
+        "max by (role) ((count_over_time(narwhal_pool_load"
+        f"{{{_ROUTER}}}[@window]) >= bool @scrapes) and on (instance) @controlling)",
         "role",
     ),
 )
+# The stack's Prometheus scrape interval, from its prometheus.yml.
+SCRAPE_INTERVAL_S = 5
 POOLS = ("prefill", "decode")
 
 
@@ -304,28 +424,44 @@ def _engine_series(name: str, selector: str, window: str, routers: str) -> str:
     return "(" + " or ".join(queries) + ")"
 
 
-def expression(series: Series, fleet: str, window_s: int) -> str:
-    """The query of one check for `fleet` over the last `window_s` seconds."""
+def scrapes(window_s: int, scrape_s: int = SCRAPE_INTERVAL_S) -> int:
+    """The fewest samples a series scraped every `scrape_s` seconds through the whole
+    `window_s` holds: one less than the scrapes the window spans, for the alignment of the
+    first scrape."""
+    return max(1, window_s // scrape_s - 1)
+
+
+def expression(series: Series, fleet: str, window_s: int, scrape_s: int = SCRAPE_INTERVAL_S) -> str:
+    """The query of one check for `fleet` over the last `window_s` seconds, for series scraped
+    every `scrape_s` seconds."""
     scope = f'fleet="{fleet}"'
     window = f"{window_s}s"
-    text = series.expression
+    text = series.expression.replace("@controlling", _CONTROLLING)
     while "<<" in text:
         start = text.index("<<")
         end = text.index(">>", start)
         engines = _engine_series(text[start + 2 : end], f'job="engines",{scope}', window, scope)
         text = text[:start] + engines + text[end + 2 :]
-    return text.replace("@scope", scope).replace("@window", window)
+    return (
+        text.replace("@scope", scope)
+        .replace("@window", window)
+        .replace("@scrapes", str(scrapes(window_s, scrape_s)))
+    )
 
 
 def check_series(
-    query: Query, fleet: str, window_s: int, iids: Sequence[str]
+    query: Query,
+    fleet: str,
+    window_s: int,
+    iids: Sequence[str],
+    scrape_s: int = SCRAPE_INTERVAL_S,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Run every series check; return each check's query, samples and verdict, and the
     problems of the checks that failed."""
     rows = []
     found = []
     for series in SERIES:
-        text = expression(series, fleet, window_s)
+        text = expression(series, fleet, window_s, scrape_s)
         samples = query(text)
         values: dict[str, float] = {}
         for sample in samples:

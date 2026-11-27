@@ -162,22 +162,22 @@ narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.
 | `attainment` | The fraction of offered requests that must meet both limits, above 0 and at most 1 |
 | `max_inflight`, `max_lag_s`, `timeout_s` | Optional client limits: concurrent requests, default `64`, scheduling lag, default `0.05`, and the per-request and drain timeout, default `120` |
 
-`plan` and `run` name every problem of the file before they reach a host. They also refuse `--trial` while an engine's inputs leave prefix caching on: set `NARWHAL_PREFIX_CACHING=false` before discovery, as in [Preparing, checking, and starting each engine](03-Validate-Engines.md#preparing-checking-and-starting-each-engine), and unset any `NARWHAL_NODE_<n>_PREFIX_CACHING` that turns it on again.
+`plan` and `run` read the file once and name every problem in it before they reach a host. The run's `trial` input is the SHA-256 of those bytes, and the stage runs the trial they hold, so an edit to the file after `run` starts changes neither. They also refuse `--trial` while an engine's inputs leave prefix caching on: set `NARWHAL_PREFIX_CACHING=false` before discovery, as in [Preparing, checking, and starting each engine](03-Validate-Engines.md#preparing-checking-and-starting-each-engine), and unset any `NARWHAL_NODE_<n>_PREFIX_CACHING` that turns it on again.
 
-The load client runs on the workstation from the installed wheel. For the length of the stage, SSH forwards on workstation loopback ports reach the load balancer, or the router of a fleet with one router, each router, and Prometheus on the primary router's host. The stage then:
+The load client runs on the workstation from the installed wheel. For the length of the stage, SSH forwards reach the load balancer, or the router of a fleet with one router, each router, and Prometheus on the primary router's host. Each forward listens on a Unix socket in a directory that only your user can open, which the stage removes when it ends. The stage fails when a forward's `ssh` exits. The stage then:
 
 1. Refuses to run when an engine's `checked.json` shows `prefix_caching` other than `false`, and when the workload leaves an engine's profiled domain: a prompt outside the profile's `prefill_min_tokens` to `prefill_max_tokens`, an output outside `decode_min_output_tokens` to `decode_max_output_tokens`, or one request's tokens above `decode_max_kv_tokens`.
 2. Prepares the workload from the router's served model with `load_trial prepare`.
-3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees.
-4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query:
+3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees. The state reads also give the router that controls the fleet, with its lease epoch and holder. A rate fails as well when no single router reported control before or after it, or when control moved or the lease epoch changed during it, as in a failover.
+4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query. A series must hold a sample for every 5-second scrape of the window, less one, so a series that stopped partway fails. The `role` and `pool-load` checks read only the controlling router, the one whose `narwhal_router_role{role="active"}` was 1 at every scrape of the window:
 
     | Series | Passes when |
     | --- | --- |
-    | `engine` | Every engine's scrape target was up at every scrape of the trial |
+    | `engine` | Every engine's scrape target was up at every scrape of the trial, and scraped throughout |
     | `request` | `narwhal_served_total` grew |
     | `token` | `narwhal_decode_tokens_observed_total` grew, and the engines computed prompt tokens and generated output tokens |
-    | `role` | Every engine held a role in a pool, as `narwhal_instance_role` shows |
-    | `pool-load` | The prefill and the decode pool each reported `narwhal_pool_load`. A pool whose engines run at their idle pace reports 0, which passes |
+    | `role` | The controlling router reported every engine in a pool, as `narwhal_instance_role` shows, at every scrape. An engine that changed pool passes |
+    | `pool-load` | The controlling router reported `narwhal_pool_load` for the prefill and the decode pool at every scrape. A pool whose engines run at their idle pace reports 0, which passes |
 
 5. Runs the post-load KV ring on the primary router's host, with the fleet that `fleet-limits` wrote:
 
@@ -191,13 +191,13 @@ The stage keeps its evidence in `stages/trial/attempt-<n>/` of the run directory
 
 | Path | Contents |
 | --- | --- |
-| `trial.json` | The trial file |
+| `trial.json` | The trial file, as `run` read it |
 | `prefix-caching.json` | Each engine's `prefix_caching` from its `checked.json` |
 | `workload/` | The prepared `workload.json`, `seed-response.json` and `manifest.json` |
 | `rate-<rate>/` | The [client's records](../measure/04-Reconcile-and-Accept.md) of the rate, with `samples.json`, the router reads before and after it, `journal-rows.json`, the routers' journal rows of its offers, and `reconcile.json` |
 | `series.json` | Each series query, the samples Prometheus returned and its verdict |
 | `host/ring.json` | The KV ring's command result |
-| `trial-result.json` | Each rate's counts, attainment and verdicts, each series verdict, the ring, and the failure of a failed trial |
+| `trial-result.json` | Each rate's counts, attainment, verdicts and the router that held control before and after it, each series verdict, the ring, and the failure of a failed trial |
 | `workload.log`, `rate-<rate>.log`, `logs/` | The load client's output and the SSH logs |
 
 A failed check fails the stage's gate. Fix the cause and run `run --trial` again. A trial that passed is skipped while its file and the inputs that the [rerun table](../Deploy.md#rerunning-after-a-change) names for `trial` are unchanged, so give a changed file, such as another `seed`, to repeat it.

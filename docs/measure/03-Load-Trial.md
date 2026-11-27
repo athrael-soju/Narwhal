@@ -76,6 +76,8 @@ Each run manifest records:
 
 The client limits concurrent requests with `--max-inflight` (default 64) and scheduling lag with `--max-lag` (default 0.05 s).
 
+`--unix-socket <path>` sends every request through a Unix socket, such as an SSH forward's. `--base` then sets only the scheme, the `Host` header and the path, for example `--base http://localhost`.
+
 An offer over either limit becomes a terminal `client_schedule_miss` record with `client_schedule_valid: false` in the summary.
 
 Check client CPU and scheduling lag before raising either limit.

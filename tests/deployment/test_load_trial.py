@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import io
 import json
+import socketserver
 import tempfile
 import threading
 import unittest
@@ -285,8 +286,9 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 @contextmanager
-def local_router():
-    """Serve a fake router on loopback and yield its base URL and the streamed prompts."""
+def local_router(unix_socket: Path | None = None):
+    """Serve a fake router on loopback, or on `unix_socket`, and yield its base URL and the
+    streamed prompts."""
     prompts = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -321,11 +323,19 @@ def local_router():
         def log_message(self, *_):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        def address_string(self):
+            return "client"
+
+    if unix_socket is None:
+        server: socketserver.BaseServer = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+    else:
+        server = socketserver.ThreadingUnixStreamServer(str(unix_socket), Handler)
+        base = "http://localhost"
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", prompts
+        yield base, prompts
     finally:
         server.shutdown()
         server.server_close()
@@ -334,8 +344,18 @@ def local_router():
 
 class AccountingTests(unittest.TestCase):
     def test_cli_prepares_and_runs_through_a_local_http_server(self):
+        self.prepare_and_run()
+
+    def test_cli_prepares_and_runs_through_a_unix_socket(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            socket = Path(folder) / "router.sock"
+            manifest = self.prepare_and_run(socket)
+        self.assertEqual(manifest["settings"]["unix_socket"], str(socket))
+
+    def prepare_and_run(self, unix_socket: Path | None = None) -> dict:
+        through = ["--unix-socket", str(unix_socket)] if unix_socket else []
         with (
-            local_router() as (base, _),
+            local_router(unix_socket) as (base, _),
             tempfile.TemporaryDirectory() as directory,
             redirect_stdout(io.StringIO()),
         ):
@@ -344,6 +364,7 @@ class AccountingTests(unittest.TestCase):
                 trial.main(
                     [
                         "prepare",
+                        *through,
                         "--base",
                         base,
                         "--out",
@@ -360,6 +381,7 @@ class AccountingTests(unittest.TestCase):
                 trial.main(
                     [
                         "run",
+                        *through,
                         "--base",
                         base,
                         "--out",
@@ -385,6 +407,7 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(row["client_rid"].startswith(manifest["run_id"]) for row in rows))
             self.assertEqual((root / "run").stat().st_mode & 0o777, 0o700)
+        return manifest
 
     def test_attainment_counts_failures_and_uses_joint_latency_limits(self):
         good = {

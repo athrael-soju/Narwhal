@@ -509,6 +509,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "run"))
     parser.add_argument("--base", required=True)
+    parser.add_argument(
+        "--unix-socket",
+        type=Path,
+        help="send every request through this Unix socket, such as an SSH forward's; --base "
+        "then gives only the scheme, the Host header and the path",
+    )
     parser.add_argument("--out", required=True, type=Path, help="fresh private output directory")
     parser.add_argument(
         "--api-key-env", help="environment variable containing ingress bearer token"
@@ -587,11 +593,18 @@ def main(argv: list[str] | None = None) -> int:
     args.run_id = uuid.uuid4().hex
 
     async def execute() -> int:
+        limits = httpx.Limits(max_connections=args.max_inflight + 1)
+        transport = (
+            httpx.AsyncHTTPTransport(uds=str(args.unix_socket), limits=limits)
+            if args.unix_socket
+            else None
+        )
         async with httpx.AsyncClient(
             headers=headers,
             timeout=args.timeout,
             trust_env=False,
-            limits=httpx.Limits(max_connections=args.max_inflight + 1),
+            limits=limits,
+            transport=transport,
         ) as client:
             if args.command == "prepare":
                 await prepare(client, args.base.rstrip("/"), args)
@@ -605,7 +618,12 @@ def main(argv: list[str] | None = None) -> int:
             {
                 **provenance(),
                 "run_id": args.run_id,
-                "settings": vars(args) | {"out": str(args.out), "workload": str(args.workload)},
+                "settings": vars(args)
+                | {
+                    "out": str(args.out),
+                    "workload": str(args.workload),
+                    "unix_socket": str(args.unix_socket) if args.unix_socket else None,
+                },
                 "workload_sha256": digest(args.workload) if args.workload else None,
             },
         )

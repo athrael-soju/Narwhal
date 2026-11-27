@@ -195,15 +195,23 @@ class Fleet:
         # rows on each router host, each router's request counters, the exit code of a rate's
         # client run, the journal rows a router lost, and the series Prometheus leaves out.
         self.load_argv: list[list[str]] = []
-        self.forwards: list[tuple[str, dict[int, tuple[str, int]]]] = []
+        # Each forward's host, and its sockets by name with the address each reaches; an
+        # `ssh` that exits after the named phase, such as `rate-0.5`; and a failover after a
+        # rate: the router that takes control and the epoch it takes.
+        self.forwards: list[tuple[str, dict[str, tuple[Path, str, int]]]] = []
         self.open_forwards = 0
+        self.forward_exits_after: str | None = None
+        self.forward_alive = True
+        self.failover_after: dict[str, tuple[str, int]] = {}
+        self.epoch = 1
         self.journals: dict[str, list[dict]] = {}
         self.counters: dict[str, Counter[str]] = {}
         self.client_exit: dict[str, int] = {}
         self.lost_rows = 0
         self.missing_series: set[tuple[str, str]] = set()
         self.queries: list[str] = []
-        self.prometheus_clients: list[Any] = []
+        self.prometheus_open = 0
+        self.prometheus_closed = 0
 
     def mount(self, host: str) -> str:
         """`lease_check mount` on `host`: the lease directory's mount."""
@@ -460,6 +468,7 @@ class Fleet:
         self.load_argv.append(list(argv))
         assert self.open_forwards, "the load client ran without the forwards"
         command, options = argv[3], dict(zip(argv[4::2], argv[5::2], strict=False))
+        assert options["--base"] == "http://localhost", options
         out = Path(options["--out"])
         out.mkdir(mode=0o700)
         if command == "prepare":
@@ -496,20 +505,25 @@ class Fleet:
             "tpot_s": {"p50": 0.02, "p95": 0.03, "p99": 0.04},
         }
         write_private(out / "summary.json", json.dumps(summary).encode())
+        if failover := self.failover_after.pop(rate, None):
+            self.active_router, self.epoch = failover
+        if self.forward_exits_after == f"rate-{rate}":
+            self.forward_alive = False
         return code
 
-    def _forwarded(self, url: str) -> tuple[str, str]:
-        """The host and the address that a forwarded local URL reaches."""
-        port = int(url.rsplit(":", 1)[1])
-        for host, ports in self.forwards:
-            if port in ports:
-                address, remote_port = ports[port]
-                return host, f"{address}:{remote_port}"
-        raise AssertionError(f"{url} is not a forwarded port")
+    def _forwarded(self, socket: str | Path) -> tuple[str, str]:
+        """The host and the address that a forward's socket reaches."""
+        for host, sockets in self.forwards:
+            for path, address, remote_port in sockets.values():
+                if Path(socket) == path:
+                    return host, f"{address}:{remote_port}"
+        raise AssertionError(f"{socket} is not a forwarded socket")
 
-    def router_sample(self, client: Any, url: str) -> dict:
-        _, origin = self._forwarded(url)
+    def router_sample(self, socket: Path, router: str) -> dict:
+        assert self.open_forwards, "the stage sampled a router without the forwards"
+        _, origin = self._forwarded(socket)
         host = _ROUTER_HOSTS[origin]
+        assert host == router, (host, router)
         counters = self.counters.setdefault(host, Counter())
         names = (
             "narwhal_offered_total",
@@ -526,20 +540,29 @@ class Fleet:
         return {
             "at": f"2026-01-01T00:00:{self.calls[f'sample {host}']:02d}Z",
             "monotonic": float(sum(self.calls.values())),
-            "router": url,
+            "router": router,
             "errors": {},
-            "state": {"journal_run": "j1" if host == self.active_router else f"j-{host}"},
+            "state": {
+                "journal_run": "j1" if host == self.active_router else f"j-{host}",
+                "ha": self._ha(host),
+            },
             "router_metrics": metrics,
             "journal_run_after": "j1" if host == self.active_router else f"j-{host}",
+            "ha_after": self._ha(host),
         }
 
-    def prometheus(self, origin: str, client: Any) -> Any:
-        host, address = self._forwarded(origin)
+    def _ha(self, host: str) -> dict:
+        role = "active" if host == self.active_router else "standby"
+        return {"role": role, "epoch": self.epoch, "holder": f"{self.active_router}-{self.epoch}"}
+
+    @contextlib.contextmanager
+    def prometheus(self, socket: Path) -> Iterator[Any]:
+        host, address = self._forwarded(socket)
         assert (host, address) == ("node-1", "127.0.0.1:9090"), (host, address)
-        self.prometheus_clients.append(client)
+        self.prometheus_open += 1
 
         def query(expression: str) -> list[dict]:
-            assert not client.is_closed
+            assert self.prometheus_open > self.prometheus_closed
             # The stage runs the checks in their listed order.
             series = deploy.capacity.SERIES[len(self.queries) % len(deploy.capacity.SERIES)]
             self.queries.append(expression)
@@ -550,7 +573,10 @@ class Fleet:
                 if (series.name, value) not in self.missing_series
             ]
 
-        return query
+        try:
+            yield query
+        finally:
+            self.prometheus_closed += 1
 
     # The SSH calls stages make directly.
 
@@ -592,8 +618,8 @@ class Fleet:
                 (deploy_cli, "compose_problem", lambda runner: self.compose_problem),
                 (deploy.AttestationDocument, "load", _document),
                 (deploy, "_load_client", self.load_client),
-                (deploy.capacity, "router_sample", self.router_sample),
-                (deploy.capacity, "prometheus", self.prometheus),
+                (deploy.capacity, "sample_router", self.router_sample),
+                (deploy.capacity, "prometheus_at", self.prometheus),
                 (deploy, "launch_digest", lambda contract, launch: json.dumps(launch)),
             )
             for owner, name, value in targets:
@@ -625,12 +651,26 @@ class _SSH:
         return self.logs / f"{host.id}.log"
 
     @contextlib.contextmanager
-    def forward(self, host: Host, stage: str, ports: dict[int, tuple[str, int]]) -> Iterator[None]:
+    def forward(self, host: Host, stage: str, ports: dict[str, tuple[str, int]]) -> Iterator[Any]:
         stage_limit({}, stage)
-        self.fleet.forwards.append((host.id, dict(ports)))
+        sockets = {name: self.logs / f"{host.id}-{name}.sock" for name in ports}
+        self.fleet.forwards.append(
+            (host.id, {name: (sockets[name], *ports[name]) for name in ports})
+        )
         self.fleet.open_forwards += 1
+        fleet = self.fleet
+
+        class Held:
+            def __init__(self) -> None:
+                self.sockets = sockets
+
+            def check(self) -> None:
+                if not fleet.forward_alive:
+                    raise RemoteError(host.id, stage, "forward", self_log, ": ssh exited 255")
+
+        self_log = self.log(host)
         try:
-            yield
+            yield Held()
         finally:
             self.fleet.open_forwards -= 1
 
