@@ -713,6 +713,39 @@ class SshTests(unittest.TestCase):
         self.assertLess(bound, 0.5)
         self.assertIn("offset=", ssh.log(self.hosts[1]).read_text())
 
+    def test_the_tightest_exchange_gives_the_offset_and_half_its_round_trip_the_bound(self):
+        # Workstation readings before and after each exchange, and the host's reply to each:
+        # the third exchange has the shortest round trip, 0.1 s, and puts the host 5 s ahead.
+        trips = [0.4, 0.3, 0.1, 0.5, 0.2, 0.6, 0.3, 0.4]
+        offsets = [5.4, 5.3, 5.0, 5.5, 5.2, 5.6, 5.3, 5.4]
+        readings = iter(
+            value for i, trip in enumerate(trips) for value in (100.0 + i, 100.0 + i + trip)
+        )
+        replies = [
+            100.0 + i + trip / 2 + offset
+            for i, (trip, offset) in enumerate(zip(trips, offsets, strict=True))
+        ]
+        script = (
+            f"{shlex.quote(sys.executable)} -c 'import sys\n"
+            f"replies = iter({replies!r})\n"
+            "for _ in sys.stdin: print(repr(next(replies)), flush=True)'"
+        )
+        real = time.time
+
+        def clock():
+            # Only the exchanges read the scripted workstation clock.
+            caller = sys._getframe(1).f_code.co_name
+            return next(readings) if caller == "clock_offset" else real()
+
+        with (
+            self.fake_ssh('exec sh -c "$last"'),
+            patch("narwhal.deployment.hosts.time.time", clock),
+        ):
+            ssh = SSH(self.env, self.root / "logs")
+            offset, bound = ssh.clock_offset(self.hosts[1], "lease-check", "read the clock", script)
+        self.assertAlmostEqual(offset, 5.0, places=9)
+        self.assertAlmostEqual(bound, 0.05, places=9)
+
     def test_a_host_without_coreutils_timeout_is_named(self):
         tools = self.root / "host-bin"
         tools.mkdir()

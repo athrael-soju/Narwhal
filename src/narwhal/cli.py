@@ -237,8 +237,9 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--first-start-primary requires --standby-of")
     if args.lease_witness and not args.lease_path:
         ap.error("--lease-witness requires --lease-path")
-    if args.first_start_primary and _first_start(args):
-        args.standby_of = ""
+    # A first start claims the lease, and keeps its peer to shadow should another router
+    # claim first.
+    claim_first = bool(args.first_start_primary and _first_start(args))
     if args.lease_safety_margin < 0:
         ap.error("--lease-safety-margin must be nonnegative")
     if (
@@ -252,6 +253,7 @@ def serve(argv: list[str] | None = None) -> int:
             max_concurrent=args.max_concurrent,
             journal_path=args.journal or None,
             standby_of=args.standby_of.rstrip("/") or None,
+            claim_first=claim_first,
             standby_probe_interval_s=args.standby_probe_interval,
             standby_takeover_after=args.standby_takeover_after,
             standby_max_handoff_age_s=args.standby_max_handoff_age,

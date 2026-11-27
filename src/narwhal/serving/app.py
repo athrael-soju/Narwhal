@@ -85,8 +85,17 @@ def create_app(
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
     deployment_status: Path | str | None = None,
+    claim_first: bool = False,
 ) -> FastAPI:
+    """Build the router application.
+
+    With `standby_of`, the router shadows that peer and takes over its lease. `claim_first`
+    makes it try to claim the lease at start instead: it is the primary when the claim
+    succeeds, and shadows the peer as any standby does when another router claimed first.
+    """
     cfg = cfg or FleetConfig.from_env()
+    if claim_first and not standby_of:
+        raise ValueError("claim_first needs standby_of, the peer to shadow after a lost claim")
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
     for name, value in (
@@ -121,7 +130,7 @@ def create_app(
         )
         try:
             orphans = lease.remove_orphans()
-        except OSError as exc:
+        except (OSError, LeaseError) as exc:
             log.warning("could not remove orphaned lease temporary files: %s", exc)
             orphans = []
         for orphan in orphans:
@@ -185,25 +194,32 @@ def create_app(
             raise RuntimeError("; ".join(generation_failures))
         watch = None
         lease_watch = None
+        claimed = False
         if lease is not None:
-            if standby_of:
+            if standby_of and not claim_first:
                 router.standby = True
             else:
                 try:
                     claimed = lease.claim()
                 except LeaseError as exc:
-                    claimed = False
-                    router.failover_blocked = f"lease unavailable: {exc}"
+                    if not standby_of:
+                        router.failover_blocked = f"lease unavailable: {exc}"
+                    log.warning("could not claim the lease at start: %s", exc)
                 if claimed:
                     router.lease_epoch = lease.epoch
                     router.lease_holder = lease.holder
                 else:
                     router.standby = True
-                    router.failover_blocked = (
-                        router.failover_blocked or "lease held by another router"
-                    )
+                    if not standby_of:
+                        router.failover_blocked = (
+                            router.failover_blocked or "lease held by another router"
+                        )
+                    else:
+                        log.warning(
+                            "another router claimed the lease first; shadowing %s", standby_of
+                        )
             lease_watch = asyncio.create_task(lease_renew_loop(router, lease_renew_interval_s))
-        if standby_of:
+        if standby_of and not claimed:
             # A polled handoff is fresher than the local resume file.
             if lease is None:
                 raise ValueError("automatic standby takeover requires a shared lease")

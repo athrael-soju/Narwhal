@@ -342,6 +342,62 @@ class DeployTests(unittest.TestCase):
             code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
 
+    def test_both_routers_start_with_the_lease_witness(self):
+        self.deploy("run")
+        argv = self.fleet.argv["router"]
+        at = argv.index("--lease-witness")
+        self.assertEqual(argv[at + 1], "/srv/shared/.narwhal-lease-witness")
+
+    def test_a_default_nfs_mount_caches_the_lease_too_long_for_lease_check(self):
+        # Without actimeo, the kernel caches attributes for up to 60 s.
+        self.fleet.mount_options["node-2"] = ["rw", "vers=4.2", "hard", "local_lock=none"]
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "lease-check")
+        self.assertIn("node-2's lease mount /srv/shared", error["message"])
+        self.assertIn("acregmax=60", error["message"])
+        self.assertIn("remount with actimeo=1 or noac", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 0)
+
+    def test_a_lease_mount_back_with_nocto_starts_no_router(self):
+        self.deploy("run")
+        self.stop_primary_router()
+        self.fleet.mount_options["node-1"] = [
+            "rw",
+            "vers=4.2",
+            "nocto",
+            "acregmin=1",
+            "acregmax=1",
+            "acdirmin=1",
+            "acdirmax=1",
+            "local_lock=none",
+        ]
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("remount without nocto", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def test_a_lease_directory_of_another_file_system_type_starts_no_router(self):
+        # The witness is there, but on a local file system rather than the shared mount.
+        self.deploy("run")
+        self.stop_primary_router()
+        self.fleet.mounts["node-1"] = "ext4"
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("a ext4 mount, not a nfs4 one", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def stop_primary_router(self):
+        del self.fleet.units[
+            next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        ]
+        self.fleet.active_router = "node-2"
+
     def test_a_router_host_without_its_lease_mount_starts_no_router(self):
         self.deploy("run")
         del self.fleet.units[

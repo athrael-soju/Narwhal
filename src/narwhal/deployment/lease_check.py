@@ -14,6 +14,8 @@ value written on one host must be the value the other host reads.
   or `missing`.
 - `state PATH` prints the lease's holder, epoch and expiry with this host's clock as JSON.
 - `clock` prints this host's wall clock for each line it reads, until its input ends.
+- `mount PATH` prints the file system type, mount point and options of the mount that holds
+  PATH as JSON, from `/proc/self/mountinfo`, or the type `missing` when PATH is no directory.
 """
 
 from __future__ import annotations
@@ -22,11 +24,16 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
-from ..runtime.lease import FileLease, LeaseError
+from ..runtime.lease import DEFAULT_SAFETY_MARGIN_S, FileLease, LeaseError
+
+MOUNTINFO = Path("/proc/self/mountinfo")
+# The Linux NFS client's attribute cache bounds, in seconds, while a mount sets none of them.
+NFS_ATTRIBUTE_CACHE = {"acregmin": 3.0, "acregmax": 60.0, "acdirmin": 30.0, "acdirmax": 60.0}
 
 WITNESS_TEXT = "narwhal lease directory\n"
 
@@ -101,6 +108,84 @@ def clock() -> None:
         print(repr(time.time()), flush=True)
 
 
+def _unescape(field: str) -> str:
+    """A mountinfo field with its octal escapes, such as `\\040` for a space, decoded."""
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), field)
+
+
+def mount(path: Path, mountinfo: Path = MOUNTINFO) -> str:
+    """The type, mount point and options of the mount that holds `path`, as JSON."""
+    if not path.is_dir():
+        return json.dumps({"type": "missing", "target": None, "options": []})
+    device = os.stat(path).st_dev
+    real = os.path.realpath(path)
+    found = None
+    for line in mountinfo.read_text().splitlines():
+        fields = line.split(" ")
+        separator = fields.index("-")
+        major, minor = (int(part) for part in fields[2].split(":"))
+        target = _unescape(fields[4])
+        inside = real == target or real.startswith(target.rstrip("/") + "/")
+        if os.makedev(major, minor) == device and inside:
+            # A later entry mounts over an earlier one.
+            options = fields[5].split(",") + fields[separator + 3].split(",")
+            found = {
+                "type": fields[separator + 1],
+                "target": target,
+                "options": sorted(set(options)),
+            }
+    if found is None:
+        raise ValueError(f"no mount in {mountinfo} holds {path}")
+    return json.dumps(found)
+
+
+def mount_problems(found: dict, margin_s: float = DEFAULT_SAFETY_MARGIN_S) -> list[str]:
+    """What in an NFS lease mount breaks the lease, each with its fix.
+
+    The lease needs each open of the lease file to read what another host last wrote
+    (close-to-open consistency), `flock` to reach the server, and attribute caching no longer
+    than the `margin_s` that the lease reserves for the hosts' views to differ.
+    """
+    if not str(found.get("type", "")).startswith("nfs"):
+        return []
+    options = {}
+    for option in found.get("options", []):
+        name, _, value = option.partition("=")
+        options[name] = value
+    problems = []
+    if "nocto" in options:
+        problems.append(
+            "nocto lets an open of the lease read what this host cached rather than what the "
+            "other host wrote; remount without nocto"
+        )
+    if options.get("local_lock", "none") != "none":
+        problems.append(
+            f"local_lock={options['local_lock']} keeps flock on this host, so the hosts' locks "
+            "do not exclude each other; remount with local_lock=none"
+        )
+    if "nolock" in options:
+        problems.append(
+            "nolock keeps locks on this host, so the hosts' locks do not exclude each other; "
+            "remount without nolock"
+        )
+    cache = dict(NFS_ATTRIBUTE_CACHE)
+    if "noac" in options:
+        cache = dict.fromkeys(cache, 0.0)
+    if "actimeo" in options:
+        cache = dict.fromkeys(cache, float(options["actimeo"]))
+    for name in cache:
+        if name in options:
+            cache[name] = float(options[name])
+    over = [f"{name}={value:g}" for name, value in cache.items() if value > margin_s]
+    if over:
+        problems.append(
+            f"the attribute cache holds lease attributes for up to "
+            f"{max(cache.values()):g}s ({', '.join(over)}), beyond the {margin_s:g}s the lease "
+            f"reserves; remount with actimeo={margin_s:g} or noac"
+        )
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -123,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
     stating = commands.add_parser("state")
     stating.add_argument("path", type=Path)
     commands.add_parser("clock")
+    mounting = commands.add_parser("mount")
+    mounting.add_argument("path", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "claim":
@@ -137,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
             print(state(args.path))
         elif args.command == "clock":
             clock()
+        elif args.command == "mount":
+            print(mount(args.path))
         else:
             print(probe(args.path))
     except (OSError, LeaseError, ValueError) as error:

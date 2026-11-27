@@ -34,7 +34,7 @@ from narwhal.deployment import deploy, lease_check, remote, supervision
 from narwhal.deployment.hosts import Host, RemoteError, stage_limit, write_private
 from narwhal.deployment.role_env import write_environment
 from narwhal.deployment.supervision import Observation, Supervisor, SystemdUnit
-from narwhal.runtime.lease import FileLease
+from narwhal.runtime.lease import WITNESS_NAME, FileLease
 
 REMOTE_DIR = "Narwhal-deploy/" + "b" * 32
 SHA = "c" * 64
@@ -175,6 +175,8 @@ class Fleet:
         self.mounts: dict[str, str] = {}
         self.clocks: dict[str, tuple[float, float]] = {}
         self.unmounted: set[str] = set()
+        # Each host's lease mount options, where they differ from a mount the lease accepts.
+        self.mount_options: dict[str, list[str]] = {}
         # Seconds since the pair's last lease expired, when no router runs and a lease file
         # is left; None for no lease file.
         self.lease_expired_ago: float | None = None
@@ -187,6 +189,24 @@ class Fleet:
         self.overhead_problem: str | None = None
         # The router that controls the fleet, by host ID.
         self.active_router = "node-1"
+
+    def mount(self, host: str) -> str:
+        """`lease_check mount` on `host`: the lease directory's mount."""
+        # As the kernel lists a mount made with actimeo=1.
+        accepted = [
+            "rw",
+            "vers=4.2",
+            "hard",
+            "acregmin=1",
+            "acregmax=1",
+            "acdirmin=1",
+            "acdirmax=1",
+            "local_lock=none",
+        ]
+        options = self.mount_options.get(host, accepted)
+        return json.dumps(
+            {"type": self.mounts.get(host, "nfs4"), "target": "/srv/shared", "options": options}
+        )
 
     def lease_holder(self) -> str | None:
         """The host whose running router holds a live lease: the active router, while its
@@ -533,12 +553,14 @@ class _SSH:
         if operation == "remove the lease":
             fleet.calls[operation] += 1
             return ""
-        if operation == "read the lease mount's file system type":
-            return fleet.mounts.get(host.id, "nfs")
+        if operation == "read the lease mount":
+            assert "lease_check mount /srv/shared" in script, script
+            return fleet.mount(host.id)
         if operation == "check the lease mount":
+            assert f"lease_check witness /srv/shared/{WITNESS_NAME} --check" in script, script
             if host.id in fleet.unmounted:
-                return "missing\next2/ext3"
-            return f"present\n{fleet.mounts.get(host.id, 'nfs')}"
+                return "missing"
+            return f"present\n{fleet.mount(host.id)}"
         if operation == "read the pair's lease":
             fleet.calls[operation] += 1
             holder = fleet.lease_holder()

@@ -96,29 +96,42 @@ class FileLease:
     def remove_orphans(self) -> list[Path]:
         """Remove this lease's temporary files that a writer left when it died mid-write.
 
-        Only regular files named as `_write_unlocked` names them, for this lease file, and last
-        modified more than `ORPHAN_TTLS` lease TTLs ago, are removed. Nothing else in the
-        directory is touched.
+        Only regular files named as `_write_unlocked` or `_storage_now` name them, for this
+        lease file, and last modified more than `ORPHAN_TTLS` lease TTLs before the lease
+        storage's own clock, are removed. Nothing else in the directory is touched. It holds
+        the lease lock, so no writer of this lease is mid-write meanwhile.
         """
-        name = re.compile(rf"\.{re.escape(self.path.name)}\.[0-9]+\.[0-9a-f]{{32}}\.tmp")
-        cutoff = self._wall_clock() - ORPHAN_TTLS * self.ttl_s
-        removed: list[Path] = []
-        try:
+        name = re.compile(rf"\.{re.escape(self.path.name)}\.[0-9]+\.[0-9a-f]{{32}}\.(tmp|now)")
+        with self._locked():
+            # File times on shared storage come from its server's clock, not this host's.
+            cutoff = self._storage_now() - ORPHAN_TTLS * self.ttl_s
             entries = sorted(self.path.parent.iterdir())
-        except OSError:
-            return removed
-        for entry in entries:
-            if not name.fullmatch(entry.name):
-                continue
-            try:
-                info = entry.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
-                    continue
-                entry.unlink()
-            except FileNotFoundError:
-                continue
-            removed.append(entry)
-        return removed
+            return [entry for entry in entries if self._orphaned(entry, name, cutoff)]
+
+    @staticmethod
+    def _orphaned(entry: Path, name: re.Pattern[str], cutoff: float) -> bool:
+        """Remove `entry` if it is an orphaned temporary file, and say whether it was."""
+        if not name.fullmatch(entry.name):
+            return False
+        try:
+            info = entry.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
+                return False
+            entry.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _storage_now(self) -> float:
+        """The lease storage's clock: the modification time of a file created on it now."""
+        probe = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.now")
+        descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.close(descriptor)
+            return os.stat(probe).st_mtime
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                probe.unlink()
 
     def read(self) -> LeaseRecord | None:
         """Read the shared record while holding the coordination lock."""

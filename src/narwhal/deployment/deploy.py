@@ -37,6 +37,7 @@ from . import (
     discovery,
     fabric,
     install,
+    lease_check,
     remote,
     supervision,
 )
@@ -1445,14 +1446,21 @@ class Deployment:
                 "the standby's host does not see the witness the primary's host left",
             )
             mounts = {
-                host.id: run(
-                    host,
-                    "read the lease mount's file system type",
-                    f"stat -f -c %T {shlex.quote(directory)}",
+                host.id: json.loads(
+                    run(host, "read the lease mount", f"{cli} mount {shlex.quote(directory)}")
                 )
                 for host in (primary, standby)
             }
             evidence["mounts"] = mounts
+            for host in (primary, standby):
+                self._check_mount_options(host, directory, mounts[host.id])
+            if mounts[primary.id]["type"] != mounts[standby.id]["type"]:
+                raise CheckFailed(
+                    f"{directory} is a {mounts[primary.id]['type']} mount on {primary.id} and a "
+                    f"{mounts[standby.id]['type']} mount on {standby.id}; mount the same shared "
+                    "storage there on both hosts, as in "
+                    + recovery_url("deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path")
+                )
             self._check_skew(context, ssh, manifest["remote_dir"], (primary, standby), evidence)
         finally:
             with contextlib.suppress(RemoteError, RemoteTimeout, OSError):
@@ -1642,23 +1650,36 @@ class Deployment:
         checked = _json(context.outputs("lease-check") / "lease-check.json")
         cli = ".venv/bin/python -m narwhal.deployment.lease_check"
         quoted = shlex.quote(directory)
-        found = ssh.run(
+        present, _, mounted = ssh.run(
             host,
             context.stage,
             "check the lease mount",
             f"cd {shlex.quote(remote_dir)} && {cli} witness {shlex.quote(witness)} --check && "
-            f"{{ stat -f -c %T {quoted} 2> /dev/null || echo missing; }}",
-        ).splitlines()
-        expected = checked["mounts"][host.id]
-        if found != ["present", expected]:
+            f"{cli} mount {quoted}",
+        ).partition("\n")
+        found = json.loads(mounted) if mounted.strip() else {"type": "missing"}
+        expected = checked["mounts"][host.id]["type"]
+        if present.strip() != "present" or found["type"] != expected:
             raise CheckFailed(
                 f"{routers.lease_path}: {host.id}'s lease directory is not the shared mount that "
-                f"lease-check saw (witness and file system type {found}, not "
-                f"{['present', expected]}); mount the shared storage at {directory} and run "
-                "again, as in "
+                f"lease-check saw (witness {present.strip()}, a {found['type']} mount, not a "
+                f"{expected} one); mount the shared storage at {directory} and run again, as in "
                 + recovery_url("deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path")
             )
+        # The mount may have come back with other options since lease-check passed.
+        self._check_mount_options(host, directory, found)
         return witness
+
+    @staticmethod
+    def _check_mount_options(host: Host, directory: str, found: dict[str, Any]) -> None:
+        """Fail with each mount option of `directory` on `host` that breaks the lease."""
+        if problems := lease_check.mount_problems(found):
+            raise CheckFailed(
+                f"{host.id}'s lease mount {found.get('target') or directory}: "
+                + "; ".join(problems)
+                + ", as in "
+                + recovery_url("deploy/07-Serve-and-Measure.md#mount-options-for-the-lease")
+            )
 
     def _lease_state(
         self, context: StageContext, ssh: SSH, host: Host, remote_dir: str, path: str

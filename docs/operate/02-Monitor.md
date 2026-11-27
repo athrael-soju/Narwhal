@@ -75,7 +75,7 @@ Prometheus takes the sidecar targets from the deployment rather than from the ro
 
 Every rule matches and aggregates within one `fleet`, so one fleet's active router never hides another fleet's outage. A fleet with one router and no standby raises neither `NarwhalStandbyRouterDown` nor `NarwhalMultipleRoutersReady`: its router exports lease epoch `0` and the `active` role, `NarwhalRouterDown` pages when it stops, and `NarwhalNoRouterReady` pages when it answers but admits nothing for a minute. `narwhal deploy` runs Prometheus on the primary router's host, so while that host is down no rule fires, `NarwhalRouterDown` included. Route `NarwhalWatchdog`, which always fires, to a dead man's switch outside the fleet that pages when the alert stops arriving. `NarwhalRouterDown` still fires on its own while that host is up and the pair has no active router, for example when the primary router has stopped and the standby's host reboots.
 
-A stopped single router raises `NarwhalRouterDown` only, and a single router that is not ready raises no router alert. The router rules count only samples scraped in the last 30 seconds.
+A stopped single router raises `NarwhalRouterDown` only, and a single router that answers but is not ready raises `NarwhalNoRouterReady`. The router rules count only samples scraped in the last 30 seconds.
 
 `NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch` among the routers scraped in the last 30 seconds: the lease holder, or the router that held the lease last.
 

@@ -166,6 +166,46 @@ class StandbyRoleTests(FleetCase):
         self.assertFalse(router.primary_seen)
 
 
+class ClaimFirstTests(FleetCase):
+    async def start(self, holder_first: bool):
+        if holder_first:
+            peer = FileLease(self.root / "lease.json", "peer", 30)
+            self.assertTrue(peer.claim())
+            self.addCleanup(peer.release)
+        probes = []
+
+        def transport(request):
+            probes.append(request.url.path)
+            return httpx.Response(503, json={"ready": False, "control_ready": False})
+
+        app = create_app(
+            self.cfg,
+            standby_of="http://peer",
+            claim_first=True,
+            standby_probe_interval_s=0.01,
+            standby_transport=httpx.MockTransport(transport),
+            lease=FileLease(self.root / "lease.json", "primary", 30),
+        )
+        return app, probes
+
+    async def test_a_first_start_that_loses_the_claim_shadows_its_peer(self):
+        app, probes = await self.start(holder_first=True)
+        async with app.router.lifespan_context(app):
+            async with asyncio.timeout(2):
+                while "/ready" not in probes:
+                    await asyncio.sleep(0.01)
+            self.assertTrue(app.state.router.standby)
+            self.assertEqual(app.state.router.failover_blocked, "")
+
+    async def test_a_first_start_that_wins_the_claim_runs_no_takeover_loop(self):
+        app, probes = await self.start(holder_first=False)
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0.1)
+            self.assertFalse(app.state.router.standby)
+            self.assertEqual(app.state.router.lease_holder, "primary")
+        self.assertEqual(probes, [])
+
+
 class ShutdownHandoffTests(FleetCase):
     async def test_standby_shutdown_preserves_polled_primary_handoff(self):
         owner = FileLease(self.root / "lease.json", "primary", 30)

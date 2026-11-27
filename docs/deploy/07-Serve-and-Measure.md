@@ -17,14 +17,30 @@ Both routers hold one lease at `NARWHAL_LEASE_PATH`, so both router hosts must m
 3. While the primary's host holds the lease lock, `flock` on the standby's host reports it held.
 4. Once the lease expires, the standby's host claims it, and the primary's host reads the new claim.
 5. The primary's host leaves the lease witness, `.narwhal-lease-witness`, in the lease directory, and the standby's host reads it.
-6. The stage records the file system type of the lease directory on each host.
+6. The stage reads the lease directory's mount on each host from `/proc/self/mountinfo`, records its file system type and options, and fails on a mount whose options break the lease, as [Mount options for the lease](#mount-options-for-the-lease) lists, or when the two hosts mount different file system types.
 7. The stage reads each host's clock several times over SSH and fails when the hosts' clocks may differ by more than 1 second, the `--lease-safety-margin` the routers reserve for skew. A lease's expiry is a wall-clock time that the other host compares with its own clock.
 
-A failed step names the host, what it read and what it expected, and the stage removes the probe files. The witness stays. The stage keeps each step's output, the file system types and the measured skew in `lease-check.json`. Fix the mount or the clocks on both hosts, then rerun `narwhal deploy run`.
+A failed step names the host, what it read and what it expected, and the stage removes the probe files. The witness stays. The stage keeps each step's output, the mounts and the measured skew in `lease-check.json`. Fix the mount or the clocks on both hosts, then rerun `narwhal deploy run`.
+
+### Mount options for the lease
+
+On NFS, mount the lease directory on both router hosts with these options:
+
+- Close-to-open consistency, the default. With `nocto`, an open of the lease can read what this host cached rather than what the other host wrote.
+- `local_lock=none`, the default, and not `nolock`. Otherwise `flock` stays on each host and the two hosts' locks do not exclude each other.
+- `actimeo=1` or `noac`. The client may cache the lease's attributes for no longer than the 1 second the routers reserve with `--lease-safety-margin`. Without `actimeo`, Linux caches them for up to 60 seconds.
+
+For example, in `/etc/fstab`:
+
+```text
+nfs-server:/export/narwhal  /srv/shared  nfs4  rw,hard,actimeo=1  0  0
+```
+
+The stage names each offending option and its fix. Other file systems pass this check, and the lease checks above still test them.
 
 ## Starting the router pair
 
-`router-start` runs for the primary first, then for the standby. Before either starts, the stage checks on that router's host that the lease directory holds the witness and has the file system type that `lease-check` recorded, so a host that rebooted without the shared mount starts no router. Each router runs as a systemd user unit that restarts it on failure:
+`router-start` runs for the primary first, then for the standby. Before either starts, the stage checks on that router's host that the lease directory holds the witness and has the file system type that `lease-check` recorded, so a host that rebooted without the shared mount starts no router. It also checks the mount's options again, since a remount may have changed them. Each router runs as a systemd user unit that restarts it on failure:
 
 - The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). It claims the lease when no lease file exists, or when the lease expired more than 30 seconds ago, the standby's `--standby-max-handoff-age`, so no standby can still take it over. Otherwise it starts as the standby of its peer. When the lease expired more recently, as when the pair stopped moments before, the stage waits until no standby can take it over before it starts the primary.
 - The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary.
