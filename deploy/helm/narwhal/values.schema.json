@@ -838,6 +838,16 @@
         "type": "string",
         "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
       }
+    },
+    "modelHostPathPrefixes": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Host directories a fleet's hostPath model volume may be or lie in; empty turns hostPath off",
+      "items": {
+        "type": "string",
+        "maxLength": 4096,
+        "pattern": "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+      }
     }
   },
   "required": [

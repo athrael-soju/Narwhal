@@ -25,6 +25,53 @@ from tests.deployment import chart_schema, fleet_fixtures, kubernetes_cluster
 from tools.maintenance import crd_schema
 
 SOURCE = Path(fleet_resource.__file__)
+# The variables a full fleet gives that today's Kubernetes environment does not hold, with the
+# fact each one belongs to. Step E classifies them so in `inputs()`.
+NEW_VARIABLES = {
+    "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
+    "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",
+    "NARWHAL_KUBERNETES_ROUTERS": "router",
+    "NARWHAL_KUBERNETES_HAPROXY": "router",
+    "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "discovery",
+    "NARWHAL_KUBERNETES_HAPROXY_IMAGE": "discovery",
+    "NARWHAL_KUBERNETES_FABRIC_IMAGE": "discovery",
+    "NARWHAL_KUBERNETES_RDMA_RESOURCE": "discovery",
+    "NARWHAL_KUBERNETES_RUNTIME_CLASS": "discovery",
+    "NARWHAL_ENGINE_PORT": "discovery",
+    "NARWHAL_ATTEST_PORT": "discovery",
+    "NARWHAL_MODEL_PATH": "discovery",
+    "NARWHAL_MODEL_SHA256": "discovery",
+    "NARWHAL_ENGINE_BACKEND": "discovery",
+    "NARWHAL_NODE_1_FABRIC_INTERFACE": "discovery",
+    "NARWHAL_NODE_2_FABRIC_INTERFACE": "discovery",
+    "NARWHAL_NODE_2_RDMA_GID_INDEX": "fabric_test",
+    "NARWHAL_NODE_2_RDMA_ROCE_MODE": "fabric_test",
+    "NARWHAL_PROFILE_DECODE_CONCURRENCY": "profiling",
+    "NARWHAL_STAGE_TIMEOUT_SECONDS": None,
+    "NARWHAL_STAGE_PROFILE_TIMEOUT_SECONDS": None,
+}
+# Credential names with and without a prefix, plural, and as files.
+CREDENTIALS = (
+    "NARWHAL_TOKEN",
+    "NARWHAL_HF_TOKEN",
+    "NARWHAL_HF_TOKEN_FILE",
+    "NARWHAL_NODE_1_TOKEN",
+    "NARWHAL_TOKENS",
+    "NARWHAL_SECRET",
+    "NARWHAL_SECRET_FILE",
+    "NARWHAL_CLIENT_SECRETS",
+    "NARWHAL_APIKEY",
+    "NARWHAL_OPENAI_APIKEY_FILE",
+    "NARWHAL_API_KEYS",
+    "NARWHAL_KEY",
+    "NARWHAL_KEY_FILE",
+    "NARWHAL_CREDENTIALS",
+    "NARWHAL_CREDENTIALS_FILE",
+    "NARWHAL_AWS_CREDENTIAL_FILE",
+    "NARWHAL_CREDS",
+    "NARWHAL_DB_PASSWORD_FILE",
+    "NARWHAL_PASSWD",
+)
 CLAIM = "narwhal-state"
 
 
@@ -39,14 +86,51 @@ def nodes(node, path=""):
         yield from nodes(node["additionalProperties"], f"{path}{{}}")
 
 
+def go_match(pattern, value):
+    """Whether `value` matches `pattern` as the API server's Go regexp matches it: there `$`
+    ends the text, where Python's also matches before a final newline."""
+    if pattern.endswith("$"):
+        pattern = pattern[:-1] + r"\Z"
+    return re.search(pattern, value) is not None
+
+
+def schema_path(field):
+    """A field as the API server names it, as a path of `at`: `a.b[1].c` is `a.b.[].c`."""
+    return re.sub(r"\[[0-9]+\]", ".[]", field)
+
+
+def value_at(document, field):
+    value = document
+    for name in re.findall(r"[^.\[\]]+|\[[0-9]+\]", field):
+        value = value[int(name[1:-1])] if name.startswith("[") else value[name]
+    return value if field else document["metadata"]["name"]
+
+
+def strings(value, path):
+    """Every string in a document, with the field path the API server would name."""
+    if isinstance(value, dict):
+        for name, item in value.items():
+            yield from strings(item, f"{path}.{name}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from strings(item, f"{path}[{index}]")
+    elif isinstance(value, str):
+        yield path, value
+
+
 def rules(node):
     return [item["rule"] for item in node.get("x-kubernetes-validations", [])]
 
 
 def at(path):
     node = SCHEMA
-    for name in path.split("."):
-        node = node["items"] if name == "[]" else node["properties"][name]
+    for name in path.split(".") if path else ():
+        if name == "[]":
+            node = node["items"]
+        elif "properties" in node:
+            node = node["properties"][name]
+        else:
+            node = node["additionalProperties"]
     return node
 
 
@@ -146,7 +230,9 @@ class Rules(unittest.TestCase):
         self.assertIn("self.metadata.name == 'fleet'", rules(SCHEMA))
         with self.assertRaisesRegex(ValueError, "named fleet"):
             spec_env(
-                fleet_fixtures.changed(lambda d: d["metadata"].update(name="x")), state_claim=CLAIM
+                fleet_fixtures.changed(lambda d: d["metadata"].update(name="x")),
+                state_claim=CLAIM,
+                host_path_prefixes=(),
             )
 
     def test_the_model_volume_takes_exactly_one_source_read_only(self):
@@ -167,7 +253,7 @@ class Rules(unittest.TestCase):
             self.assertNotIn("x-kubernetes-preserve-unknown-fields", node, path)
 
     def test_launch_refuses_every_variable_the_fleet_sets(self):
-        env = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM)
+        env = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, host_path_prefixes=())
         launch = {item["name"] for item in fleet_fixtures.fleet()["spec"]["engines"]["launch"]}
         for name in set(env) - launch:
             with self.subTest(name):
@@ -175,6 +261,7 @@ class Rules(unittest.TestCase):
 
     def test_launch_refuses_credentials_and_runner_variables(self):
         for name in (
+            *CREDENTIALS,
             "NARWHAL_ENGINE_API_KEY",
             "NARWHAL_SGLANG_API_KEY",
             "NARWHAL_SSH_PASSWORD",
@@ -197,6 +284,7 @@ class Rules(unittest.TestCase):
                             )
                         ),
                         state_claim=CLAIM,
+                        host_path_prefixes=(),
                     )
 
     def test_launch_takes_backend_inputs(self):
@@ -221,7 +309,7 @@ class Rules(unittest.TestCase):
                 self.assertNotIn("matches('", rule)
 
     def test_path_rules_refuse_dot_segments(self):
-        [_, dots] = rules(at("spec.engines.modelVolume.hostPath.path"))
+        [dots, _] = rules(at("spec.engines.modelVolume.hostPath.path"))
         pattern = re.search(r"r'([^']*)'", dots)[1]
         for path in ("/a/../b", "/a/./b", "/..", "../a", "a/.."):
             self.assertRegex(path, pattern)
@@ -236,15 +324,98 @@ class Rules(unittest.TestCase):
         for name in ("gpu.example.com/gpu", "nvidia.com/gpu", "notkubernetes.io/gpu"):
             self.assertNotRegex(name, pattern)
 
-    def test_every_refused_case_breaks_a_rule_the_schema_holds(self):
-        messages = [
-            item["message"]
-            for _, node in nodes(SCHEMA)
-            for item in node.get("x-kubernetes-validations", [])
-        ]
-        for case, (_, pattern) in fleet_fixtures.REFUSED.items():
+    def test_each_refused_case_meets_the_check_its_field_holds(self):
+        """Each case names its field and check; the check exists there, and where Python can
+        run it, it refuses the case's value and accepts the fixture's."""
+        for case, refusal in fleet_fixtures.REFUSED.items():
             with self.subTest(case):
-                self.assertTrue(any(re.search(pattern, message) for message in messages))
+                node = at(schema_path(refusal.field))
+                bad = value_at(fleet_fixtures.changed(refusal.change), refusal.field)
+                if refusal.check == "rule":
+                    [rule] = [
+                        item["rule"]
+                        for item in node.get("x-kubernetes-validations", [])
+                        if item["message"] == refusal.message
+                    ]
+                    if match := re.fullmatch(r"!self\.matches\(r'([^']*)'\)", rule):
+                        self.assertRegex(bad, match[1])
+                elif refusal.check == "pattern":
+                    self.assertFalse(go_match(node["pattern"], bad))
+                else:
+                    self.assertNotIn(bad, node["enum"])
+
+    def test_the_host_path_rule_and_the_controller_share_one_expression(self):
+        [_, system] = rules(at("spec.engines.modelVolume.hostPath.path"))
+        self.assertEqual(system, f"!self.matches(r'{fleet_resource.HOST_PATH_REFUSED}')")
+        node = at("spec.engines.modelVolume.hostPath")
+        self.assertEqual(node["properties"]["type"]["enum"], ["Directory"])
+        self.assertIn("type", node["required"])
+
+    def test_host_paths_are_matched_by_segment(self):
+        for path in (
+            "/proc",
+            "/proc/1/root",
+            "/sys/fs",
+            "/dev",
+            "/run/containerd/containerd.sock",
+            "/var/run/docker.sock",
+            "/etc",
+            "/etc/kubernetes/pki",
+            "/var/lib/kubelet/pods",
+            "/var/lib/containerd",
+            "/var/lib/docker",
+            "/var/lib/containers/storage",
+            "/var/lib/rancher/k3s",
+            "/var",
+            "/var/lib",
+        ):
+            self.assertRegex(path, fleet_resource.HOST_PATH_REFUSED)
+        for path in ("/process", "/etcd/models", "/devices", "/var/lib/kubeletx", "/srv/models"):
+            self.assertNotRegex(path, fleet_resource.HOST_PATH_REFUSED)
+
+    def test_every_string_that_reaches_a_variable_refuses_control_characters(self):
+        documents = [fleet_fixtures.full_fleet()] + [
+            fleet_fixtures.changed(
+                lambda d, v=volume: d["spec"]["engines"].update(modelVolume=copy.deepcopy(v))
+            )
+            for volume in fleet_fixtures.VOLUMES
+        ]
+        checked = set()
+        for document in documents:
+            for path, value in strings(document["spec"], "spec"):
+                node = at(schema_path(path))
+                checked.add(re.sub(r"\[[0-9]+\]", "[]", path))
+                with self.subTest(path):
+                    if "enum" in node:
+                        continue
+                    self.assertIn("pattern", node)
+                    self.assertTrue(go_match(node["pattern"], value))
+                    for control in ("\x00", "\x01", "\n", "\x1b", "\x7f", "\x85"):
+                        for spoiled in (
+                            value + control,
+                            control + value,
+                            value[:1] + control + value[1:],
+                        ):
+                            self.assertFalse(go_match(node["pattern"], spoiled), repr(spoiled))
+        unchecked = (
+            {
+                path
+                for path, node in nodes(SCHEMA["properties"]["spec"], "spec")
+                if node.get("type") == "string" and "enum" not in node
+            }
+            - checked
+            - {"spec.engines.modelVolume.csi.volumeAttributes{}"}
+        )
+        self.assertEqual(unchecked, set())
+
+    def test_a_control_character_never_reaches_a_variable(self):
+        document = fleet_fixtures.changed(
+            lambda d: d["spec"]["engines"]["launch"].append(
+                {"name": "NARWHAL_ENGINE_ENV", "value": "{}\n"}
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "control character reaches NARWHAL_ENGINE_ENV"):
+            spec_env(document, state_claim=CLAIM, host_path_prefixes=())
 
 
 class Values(unittest.TestCase):
@@ -288,8 +459,8 @@ class Values(unittest.TestCase):
 
 
 class Variables(unittest.TestCase):
-    def test_a_fleet_gives_the_variables_the_target_reads_today(self):
-        env = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM)
+    def test_a_fleet_gives_the_variables_the_target_reads_today_and_no_others(self):
+        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, host_path_prefixes=())
         with tempfile.TemporaryDirectory() as root:
             today = kubernetes_cluster.environment(Path(root))
         # The fleet forces the model volume read-only.
@@ -299,18 +470,44 @@ class Variables(unittest.TestCase):
         for name in sorted(set(today) & set(env)):
             with self.subTest(name):
                 self.assertEqual(env[name], today[name])
-        # The spec replaces the values file and the chart path, and names each engine's
+        # The spec replaces the values file and the chart directory, and names each engine's
         # fabric interface.
-        moved = {
-            "NARWHAL_KUBERNETES_VALUES",
-            "NARWHAL_KUBERNETES_CHART",
-            "NARWHAL_FABRIC_INTERFACE",
-        }
-        self.assertEqual(set(today) - set(env), moved)
+        self.assertEqual(
+            set(today) - set(env),
+            {"NARWHAL_KUBERNETES_VALUES", "NARWHAL_KUBERNETES_CHART", "NARWHAL_FABRIC_INTERFACE"},
+        )
+        self.assertEqual(
+            {name: fleet_resource.variable_fact(name) for name in set(env) - set(today)},
+            NEW_VARIABLES,
+        )
         for n in (1, 2):
             self.assertEqual(
                 env[f"NARWHAL_NODE_{n}_FABRIC_INTERFACE"], today["NARWHAL_FABRIC_INTERFACE"]
             )
+
+    def test_each_variable_has_the_fact_the_design_gives_it(self):
+        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, host_path_prefixes=())
+        facts = {name: fleet_resource.variable_fact(name) for name in env}
+        expected = {
+            "NARWHAL_KUBERNETES_NAMESPACE": "cluster",
+            "NARWHAL_ENGINE_IMAGE": "discovery",
+            "NARWHAL_KUBERNETES_MODEL_VOLUME": "discovery",
+            "NARWHAL_NODE_1_KUBERNETES_NODE": "discovery",
+            "NARWHAL_NODE_1_URL": "discovery",
+            "NARWHAL_TTFT_S": "slo",
+            "NARWHAL_ROUTER_OVERHEAD_S": "slo",
+            "NARWHAL_FIRST_TOKEN_MARGIN_S": "deadline_margin",
+            "NARWHAL_PROFILE_DECODE_CONCURRENCY": "profiling",
+            "NARWHAL_CALIBRATION_SAMPLES": "calibration",
+            "NARWHAL_FABRIC_HEADROOM": "fabric_workload",
+            "NARWHAL_FABRIC_TEST_PORT": "fabric_test",
+            **NEW_VARIABLES,
+        }
+        for name, fact in expected.items():
+            with self.subTest(name):
+                self.assertEqual(facts[name], fact)
+        with self.assertRaisesRegex(ValueError, "no variable of a fleet"):
+            fleet_resource.variable_fact("PATH")
 
     def test_each_engine_takes_its_node_urls_and_rdma_port(self):
         document = fleet_fixtures.changed(
@@ -318,7 +515,7 @@ class Variables(unittest.TestCase):
                 rdma={"gidIndex": 3, "roceMode": "v2"}
             )
         )
-        env = spec_env(document, state_claim=CLAIM)
+        env = spec_env(document, state_claim=CLAIM, host_path_prefixes=())
         self.assertEqual(env["NARWHAL_NODE_2_KUBERNETES_NODE"], "gpu-b")
         self.assertEqual(
             env["NARWHAL_NODE_2_URL"],
@@ -341,7 +538,7 @@ class Variables(unittest.TestCase):
             spec["profiling"]["decodeConcurrency"] = [1, 8]
             spec["timeouts"] = {"defaultSeconds": 600, "stages": {"profile": 7200}}
 
-        env = spec_env(fleet_fixtures.changed(change), state_claim=CLAIM)
+        env = spec_env(fleet_fixtures.changed(change), state_claim=CLAIM, host_path_prefixes=())
         self.assertEqual(env["NARWHAL_MODEL_PATH"], "/model/gguf/model.gguf")
         self.assertEqual(env["NARWHAL_MODEL_SHA256"], "a" * 64)
         self.assertEqual(env["NARWHAL_KUBERNETES_API_KEY_SECRET"], "engine-key-v2/api-key")
@@ -362,12 +559,13 @@ class Variables(unittest.TestCase):
         self.assertEqual(env["NARWHAL_ENGINE_BACKEND"], "vllm")
 
     def test_no_variable_comes_from_until_stopped_or_retained_runs(self):
-        base = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM)
+        base = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, host_path_prefixes=())
         edited = spec_env(
             fleet_fixtures.changed(
                 lambda d: d["spec"].update(until="profile", stopped=True, retainRuns=5)
             ),
             state_claim=CLAIM,
+            host_path_prefixes=(),
         )
         self.assertEqual(base, edited)
 
@@ -377,7 +575,7 @@ class Variables(unittest.TestCase):
                 readOnly=False
             )
         )
-        env = spec_env(writable, state_claim=CLAIM)
+        env = spec_env(writable, state_claim=CLAIM, host_path_prefixes=())
         self.assertEqual(
             json.loads(env["NARWHAL_KUBERNETES_MODEL_VOLUME"]),
             {"persistentVolumeClaim": {"claimName": "model", "readOnly": True}},
@@ -389,6 +587,7 @@ class Variables(unittest.TestCase):
                         lambda d, v=volume: d["spec"]["engines"].update(modelVolume=v)
                     ),
                     state_claim=CLAIM,
+                    host_path_prefixes=(),
                 )
 
     def test_a_missing_field_gives_no_variable(self):
@@ -398,6 +597,7 @@ class Variables(unittest.TestCase):
                 "spec": {},
             },
             state_claim=CLAIM,
+            host_path_prefixes=(),
         )
         self.assertEqual(
             env,
@@ -407,6 +607,65 @@ class Variables(unittest.TestCase):
                 "NARWHAL_KUBERNETES_STATE_CLAIM": CLAIM,
             },
         )
+
+
+class HostPaths(unittest.TestCase):
+    """hostPath stays off until the cluster admin lists prefixes, and never reaches a node's
+    system, kubelet or runtime directories."""
+
+    def test_without_prefixes_host_path_is_off(self):
+        with self.assertRaisesRegex(ValueError, "hostPath is off"):
+            fleet_resource.check_host_path("/srv/models", ())
+
+    def test_a_path_must_lie_at_or_below_a_prefix_by_segment(self):
+        prefixes = ("/srv/models", "/data")
+        for path in ("/srv/models", "/srv/models/llama", "/data/x/y"):
+            fleet_resource.check_host_path(path, prefixes)
+        for path in ("/srv/models2", "/srv", "/opt/models", "/database"):
+            with self.subTest(path), self.assertRaisesRegex(ValueError, "outside"):
+                fleet_resource.check_host_path(path, prefixes)
+
+    def test_a_prefix_never_admits_a_system_directory(self):
+        for path in ("/var/lib/kubelet/pods", "/var/run/docker.sock", "/etc/kubernetes"):
+            with self.subTest(path), self.assertRaisesRegex(ValueError, "container runtime"):
+                fleet_resource.check_host_path(path, ("/var", "/etc"))
+
+    def test_a_path_or_prefix_must_be_normalised(self):
+        for path in (
+            "//models",
+            "/models/",
+            "/models/../etc",
+            "/models/./a",
+            "/",
+            "models",
+            "/m\n",
+        ):
+            with self.subTest(path), self.assertRaisesRegex(ValueError, "normalised"):
+                fleet_resource.check_host_path(path, ("/models",))
+        with self.assertRaisesRegex(ValueError, "modelHostPathPrefixes: '/srv/'"):
+            fleet_resource.check_host_path("/srv/models", ("/srv/",))
+
+    def test_a_fleet_mounts_an_admitted_directory_only(self):
+        document = fleet_fixtures.changed(
+            lambda d: d["spec"]["engines"].update(modelVolume={"hostPath": {"path": "/srv/models"}})
+        )
+        with self.assertRaisesRegex(ValueError, "hostPath is off"):
+            spec_env(document, state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(document, state_claim=CLAIM, host_path_prefixes=("/srv",))
+        self.assertEqual(
+            json.loads(env["NARWHAL_KUBERNETES_MODEL_VOLUME"]),
+            {"hostPath": {"path": "/srv/models", "type": "Directory"}},
+        )
+
+    def test_the_chart_holds_the_admin_list_off_by_default(self):
+        chart = kubernetes_cluster.GATES.parents[1]
+        self.assertEqual(
+            yaml.safe_load((chart / "values.yaml").read_text())["modelHostPathPrefixes"], []
+        )
+        node = json.loads((chart / "values.schema.json").read_text())["properties"][
+            "modelHostPathPrefixes"
+        ]
+        self.assertEqual(node["items"]["pattern"], fleet_resource._NORMALISED)
 
 
 class Definition(unittest.TestCase):
@@ -447,6 +706,46 @@ class Definition(unittest.TestCase):
         finally:
             SCHEMA["properties"]["spec"]["properties"]["retainRuns"]["maximum"] = original
         self.assertEqual(fleet_resource.schema_digest(), before)
+
+
+class StoredDefinition(unittest.TestCase):
+    """The controller checks the CRD the API server holds from its spec, not its annotation."""
+
+    def stored(self):
+        document = copy.deepcopy(fleet_resource.crd())
+        # What the API server adds to a CRD it stores.
+        document["metadata"].update(uid=fleet_fixtures.UID, resourceVersion="1", generation=1)
+        document["spec"]["conversion"] = {"strategy": "None"}
+        document["status"] = {"storedVersions": ["v1alpha1"], "conditions": []}
+        return document
+
+    def test_a_stored_crd_with_server_defaults_is_current(self):
+        self.assertTrue(fleet_resource.crd_current(self.stored()))
+        self.assertEqual(
+            fleet_resource.stored_digest(self.stored()), fleet_resource.schema_digest()
+        )
+
+    def test_a_changed_schema_is_found_whatever_the_annotation_says(self):
+        document = self.stored()
+        engines = document["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"][
+            "spec"
+        ]["properties"]["engines"]
+        del engines["properties"]["modelVolume"]["x-kubernetes-validations"]
+        self.assertEqual(
+            document["metadata"]["annotations"][fleet_resource.SCHEMA_SHA256],
+            fleet_resource.schema_digest(),
+        )
+        self.assertFalse(fleet_resource.crd_current(document))
+
+    def test_a_wrong_annotation_alone_does_not_stall_the_fleet(self):
+        document = self.stored()
+        document["metadata"]["annotations"][fleet_resource.SCHEMA_SHA256] = "0" * 64
+        self.assertTrue(fleet_resource.crd_current(document))
+
+    def test_another_crd_is_not_the_fleet_crd(self):
+        document = self.stored()
+        document["metadata"]["name"] = "other.example.com"
+        self.assertFalse(fleet_resource.crd_current(document))
 
 
 class Generated(unittest.TestCase):

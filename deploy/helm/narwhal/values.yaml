@@ -58,6 +58,11 @@ gates: []
 # with engines: the chart holds each engine pod at a scheduling gate until the run pins it there.
 placement: {}
 
+# The host directories a fleet's hostPath model volume may be or lie in, such as
+# ["/srv/models"], matched by whole path segments. Empty, the default, turns hostPath off: the
+# controller refuses a fleet whose model volume is a hostPath. The cluster admin sets it.
+modelHostPathPrefixes: []
+
 # Prometheus and Grafana, from the configuration files `make observe` uses. Prometheus scrapes
 # both routers and finds the engines through the load balancer's /narwhal/targets.
 monitoring:

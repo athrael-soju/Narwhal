@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "7e6e1b42c3d51d6c44a3508063793dd7c70f197b5e03a169b9fe7f5b419082d3"
+    "narwhal.example.com/schema-sha256": "f78327b82582ff28e982df62c01e8fef1b39c697734bfff005470c3d56d17655"
 spec:
   group: "narwhal.example.com"
   names:
@@ -53,17 +53,17 @@ spec:
                       type: "string"
                       description: "The Narwhal image: the controller, routers, gate Jobs and attestation sidecars"
                       maxLength: 512
-                      pattern: "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                     haproxy:
                       type: "string"
                       description: "The HAProxy image"
                       maxLength: 512
-                      pattern: "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                     fabric:
                       type: "string"
                       description: "The image the fabric Jobs run ib_write_bw from"
                       maxLength: 512
-                      pattern: "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                   required:
                     - "narwhal"
                     - "haproxy"
@@ -76,7 +76,7 @@ spec:
                       type: "string"
                       description: "The engine image by registry digest"
                       maxLength: 512
-                      pattern: "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                     model:
                       type: "object"
                       description: "The checkpoint the engines serve"
@@ -86,6 +86,7 @@ spec:
                           description: "The served model name"
                           maxLength: 256
                           minLength: 1
+                          pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
                         treeSha256:
                           type: "string"
                           description: "The checkpoint's model_tree_sha256"
@@ -95,7 +96,7 @@ spec:
                           type: "string"
                           description: "For an engine that serves one model file, its path in the model volume"
                           maxLength: 1024
-                          pattern: "^[^/\\x00][^\\x00]*$"
+                          pattern: "^[^/\\x00-\\x1f\\x7f-\\x9f]+(/[^/\\x00-\\x1f\\x7f-\\x9f]+)*$"
                           x-kubernetes-validations:
                             - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
                               message: "must not hold a . or .. segment"
@@ -134,28 +135,27 @@ spec:
                             - "claimName"
                         hostPath:
                           type: "object"
-                          description: "A directory on every engine node"
+                          description: "A directory on every engine node. The controller refuses it unless the cluster admin lists a prefix that holds it in the narwhal chart's modelHostPathPrefixes, which is empty by default."
                           properties:
                             path:
                               type: "string"
-                              description: "The directory's absolute path on the node"
+                              description: "The directory's normalised absolute path on the node"
                               maxLength: 4096
-                              pattern: "^/[^\\x00]*$"
+                              pattern: "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
                               x-kubernetes-validations:
-                                - rule: "self != '/'"
-                                  message: "must name a directory below /"
                                 - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
                                   message: "must not hold a . or .. segment"
+                                - rule: "!self.matches(r'^/(proc|sys|dev|run|var/run|etc|var/lib/kubelet|var/lib/containerd|var/lib/docker|var/lib/containers|var/lib/cri-o|var/lib/crio|var/lib/rancher)(/|$)|^/(var|var/lib)$')"
+                                  message: "must not be or lie in a node's system, kubelet or container runtime directory"
                             type:
                               type: "string"
-                              description: "The kubelet's check of the path"
+                              description: "Directory: the kubelet refuses a path that is not an existing directory"
                               maxLength: 16
                               enum:
-                                - ""
                                 - "Directory"
-                              default: ""
                           required:
                             - "path"
+                            - "type"
                         nfs:
                           type: "object"
                           description: "An NFS export"
@@ -169,10 +169,8 @@ spec:
                               type: "string"
                               description: "The exported directory"
                               maxLength: 4096
-                              pattern: "^/[^\\x00]*$"
+                              pattern: "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
                               x-kubernetes-validations:
-                                - rule: "self != '/'"
-                                  message: "must name a directory below /"
                                 - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
                                   message: "must not hold a . or .. segment"
                             readOnly:
@@ -208,6 +206,7 @@ spec:
                               additionalProperties:
                                 type: "string"
                                 maxLength: 1024
+                                pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
                               x-kubernetes-validations:
                                 - rule: "self.all(k, k.size() <= 253)"
                                   message: "an attribute name holds at most 253 characters"
@@ -283,7 +282,7 @@ spec:
                             type: "string"
                             description: "The network interface that carries the engine's KV transfers"
                             maxLength: 15
-                            pattern: "^[^\\s/:]+$"
+                            pattern: "^[^\\s/:\\x00-\\x1f\\x7f-\\x9f]+$"
                           rdma:
                             type: "object"
                             description: "The RDMA port settings of a ucx_rdma engine"
@@ -337,12 +336,13 @@ spec:
                             maxLength: 128
                             pattern: "^NARWHAL_[A-Z0-9_]+$"
                             x-kubernetes-validations:
-                              - rule: "!self.matches(r'^NARWHAL_(NODE_[0-9]+_)?(KUBERNETES_.*|KUBECTL|HELM|ENGINE_(IMAGE|MODEL_NAME|PORT|LAUNCH_CONFIG)|ATTEST_PORT|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME|.*_(KEY|PASSWORD|TOKEN|SECRET))$')"
+                              - rule: "!self.matches(r'^NARWHAL_(NODE_[0-9]+_)?(KUBERNETES_.*|KUBECTL|HELM|ENGINE_(IMAGE|MODEL_NAME|PORT|LAUNCH_CONFIG)|ATTEST_PORT|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME|.*(SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY).*|(.*_)?(TOKENS?|KEYS?|CREDS)(_.*)?)$')"
                                 message: "another field of the fleet sets this variable, or it names a credential, which belongs in engines.apiKeySecret"
                           value:
                             type: "string"
                             description: "The variable's value"
                             maxLength: 4096
+                            pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
                         required:
                           - "name"
                           - "value"
@@ -547,6 +547,7 @@ spec:
                         type: "string"
                         description: "One option or value"
                         maxLength: 256
+                        pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
                       maxItems: 32
                       x-kubernetes-list-type: "atomic"
                   required:

@@ -111,8 +111,23 @@ LAUNCH_REFUSED = (
     r"|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*"
     r"|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*"
     r"|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT"
-    r"|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME|.*_(KEY|PASSWORD|TOKEN|SECRET)"
+    r"|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME"
+    # A credential: a word that only credentials use, anywhere in the name, or a word that
+    # names one as a whole segment, with any prefix and any suffix such as _FILE.
+    r"|.*(SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY).*|(.*_)?(TOKENS?|KEYS?|CREDS)(_.*)?"
     r")$"
+)
+# Characters that must not reach a variable or an argument: C0 and C1 controls and DEL.
+CONTROL = r"[\x00-\x1f\x7f-\x9f]"
+_PRINTABLE = r"^[^\x00-\x1f\x7f-\x9f]*$"
+# A normalised absolute path: one or more segments, no empty segment and no trailing slash.
+_NORMALISED = r"^(/[^/\x00-\x1f\x7f-\x9f]+)+$"
+# The host directories no model volume may be, or lie in: kernel and device interfaces, node
+# configuration, the kubelet's and container runtimes' state, and the directories that hold
+# them. Matched by whole segments.
+HOST_PATH_REFUSED = (
+    r"^/(proc|sys|dev|run|var/run|etc|var/lib/kubelet|var/lib/containerd|var/lib/docker"
+    r"|var/lib/containers|var/lib/cri-o|var/lib/crio|var/lib/rancher)(/|$)|^/(var|var/lib)$"
 )
 
 # Bounds. Each keeps a fleet small and each CEL rule's cost estimate low.
@@ -123,7 +138,7 @@ MAX_RETAINED_RUNS = 16
 MAX_ATTRIBUTES = 32
 WEEK_SECONDS = 7 * 24 * 3600
 
-_DIGEST = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
+_DIGEST = r"^[^\s@\x00-\x1f\x7f-\x9f]+@sha256:[0-9a-f]{64}$"
 _DNS_LABEL = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?"
 _DNS_SUBDOMAIN = rf"^{_DNS_LABEL}(\.{_DNS_LABEL})*$"
 _RESOURCE = r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
@@ -266,16 +281,16 @@ def _read_only() -> dict:
     )
 
 
-def _absolute(description: str) -> dict:
-    return _string(
-        description,
-        4096,
-        pattern=r"^/[^\x00]*$",
-        rules=[
-            _rule("self != '/'", "must name a directory below /"),
-            _rule("!" + _matches(_DOT_SEGMENT), "must not hold a . or .. segment"),
-        ],
-    )
+def _absolute(description: str, *, host: bool = False) -> dict:
+    rules = [_rule("!" + _matches(_DOT_SEGMENT), "must not hold a . or .. segment")]
+    if host:
+        rules.append(
+            _rule(
+                "!" + _matches(HOST_PATH_REFUSED),
+                "must not be or lie in a node's system, kubelet or container runtime directory",
+            )
+        )
+    return _string(description, 4096, pattern=_NORMALISED, rules=rules)
 
 
 _MODEL_VOLUME = _object(
@@ -291,14 +306,20 @@ _MODEL_VOLUME = _object(
             required=["claimName"],
         ),
         "hostPath": _object(
-            "A directory on every engine node",
+            "A directory on every engine node. The controller refuses it unless the cluster "
+            "admin lists a prefix that holds it in the narwhal chart's modelHostPathPrefixes, "
+            "which is empty by default.",
             {
-                "path": _absolute("The directory's absolute path on the node"),
+                "path": _absolute(
+                    "The directory's normalised absolute path on the node", host=True
+                ),
                 "type": _string(
-                    "The kubelet's check of the path", 16, enum=["", "Directory"], default=""
+                    "Directory: the kubelet refuses a path that is not an existing directory",
+                    16,
+                    enum=["Directory"],
                 ),
             },
-            required=["path"],
+            required=["path", "type"],
         ),
         "nfs": _object(
             "An NFS export",
@@ -320,7 +341,11 @@ _MODEL_VOLUME = _object(
                     "type": "object",
                     "description": "The driver's volume attributes",
                     "maxProperties": MAX_ATTRIBUTES,
-                    "additionalProperties": {"type": "string", "maxLength": 1024},
+                    "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 1024,
+                        "pattern": _PRINTABLE,
+                    },
                     "x-kubernetes-validations": [
                         _rule(
                             "self.all(k, k.size() <= 253)",
@@ -360,7 +385,7 @@ _LAUNCH = _array(
                     )
                 ],
             ),
-            "value": _string("The variable's value", 4096),
+            "value": _string("The variable's value", 4096, pattern=_PRINTABLE),
         },
         required=["name", "value"],
     ),
@@ -376,7 +401,7 @@ _NODE = _object(
         "fabricInterface": _string(
             "The network interface that carries the engine's KV transfers",
             15,
-            pattern=r"^[^\s/:]+$",
+            pattern=r"^[^\s/:\x00-\x1f\x7f-\x9f]+$",
         ),
         "rdma": _object(
             "The RDMA port settings of a ucx_rdma engine",
@@ -400,12 +425,13 @@ _ENGINES = _object(
         "model": _object(
             "The checkpoint the engines serve",
             {
-                "name": _string("The served model name", 256, min_length=1),
+                "name": _string("The served model name", 256, min_length=1, pattern=_PRINTABLE),
                 "treeSha256": _string("The checkpoint's model_tree_sha256", 64, pattern=_SHA256),
                 "file": _string(
                     "For an engine that serves one model file, its path in the model volume",
                     1024,
-                    pattern=r"^[^/\x00][^\x00]*$",
+                    # Relative and normalised: no leading, doubled or trailing slash.
+                    pattern=r"^[^/\x00-\x1f\x7f-\x9f]+(/[^/\x00-\x1f\x7f-\x9f]+)*$",
                     rules=[_rule("!" + _matches(_DOT_SEGMENT), "must not hold a . or .. segment")],
                 ),
                 "fileSha256": _string("The model file's SHA-256", 64, pattern=_SHA256),
@@ -544,7 +570,7 @@ _ROUTERS = _object(
         "size": _string("The size of each router's volume", 32, pattern=_QUANTITY),
         "args": _array(
             "More narwhal-serve options, such as --lease-ttl 6",
-            _string("One option or value", 256),
+            _string("One option or value", 256, pattern=_PRINTABLE),
             MAX_ROUTER_ARGS,
         ),
     },
@@ -743,6 +769,26 @@ def schema_digest() -> str:
     return hashlib.sha256(canonical(crd_spec())).hexdigest()
 
 
+def stored_digest(stored: Mapping[str, Any]) -> str:
+    """The SHA-256 of a CRD the API server returned, over the fields `crd_spec()` sets.
+
+    The API server adds defaults, such as `conversion`, so only the fields this module sets
+    count. The digest is computed from the stored spec itself; the CRD's `SCHEMA_SHA256`
+    annotation is never trusted.
+    """
+    spec = _block(stored, "spec")
+    return hashlib.sha256(canonical({key: spec.get(key) for key in crd_spec()})).hexdigest()
+
+
+def crd_current(stored: Mapping[str, Any]) -> bool:
+    """Whether a stored CRD holds this module's schema. The controller sets `Stalled` when
+    it does not."""
+    return (
+        _block(stored, "metadata").get("name") == CRD_NAME
+        and stored_digest(stored) == schema_digest()
+    )
+
+
 def crd() -> dict:
     """The CRD, as the CRD chart installs it apart from the chart's labels."""
     return {
@@ -785,8 +831,43 @@ def stage_timeout_env(stage: str) -> str:
     return "NARWHAL_STAGE_" + re.sub(r"[^A-Z0-9]", "_", stage.upper()) + "_TIMEOUT_SECONDS"
 
 
-def model_volume(spec: Mapping[str, Any]) -> dict:
-    """The model volume source of an engines block, with `readOnly` forced on."""
+def _normalised(path: str) -> bool:
+    return bool(re.fullmatch(_NORMALISED, path)) and not re.search(_DOT_SEGMENT, path)
+
+
+def check_host_path(path: str, prefixes: Sequence[str]) -> None:
+    """Refuse a model hostPath unless it is normalised, outside every directory
+    `HOST_PATH_REFUSED` names, and at or below one of `prefixes`, matched by whole segments.
+
+    `prefixes` is the cluster admin's `modelHostPathPrefixes`; without one, hostPath is off.
+    The controller and the admission policy apply the same check.
+    """
+    if not _normalised(path):
+        raise ValueError(
+            f"engines.modelVolume.hostPath.path: {path!r} is not a normalised absolute path"
+        )
+    if re.search(HOST_PATH_REFUSED, path):
+        raise ValueError(
+            f"engines.modelVolume.hostPath.path: {path} is or lies in a system, kubelet or "
+            "container runtime directory"
+        )
+    for prefix in prefixes:
+        if not _normalised(prefix):
+            raise ValueError(f"modelHostPathPrefixes: {prefix!r} is not a normalised absolute path")
+    if not prefixes:
+        raise ValueError(
+            "engines.modelVolume.hostPath: hostPath is off; the cluster admin turns it on by "
+            "listing prefixes in modelHostPathPrefixes"
+        )
+    if not any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes):
+        raise ValueError(
+            f"engines.modelVolume.hostPath.path: {path} lies outside modelHostPathPrefixes"
+        )
+
+
+def model_volume(spec: Mapping[str, Any], *, host_path_prefixes: Sequence[str]) -> dict:
+    """The model volume source of an engines block, with `readOnly` forced on and a hostPath
+    checked against the admin's prefixes."""
     source = _block(spec, "modelVolume")
     if len(source) != 1 or next(iter(source)) not in MODEL_VOLUME_SOURCES:
         raise ValueError(
@@ -794,18 +875,30 @@ def model_volume(spec: Mapping[str, Any]) -> dict:
         )
     [(kind, settings)] = source.items()
     settings = dict(settings) if isinstance(settings, Mapping) else {}
-    if kind != "hostPath":
+    if kind == "hostPath":
+        check_host_path(str(settings.get("path", "")), host_path_prefixes)
+        settings["type"] = "Directory"
+    else:
         settings["readOnly"] = True
     return {kind: settings}
 
 
-def spec_env(fleet: Mapping[str, Any], *, state_claim: str) -> dict[str, str]:
+def spec_env(
+    fleet: Mapping[str, Any], *, state_claim: str, host_path_prefixes: Sequence[str]
+) -> dict[str, str]:
     """The variables `kubernetes_target.inputs()` reads, from a `NarwhalFleet` object.
 
-    `state_claim` names the state PersistentVolumeClaim the chart made. A field the fleet
-    leaves out gives no variable, so `inputs()` names it. Raises `ValueError` for a fleet with
-    another name, a launch input the fleet refuses, or a model volume without exactly one
-    source; the API server refuses each of these before a fleet is stored.
+    `state_claim` names the state PersistentVolumeClaim the chart made, and
+    `host_path_prefixes` the admin's `modelHostPathPrefixes`. A field the fleet leaves out
+    gives no variable, so `inputs()` names it. `VARIABLE_FACTS` gives each variable's fact.
+
+    The fleet replaces the chart values file, and the controller builds its objects from the
+    installed package rather than a chart directory, so no `NARWHAL_KUBERNETES_VALUES` or
+    `NARWHAL_KUBERNETES_CHART` comes from a fleet.
+
+    Raises `ValueError` for a fleet with another name, a launch input the fleet refuses, a
+    model volume without exactly one source, a hostPath `check_host_path` refuses, or a
+    control character in any value.
     """
     metadata = _block(fleet, "metadata")
     if metadata.get("name") != NAME:
@@ -839,7 +932,9 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str) -> dict[str, str]:
         env["NARWHAL_MODEL_PATH"] = f"{MODEL_MOUNT}/{model['file']}"
     _set(env, "NARWHAL_MODEL_SHA256", model, "fileSha256")
     if "modelVolume" in engines:
-        env[MODEL_VOLUME_ENV] = json.dumps(model_volume(engines), sort_keys=True)
+        env[MODEL_VOLUME_ENV] = json.dumps(
+            model_volume(engines, host_path_prefixes=host_path_prefixes), sort_keys=True
+        )
     resources = _block(engines, "resources")
     _set(env, GPU_RESOURCE_ENV, resources, "gpu")
     _set(env, RDMA_RESOURCE_ENV, resources, "rdma")
@@ -898,4 +993,36 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str) -> dict[str, str]:
     _set(env, TIMEOUT_ENV, timeouts, "defaultSeconds")
     for stage, seconds in _block(timeouts, "stages").items():
         env[stage_timeout_env(stage)] = _text(seconds)
+    controlled = sorted(name for name, value in env.items() if re.search(CONTROL, value))
+    if controlled:
+        raise ValueError(f"a control character reaches {', '.join(controlled)}")
     return env
+
+
+# The fact of each variable `spec_env` gives, by the full name's pattern, following the
+# design's table: `None` for a variable that is no input. `kubernetes_target.inputs()` files
+# every NARWHAL_ variable it does not claim under `discovery`.
+VARIABLE_FACTS: tuple[tuple[str, str | None], ...] = (
+    (NAMESPACE_ENV, "cluster"),
+    (FLEET_UID_ENV, "cluster"),
+    (API_KEY_SECRET_ENV, "credential"),
+    (ROUTERS_ENV, "router"),
+    (HAPROXY_ENV, "router"),
+    (fabric.TEST_PORT, "fabric_test"),
+    (r"NARWHAL_NODE_[1-9][0-9]*_RDMA_(GID_INDEX|ROCE_MODE)", "fabric_test"),
+    *((name, "fabric_workload") for _, name, _ in fabric.WORKLOAD),
+    *((name, "slo") for name in SLO),
+    (MARGIN, "deadline_margin"),
+    *((name, "profiling") for name in PROFILE),
+    *((name, "calibration") for name in CALIBRATION),
+    (r"NARWHAL_STAGE_([A-Z0-9_]+_)?TIMEOUT_SECONDS", None),
+    (r"NARWHAL_[A-Z0-9_]+", "discovery"),
+)
+
+
+def variable_fact(name: str) -> str | None:
+    """The fact a `spec_env` variable belongs to; the first matching row of `VARIABLE_FACTS`."""
+    for pattern, fact in VARIABLE_FACTS:
+        if re.fullmatch(pattern, name):
+            return fact
+    raise ValueError(f"{name} is no variable of a fleet")
