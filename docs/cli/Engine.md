@@ -129,7 +129,7 @@ Every container runs in the unmodified engine image:
 | --- | --- | --- |
 | `checkpoint` | Init | Hashes the files under `/model` and fails when their tree digest differs from `model_tree_sha256` in `launch.json` |
 | `runtime-check` | Init | Runs the runtime probe that `check` runs in Docker, with the engine's environment, devices and mounts, and judges its output as `check` does. It fails on a probe that exits nonzero or an output that fails the check |
-| `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan, this pod and its HCA |
+| `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan, this pod and its HCA. Each start, including a restart without the init containers, judges the recorded probe output again and requires the recorded verdict |
 
 Each container's command first runs a bootstrap under `python3 -I -B`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. It skips the entries whose names start with `..`, which the kubelet adds to a ConfigMap volume. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path, and `-B` keeps the pod steps from writing bytecode. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
 

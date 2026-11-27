@@ -283,6 +283,21 @@ class KubernetesLaunchTests(unittest.TestCase):
         (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(changed))
         with self.assertRaisesRegex(ValueError, "pod's verdict differs from this check"):
             self.check(run, plan, engine)
+        # A restarted engine container judges the recorded output again, so a record written
+        # after the init containers ran cannot start the engine.
+        self.assertEqual(engine.run("engine"), 1)
+        self.assertIn("recorded verdict differs", engine.stderr.getvalue())
+        forged = {**changed, "verdict": {}}
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(forged))
+        self.assertEqual(engine.run("engine"), 1)
+        self.assertIn("recorded verdict differs", engine.stderr.getvalue())
+        forged["stdout"] = failing
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(forged))
+        self.assertEqual(engine.run("engine"), 1)
+        self.assertIn(
+            "recorded runtime check output fails: runtime check requires one tokenizer",
+            engine.stderr.getvalue(),
+        )
         del changed["verdict"]
         (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(changed))
         self.assertEqual(engine.run("engine"), 1)

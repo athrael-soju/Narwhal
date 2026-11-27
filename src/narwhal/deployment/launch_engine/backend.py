@@ -89,7 +89,6 @@ class EngineLauncher(ABC):
         """Return the interpreter arguments of the in-image probe; raise for a failed input."""
 
     @abstractmethod
-    @abstractmethod
     def capture_connector(self, run: Path) -> Path: ...
 
     @abstractmethod

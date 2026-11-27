@@ -11,8 +11,8 @@ Each step takes its arguments after its name:
 - `runtime-check <seconds> <probe arguments>` runs the runtime probe within that budget, with
   UCX_NET_DEVICES set to the HCA the device plugin allocated, and records its output with the
   verdict on it that `narwhal-engine check` gives.
-- `serve <engine arguments>` replaces itself with the engine once both records pass for this
-  launch plan, this pod and this HCA.
+- `serve <engine arguments>` judges the recorded probe output again, and replaces itself with
+  the engine once both records pass for this launch plan, this pod and this HCA.
 
 The records land in the pod's own directory of the state volume, where `narwhal-engine check`
 reads them.
@@ -128,6 +128,21 @@ def delivered_module(name: str) -> ModuleType:
     return module
 
 
+def probe_environment(device: dict) -> dict[str, str]:
+    """Return the environment the probe runs with: the container's, with the allocated HCA."""
+    return {**os.environ, "UCX_NET_DEVICES": device["ucx_net_devices"]}
+
+
+def judge(plan: dict, device: dict, output: str) -> dict:
+    """Return the verdict on probe output, as `narwhal-engine check` gives it.
+
+    Raise ValueError for output that fails.
+    """
+    return delivered_module("verdict").verdict(
+        delivered_module("probe_reader"), plan, probe_environment(device), output
+    )
+
+
 def fail(message: str) -> int:
     print(f"narwhal: {message}", file=sys.stderr)
     return 1
@@ -164,11 +179,10 @@ def runtime_check(seconds: float, probe: list[str]) -> int:
     except StepFailure as error:
         write_record(RUNTIME_RECORD, {**header, "error": str(error)})
         return fail(str(error))
-    environment = {**os.environ, "UCX_NET_DEVICES": device["ucx_net_devices"]}
     try:
         result = subprocess.run(
             [sys.executable, *probe],
-            env=environment,
+            env=probe_environment(device),
             capture_output=True,
             text=True,
             timeout=seconds,
@@ -199,9 +213,7 @@ def runtime_check(seconds: float, probe: list[str]) -> int:
         write_record(RUNTIME_RECORD, record)
         return fail(f"the runtime check exited {result.returncode}")
     try:
-        judged = delivered_module("verdict").verdict(
-            delivered_module("probe_reader"), plan, environment, result.stdout
-        )
+        judged = judge(plan, device, result.stdout)
     except ValueError as error:
         write_record(RUNTIME_RECORD, {**record, "error": str(error)})
         return fail(str(error))
@@ -233,7 +245,11 @@ def passed_records(plan: dict, plan_sha256: str) -> dict:
     if records[CHECKPOINT_RECORD].get("model_tree_sha256") != plan["model_tree_sha256"]:
         raise StepFailure("the checked model files differ from the launch plan's tree digest")
     runtime = records[RUNTIME_RECORD]
-    if runtime.get("returncode") != 0 or not isinstance(runtime.get("verdict"), dict):
+    if (
+        runtime.get("returncode") != 0
+        or not isinstance(runtime.get("stdout"), str)
+        or not isinstance(runtime.get("verdict"), dict)
+    ):
         raise StepFailure("the runtime check did not pass")
     return runtime
 
@@ -249,6 +265,14 @@ def serve(arguments: list[str]) -> int:
         return fail(str(error))
     if device != checked.get("transfer_device"):
         return fail("the allocated HCA differs from the HCA the runtime check recorded")
+    # The kubelet restarts this container without its init containers, so each start judges
+    # the recorded probe output again rather than trust the recorded verdict.
+    try:
+        judged = judge(plan, device, checked["stdout"])
+    except ValueError as error:
+        return fail(f"the recorded runtime check output fails: {error}")
+    if judged != checked["verdict"]:
+        return fail("the recorded verdict differs from the recorded runtime check output")
     os.environ["UCX_NET_DEVICES"] = device["ucx_net_devices"]
     # The engine keeps this process, so its process ID is the one the container started.
     os.execv(sys.executable, ["python3", *arguments])
