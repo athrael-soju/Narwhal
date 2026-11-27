@@ -33,9 +33,12 @@ class SLO:
 
     ttft_s: float
     tpot_s: float
+    # Time the router adds before a request reaches its prefill engine. Preflight fits it,
+    # the first-token deadline and the longest calibrated prefill within `ttft_s`.
+    router_overhead_s: float = 0.0
 
     def __post_init__(self) -> None:
-        for name in ("ttft_s", "tpot_s"):
+        for name in ("ttft_s", "tpot_s", "router_overhead_s"):
             value = getattr(self, name)
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite, got {value}")

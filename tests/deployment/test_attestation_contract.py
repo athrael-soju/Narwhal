@@ -1100,3 +1100,6 @@ class AttestationContractTests(unittest.TestCase):
                     os.chdir(old)
             self.assertEqual(json.loads(path.read_text())["engine_contract"], contract.fields())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            backups = list(Path(folder).glob("fleet.local.before-attestation-*.json"))
+            self.assertEqual(len(backups), 1)
+            self.assertNotIn("engine_contract", json.loads(backups[0].read_text()))

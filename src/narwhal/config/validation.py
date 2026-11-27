@@ -45,6 +45,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
                 f"{config.request_timeout_s}: the request expires before this phase limit"
             )
     not_negative = [
+        ("slo.router_overhead_s", config.slo.router_overhead_s),
         ("controller.thresholds.shrink", config.thresholds.shrink),
         ("controller.thresholds.cooldown_s", config.thresholds.cooldown_s),
         ("controller.thresholds.dwell_s", config.thresholds.dwell_s),

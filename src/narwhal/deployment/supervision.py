@@ -469,6 +469,18 @@ class SystemdUnits(Supervisor[SystemdUnit]):
             environment_file=str(environment),
         )
 
+    def discard(self, name: str) -> bool:
+        """Stop this run's unit `name` that no record names; return whether one was loaded.
+
+        A start interrupted after `systemd-run` and before its caller recorded the identity
+        leaves such a unit. Its name carries the run ID, so no other run's unit can match.
+        """
+        unit = self.unit(name)
+        if self._show(unit)["LoadState"] != "loaded":
+            return False
+        self._stop_unit(unit)
+        return True
+
     def _discard(self, unit: str, nonce: str, environment: Path, error: BaseException) -> None:
         """Undo a failed start: stop the unit it created, and remove its environment file."""
         try:

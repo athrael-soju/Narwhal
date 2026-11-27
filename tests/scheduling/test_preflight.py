@@ -33,6 +33,7 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.observability.tools import ToolActivity
+from narwhal.profiling.calibration import CalibrationCheck
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.probe.offline import merge_profiles
 from narwhal.profiling.store import ProfileStore
@@ -384,7 +385,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 )
                 client.aclose.assert_awaited_once()
                 store.assert_called_once_with(self.cfg, report)
-                slo.assert_called_once_with(self.cfg, "store", report)
+                slo.assert_called_once()
+                self.assertEqual(slo.call_args.args[:3], (self.cfg, "store", report))
+                self.assertEqual(slo.call_args.args[3].status, "uncalibrated")
                 self.assertEqual(
                     constructor.call_args.kwargs["prefill_timeout_s"], self.cfg.prefill_timeout_s
                 )
@@ -811,7 +814,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.url.path, "/v1/hca")
             code = status[request.url.host]
             if code != 200:
-                return httpx.Response(code, json={"detail": "HCA counters unreadable: gone"})
+                return httpx.Response(code, json={"detail": "HCA port unreadable: gone"})
             reading = {"device": "mlx5_0", "port": 1, "boot_id": "a", "port_xmit_data": 7}
             return httpx.Response(200, json=reading)
 
@@ -828,8 +831,43 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(set(ports), {"e0"})
         self.assertEqual(len(report.failed), 1)
-        self.assertRegex(
-            report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA counters unreadable"
+        self.assertRegex(report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA port unreadable")
+
+    async def test_hca_gate_needs_the_counters_only_for_an_engine_with_a_same_host_peer(self):
+        missing = "/sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: missing"
+        boots = {"engine-0.invalid": "a", "engine-3.invalid": "b"}
+
+        def sidecar(request):
+            host = request.url.host
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": boots[host]}
+            if host == "engine-0.invalid":
+                reading.update(port_xmit_data=None, counter_error=missing)
+            else:
+                reading["port_xmit_data"] = 7
+            return httpx.Response(200, json=reading)
+
+        transport = httpx.MockTransport(sidecar)
+        report = Report()
+        with redirect_stdout(io.StringIO()) as printed:
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual((set(ports), report.failed), ({"e3"}, []))
+        self.assertIn(
+            "e0 sends KV through HCA mlx5_0:1 and has no same-host peer; the same-host HCA "
+            "check does not apply",
+            printed.getvalue(),
+        )
+        # On one host the pair's KV must be seen crossing the HCA, so the counter is needed.
+        boots["engine-3.invalid"] = "a"
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual(set(ports), {"e3"})
+        self.assertEqual(
+            report.failed,
+            [
+                "e0 HCA mlx5_0:1 counters are unreadable, and its same-host KV with e3 needs "
+                f"them: {missing}"
+            ],
         )
 
     async def test_consume_requires_same_host_kv_to_cross_the_producer_hca(self):
@@ -1703,6 +1741,55 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.failed, [])
         self.assertIn("tpot=1.00e-02q+1.00e-04b+0.0010", output.getvalue())
         self.assertIn("4890 batch tokens across 1 requests", output.getvalue())
+
+    def test_slo_gate_fits_the_deadline_longest_prefill_and_router_overhead_in_the_ttft(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        first, second = (spec.iid for spec in self.cfg.engines)
+        # The first engine is the fastest; the budget must price the slowest, the second.
+        store.put(profile(first))
+        store.put(profile(second, ttft_c=0.5))
+        slow = store.get(second).prefill_time(8192)
+        fast = store.get(first).prefill_time(8192)
+        self.assertGreater(slow, fast + 0.4)
+        self.assertGreater(slow, store.get(second).prefill_time(256))
+        calibration = CalibrationCheck("measured", longest_input_tokens=8192)
+        self.cfg.first_token_timeout_s = 1.0
+        fits = 1.0 + slow + 0.25
+        cases = (
+            (fits + 0.001, 0.25, True),
+            (fits + 0.001, 0.5, False),
+            # Enough for the fastest engine's prefill, too little for the slowest one's.
+            (fits - 0.01, 0.25, False),
+        )
+        for ttft, overhead, passes in cases:
+            with self.subTest(ttft=ttft, overhead=overhead):
+                self.cfg.slo = replace(self.cfg.slo, ttft_s=ttft, router_overhead_s=overhead)
+                report = Report()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    gate_slo(self.cfg, store, report, calibration)
+                budget = (
+                    f"first-token deadline 1.000s + {second} prefill of 8192 tokens "
+                    f"{slow:.3f}s + router overhead {overhead:.3f}s"
+                )
+                if passes:
+                    self.assertEqual(report.failed, [])
+                    self.assertIn(budget, output.getvalue())
+                else:
+                    self.assertEqual(len(report.failed), 1)
+                    self.assertIn(budget, report.failed[0])
+                    self.assertIn(f"exceeds slo.ttft_s {ttft:.3f}s", report.failed[0])
+
+    def test_slo_gate_skips_the_first_token_budget_without_a_usable_calibration(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5, router_overhead_s=100.0)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        for calibration in (None, CalibrationCheck("uncalibrated"), CalibrationCheck("rejected")):
+            report = Report()
+            gate_slo(self.cfg, store, report, calibration)
+            self.assertEqual(report.failed, [])
 
     def test_slo_gate_accepts_a_flat_profile_at_the_measured_boundary(self):
         store = ProfileStore(self.cfg.profiles_path)

@@ -118,7 +118,14 @@ LAUNCHED_FACTS = (
         "The launch directory and the SHA-256 of its `launch.json`",
         (Rerun("engine-check"), Rerun("engine-start")),
     ),
-    _engines_restarted(_shared("engine_identity", LAUNCHED_STAGES).reruns),
+    # Readmission to a running router is a deployment step; dev reruns what it did before.
+    _engines_restarted(
+        tuple(
+            rerun
+            for rerun in _shared("engine_identity", LAUNCHED_STAGES).reruns
+            if rerun.stage != "router-start"
+        )
+    ),
     _shared("binding", LAUNCHED_STAGES),
     _shared("engine_contract", LAUNCHED_STAGES),
     _shared("sidecar_identity", LAUNCHED_STAGES),

@@ -154,6 +154,25 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 
 [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) shows how the workload sets the required rate.
 
+### Deployment run inputs
+
+[`narwhal deploy plan` and `run`](../cli/Deploy.md#running-the-stage-graph) read these variables besides the discovery, package and fabric inputs above. Both name every one that is unset or invalid, before they reach a host.
+
+| Variable | Read by | Value |
+| --- | --- | --- |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S` | `fleet-limits` | The fleet's `slo.ttft_s` and `slo.tpot_s`, positive seconds |
+| `NARWHAL_ROUTER_OVERHEAD_S` | `fleet-limits` | The fleet's [`slo.router_overhead_s`](01-Fleet-Schema.md#minimal-fleet-definition), seconds of at least 0 |
+| `NARWHAL_FIRST_TOKEN_MARGIN_S` | `fleet-limits` | Positive seconds that `engine.first_token_timeout_s` adds to the calibrated candidate deadline |
+| `NARWHAL_PROFILE_PREFILL_LENS`, `NARWHAL_PROFILE_DECODE_INPUT_LENS` | `profile` | `narwhal-profile --prefill-lens` and `--decode-input-lens`, comma-separated positive integers |
+| `NARWHAL_PROFILE_DECODE_CONCURRENCY` | `profile` | Optional `--decode-concurrency`, comma-separated positive integers |
+| `NARWHAL_PROFILE_WARMUP_REQUESTS` | `profile` | `--warmup-requests`, an integer of at least 0 |
+| `NARWHAL_CALIBRATION_INPUT_TOKENS` | `calibrate` | `narwhal-check --input-tokens`, comma-separated positive integers |
+| `NARWHAL_CALIBRATION_SAMPLES` | `calibrate` | `--samples`, an integer of at least 100, the fewest that preflight accepts as calibration evidence |
+| `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | `calibrate` | `--observation-timeout-s`, positive seconds |
+| `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the router binds and that the router host checks |
+
+Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-change), and a change reruns the stages of its row. Every other `NARWHAL_` variable belongs to discovery, apart from the SSH, inventory, stage limit and trial variables. A secret enters the run record only as part of a digest.
+
 ### Profiling limits
 
 Profile with the generated limits from the router shell:

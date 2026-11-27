@@ -40,6 +40,8 @@ from .tasks import cancel_tasks
 # ended its stream without a token in most live attempts, so each calibration request asks for
 # at least two output tokens.
 MIN_OUTPUT_TOKENS = 2
+# Fewer first-token samples per directed group and input length are not evidence.
+MIN_SAMPLES_PER_GROUP = 100
 
 SCHEMA = "narwhal.first-token-calibration"
 RECALIBRATE = "recalibrate with narwhal-check --calibrate-first-token"
@@ -189,9 +191,12 @@ def evidence_problems(
         or any(type(value) is not int or value < 1 for value in lengths)
         or len(set(lengths)) != len(lengths)
         or type(repeats) is not int
-        or repeats < 100
+        or repeats < MIN_SAMPLES_PER_GROUP
     ):
-        problems.append("first-token calibration lacks at least 100 samples per input length")
+        problems.append(
+            f"first-token calibration lacks at least {MIN_SAMPLES_PER_GROUP} samples per "
+            "input length"
+        )
         return problems
     expected_groups = {
         (src, dst, length)
@@ -317,6 +322,8 @@ class CalibrationCheck:
     candidate_deadline_s: float | None = None
     engines: dict[str, EngineLabel] = field(default_factory=dict)
     process_starts: dict[str, float] = field(default_factory=dict)
+    # The longest target input length the calibration measured.
+    longest_input_tokens: int | None = None
 
     def at_starts(self, starts: Mapping[str, float]) -> CalibrationCheck:
         if not self.engines:
@@ -399,6 +406,7 @@ async def verify_calibration(
         candidate_deadline_s=document["candidate_deadline_s"],
         engines=labels,
         process_starts=dict(document["process_starts"]),
+        longest_input_tokens=max(document["input_tokens"]),
     )
 
 
@@ -889,7 +897,7 @@ async def calibrate(
             if current.process_digest != started[spec.iid].process_digest:
                 changed.append(spec.iid)
     complete = (
-        samples_per_group >= 100
+        samples_per_group >= MIN_SAMPLES_PER_GROUP
         and not unmeasured
         and not changed
         and not generation_errors

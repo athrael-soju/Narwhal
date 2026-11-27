@@ -230,6 +230,12 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
 
+    async def test_hca_reading_without_a_counter_field_is_refused(self):
+        payload = {"device": "mlx5_0", "port": 1, "boot_id": "boot-a", "counter_error": "gone"}
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        with self.assertRaisesRegex(ValueError, "returned no HCA counters"):
+            await read_hca_counters("http://sidecar/v1/attestation", transport=transport)
+
     async def test_sidecar_serves_hca_counters_only_for_its_hca_port(self):
         start = 100
 
@@ -293,15 +299,36 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                             transport=httpx.ASGITransport(app=apps["none"]),
                         )
                     )
+                    # Without the counter, as for a device another network namespace sees,
+                    # the port and host still publish, with the reason.
                     (counters / "port_xmit_data").unlink()
                     unreadable = await client.get("/v1/hca")
-                    self.assertEqual(unreadable.status_code, 503)
-                    self.assertIn("HCA counters unreadable", unreadable.json()["detail"])
-                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA counters unreadable"):
+                    self.assertEqual(unreadable.status_code, 200)
+                    reading = await read_hca_counters(
+                        "http://sidecar/v1/attestation",
+                        transport=httpx.ASGITransport(app=apps["hca"]),
+                    )
+                    assert reading is not None
+                    self.assertEqual(
+                        {k: reading[k] for k in ("device", "port", "boot_id", "port_xmit_data")},
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": None,
+                        },
+                    )
+                    self.assertIn("counters/port_xmit_data", reading["counter_error"])
+                    boot.write_text("")
+                    blank = await client.get("/v1/hca")
+                    self.assertEqual(blank.status_code, 503)
+                    self.assertIn("HCA port unreadable", blank.json()["detail"])
+                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA port unreadable"):
                         await read_hca_counters(
                             "http://sidecar/v1/attestation",
                             transport=httpx.ASGITransport(app=apps["hca"]),
                         )
+                    boot.write_text("boot-a\n")
                     (counters / "port_xmit_data").write_text("4096\n")
                     start = 101
                     self.assertEqual((await client.get("/v1/hca")).status_code, 503)

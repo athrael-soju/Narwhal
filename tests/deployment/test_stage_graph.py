@@ -43,7 +43,7 @@ class StageGraphTests(unittest.TestCase):
                 headings = re.findall(r"^#+ (.+)$", page, re.M)
                 self.assertIn(stage.section, headings)
 
-    def test_engine_restart_reruns_the_engine_attestation_and_preflight(self):
+    def test_engine_restart_reruns_the_engine_attestation_preflight_and_readmission(self):
         self.assertEqual(
             [rerun.stage for rerun in DEPLOY_GRAPH.reruns("engine_identity")],
             [
@@ -55,6 +55,7 @@ class StageGraphTests(unittest.TestCase):
                 "sidecar-verify",
                 "finalize-fleet",
                 "preflight",
+                "router-start",
             ],
         )
         self.assertNotIn("profile", [r.stage for r in DEPLOY_GRAPH.reruns("engine_identity")])

@@ -81,13 +81,18 @@ def record_container_start(run: Path, cid: str, started_at: str) -> None:
     write_private(run / "container-start.json", json.dumps(record, indent=2) + "\n")
 
 
-def start(run: Path, plan: dict) -> None:
+def start(run: Path, plan: dict, ready_seconds: int | None = None) -> None:
+    """Start the plan's container; with `ready_seconds`, wait that long for its `/health`."""
     cid = _create_container(run, plan)
     write_private(run / "container.id", cid + "\n")
     docker(["start", cid], run, "launch.log")
     started_at = docker(["inspect", "--format", "{{.State.StartedAt}}", cid], run, "launch.log")
     record_container_start(run, cid, started_at)
-    print("Container started; follow its logs and verify the HTTP endpoints.")
+    if ready_seconds is None:
+        print("Container started; follow its logs and verify the HTTP endpoints.")
+        return
+    wait_ready(run, plan, cid, ready_seconds)
+    print(f"{plan['role']}: container started and its health endpoint answered.")
 
 
 def gpu_memory(gpu_uuid: str) -> dict[str, int]:

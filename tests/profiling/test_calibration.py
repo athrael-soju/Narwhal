@@ -244,6 +244,26 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(check.status, status)
         self.assertEqual(check.problems, ("e0 process differs from first-token calibration",))
 
+    async def test_a_usable_calibration_reports_its_longest_input(self):
+        self.cfg.first_token_timeout_s = 5.1
+        path = Path(self.folder.name) / "calibration.json"
+        self.cfg.engines = self.cfg.engines[:3]
+        document = calibration_document(
+            self.cfg,
+            {spec.iid: "old" for spec in self.cfg.engines},
+            {spec.iid: 100.0 for spec in self.cfg.engines},
+            seconds=3.75,
+            input_tokens=(8, 64, 16),
+        )
+        path.write_text(json.dumps(document))
+        self.cfg.first_token_calibration_path = path
+        evidence = GenerationEvidence("old", {}, 100.0)
+        with patch.object(calibration, "read_generation", new=AsyncMock(return_value=evidence)):
+            check = await calibration.verify_calibration(self.cfg)
+        self.assertEqual(check.status, "measured", check.problems)
+        # The longest length, neither the first listed nor the last.
+        self.assertEqual(check.longest_input_tokens, 64)
+
     async def test_unreadable_generation_names_the_sidecar_fix(self):
         self.cfg.first_token_timeout_s = 5.1
         path = Path(self.folder.name) / "calibration.json"

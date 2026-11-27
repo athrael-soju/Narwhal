@@ -435,6 +435,16 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertTrue(self.supervisor.stop(identity))
         self.assertNotIn(UNIT, self.manager.units)
 
+    def test_discard_stops_an_unrecorded_unit_of_this_run_only(self):
+        self.supervisor.start(self.spec())
+        other = SystemdUnits("f" * 32, self.manager)
+        self.assertFalse(other.discard("router"))
+        self.assertIn(UNIT, self.manager.units)
+        self.assertTrue(self.supervisor.discard("router"))
+        self.assertEqual(self.stops(), [["systemctl", "--user", "stop", UNIT]])
+        self.assertNotIn(UNIT, self.manager.units)
+        self.assertFalse(self.supervisor.discard("router"))
+
     def test_a_unit_of_another_run_is_refused(self):
         identity = SystemdUnits("f" * 32, self.manager).start(self.spec())
         with self.assertRaisesRegex(SupervisionError, "does not belong to run"):

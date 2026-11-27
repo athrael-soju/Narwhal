@@ -121,7 +121,11 @@ duration 1200s
 
 Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
 
-The deadline, the measured prefill and the router overhead must fit the client time to first token (TTFT) requirement.
+The client time to first token (TTFT) target must hold the deadline, the slowest engine's prefill of the longest calibrated input and the router overhead. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) fails with each term when they exceed `slo.ttft_s`:
+
+```text
+first-token deadline 2.100s + n3 prefill of 4096 tokens 0.412s + router overhead 0.050s = 2.562s exceeds slo.ttft_s 2.500s
+```
 
 ### Reusing or repeating the calibration
 
@@ -169,7 +173,7 @@ The full preflight runs these gates:
 | `model`       | Every engine serves the configured model                                                                                                                     |
 | `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
 | `tokenize`    | Exact input sizing succeeds when `engine.tokenize` is on                                                                                                     |
-| `hca`         | Every sidecar of an engine that sends KV through its HCA, even on its own host, publishes that HCA's transmit counter                                       |
+| `hca`         | Every sidecar of an engine that sends KV through its HCA, even on its own host, publishes that HCA, and its transmit counter when the engine has a peer on its host |
 | `produce`     | Every tested vLLM producer can export a KV handoff; an SGLang producer passes here, and its consume pairs check the transfer                                 |
 | `consume`     | Every tested peer can consume that KV handoff                                                                                                                |
 | `slo`         | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                              |
@@ -223,7 +227,7 @@ In the consume gate, a transfer across a role-permitted engine pair passes when:
 
 The gate reports the first-token time for each passing transfer.
 
-[Fabric qualification](04-Qualify-Fabric.md) measures KV between hosts. Preflight checks KV between engines of one host when those engines send it through their HCAs: their launches set `transfer.transport` to `ucx_rdma`, `transfer.gpu_tls` to `cuda_copy` and `UCX_SHM_DEVICES` to `none`, with one HCA port in `transfer.net_devices`. For each probed pair of such engines on one host, the producer's HCA transmit counter must grow during the transfer, or the pair fails because UCX moved the KV through shared memory or CUDA IPC. [Same-host HCA path](../cli/Check.md#same-host-hca-path) gives the lines it prints. Under `--ring`, an engine whose same-host pair the ring never probes is skipped, so run the full mesh to qualify the path.
+[Fabric qualification](04-Qualify-Fabric.md) measures KV between hosts. Preflight checks KV between engines of one host when those engines send it through their HCAs: their launches set `transfer.transport` to `ucx_rdma`, `transfer.gpu_tls` to `cuda_copy` and `UCX_SHM_DEVICES` to `none`, with one HCA port in `transfer.net_devices`. For each probed pair of such engines on one host, the producer's HCA transmit counter must grow during the transfer, or the pair fails because UCX moved the KV through shared memory or CUDA IPC. An engine with no peer on its host needs no counter. [Same-host HCA path](../cli/Check.md#same-host-hca-path) gives the lines it prints. Under `--ring`, an engine whose same-host pair the ring never probes is skipped, so run the full mesh to qualify the path.
 
 If the first-token deadline expires, check the calibration artifact and the deadline. For any other failure, keep the pair, the error, and the engine logs.
 

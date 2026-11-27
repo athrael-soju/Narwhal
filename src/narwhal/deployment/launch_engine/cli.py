@@ -87,7 +87,7 @@ def _main(argv: list[str]) -> int:
         "model-dimensions": "Inspect model dimensions using a checked plan; "
         "write model-dimensions.json (container only).",
         "start": "Start one serving container from a checked plan and record container.id; "
-        "verify HTTP readiness separately (container only).",
+        "with --ready-seconds, wait for its health endpoint (container only).",
         "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
         "engine's readiness and memory allowance, and record shared-start.json "
         "(container and native).",
@@ -129,6 +129,11 @@ def _main(argv: list[str]) -> int:
         public[command].add_argument(
             "--run", type=Path, required=True, help="prepared launch directory"
         )
+    public["start"].add_argument(
+        "--ready-seconds",
+        type=int,
+        help="wait this many seconds, at least 1, for the engine's health endpoint",
+    )
     shared = public["start-shared"]
     shared.add_argument(
         "--run",
@@ -170,7 +175,11 @@ def _main(argv: list[str]) -> int:
     )
     validation.add_arguments(public)
     args = parser.parse_args(argv)
-    if args.command in ("start-shared", "start-native") and args.ready_seconds < 1:
+    if (
+        args.command in ("start", "start-shared", "start-native")
+        and args.ready_seconds is not None
+        and args.ready_seconds < 1
+    ):
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     results.set_operation(args.command)
     if args.command in validation.DESCRIPTIONS:
@@ -257,10 +266,12 @@ def _main(argv: list[str]) -> int:
                 else:
                     cast(CacheCapture, engine).capture_cache(run, plan)
                 return 0
+            if args.command == "start":
+                start(run, plan, args.ready_seconds)
+                return 0
             {
                 "check": check,
                 "model-dimensions": model_dimensions,
-                "start": start,
             }[args.command](run, plan)
     except (
         ValueError,

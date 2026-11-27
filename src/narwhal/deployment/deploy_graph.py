@@ -77,7 +77,7 @@ STAGES = (
     _stage("package", WORKSTATION, _INSTALL, "Building the deployment package", ("discover",)),
     _stage("install", HOST, _INSTALL, "Installing engine 1 and the remaining hosts", ("package",)),
     _stage("engine-inspect", ENGINE, _ENGINES, "Inspecting every engine host", ("install",)),
-    _stage("engine-prepare", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-inspect",)),
+    _stage("engine-prepare", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-inspect",), ("launch",)),
     _stage("engine-check", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-prepare",)),
     _stage("engine-start", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-check",), ("engine_identity",)),
     _stage("engine-probe", ENGINE, _ENGINES, "Proving the live HTTP process", ("engine-start",)),
@@ -236,8 +236,8 @@ FACTS = (
         "slo",
         INPUT,
         WORKSTATION,
-        "SLO targets",
-        "`slo.ttft_s` and `slo.tpot_s`",
+        "SLO targets or router overhead",
+        "`slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s`",
         _reruns("fleet-limits", *_SERVING),
     ),
     Fact(
@@ -307,21 +307,34 @@ FACTS = (
         "The trial workload, offered rate, request count and thresholds",
         (Rerun("trial", note="from a drained router"),),
     ),
+    # A launch directory starts one engine once. Once its engine has stopped, the engine is
+    # prepared and checked again in a fresh one.
+    Fact(
+        "launch",
+        LIVE,
+        ENGINE,
+        "Launch directory whose engine has stopped",
+        "The launch directory and the SHA-256 of its `launch.json`",
+        _reruns("engine-check", "engine-start"),
+    ),
     Fact(
         "engine_identity",
         LIVE,
         ENGINE,
         "Engine process restarted",
         "The container ID and start time, or the PID, boot ID and start ticks",
-        _reruns(
-            "engine-probe",
-            "cache-capture",
-            "transfer-measure",
-            "attest-capture",
-            "sidecar-start",
-            "sidecar-verify",
-            "finalize-fleet",
-            "preflight",
+        (
+            *_reruns(
+                "engine-probe",
+                "cache-capture",
+                "transfer-measure",
+                "attest-capture",
+                "sidecar-start",
+                "sidecar-verify",
+                "finalize-fleet",
+                "preflight",
+            ),
+            Rerun("router-start", note="to readmit the engine to a router that still runs"),
         ),
     ),
     Fact(

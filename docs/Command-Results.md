@@ -4,7 +4,7 @@ description: Machine-readable JSON results and exit codes for automating Narwhal
 
 # Command results for automation
 
-`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package`, `install`, `transfer-measure`, `cache-groups` and `fabric` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
+`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy plan`, `run`, `status`, `down`, `discover`, `access`, `package`, `install`, `transfer-measure`, `cache-groups` and `fabric` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
 
 With `--format json`, stdout carries one `narwhal.command-result` version 1 object for every outcome. stderr carries live progress and diagnostics, subprocess stdout and stderr replayed at completion, and the help text for `--format json --help`.
 
@@ -24,9 +24,9 @@ Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes)
 | Status | Exit code | Operation state | Error codes |
 | --- | :--: | --- | --- |
 | `success` | 0 | The requested operation completed | |
-| `failed_gate` | 1 | A preflight, evidence, health, host inspection or engine probe gate rejected the operation | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
+| `failed_gate` | 1 | A preflight, evidence, health, host inspection, engine probe or deployment stage gate rejected the operation | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
 | `invalid_input` | 2 | Arguments, configuration, or required inputs failed validation | `invalid_arguments`, `invalid_input`, `input_missing`, `output_exists`, `engine_selection_empty`, `runtime_package_missing` |
-| `degraded` | 3 | Completed with skipped preflight gates, a degraded development instance, or a partial diagnostic bundle | `gates_skipped`, `instance_degraded`, `collection_partial` |
+| `degraded` | 3 | Completed with skipped preflight gates, a degraded development instance, a deployment whose recorded process or route no longer holds, or a partial diagnostic bundle | `gates_skipped`, `instance_degraded`, `collection_partial` |
 | `error` | 4 | An operational failure or stage deadline interrupted completion | `permission_denied`, `engine_http_error`, `operation_failed`, `stage_timeout` |
 | `interrupted` | 130 | The command received cancellation | `stage_cancelled`, `interrupted` |
 
@@ -48,6 +48,10 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | Operation | `data` |
 | --- | --- |
 | `narwhal dev` subcommands | `instance` and the returned lifecycle state |
+| `narwhal deploy plan` | `run`, the run directory, `stages`, each with its `stage` instance, whether it `runs` and its `reasons`, `hosts`, the systemd problems of each host that has any, and `notes`, what the plan assumed, such as a restarted unit whose check only `run` performs |
+| `narwhal deploy run` | `run` and `run_id`, and `ran`, the stage instances that ran, or on failure `failed_stage` or `cancelled_stage`. The failure's error `context` holds `recovery`, the URL of its gate section |
+| `narwhal deploy status` | `run`, `run_id`, `locked`, whether another runner held the run so nothing was recorded, `stages`, each with its `stage`, `status`, `attempt`, `evidence` directory, and a failed stage's `failure` and `recovery`, and `live`, each recorded process or route with its `key`, `stage`, `state` and `detail` |
+| `narwhal deploy down` | `run`, and `processes`, each with its `name`, `host` and whether it was `stopped` |
 | `narwhal deploy discover` | `out`, the discovery directory, and `deployment_env`, the derived variables file |
 | `narwhal deploy access` | `logs`, the log directory, and `hosts`, each with its `id` and `roles` |
 | `narwhal deploy package`, `narwhal deploy install` | `run`, the package directory, and `hosts`, the packaged or installed host IDs |

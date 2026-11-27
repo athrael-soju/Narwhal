@@ -1,5 +1,6 @@
 """SSH access pins host keys, keeps passwords off argument lists and bounds every command."""
 
+import base64
 import json
 import os
 import shlex
@@ -12,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.deployment import remote
 from narwhal.deployment.hosts import (
     HOST_GRACE_S,
     SSH,
@@ -335,6 +337,36 @@ class SshTests(unittest.TestCase):
         fake.write_text(SSHD_LIKE % (PASSWORD + "\n").encode())
         fake.chmod(0o700)
         return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"})
+
+    def test_a_supervisor_input_reaches_standard_input_and_no_log_or_argument_list(self):
+        secret = "engine-key-that-must-stay-private"
+        target = self.root / "unit.env"
+        started = []
+        real = subprocess.Popen
+
+        def recording(args, **kwargs):
+            started.append(list(args))
+            return real(args, **kwargs)
+
+        with (
+            self.sshd_like(),
+            patch("narwhal.deployment.hosts.subprocess.Popen", recording),
+        ):
+            ssh = SSH(self.env, self.root / "logs")
+            runner = remote.SSHRunner(ssh, self.hosts[0], "sidecar-start")
+            result = runner(
+                ["sh", "-c", 'cat > "$1"', "sh", str(target)],
+                input=f'NARWHAL_ENGINE_API_KEY="{secret}"\n',
+            )
+            empty = runner(["sh", "-c", "cat"])
+        self.assertEqual((result.returncode, empty.returncode, empty.stdout), (0, 0, ""))
+        self.assertEqual(target.read_text(), f'NARWHAL_ENGINE_API_KEY="{secret}"\n')
+        encoded = base64.b64encode(secret.encode()).decode()[:16]
+        arguments = json.dumps(started)
+        log = ssh.log(self.hosts[0]).read_text()
+        for text in (arguments, log):
+            self.assertNotIn(secret, text)
+            self.assertNotIn(encoded, text)
 
     def test_the_host_stops_a_command_that_exceeds_its_time_limit(self):
         # `timeout` on the "host" must stop the script and its child, whether the script

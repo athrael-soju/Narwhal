@@ -20,6 +20,7 @@ from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.backends.vllm.probe_reader import releases_peers
 from narwhal.deployment import native_engine
+from narwhal.deployment.attestation_contract.document import planned_launch
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine import start as launch_start
@@ -39,6 +40,7 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
+from narwhal.engines.attestation import launch_digest
 from tests.deployment.fixtures import (
     cuda_engine,
     engine_config_modules,
@@ -129,6 +131,24 @@ class EngineLauncherTests(unittest.TestCase):
             plan = load(root / "launch")
             self.assertEqual(plan["model_tree_sha256"], tree)
             self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_two_prepares_of_one_record_attest_one_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/model.safetensors").write_bytes(b"weights")
+            prepare(root / "first", env)
+            time.sleep(0.05)
+            prepare(root / "second", env)
+            first, second = load(root / "first"), load(root / "second")
+            # Each prepare names its own container and paths.
+            self.assertNotEqual(first, second)
+            contract = {"engine_version": "1.0.0"}
+            image = "sha256:" + "a" * 64
+            self.assertEqual(
+                launch_digest(contract, planned_launch(first, image)),
+                launch_digest(contract, planned_launch(second, image)),
+            )
 
     def test_check_refuses_a_status_change_that_keeps_the_content(self):
         for change in ("chmod", "hard link"):
@@ -647,6 +667,22 @@ class EngineLauncherTests(unittest.TestCase):
             env.update(NARWHAL_MODEL_REVISION="a" * 40, NARWHAL_MODEL_SHA256="9" * 64)
             with self.assertRaisesRegex(ValueError, "NARWHAL_MODEL_SHA256 pins a model file"):
                 prepare(root / "launch", env, backend="native")
+
+    def test_start_waits_for_health_only_when_given_ready_seconds(self):
+        plan = {"role": "engine-1"}
+        for ready, waits in ((None, []), (30, [30])):
+            run = Path(tempfile.mkdtemp())
+            waited = Mock()
+            with (
+                self.subTest(ready=ready),
+                patch.object(launch_start, "_create_container", return_value="cid"),
+                patch.object(launch_start, "docker", return_value="2026-01-01T00:00:00Z"),
+                patch.object(launch_start, "record_container_start"),
+                patch.object(launch_start, "wait_ready", waited),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                launch_start.start(run, plan, ready)
+            self.assertEqual([call.args[3] for call in waited.call_args_list], waits)
 
     def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:

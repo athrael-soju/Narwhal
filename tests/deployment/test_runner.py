@@ -96,6 +96,7 @@ ROWS = {
     "router": {"all": ("router-start", "monitoring", "trial")},
     "monitoring": {"all": ("monitoring",)},
     "trial": {"all": ("trial",)},
+    "launch": {"same": ("engine-check", "engine-start")},
     "engine_identity": {
         "same": (
             "engine-probe",
@@ -105,7 +106,7 @@ ROWS = {
             "sidecar-start",
             "sidecar-verify",
         ),
-        "all": ("finalize-fleet", "preflight"),
+        "all": ("finalize-fleet", "preflight", "router-start"),
     },
     "cache_geometry": {
         "all": ("cache-groups",),
@@ -179,6 +180,9 @@ def runs(result):
     return Counter(decision.key for decision in result.decisions if decision.ran)
 
 
+PROCESSES = ("launch", "engine_identity", "sidecar_identity", "router_identity")
+
+
 class Fleet:
     """Stub stage bodies: each attempt writes its evidence and returns the fleet's values."""
 
@@ -189,6 +193,8 @@ class Fleet:
         self.started = 0
         self.interrupt = None
         self.cleaned = []
+        # Live facts whose stage starts a new process, with a new identity, on every rerun.
+        self.fresh = ()
 
     def action(self, stage):
         spec = DEPLOY_GRAPH.stages[stage]
@@ -208,7 +214,7 @@ class Fleet:
             for fact in spec.produces:
                 name = (fact, context.instance)
                 if DEPLOY_GRAPH.facts[fact].kind == LIVE:
-                    if self.live.get(name) is None:
+                    if self.live.get(name) is None or fact in self.fresh:
                         self.started += 1
                         self.live[name] = {"started": self.started}
                     products[fact] = self.live[name]
@@ -289,6 +295,144 @@ class RunnerTests(unittest.TestCase):
                     self.fleet.live[(fact, instance)] = {"restarted": fact + instance}
                     self.assertEqual(ran(self.fleet.run(self.directory)), expected(fact, instance))
                     self.assertEqual(ran(self.fleet.run(self.directory)), set())
+
+    def test_a_restarted_process_that_passed_its_check_is_recorded_without_rerunning_its_stage(
+        self,
+    ):
+        self.baseline()
+        restarted = {"started": "again"}
+        probes = self.fleet.probe
+
+        def refreshing(fact):
+            if fact != "sidecar_identity":
+                return probes(fact)
+            return lambda instance, recorded: (
+                runner.Refreshed(restarted) if instance == "engine-1" else recorded
+            )
+
+        with patch.object(self.fleet, "probe", refreshing):
+            self.assertEqual(
+                ran(self.fleet.run(self.directory)),
+                {"sidecar-verify[engine-1]", "finalize-fleet[router-host]"},
+            )
+        entry = self.record()["stages"]["sidecar-start[engine-1]"]
+        self.assertEqual(entry["products"]["sidecar_identity"], restarted)
+        self.fleet.live[("sidecar_identity", "engine-1")] = restarted
+        self.assertEqual(ran(self.fleet.run(self.directory)), set())
+
+    def test_inspect_reports_each_live_fact_and_records_a_checked_restart(self):
+        self.baseline()
+        self.fleet.live[("router_identity", "router-host")] = None
+        self.fleet.live[("link", "node-1-to-node-2")] = {"route": "changed"}
+        build = self.fleet.runner(self.directory)
+        sidecar = build.probes["sidecar_identity"]
+        build.probes["sidecar_identity"] = lambda instance, recorded: (
+            runner.Refreshed({"new": instance})
+            if instance == "engine-2"
+            else sidecar(instance, recorded)
+        )
+        _, checks = build.inspect(refresh=False)
+        states = {check.key: check.state for check in checks}
+        self.assertEqual(states["router_identity[router-host]"], "gone")
+        self.assertEqual(states["link[node-1-to-node-2]"], "changed")
+        self.assertEqual(states["sidecar_identity[engine-2]"], "restarted and checked")
+        self.assertEqual(states["engine_identity[engine-1]"], "holds")
+        unchanged = self.record()["stages"]["sidecar-start[engine-2]"]["products"]
+        self.assertNotEqual(unchanged["sidecar_identity"], {"new": "engine-2"})
+        build.inspect(refresh=True)
+        refreshed = self.record()["stages"]["sidecar-start[engine-2]"]["products"]
+        self.assertEqual(refreshed["sidecar_identity"], {"new": "engine-2"})
+
+    def test_plan_decides_like_run_without_running_or_recording(self):
+        build = self.fleet.runner(self.directory)
+        decisions = {d.key: d.reasons for d in build.plan(self.fleet.inputs).decisions}
+        self.assertEqual(decisions["access[node-1]"], ("no attempt yet",))
+        self.assertEqual(decisions["discover"], ("no attempt yet",))
+        self.assertFalse(self.directory.exists())
+        self.baseline()
+        before = (self.directory / "run.json").read_bytes()
+        self.fleet.inputs["slo"] = Input.value("changed", "test")
+        planned = self.fleet.runner(self.directory).plan(self.fleet.inputs)
+        running = {d.key: d.reasons for d in planned.decisions if d.ran}
+        self.assertEqual(running["fleet-limits"], ("slo changed",))
+        self.assertEqual(running["preflight[router-host]"], ("slo changed",))
+        self.assertEqual(set(running), expected("slo"))
+        self.assertNotIn("calibrate[router-host]", running)
+        self.assertEqual((self.directory / "run.json").read_bytes(), before)
+        self.assertEqual(
+            {d.key for d in self.fleet.run(self.directory).decisions if d.ran},
+            expected("slo"),
+        )
+
+    def assert_plan_matches_run(self, probes=None):
+        """Plan names every stage instance the next run runs, and only a product that may
+        change makes it name more."""
+        build = self.fleet.runner(self.directory)
+        if probes:
+            build.probes.update(probes)
+        planned = {d.key: d.reasons for d in build.plan(self.fleet.inputs).decisions if d.ran}
+        build = self.fleet.runner(self.directory)
+        if probes:
+            build.probes.update(probes)
+        ran_now = {d.key for d in build.run(self.fleet.inputs).decisions if d.ran}
+        self.assertLessEqual(ran_now, set(planned))
+        for name in set(planned) - ran_now:
+            self.assertRegex(planned[name][0], r"^runs after \S+ if \S+ changes$", name)
+        return planned, ran_now
+
+    def test_plan_names_what_run_runs_after_each_change(self):
+        self.baseline()
+        # Each rerun of a stage that starts a process starts a new one, as on a host.
+        self.fleet.fresh = PROCESSES
+        for fact in facts(INPUT):
+            with self.subTest(input=fact):
+                self.fleet.inputs[fact] = Input.value(fact + "-planned", "test")
+                self.assert_plan_matches_run()
+        for fact in facts(LIVE):
+            for instance in TOPOLOGY.instances(DEPLOY_GRAPH.facts[fact].scope):
+                for value in ({"planned": fact + instance}, None):
+                    with self.subTest(fact=fact, instance=instance, gone=value is None):
+                        self.fleet.live[(fact, instance)] = value
+                        self.assert_plan_matches_run()
+
+    def test_plan_reruns_the_readers_of_a_process_a_rerun_replaces(self):
+        self.baseline()
+        # The launch directory is gone while the engine still answers with its old identity.
+        # The rerun of engine-start starts a new process, so its readers run after it.
+        self.fleet.fresh = PROCESSES
+        self.fleet.live[("launch", "engine-1")] = None
+        planned, _ = self.assert_plan_matches_run()
+        self.assertEqual(
+            planned["engine-probe[engine-1]"],
+            ("runs after engine-start[engine-1] if engine_identity[engine-1] changes",),
+        )
+        self.assertNotIn("engine-probe[engine-2]", planned)
+
+    def test_plan_skips_the_stage_of_a_checked_restart_as_run_does(self):
+        self.baseline()
+        for fact, instance in (
+            ("sidecar_identity", "engine-1"),
+            ("router_identity", "router-host"),
+        ):
+            with self.subTest(fact=fact):
+                restarted = {"restarted": fact}
+
+                def refreshed(probed, recorded, fact=fact, instance=instance, value=restarted):
+                    if probed == instance and recorded != value:
+                        return runner.Refreshed(value)
+                    return self.fleet.live.get((fact, probed))
+
+                planned, _ = self.assert_plan_matches_run({fact: refreshed})
+                self.assertNotIn(key(DEPLOY_GRAPH.producer(fact), instance), planned)
+                self.fleet.live[(fact, instance)] = restarted
+
+    def test_plan_invalidates_only_the_instances_run_would(self):
+        self.baseline()
+        entry = self.record()["stages"]["engine-check[engine-1]"]
+        (self.directory / entry["outputs"][0]["path"]).write_text("{}")
+        planned, _ = self.assert_plan_matches_run()
+        self.assertIn("engine-start[engine-1]", planned)
+        self.assertNotIn("engine-start[engine-2]", planned)
 
     def test_a_live_process_that_is_gone_reruns_the_stage_that_started_it(self):
         self.baseline()
@@ -371,6 +515,7 @@ class RunnerTests(unittest.TestCase):
                 "sidecar-verify[engine-2]",
                 "finalize-fleet[router-host]",
                 "preflight[router-host]",
+                "router-start[router-host]",
             },
         )
 
