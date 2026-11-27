@@ -107,6 +107,7 @@
         }
       ],
       "podSpec": {
+        "automountServiceAccountToken": false,
         "containers": [
           {
             "command": [
@@ -294,10 +295,115 @@
                 "name": "kv-events"
               },
               {
+                "mountPath": "/narwhal-engine",
+                "name": "narwhal-engine"
+              },
+              {
                 "mountPath": "/narwhal-state",
                 "name": "narwhal-state",
                 "readOnly": true,
                 "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              }
+            ]
+          },
+          {
+            "command": [
+              "python3",
+              "-I",
+              "-m",
+              "narwhal.deployment.attestation_contract.cli",
+              "serve",
+              "--run",
+              "/narwhal-launch",
+              "--pod-evidence",
+              "/narwhal-state"
+            ],
+            "env": [
+              {
+                "name": "NARWHAL_POD_IP",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "status.podIP"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_UID",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.uid"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              }
+            ],
+            "image": "registry.example/narwhal@sha256:<sha256>",
+            "name": "attestation",
+            "ports": [
+              {
+                "containerPort": 8010,
+                "name": "attestation"
+              }
+            ],
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "runAsGroup": 0,
+              "runAsUser": 0
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/narwhal-hooks",
+                "name": "narwhal-hooks",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/model",
+                "name": "model",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-kv-events",
+                "name": "kv-events"
+              },
+              {
+                "mountPath": "/narwhal-engine",
+                "name": "narwhal-engine"
+              },
+              {
+                "mountPath": "/narwhal-state",
+                "name": "narwhal-state",
+                "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              },
+              {
+                "mountPath": "/narwhal-launch",
+                "name": "narwhal-state",
+                "readOnly": true,
+                "subPathExpr": "engines/engine-1/launches/$(NARWHAL_POD_UID)"
+              },
+              {
+                "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                "name": "narwhal-api",
+                "readOnly": true
               }
             ]
           }
@@ -532,6 +638,8 @@
             ]
           }
         ],
+        "serviceAccountName": "narwhal-attestation",
+        "shareProcessNamespace": true,
         "volumes": [
           {
             "configMap": {
@@ -573,8 +681,95 @@
           {
             "emptyDir": {},
             "name": "kv-events"
+          },
+          {
+            "emptyDir": {},
+            "name": "narwhal-engine"
+          },
+          {
+            "name": "narwhal-api",
+            "projected": {
+              "defaultMode": 292,
+              "sources": [
+                {
+                  "serviceAccountToken": {
+                    "expirationSeconds": 3600,
+                    "path": "token"
+                  }
+                },
+                {
+                  "configMap": {
+                    "items": [
+                      {
+                        "key": "ca.crt",
+                        "path": "ca.crt"
+                      }
+                    ],
+                    "name": "kube-root-ca.crt"
+                  }
+                },
+                {
+                  "downwardAPI": {
+                    "items": [
+                      {
+                        "fieldRef": {
+                          "fieldPath": "metadata.namespace"
+                        },
+                        "path": "namespace"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
           }
         ]
+      },
+      "role": {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "rules": [
+          {
+            "apiGroups": [
+              ""
+            ],
+            "resources": [
+              "pods"
+            ],
+            "verbs": [
+              "get"
+            ]
+          }
+        ]
+      },
+      "roleBinding": {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "roleRef": {
+          "apiGroup": "rbac.authorization.k8s.io",
+          "kind": "Role",
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "subjects": [
+          {
+            "kind": "ServiceAccount",
+            "name": "narwhal-attestation"
+          }
+        ]
+      },
+      "serviceAccount": {
+        "apiVersion": "v1",
+        "automountServiceAccountToken": false,
+        "kind": "ServiceAccount",
+        "metadata": {
+          "name": "narwhal-attestation"
+        }
       }
     },
     "plan": {
@@ -618,6 +813,7 @@
         "{\"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}"
       ],
       "attestation_port": 8010,
+      "attestation_url": "http://engine-1.engines.example.svc:8010/v1/attestation",
       "backend": "kubernetes",
       "common": [],
       "connector": {
@@ -653,6 +849,8 @@
         "rdma_resource": "rdma.example.com/hca",
         "runtime_check_seconds": 300.0,
         "seccomp_unconfined": false,
+        "service_account": "narwhal-attestation",
+        "sidecar_image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "state_claim": "narwhal-state"
       },
       "kv_events": {

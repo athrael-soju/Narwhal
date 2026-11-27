@@ -91,6 +91,8 @@
       "command": [
         "docker",
         "exec",
+        "--env",
+        "NARWHAL_CAPTURE_CACHE=0",
         "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "python3",
         "-c",

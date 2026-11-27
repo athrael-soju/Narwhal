@@ -127,6 +127,8 @@ If the engine stays ejected with lifecycle state `active` while its attestation 
 1. Start the attestation sidecar through its process manager.
 2. Wait for the next recovery probe.
 
+In a Kubernetes engine pod, the kubelet restarts a failed engine container. The pod's attestation sidecar stops once the engine process it serves ends, and when the kubelet restarts it, it [captures the new engine container's attestation](../deploy/05-Attest.md#attesting-an-engine-pod) before it serves. Recovery then validates the engine as above.
+
 If a restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it`:
 
 1. Wait up to 180 seconds for [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release).

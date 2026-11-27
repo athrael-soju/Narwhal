@@ -14,20 +14,20 @@ Run the sidecar while its engine runs. For a container engine, run it as a user 
 python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>
 ```
 
-The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. When the engine publishes no process start (llama.cpp, SGLang and TensorRT-LLM), it passes `--engine-container`, or `--engine-pid` for a native launch. When the checked launch has prefix caching on and publishes cache events, it passes `--kv-events` and `--model`. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
+The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. When the engine publishes no process start (llama.cpp, SGLang and TensorRT-LLM), it passes `--engine-container`, or `--engine-pid` for a native launch. In a Kubernetes engine pod it always passes `--engine-pod-container`, as [Attesting an engine pod](../deploy/05-Attest.md#attesting-an-engine-pod) describes. When the checked launch has prefix caching on and publishes cache events, it passes `--kv-events` and `--model`. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
 At startup the sidecar reads the engine's identity, which is its version and its process start time:
 
 | Backend | Version from | Process start from |
 | --- | --- | --- |
 | vLLM | `/version` | `/metrics` |
-| SGLang | `/server_info` | The host process named by `--engine-container` or `--engine-pid` |
-| TensorRT-LLM | `/version` | The host process named by `--engine-container` or `--engine-pid` |
+| SGLang | `/server_info` | The host process named by `--engine-container` or `--engine-pid`, or the pod process named by `--engine-pod-container` |
+| TensorRT-LLM | `/version` | The host process named by `--engine-container` or `--engine-pid`, or the pod process named by `--engine-pod-container` |
 | llama.cpp | `build_info` in `/props` | The host process named by `--engine-container` or `--engine-pid` |
 
-The sidecar exits with status 1 when it cannot read the identity or the engine's version differs from the document's `engine_version`. It exits with status 2 when the document fails to load or an argument is invalid: `--kv-events` without `--model`, a backend that publishes no process start without `--engine-container` or `--engine-pid`, or both of those two options together.
+The sidecar exits with status 1 when it cannot read the identity or the engine's version differs from the document's `engine_version`. It exits with status 2 when the document fails to load or an argument is invalid: `--kv-events` without `--model`, a backend that publishes no process start without `--engine-container`, `--engine-pid` or `--engine-pod-container`, or more than one of those options.
 
-While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
+While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar. With `--engine-pod-container`, the sidecar checks every second that the container's first process still runs, and stops once it has ended.
 
 ## Options
 
@@ -44,6 +44,7 @@ While the engine's version or process start time differs from startup, or cannot
 | `--model NAME`          | optional    | Served model name for block identities, required with `--kv-events`.                                               |
 | `--engine-container ID` |             | Engine container whose start time identifies the engine process. Required for llama.cpp, SGLang and TensorRT-LLM unless `--engine-pid` is set. |
 | `--engine-pid PID`      |             | Native engine process whose start time identifies the engine process.                                              |
+| `--engine-pod-container ID` |         | Engine container of this pod, by runtime container ID. Its first process in the pod's shared process namespace identifies the engine process. |
 
 ## Routes
 
@@ -51,7 +52,7 @@ While the engine's version or process start time differs from startup, or cannot
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health`                      | `{"status": "ok"}` once the identity check passes                                                                         |
 | `GET /v1/attestation`              | The [attestation](../configuration/01-Fleet-Schema.md#attestation) for the engine's current identity                      |
-| `GET /v1/process`                  | `process_start_time_seconds`, the engine process start time read on the host, with `--engine-container` or `--engine-pid` |
+| `GET /v1/process`                  | `process_start_time_seconds`, the engine process start time read on the host, with `--engine-container`, `--engine-pid` or `--engine-pod-container` |
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
 

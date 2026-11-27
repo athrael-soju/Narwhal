@@ -17,7 +17,7 @@ from ...deployment.launch_engine.backend import (
     ModelFormats,
 )
 from ...deployment.launch_engine.check import CheckContext
-from . import attestation, captures, dev, discovery, probe_reader
+from . import attestation, captures, dev, discovery, inspections, probe_reader
 from . import check as runtime_check
 from . import plan as policy
 from .identity import parse_process_start
@@ -47,6 +47,7 @@ class VllmLauncher(
     fleet_settings = discovery.FLEET_SETTINGS
     probe_reader: ClassVar[ModuleType] = probe_reader
     live_probe = LiveProbe(parse_process_start, completion=True)
+    pod_inspections: ClassVar[ModuleType] = inspections
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -120,8 +121,8 @@ class VllmLauncher(
     def model_dimensions(self, run: Path, plan: dict) -> None:
         captures.model_dimensions(run, plan)
 
-    def cache_layout(self, run: Path) -> str:
-        return captures.resolved_layout(run)
+    def cache_layout(self, source: Path) -> str:
+        return captures.resolved_layout(source)
 
     def capture_model_dimensions(self, run: Path, out: Path) -> Path:
         return attestation.capture_model_dimensions(run, out)

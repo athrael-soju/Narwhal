@@ -121,30 +121,36 @@ The device plugins choose the pod's GPUs and HCA, so the plan differs from a con
 
 ### The engine pod
 
-`kubernetes.json` holds `plan_sha256`, two immutable ConfigMaps under `configMaps`, and the engine pod's specification under `podSpec`. The ConfigMap `<plan name>-hooks` holds the hook directory: `launch.json`, `launch_engine.py`, the cache-capture hook and the engine configuration files. The ConfigMap `narwhal-pod-<digest>` holds the pod steps: `pod.py`, `checkpoint.py`, `verdict.py`, and the engine backend's probe reader as `probe_reader.py`. Its name follows its content, so plans of one engine backend prepared by one Narwhal release share it.
+`kubernetes.json` holds `plan_sha256`, two immutable ConfigMaps under `configMaps`, the engine pod's specification under `podSpec`, and the attestation sidecar's `serviceAccount` with the `role` and `roleBinding` that let it `get` pods in its namespace and nothing else. The ConfigMap `<plan name>-hooks` holds the hook directory: `launch.json`, `launch_engine.py`, the cache-capture hook and the engine configuration files. The ConfigMap `narwhal-pod-<digest>` holds the pod steps: `pod.py`, `checkpoint.py`, `verdict.py`, the engine backend's probe reader as `probe_reader.py`, and on vLLM the attestation inspections as `inspections.py`. Its name follows its content, so plans of one engine backend prepared by one Narwhal release share it.
 
-Every container runs in the unmodified engine image:
+The engine steps run in the unmodified engine image, and the attestation sidecar in the Narwhal image:
 
 | Container | Kind | Step |
 | --- | --- | --- |
 | `checkpoint` | Init | Hashes the files under `/model` and fails when their tree digest differs from `model_tree_sha256` in `launch.json` |
 | `runtime-check` | Init | Runs the runtime probe that `check` runs in Docker, with the engine's environment, devices and mounts, and judges its output as `check` does. It fails on a probe that exits nonzero or an output that fails the check |
 | `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan, this pod and its HCA. Each start, including a restart without the init containers, judges the recorded probe output again and requires the recorded verdict |
+| `attestation` | Main | Captures and serves the attestation of the running engine container, as [Attesting an engine pod](../deploy/05-Attest.md#attesting-an-engine-pod) describes |
 
-Each container's command first runs a bootstrap under `python3 -I -B`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. It skips the entries whose names start with `..`, which the kubelet adds to a ConfigMap volume. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path, and `-B` keeps the pod steps from writing bytecode. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
+Before the `engine` step starts the engine, it opens a directory for its own process in the engine volume, `/narwhal-engine/<process ID>-<start ticks>/`, and removes the directories of earlier processes. It runs the backend's attestation inspections there and records their output in `inspections.json`, sends the engine's output to `startup.log` as well as the container's output, and on vLLM points the cache capture hook at `cache-layout.json`. The sidecar reads that directory.
+
+Each engine-image container's command first runs a bootstrap under `python3 -I -B`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. It skips the entries whose names start with `..`, which the kubelet adds to a ConfigMap volume. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path, and `-B` keeps the pod steps from writing bytecode. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
 
 The specification sets:
 
 | Setting | Value |
 | --- | --- |
 | Network | `hostNetwork: true`, `dnsPolicy: ClusterFirstWithHostNet` and `enableServiceLinks: false`, so Kubernetes adds no variables to the engine's environment |
+| Processes | `shareProcessNamespace: true`, so the sidecar sees the engine's process |
+| Service account | `NARWHAL_KUBERNETES_SERVICE_ACCOUNT`, with `automountServiceAccountToken: false`. Only the sidecar mounts a token, projected with the cluster CA and the pod's namespace |
+| Runtime class | `NARWHAL_KUBERNETES_RUNTIME_CLASS` as `runtimeClassName`, when set |
 | Devices | The GPU and HCA requests in `runtime-check` and `engine` |
-| Volumes | The model volume read-only at `/model`; the ConfigMaps read-only at `/narwhal-hooks` and `/narwhal-pod`; the state claim at `/narwhal-state`; empty directories at `/root/.cache`, in memory at `/dev/shm`, and at `/narwhal-kv-events` while the engine publishes cache events |
+| Volumes | The model volume read-only at `/model`; the ConfigMaps read-only at `/narwhal-hooks` and `/narwhal-pod`; the state claim at `/narwhal-state`; empty directories at `/root/.cache`, in memory at `/dev/shm`, at `/narwhal-kv-events` while the engine publishes cache events, and at `/narwhal-engine` for `engine` and the sidecar |
 | Ports | The engine port as `http` and the KV side-channel port as `kv-side-channel` |
 | Credential | The engine credential from the Secret that `NARWHAL_KUBERNETES_API_KEY_SECRET` names |
-| Security context | `IPC_LOCK` added to `runtime-check` and `engine`, so they can lock the memory that RDMA registers, as the container backend's unlimited `memlock` allows. On ROCm, also seccomp `Unconfined`, as the container backend runs ROCm engines |
+| Security context | `IPC_LOCK` added to `runtime-check` and `engine`, so they can lock the memory that RDMA registers, as the container backend's unlimited `memlock` allows. On ROCm, also seccomp `Unconfined`, as the container backend runs ROCm engines. The sidecar runs as root, the engine's user, with every capability dropped |
 
-The state claim mounts at the subdirectory `engines/<role>/<pod UID>`, writable for the init containers and read-only for `engine`.
+The state claim mounts at the subdirectory `engines/<role>/<pod UID>`, writable for the init containers and the sidecar and read-only for `engine`. The sidecar also mounts `engines/<role>/launches/<pod UID>` read-only at `/narwhal-launch`.
 
 ### Allocated HCA
 

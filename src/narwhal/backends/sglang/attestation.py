@@ -10,14 +10,15 @@ from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
+    engine_environment,
+    engine_process_start,
     live_binding,
     live_identity,
     read_json,
     require_binding,
     write_private_json,
 )
-from ...deployment.launch_engine.plan import env_file_name, launch_headers, option, read_env
-from ...engines.host_process import container_start, native_start
+from ...deployment.launch_engine.plan import launch_headers, option
 from .identity import SERVER_INFO_PATH, server_version
 
 # /server_info fields that hold credentials.
@@ -59,11 +60,7 @@ def capture_server(run: Path, out: Path) -> Path:
     server = {name: payload.get(name) for name in SERVER_FIELDS}
     record = {
         "server": server,
-        "process_start_time_seconds": (
-            native_start(identity["pid"])
-            if isinstance(identity, dict)
-            else container_start(str(identity))
-        ),
+        "process_start_time_seconds": engine_process_start(identity),
         "plan_sha256": plan_hash,
         **live_binding(plan, checked, identity),
     }
@@ -112,7 +109,7 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         raise ValueError("Live page size differs from the launch plan")
     if server.get("decode_attention_backend") != option(plan["args"], "--decode-attention-backend"):
         raise ValueError("Live decode attention backend differs from the launch plan")
-    env = read_env(run / env_file_name(plan))
+    env = engine_environment(run, plan, context.identity)
     contract = {
         "connector_version": 0,
         "model_dtype": server["dtype"],

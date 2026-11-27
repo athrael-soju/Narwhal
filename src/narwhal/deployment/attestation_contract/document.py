@@ -18,14 +18,18 @@ from ..launch_engine.backend import (
 from ..launch_engine.plan import check_model_files, model_file_changed
 from ..launch_engine.runtime import digest
 from .evidence import (
+    LiveEngine,
     checked_plan,
+    engine_image,
     live_binding,
     live_identity,
+    planned_model_config,
     read_json,
     require_binding,
     require_prior_dimensions,
     write_private_json,
 )
+from .pod_engine import PodEngine, require_identity
 
 # The startup log an attempt captures and its document attests.
 STARTUP_LOG = "startup.log"
@@ -42,8 +46,8 @@ class AttestationContext:
     plan: dict
     checked: dict
     plan_hash: str
-    # The live container ID, or the native process identity.
-    identity: dict | str
+    # The live container ID, the native process identity, or the pod's engine container.
+    identity: LiveEngine
     dimensions: dict
 
     @property
@@ -81,7 +85,7 @@ def launch_args(args: list[str], per_launch: frozenset[str]) -> list[str]:
 
 
 def bound_dimensions(
-    run: Path, attempt: Path, plan: dict, checked: dict, plan_hash: str, identity: dict | str
+    run: Path, attempt: Path, plan: dict, checked: dict, plan_hash: str, identity: LiveEngine
 ) -> tuple[dict, Path]:
     """Return the attempt's bound model dimensions and their file, live ones when the backend
     reads them from the live engine."""
@@ -102,11 +106,13 @@ def bound_dimensions(
             dimensions, "Live model dimensions", launcher_sha256=plan["launcher_sha256"], **binding
         )
         require_prior_dimensions(run, plan, plan_hash, dimensions.get("contract"))
-    if digest(Path(plan["model_dir"]) / "config.json") != plan["model_config_sha256"]:
+    if digest(planned_model_config(plan)) != plan["model_config_sha256"]:
         raise ValueError("Model configuration changed after launch preparation")
-    if model_file_changed(plan):
-        raise ValueError("Model file changed after launch preparation")
-    check_model_files(plan)
+    # A pod's checkpoint record holds the digest of the model files the pod serves.
+    if not isinstance(identity, PodEngine):
+        if model_file_changed(plan):
+            raise ValueError("Model file changed after launch preparation")
+        check_model_files(plan)
     architecture = dimensions.get("model_architecture")
     if not isinstance(architecture, str) or not architecture.strip():
         raise ValueError("Model dimensions name no architecture")
@@ -137,9 +143,10 @@ def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
     transfer_version = plan["expected_packages"].get(package) if package else None
     if not isinstance(transfer_version, str) or not transfer_version:
         raise ValueError("Checked image lacks a pinned transfer package")
+    image = engine_image(checked, identity)
     values = {
         "engine_version": evidence.engine_version,
-        "image_digest": "" if native else checked["image_id"],
+        "image_digest": image,
         "transfer_version": transfer_version,
         "model_architecture": dimensions["model_architecture"],
         **dimensions["contract"],
@@ -154,7 +161,12 @@ def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
     if missing:
         raise ValueError("Derived engine contract is incomplete: " + ", ".join(missing))
     paths = {
-        "image_digest": run / "checked.json",
+        # A pod reports the image it runs; the image check observes a container's.
+        "image_digest": (
+            require_identity(identity, attempt)
+            if isinstance(identity, PodEngine)
+            else run / "checked.json"
+        ),
         "transfer_version": run / "launch.json",
         **dict.fromkeys(MODEL_FIELDS, dimension_source),
         **evidence.sources,
@@ -168,7 +180,7 @@ def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
     }
     launch = {
         "args": launch_args(plan["args"], engine.launch_varying_flags),
-        "image_id": "" if native else checked["image_id"],
+        "image_id": image,
         "expected_packages": plan["expected_packages"],
         "model_config_sha256": plan["model_config_sha256"],
         **({"model_sha256": plan["model_sha256"]} if "model_sha256" in plan else {}),

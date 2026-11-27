@@ -5,10 +5,24 @@ import json
 import re
 from pathlib import Path
 
-from ...deployment.launch_engine.check import require_checked
+from ...deployment.attestation_contract.pod_engine import (
+    engine_record,
+    live_pod,
+    recorded_inspection,
+)
+from ...deployment.launch_engine import pod as pod_steps
+from ...deployment.launch_engine.check import read_checked, require_checked
 from ...deployment.launch_engine.docker import docker, run_runtime_script
 from ...deployment.launch_engine.plan import container_options
 from ...deployment.launch_engine.runtime import digest, write_private
+from .inspections import (
+    CACHE_REGISTRATION,
+    CACHE_REGISTRATION_TAG,
+    HANDSHAKE_POLICY,
+    HANDSHAKE_POLICY_TAG,
+    connector_config,
+    inspection,
+)
 from .runtime import LAUNCHER
 
 
@@ -56,27 +70,54 @@ def inspection_log(run: Path, out: Path, name: str) -> str:
     return str((out / name).relative_to(run))
 
 
-def resolved_layout(run: Path) -> str:
-    """The one KV cache layout that the live cache layout of `run` holds across TP ranks."""
-    source = run / "cache-layout.json"
+def layout_record(run: Path, plan: dict, out: Path) -> Path:
+    """The live KV cache layout a capture reads: the one capture-cache kept in the launch
+    directory, or for a Kubernetes engine the copy its capture keeps in the attempt `out`."""
+    if plan.get("backend") == "kubernetes":
+        return out / "cache-layout.json"
+    return run / "cache-layout.json"
+
+
+def resolved_layout(source: Path) -> str:
+    """The one KV cache layout that the live cache layout record `source` holds across TP
+    ranks."""
     if not source.is_file():
-        raise ValueError("the engine has captured no live KV cache layout in cache-layout.json")
+        raise ValueError(f"the engine has captured no live KV cache layout in {source.name}")
     names = {rank.get("kv_cache_layout") for rank in json.loads(source.read_bytes())["ranks"]}
     if len(names) != 1 or None in names:
-        raise ValueError("cache-layout.json must hold one resolved KV cache layout across TP ranks")
+        raise ValueError(f"{source.name} must hold one resolved KV cache layout across TP ranks")
     return str(next(iter(names)))
 
 
+def inspected(run: Path, plan: dict, out: Path, name: str, image_arguments: list[str]) -> str:
+    """Return an inspection's output from the engine's image: a container of the image, the
+    native runtime, or the record of the one a pod's engine container ran.
+
+    `image_arguments` follow the script when it runs in a container of the image or the native
+    runtime; a pod's engine container ran it before the engine resolved them.
+    """
+    log = out / f"{name}.log"
+    if plan.get("backend") == "kubernetes":
+        engine = live_pod(read_checked(run))
+        return recorded_inspection(
+            engine, name, inspection(plan, digest(run / "launch.json"), name), log
+        )
+    script = {"cache-registration": CACHE_REGISTRATION, "handshake-policy": HANDSHAKE_POLICY}[name]
+    return run_runtime_script(
+        run, plan, script, image_arguments, inspection_log(run, out, log.name)
+    )
+
+
 def registration_layout(run: Path, plan: dict, out: Path) -> None:
-    """Write cache-registration.json into `out` from the live cache layout of `run`."""
+    """Write cache-registration.json into `out` from the live cache layout."""
     require_checked(run, plan)
     destination = out / "cache-registration.json"
     if destination.exists():
         raise ValueError(
             "cache registration capture exists; retain it and use a fresh inspection plan"
         )
-    source = run / "cache-layout.json"
-    name = resolved_layout(run)
+    source = layout_record(run, plan, out)
+    name = resolved_layout(source)
     data = source.read_bytes()
     record = json.loads(data)
     for field, expected in (
@@ -89,33 +130,17 @@ def registration_layout(run: Path, plan: dict, out: Path) -> None:
     tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
     if sorted(rank["rank"] for rank in record["ranks"]) != list(range(tp)):
         raise ValueError("cache layout record requires every TP rank exactly once")
-    script = """import hashlib, inspect, json, sys
-from pathlib import Path
-from vllm.v1.kv_cache_layout import KVCacheLayout
-layout = KVCacheLayout[sys.argv[1]]
-source = Path(inspect.getfile(KVCacheLayout))
-print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
-    'cross_layers_blocks': layout.is_block_outermost,
-    'kv_cache_layout': layout.name,
-    'source': 'KVCacheLayout.' + layout.name + '.is_block_outermost',
-    'module_file': str(source),
-    'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
-}))
-"""
-    output = run_runtime_script(
-        run, plan, script, [name], inspection_log(run, out, "cache-registration.log")
-    )
-    prefix = "NARWHAL_CACHE_REGISTRATION="
+    output = inspected(run, plan, out, "cache-registration", [name])
     records = [
-        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+        result
+        for result in tagged_records(output, CACHE_REGISTRATION_TAG)
+        if result.get("kv_cache_layout") == name
     ]
     if len(records) != 1 or type(records[0].get("cross_layers_blocks")) is not bool:
         raise ValueError(
-            "cache registration inspection requires one boolean result; inspect its log"
+            f"cache registration inspection requires one boolean result for {name}; inspect its log"
         )
     result = records[0]
-    if result["kv_cache_layout"] != name:
-        raise ValueError("cache registration inspection returned a different layout")
     result.update(
         image=plan["image"],
         plan_sha256=digest(run / "launch.json"),
@@ -135,53 +160,9 @@ def handshake_policy(run: Path, plan: dict, out: Path) -> None:
         raise ValueError(
             "handshake policy capture exists; retain it and use a fresh inspection plan"
         )
-    arguments = plan["args"]
-    connector = json.loads(arguments[arguments.index("--kv-transfer-config") + 1])
-    if connector != plan["connector"]:
-        raise ValueError("serving arguments differ from the recorded connector configuration")
-    script = """import ast, hashlib, inspect, json, sys, textwrap
-from vllm.config import KVTransferConfig
-from vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker import NixlBaseConnectorWorker
-source = textwrap.dedent(inspect.getsource(NixlBaseConnectorWorker.__init__))
-defaults = []
-for node in ast.walk(ast.parse(source)):
-    if not isinstance(node, ast.Assign):
-        continue
-    if not any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-               and t.value.id == 'self' and t.attr == 'enforce_compat_hash' for t in node.targets):
-        continue
-    call = node.value
-    if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-        and call.func.attr == 'get_from_extra_config'
-        and isinstance(call.func.value, ast.Attribute)
-        and call.func.value.attr == 'kv_transfer_config'
-        and isinstance(call.func.value.value, ast.Name)
-        and call.func.value.value.id == 'self' and len(call.args) == 2
-        and isinstance(call.args[0], ast.Constant)
-        and call.args[0].value == 'enforce_handshake_compat'):
-        defaults.append(ast.literal_eval(call.args[1]))
-if len(defaults) != 1 or type(defaults[0]) is not bool:
-    raise ValueError('Inspect the installed worker compatibility policy before declaring it')
-config = KVTransferConfig(**json.loads(sys.argv[1]))
-effective = config.get_from_extra_config('enforce_handshake_compat', defaults[0])
-if effective is not True:
-    raise ValueError('The resolved handshake compatibility setting must be boolean true')
-print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
-    'enforce_handshake_compat': effective,
-    'configured': 'enforce_handshake_compat' in config.kv_connector_extra_config,
-    'installed_default': defaults[0],
-    'source': 'NixlBaseConnectorWorker.__init__: self.enforce_compat_hash',
-    'source_code': source,
-    'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
-}))
-"""
-    output = run_runtime_script(
-        run, plan, script, [json.dumps(connector)], inspection_log(run, out, "handshake-policy.log")
-    )
-    prefix = "NARWHAL_HANDSHAKE_POLICY="
-    records = [
-        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
-    ]
+    connector = connector_config(plan)
+    output = inspected(run, plan, out, "handshake-policy", [json.dumps(connector)])
+    records = tagged_records(output, HANDSHAKE_POLICY_TAG)
     if len(records) != 1 or records[0].get("enforce_handshake_compat") is not True:
         raise ValueError("handshake policy inspection requires boolean true; inspect its log")
     result = records[0]
@@ -192,6 +173,12 @@ print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
         launcher_sha256=digest(LAUNCHER),
     )
     write_private(destination, json.dumps(result, indent=2) + "\n")
+
+
+def tagged_records(output: str, prefix: str) -> list[dict]:
+    return [
+        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
+    ]
 
 
 def measure_cache(run: Path, plan: dict) -> None:
@@ -256,7 +243,14 @@ def capture_cache(run: Path, plan: dict) -> None:
         raise ValueError("serving container exited; inspect its launch log before cache capture")
     docker(["cp", f"{cid}:/tmp/narwhal-cache-layout.json", str(pending)], run, "cache-capture.log")
     pending.chmod(0o600)
-    record = json.loads(pending.read_text())
+    require_live_layout(json.loads(pending.read_text()), run, plan)
+    write_private(destination, pending.read_text())
+    pending.unlink()
+    print("Live serving cache pages captured in cache-layout.json; container remains running.")
+
+
+def require_live_layout(record: dict, run: Path, plan: dict) -> None:
+    """Require a cache layout that the serving engine's hook wrote to belong to the plan."""
     expected = {
         "image": plan["image"],
         "expected_packages": plan["expected_packages"],
@@ -273,6 +267,15 @@ def capture_cache(run: Path, plan: dict) -> None:
     ranks = record["ranks"]
     if sorted(rank["rank"] for rank in ranks) != list(range(tp)):
         raise ValueError("live cache capture requires every TP rank exactly once")
-    write_private(destination, pending.read_text())
-    pending.unlink()
-    print("Live serving cache pages captured in cache-layout.json; container remains running.")
+
+
+def cache_layout_capture(run: Path, plan: dict, out: Path) -> Path:
+    """Copy into `out` the cache layout that a pod's cache capture hook wrote for the live
+    engine process, checked as capture-cache checks a container's."""
+    require_checked(run, plan)
+    source = engine_record(live_pod(read_checked(run)), pod_steps.CACHE_LAYOUT)
+    text = source.read_text()
+    require_live_layout(json.loads(text), run, plan)
+    destination = out / "cache-layout.json"
+    write_private(destination, text)
+    return destination

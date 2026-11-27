@@ -24,6 +24,9 @@ INPUTS = {
     ),
     "NARWHAL_KUBERNETES_STATE_CLAIM": "narwhal-state",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "engine-credential/api-key",
+    "NARWHAL_KUBERNETES_SERVICE_ACCOUNT": "narwhal-attestation",
+    "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "registry.example/narwhal@sha256:" + "a" * 64,
+    "NARWHAL_NODE_1_ATTESTATION_URL": "http://engine-1.engines.example.svc:8010/v1/attestation",
 }
 RDMA_TRANSFER = {
     "transport": "ucx_rdma",
@@ -33,6 +36,10 @@ RDMA_TRANSFER = {
 POD_UID = "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b"
 NODE = "gpu-node-a"
 POD_IP = "198.51.100.7"
+# The engine container's first process, as /proc/self/stat names it: its ID and start ticks.
+ENGINE_PID = 4242
+ENGINE_TICKS = 123456
+ENGINE_PROCESS = f"{ENGINE_PID}-{ENGINE_TICKS}"
 SECRET_VALUE = "engine-only-secret"
 # Kubernetes expands $(NAME) from the variables defined before it, and turns $$ into $.
 EXPANSION = re.compile(r"\$\$|\$\(([A-Za-z_][A-Za-z0-9_]*)\)")
@@ -94,8 +101,18 @@ class EnginePod:
         plan = json.loads((run / "launch.json").read_text())
         shutil.copytree(plan["model_dir"], self.path(pod.MODEL), symlinks=True)
         self.state.mkdir(parents=True)
+        self.path(pod.ENGINE).mkdir(parents=True)
+        stat = self.path(pod.PROC) / "self" / "stat"
+        stat.parent.mkdir(parents=True)
+        # Fields after the command: state, parent, and so on to the start ticks, the 20th.
+        fields = ["S", "0", *["0"] * 17, str(ENGINE_TICKS), "0"]
+        stat.write_text(f"{ENGINE_PID} (python3) {' '.join(fields)}\n")
         self.allocate(hcas)
         self.executed: list[tuple[str, list[str], str | None]] = []
+        # The startup log each engine start sent its output to, and the cache layout record
+        # the cache capture hook was told to write.
+        self.logs: list[Path] = []
+        self.cache_outputs: list[str | None] = []
         self.stderr = io.StringIO()
 
     def path(self, pod_path: str | Path) -> Path:
@@ -143,6 +160,7 @@ class EnginePod:
 
         def execv(path: str, argv: list[str]) -> None:
             self.executed.append((path, argv, os.environ.get("UCX_NET_DEVICES")))
+            self.cache_outputs.append(os.environ.get("NARWHAL_CACHE_OUTPUT"))
             raise Executed
 
         self.stderr = io.StringIO()
@@ -151,6 +169,8 @@ class EnginePod:
             patch.object(sys, "dont_write_bytecode", True),
             patch.dict(os.environ, self.environment(name), clear=True),
             patch("os.execv", side_effect=execv),
+            # The step would send this process's output to the startup log as well.
+            patch.object(pod, "tee", side_effect=self.logs.append),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(self.stderr),
         ):

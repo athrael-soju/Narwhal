@@ -12,7 +12,10 @@ Each step takes its arguments after its name:
   UCX_NET_DEVICES set to the HCA the device plugin allocated, and records its output with the
   verdict on it that `narwhal-engine check` gives.
 - `serve <engine arguments>` judges the recorded probe output again, and replaces itself with
-  the engine once both records pass for this launch plan, this pod and this HCA.
+  the engine once both records pass for this launch plan, this pod and this HCA. Before it
+  does, it opens a directory for its process in the engine volume, named by the process ID
+  and start ticks, records the backend's inspections there, and copies the engine's output to
+  the directory's startup.log. The attestation sidecar reads that directory.
 
 The records land in the pod's own directory of the state volume, where `narwhal-engine check`
 reads them.
@@ -24,6 +27,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,10 +40,20 @@ HOOKS = Path("/narwhal-hooks")
 TOOLS = Path("/narwhal-pod")
 STATE = Path("/narwhal-state")
 MODEL = Path("/model")
+# The volume the engine container shares with its attestation sidecar.
+ENGINE = Path("/narwhal-engine")
+PROC = Path("/proc")
 VERBS_DEVICES = Path("/dev/infiniband")
 VERBS_CLASS = Path("/sys/class/infiniband_verbs")
 CHECKPOINT_RECORD = "checkpoint.json"
 RUNTIME_RECORD = "runtime-check.json"
+# An engine process's directory in the engine volume holds the outputs of the backend's
+# inspections, the engine's output, and the KV cache layout the cache capture hook writes.
+INSPECTIONS_RECORD = "inspections.json"
+STARTUP_LOG = "startup.log"
+CACHE_LAYOUT = "cache-layout.json"
+# The backend's inspections, delivered with the pod steps when the backend has any.
+INSPECTIONS_MODULE = "inspections"
 # The pod specification sets both from the downward API.
 POD_UID_ENV = "NARWHAL_POD_UID"
 NODE_NAME_ENV = "NARWHAL_NODE_NAME"
@@ -254,6 +268,96 @@ def passed_records(plan: dict, plan_sha256: str) -> dict:
     return runtime
 
 
+def process_name() -> str:
+    """Return this process's name in the engine volume: its process ID and start ticks.
+
+    The pod shares one process namespace, so the sidecar sees the engine under the same ID.
+    """
+    stat = local(PROC / "self" / "stat").read_text()
+    return f"{stat.split(' ', 1)[0]}-{stat.rsplit(')', 1)[1].split()[19]}"
+
+
+def process_directory() -> Path:
+    """Open this process's directory in the engine volume, and remove earlier processes' ones.
+
+    The engine's user writes the directory, and the sidecar reads it as the same user.
+    """
+    root = local(ENGINE)
+    name = process_name()
+    for entry in root.iterdir():
+        if entry.name == name:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    directory = root / name
+    directory.mkdir(mode=0o755)
+    return directory
+
+
+def inspect(plan: dict, plan_sha256: str, device: dict, directory: Path) -> None:
+    """Run the backend's inspections in this container, and record each one's output.
+
+    The attestation capture reads the record where a container capture runs each inspection
+    in the live container through Docker.
+    """
+    if not (local(TOOLS) / f"{INSPECTIONS_MODULE}.py").exists():
+        return
+    commands = delivered_module(INSPECTIONS_MODULE).inspections(plan, plan_sha256)
+    environment = {**probe_environment(device), "NARWHAL_CAPTURE_CACHE": "0"}
+    seconds = plan["kubernetes"]["runtime_check_seconds"]
+    records = {}
+    for name, argv in sorted(commands.items()):
+        try:
+            result = subprocess.run(
+                [sys.executable, *argv],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            records[name] = {
+                "argv": argv,
+                "error": f"the inspection exceeded {seconds:g} seconds",
+                "stdout": _text(error.stdout),
+                "stderr": _text(error.stderr),
+            }
+            continue
+        records[name] = {
+            "argv": argv,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    path = directory / INSPECTIONS_RECORD
+    path.write_text(json.dumps(records, indent=2) + "\n")
+    path.chmod(0o644)
+
+
+# Copies its input to its output and to the file it names, which it creates.
+TEE = """import os, sys
+log = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+while chunk := os.read(0, 65536):
+    for target in (1, log):
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(target, view):]
+"""
+
+
+def tee(path: Path) -> None:
+    """Send this process's output, and the engine's once it replaces this process, both to
+    the container's output and to `path`."""
+    reader, writer = os.pipe()
+    subprocess.Popen([sys.executable, "-I", "-B", "-c", TEE, str(path)], stdin=reader)
+    os.close(reader)
+    for target in (1, 2):
+        os.dup2(writer, target)
+    os.close(writer)
+
+
 def serve(arguments: list[str]) -> int:
     plan, plan_sha256 = launch_plan()
     if arguments != plan["args"]:
@@ -273,7 +377,19 @@ def serve(arguments: list[str]) -> int:
         return fail(f"the recorded runtime check output fails: {error}")
     if judged != checked["verdict"]:
         return fail("the recorded verdict differs from the recorded runtime check output")
+    directory = process_directory()
+    inspect(plan, plan_sha256, device, directory)
     os.environ["UCX_NET_DEVICES"] = device["ucx_net_devices"]
+    if "cache_capture_sha256" in plan:
+        # The cache capture hook records the KV cache layout, as a container start enables it.
+        os.environ.update(
+            NARWHAL_CAPTURE_CACHE="1",
+            NARWHAL_CACHE_PLAN=str(HOOKS / "launch.json"),
+            NARWHAL_CACHE_OUTPUT=str(ENGINE / directory.name / CACHE_LAYOUT),
+        )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    tee(directory / STARTUP_LOG)
     # The engine keeps this process, so its process ID is the one the container started.
     os.execv(sys.executable, ["python3", *arguments])
 

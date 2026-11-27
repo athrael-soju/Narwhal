@@ -1,11 +1,16 @@
 """Render a Kubernetes launch plan into its engine pod, and check the pod's records.
 
 `prepare --backend kubernetes` writes `kubernetes.json`: two immutable ConfigMaps, one with the
-launch's hook files and one with the pod steps, and the engine pod's specification. The pod runs
-every step in the unmodified engine image. An init container hashes the served model, a second
+launch's hook files and one with the pod steps, the engine pod's specification, and the service
+account, Role and RoleBinding its attestation sidecar reads the pod with. The pod runs every
+engine step in the unmodified engine image. An init container hashes the served model, a second
 one runs the runtime probe and judges its output as the offline check does, and the engine
 container starts once both pass. `check` reads the records they leave on the state volume,
 judges the probe output again and writes checked.json.
+
+The attestation sidecar runs in the Narwhal image beside the engine container. The pod shares
+its process namespace, so the sidecar binds the engine process to its container, and it reads
+the launch directory that checked its pod from the state volume.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ...engines.pod_identity import SERVICE_ACCOUNT
 from .. import stages
 from . import checkpoint as checkpoint_module
 from . import pod
@@ -38,6 +44,9 @@ RDMA_RESOURCE_ENV = "NARWHAL_KUBERNETES_RDMA_RESOURCE"
 MODEL_VOLUME_ENV = "NARWHAL_KUBERNETES_MODEL_VOLUME"
 STATE_CLAIM_ENV = "NARWHAL_KUBERNETES_STATE_CLAIM"
 API_KEY_SECRET_ENV = "NARWHAL_KUBERNETES_API_KEY_SECRET"
+SERVICE_ACCOUNT_ENV = "NARWHAL_KUBERNETES_SERVICE_ACCOUNT"
+SIDECAR_IMAGE_ENV = "NARWHAL_KUBERNETES_SIDECAR_IMAGE"
+RUNTIME_CLASS_ENV = "NARWHAL_KUBERNETES_RUNTIME_CLASS"
 # Volume sources that serve a staged checkpoint to the pod.
 MODEL_VOLUME_SOURCES = ("persistentVolumeClaim", "hostPath", "nfs", "csi")
 # The pod steps, by file name in the pod-step ConfigMap; the engine's probe reader joins them.
@@ -51,11 +60,22 @@ RUNTIME_CHECK_STAGE = "pod-runtime-check"
 MANIFESTS = "kubernetes.json"
 # The pod's records, copied into the launch directory by pod UID.
 POD_RECORDS = "pods"
+# Each launch directory that checked one of the role's pods lies on the state volume at
+# engines/<role>/launches/<pod UID>, beside the pod's own directory engines/<role>/<pod UID>.
+LAUNCHES = "launches"
+# Where the attestation sidecar mounts its pod's launch directory.
+LAUNCH_MOUNT = Path("/narwhal-launch")
 DOWNWARD_ENV = (
     (POD_ADDRESS_ENV, "status.podIP"),
     (pod.POD_UID_ENV, "metadata.uid"),
     (pod.NODE_NAME_ENV, "spec.nodeName"),
 )
+# The attestation sidecar also takes its pod's name, to read the pod through the API.
+SIDECAR_ENV = (*DOWNWARD_ENV, ("NARWHAL_POD_NAME", "metadata.name"))
+SIDECAR = "attestation"
+# The sidecar's service account token lasts this long; the kubelet renews it before it expires.
+TOKEN_SECONDS = 3600
+RBAC_API = "rbac.authorization.k8s.io/v1"
 # Runs first in each pod container. It checks every delivered file against the SHA-256 the pod
 # specification pins, then runs the pod steps. Isolated mode keeps the hook directory, which
 # the engine's PYTHONPATH names, off its import path, and -B keeps the pod steps from writing
@@ -131,10 +151,26 @@ def api_key_secret(env: dict[str, str]) -> dict | None:
 
 def pod_files(plan: dict) -> dict[str, Path]:
     """Return the source of each file in the pod-step ConfigMap, by file name."""
-    source = plan_launcher(plan).probe_reader.__file__
-    if source is None:
-        raise ValueError("the engine backend's probe reader has no source file")
-    return {**POD_FILES, PROBE_READER: Path(source)}
+    engine = plan_launcher(plan)
+    modules = {PROBE_READER: engine.probe_reader}
+    if engine.pod_inspections is not None:
+        modules[f"{pod.INSPECTIONS_MODULE}.py"] = engine.pod_inspections
+    files = dict(POD_FILES)
+    for name, module in modules.items():
+        if module.__file__ is None:
+            raise ValueError(f"the engine backend's {name} has no source file")
+        files[name] = Path(module.__file__)
+    return files
+
+
+def sidecar_image(env: dict[str, str]) -> str:
+    image = env.get(SIDECAR_IMAGE_ENV, "")
+    if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
+        raise ValueError(
+            f"set {SIDECAR_IMAGE_ENV} to the Narwhal image's registry digest, "
+            "<repository>@sha256:<hex>"
+        )
+    return image
 
 
 def hca_port(record: dict) -> int:
@@ -160,6 +196,17 @@ def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
     claim = env.get(STATE_CLAIM_ENV, "")
     if not re.fullmatch(DNS_SUBDOMAIN, claim):
         raise ValueError(f"set {STATE_CLAIM_ENV} to the state PersistentVolumeClaim's name")
+    account = env.get(SERVICE_ACCOUNT_ENV, "")
+    if not re.fullmatch(DNS_SUBDOMAIN, account):
+        raise ValueError(
+            f"set {SERVICE_ACCOUNT_ENV} to the service account the attestation sidecar reads "
+            "its pod with"
+        )
+    # A node whose default container runtime exposes no accelerators runs the engine pod under
+    # the RuntimeClass of the runtime that does.
+    runtime_class = env.get(RUNTIME_CLASS_ENV, "")
+    if runtime_class and not re.fullmatch(DNS_SUBDOMAIN, runtime_class):
+        raise ValueError(f"set {RUNTIME_CLASS_ENV} to a RuntimeClass name, or leave it unset")
     secret = api_key_secret(env)
     budget = stages.seconds(
         "NARWHAL_STAGE_" + RUNTIME_CHECK_STAGE.upper().replace("-", "_") + "_TIMEOUT_SECONDS",
@@ -172,7 +219,10 @@ def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
         "hca_port": hca_port(record),
         "model_volume": model_volume(env),
         "state_claim": claim,
+        "service_account": account,
+        "sidecar_image": sidecar_image(env),
         **({"api_key_secret": secret} if secret is not None else {}),
+        **({"runtime_class": runtime_class} if runtime_class else {}),
         # Docker's ROCm launch runs the engine without a seccomp filter, as this pod does.
         "seccomp_unconfined": record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES",
         "runtime_check_seconds": budget,
@@ -254,20 +304,24 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
             **({"readOnly": True} if read_only else {}),
         }
 
+    hooks = {"name": "narwhal-hooks", "mountPath": HOOK_MOUNT, "readOnly": True}
+    model = {"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True}
     delivered = [
-        {"name": "narwhal-hooks", "mountPath": HOOK_MOUNT, "readOnly": True},
+        hooks,
         {"name": "narwhal-pod", "mountPath": str(pod.TOOLS), "readOnly": True},
-        {"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True},
+        model,
     ]
+    events = (
+        [{"name": "kv-events", "mountPath": KV_EVENTS_MOUNT}]
+        if plan["kv_events"] is not None
+        else []
+    )
+    engine_volume = {"name": "narwhal-engine", "mountPath": str(pod.ENGINE)}
     serving = [
         *delivered,
         {"name": "cache", "mountPath": "/root/.cache"},
         {"name": "shm", "mountPath": "/dev/shm"},
-        *(
-            [{"name": "kv-events", "mountPath": KV_EVENTS_MOUNT}]
-            if plan["kv_events"] is not None
-            else []
-        ),
+        *events,
     ]
     env = pod_env(run, plan)
     resources = {
@@ -288,6 +342,12 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
         "dnsPolicy": "ClusterFirstWithHostNet",
         # Service links would add variables, such as one per Service port, to the engine's own.
         "enableServiceLinks": False,
+        # The attestation sidecar binds the engine process to its container through /proc.
+        "shareProcessNamespace": True,
+        "serviceAccountName": settings["service_account"],
+        # Only the sidecar mounts the service account's token.
+        "automountServiceAccountToken": False,
+        **({"runtimeClassName": settings["runtime_class"]} if "runtime_class" in settings else {}),
         "initContainers": [
             {
                 "name": "checkpoint",
@@ -319,9 +379,10 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
                     {"name": "kv-side-channel", "containerPort": plan["side_channel_port"]},
                 ],
                 "resources": resources,
-                "volumeMounts": [*serving, state(True)],
+                "volumeMounts": [*serving, engine_volume, state(True)],
                 **security,
-            }
+            },
+            sidecar(plan, [hooks, model, *events, engine_volume, state(False)]),
         ],
         "volumes": [
             {"name": "narwhal-hooks", "configMap": {"name": hooks_map, "defaultMode": 0o444}},
@@ -334,7 +395,110 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
             {"name": "cache", "emptyDir": {}},
             {"name": "shm", "emptyDir": {"medium": "Memory"}},
             *([{"name": "kv-events", "emptyDir": {}}] if plan["kv_events"] is not None else []),
+            {"name": "narwhal-engine", "emptyDir": {}},
+            {
+                "name": "narwhal-api",
+                "projected": {
+                    "defaultMode": 0o444,
+                    "sources": [
+                        {
+                            "serviceAccountToken": {
+                                "path": "token",
+                                "expirationSeconds": TOKEN_SECONDS,
+                            }
+                        },
+                        {
+                            "configMap": {
+                                "name": "kube-root-ca.crt",
+                                "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                            }
+                        },
+                        {
+                            "downwardAPI": {
+                                "items": [
+                                    {
+                                        "path": "namespace",
+                                        "fieldRef": {"fieldPath": "metadata.namespace"},
+                                    }
+                                ]
+                            }
+                        },
+                    ],
+                },
+            },
         ],
+    }
+
+
+def sidecar(plan: dict, mounts: list[dict]) -> dict:
+    """Return the attestation sidecar container, which runs in the Narwhal image.
+
+    It mounts the launch directory that checked its pod read-only, writes its attestation in
+    the pod's directory of the state volume, and reads the engine process's directory in the
+    engine volume. It runs as root, the engine's user, with no capabilities.
+    """
+    launch = {
+        "name": "narwhal-state",
+        "mountPath": str(LAUNCH_MOUNT),
+        "subPathExpr": f"engines/{plan['role']}/{LAUNCHES}/$({pod.POD_UID_ENV})",
+        "readOnly": True,
+    }
+    account = {"name": "narwhal-api", "mountPath": str(SERVICE_ACCOUNT), "readOnly": True}
+    return {
+        "name": SIDECAR,
+        "image": plan["kubernetes"]["sidecar_image"],
+        "command": [
+            "python3",
+            "-I",
+            "-m",
+            "narwhal.deployment.attestation_contract.cli",
+            "serve",
+            "--run",
+            str(LAUNCH_MOUNT),
+            "--pod-evidence",
+            str(pod.STATE),
+        ],
+        "env": [
+            {"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
+            for name, field in SIDECAR_ENV
+        ],
+        "ports": [{"name": "attestation", "containerPort": plan["attestation_port"]}],
+        "volumeMounts": [*mounts, launch, account],
+        "securityContext": {
+            "runAsUser": 0,
+            "runAsGroup": 0,
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+        },
+    }
+
+
+def access_objects(plan: dict) -> dict:
+    """Return the service account the sidecar runs as, and the Role and RoleBinding that let
+    it get the pods of its namespace and nothing else."""
+    account = plan["kubernetes"]["service_account"]
+    role = f"{account}-pod-reader"
+    return {
+        "serviceAccount": {
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {"name": account},
+            "automountServiceAccountToken": False,
+        },
+        "role": {
+            "apiVersion": RBAC_API,
+            "kind": "Role",
+            "metadata": {"name": role},
+            "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}],
+        },
+        # A service account subject without a namespace names one in the binding's namespace.
+        "roleBinding": {
+            "apiVersion": RBAC_API,
+            "kind": "RoleBinding",
+            "metadata": {"name": role},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": role},
+            "subjects": [{"kind": "ServiceAccount", "name": account}],
+        },
     }
 
 
@@ -354,6 +518,7 @@ def write_manifests(run: Path, plan: dict, probe: list[str]) -> None:
         "plan_sha256": plan_sha256,
         "configMaps": [config_map(maps[0], hooks), config_map(maps[1], steps)],
         "podSpec": pod_spec(run, plan, probe, maps),
+        **access_objects(plan),
     }
     write_private(run / MANIFESTS, json.dumps(manifests, indent=2) + "\n")
 
