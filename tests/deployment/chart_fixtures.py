@@ -22,11 +22,14 @@ from narwhal.deployment.launch_engine.runtime import digest
 from tests.backends.contract import MODEL_CONFIG, fixtures, launch_record
 from tests.deployment.fixtures import launcher_inputs
 from tests.deployment.pod_fixtures import INPUTS, RDMA_TRANSFER, kubernetes_env
+from tools.observability.chart_dashboard import chart_dashboard
 
 NAMESPACE = "example"
 NARWHAL_IMAGE = INPUTS["NARWHAL_KUBERNETES_SIDECAR_IMAGE"]
 HAPROXY_IMAGE = "registry.example/haproxy@sha256:" + "b" * 64
 FABRIC_IMAGE = "registry.example/perftest@sha256:" + "c" * 64
+PROMETHEUS_IMAGE = "registry.example/prometheus@sha256:" + "e" * 64
+GRAFANA_IMAGE = "registry.example/grafana@sha256:" + "f" * 64
 # Each engine role after the first listens 100 ports higher, as engines on one node must.
 PORT_STEP = 100
 
@@ -79,6 +82,23 @@ def values(engines: dict, **overrides: object) -> dict:
                 "secretName": "engine-credential",
                 "key": "api-key",
             }
+        },
+        "monitoring": {
+            "enabled": True,
+            "prometheus": {
+                "image": PROMETHEUS_IMAGE,
+                "storage": {"storageClassName": "local", "size": "20Gi"},
+                "resources": {"requests": {"cpu": "500m", "memory": "2Gi"}},
+            },
+            "grafana": {
+                "image": GRAFANA_IMAGE,
+                "dashboard": chart_dashboard(),
+                "admin": {
+                    "secretName": "grafana-admin",
+                    "userKey": "user",
+                    "passwordKey": "password",
+                },
+            },
         },
         "gates": [
             {

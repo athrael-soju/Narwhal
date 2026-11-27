@@ -45,3 +45,24 @@ credentials: {}
 
 # The gate Jobs of the current deployment stage. narwhal deploy --target kubernetes sets them.
 gates: []
+
+# Prometheus and Grafana, from the configuration files `make observe` uses. Prometheus scrapes
+# both routers and finds the engines through the load balancer's /narwhal/targets.
+monitoring:
+  enabled: false
+  prometheus:
+    # The Prometheus image by registry digest. Required with monitoring.
+    image: ""
+    # {"storageClassName", "size"} for a data claim; without it, data lives as long as the pod.
+    # storage: {}
+    resources: {}
+  grafana:
+    # The Grafana image by registry digest. Required with monitoring.
+    image: ""
+    # The rendered dashboard. Pass it with
+    # --set-file monitoring.grafana.dashboard=<file from python -m tools.observability.chart_dashboard>.
+    dashboard: ""
+    # The Secret that holds the Grafana admin login: {"secretName", "userKey", "passwordKey"}.
+    admin: {}
+    # storage: {}
+    resources: {}

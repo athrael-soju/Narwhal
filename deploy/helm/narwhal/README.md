@@ -8,6 +8,7 @@ The chart runs one Narwhal fleet in one namespace:
 - the router pair, the StatefulSet `router`, each started as a standby of the other
 - HAProxy in front of the routers, configured from [`deploy/ha/haproxy.cfg`](../../ha/haproxy.cfg)
 - the gate Jobs of the deployment stage that is running
+- Prometheus and Grafana, when `monitoring.enabled` is set
 
 `narwhal deploy --target kubernetes` installs the chart and sets the `engines` and `gates` values. The cluster needs Kubernetes 1.27 or later, the GPU and RDMA device plugins the engine plans name, and a ReadWriteMany storage class for the state and lease claims. The lease volume must support `flock`, coherent reads and atomic rename across nodes.
 
@@ -38,6 +39,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | `haproxy.clusterDomain` | The cluster's DNS domain, default `cluster.local` |
 | `credentials.engineApiKey` | `{"env", "secretName", "key"}`: the Secret key the routers and gate Jobs read into the variable the fleet file's `engine.engine_api_key_env` names. Required, with the same Secret and key, when the engines read their API key from a Secret |
 | `gates` | The gate Jobs of the running stage |
+| `monitoring` | Prometheus and Grafana, under [Monitoring](#monitoring) |
 
 ## Volumes
 
@@ -75,6 +77,33 @@ Each `gates` entry becomes one Job that runs once, within `deadlineSeconds`, wit
 | `resources` | Resource limits, such as GPUs for a discovery Job |
 
 A fabric Job runs on the host network with one HCA from the RDMA device plugin and `IPC_LOCK`, in `images.fabric`. Every other Job runs in `images.narwhal`.
+
+## Monitoring
+
+With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the files `make observe` stages: [`prometheus.yml`](../../../tools/observability/prometheus.yml), [`prometheus-alerts.yml`](../../../tools/observability/prometheus-alerts.yml) and the Grafana provisioning under [`tools/observability/grafana`](../../../tools/observability/grafana). The chart links them from `files/observability/`, so there is one copy, and a chart test fails when the mounted files differ from what `make observe` stages for the same routers.
+
+Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana lets anonymous users view dashboards, as under `make observe`, and runs without the image renderer.
+
+The dashboard needs rendering first, because its queries come from the installed engine backends:
+
+```bash
+python -m tools.observability.chart_dashboard config/helm/dashboard.json
+helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
+  --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
+```
+
+`--console-url` adds the fleet control link and markers that `make observe` adds.
+
+| Value | Meaning |
+| --- | --- |
+| `monitoring.enabled` | Run Prometheus and Grafana, default `false` |
+| `monitoring.prometheus.image`, `monitoring.grafana.image` | The images by registry digest. Required with monitoring |
+| `monitoring.grafana.dashboard` | The rendered dashboard. Required with monitoring |
+| `monitoring.grafana.admin` | `{"secretName", "userKey", "passwordKey"}`: the Secret that holds the Grafana admin login. Required with monitoring |
+| `monitoring.prometheus.storage`, `monitoring.grafana.storage` | `{"storageClassName", "size"}` for a ReadWriteOnce data claim. Without one, the data lasts only as long as the pod |
+| `monitoring.prometheus.resources`, `monitoring.grafana.resources` | Container `requests` and `limits` |
+
+Prometheus keeps 30 days of samples, as under `make observe`. A changed configuration or dashboard restarts the pod that reads it.
 
 ## Checking the chart
 
