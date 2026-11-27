@@ -392,6 +392,14 @@ class DeployTests(unittest.TestCase):
         self.assertEqual((code, result["status"]), (1, "failed_gate"))
         self.assertIn("node-1: no linger", [error["message"] for error in result["errors"]])
 
+    def test_plan_names_a_router_host_without_docker_compose(self):
+        self.fleet.compose_problem = "no compose"
+        code, result = self.deploy("plan")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"))
+        messages = [error["message"] for error in result["errors"]]
+        # Only the primary router's host runs the monitoring stack.
+        self.assertEqual(messages, ["node-1: no compose"])
+
     def test_down_stops_what_the_run_started(self):
         self.deploy("run")
         code, result = self.deploy("down")

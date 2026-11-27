@@ -14,6 +14,7 @@ from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
+from ..observability.stack.start.stack import compose_problem
 from . import (
     cache_groups,
     discovery,
@@ -427,7 +428,11 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
         ssh = SSH(env, _access_logs())
         for host in discovery.derive_hosts(env):
             runner = remote.SSHRunner(ssh, host, "access")
-            if found := supervision.check_systemd_host(runner):
+            found = supervision.check_systemd_host(runner)
+            # The primary router's host runs the monitoring stack with Docker Compose.
+            if "router" in host.roles and (problem := compose_problem(runner)):
+                found.append(problem)
+            if found:
                 problems[host.id] = found
     directory = args.run.resolve()
     deployment = TARGETS[args.target].Deployment(directory, env, dry=True)

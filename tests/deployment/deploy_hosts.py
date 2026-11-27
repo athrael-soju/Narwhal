@@ -170,6 +170,8 @@ class Fleet:
         self.lease = ProbeLease(root / "shared")
         self.monitoring_up = False
         self.monitoring_command = ""
+        # What `docker compose version` reports missing on every host, or None.
+        self.compose_problem: str | None = None
         self.overhead_problem: str | None = None
         # The router that controls the fleet, by host ID.
         self.active_router = "node-1"
@@ -414,6 +416,7 @@ class Fleet:
                 (deploy, "load_hosts", lambda path, env: deploy.discovery.derive_hosts(env)),
                 (deploy.Deployment, "supervisor", lambda _, *args: self.supervisor(*args)),
                 (deploy.supervision, "check_systemd_host", lambda runner: []),
+                (deploy_cli, "compose_problem", lambda runner: self.compose_problem),
                 (deploy.AttestationDocument, "load", _document),
                 (deploy, "launch_digest", lambda contract, launch: json.dumps(launch)),
             )

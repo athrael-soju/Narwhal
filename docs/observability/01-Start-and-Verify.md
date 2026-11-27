@@ -8,7 +8,7 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 
 - a running Narwhal router
 - Linux
-- Docker Engine with the Compose plugin
+- Docker Engine with the Compose v2 plugin, so that `docker compose version` answers. The start command checks it first
 - Python 3.11 or newer
 - `curl`
 - network reachability from the router host to every engine metrics endpoint

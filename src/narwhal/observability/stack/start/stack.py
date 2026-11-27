@@ -10,7 +10,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from narwhal.observability.stack.artifacts import MOUNTS, STATE
 
@@ -46,6 +46,23 @@ class Stack(Protocol):
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _local(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=30)
+
+
+def compose_problem(runner: Callable[[Sequence[str]], Any] = _local) -> str | None:
+    """Why this host cannot run the stack's Docker Compose project, or None when it can."""
+    result = runner(["docker", "compose", "version"])
+    if result.returncode == 0:
+        return None
+    lines = [line for line in (result.stderr or result.stdout or "").splitlines() if line.strip()]
+    answer = lines[0].strip() if lines else f"exit {result.returncode}"
+    return (
+        f"docker compose version failed ({answer}); the monitoring stack needs Docker Compose "
+        "v2: install the Docker Compose plugin, the docker-compose-plugin package"
+    )
 
 
 class ComposeStack:

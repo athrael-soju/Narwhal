@@ -879,6 +879,7 @@ class ReadinessTests(unittest.TestCase):
         with (
             mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
             mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(observe_cli, "compose_problem", return_value=None),
             mock.patch.object(
                 observe_cli, "start", side_effect=observe_services.StartupError("occupied")
             ),
@@ -887,6 +888,27 @@ class ReadinessTests(unittest.TestCase):
             code = observe_cli.main(["--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn("observability startup failed: occupied", stderr.getvalue())
+
+    def test_a_host_without_compose_v2_is_named_before_the_stack_starts(self) -> None:
+        def missing(command: list[str]) -> CompletedProcess[str]:
+            return CompletedProcess(command, 1, "", "docker: unknown command: docker compose\n")
+
+        problem = observe_stack.compose_problem(missing)
+        self.assertIn("docker: unknown command: docker compose", problem or "")
+        self.assertIn("docker-compose-plugin", problem or "")
+        self.assertIsNone(
+            observe_stack.compose_problem(lambda command: CompletedProcess(command, 0, "", ""))
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(observe_cli, "compose_problem", return_value="no compose"),
+            mock.patch.object(observe_cli, "start") as started,
+            redirect_stderr(stderr),
+        ):
+            code = observe_cli.main(["--router-url", "http://router:8000"])
+        self.assertEqual(code, 1)
+        started.assert_not_called()
+        self.assertIn("observability startup failed: no compose", stderr.getvalue())
 
     def test_compose_commands_have_explicit_deadlines(self) -> None:
         calls: list[tuple[list[str], object]] = []
@@ -913,6 +935,7 @@ class ReadinessTests(unittest.TestCase):
                     os.environ, {**env, "NARWHAL_TARGETS_URL": "http://lb:8000"}, clear=True
                 ),
                 mock.patch.object(observe_cli, "ComposeStack"),
+                mock.patch.object(observe_cli, "compose_problem", return_value=None),
                 mock.patch.object(observe_cli, "start") as start,
             ):
                 self.assertEqual(observe_cli.main(argv), 0)
@@ -937,6 +960,7 @@ class ReadinessTests(unittest.TestCase):
         with (
             mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
             mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(observe_cli, "compose_problem", return_value=None),
             mock.patch.object(observe_cli, "start", side_effect=timeout),
             redirect_stderr(stderr),
         ):

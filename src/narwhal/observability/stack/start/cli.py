@@ -31,7 +31,7 @@ from narwhal.observability.stack.make_targets import (
 from .listeners import check_listeners
 from .readiness import DEFAULT_READY_TIMEOUT_S, HttpGet, http_get, wait_collection, wait_ready
 from .services import Container, StartupError, configured_services
-from .stack import ComposeStack, Stack
+from .stack import ComposeStack, Stack, compose_problem
 
 
 def start(
@@ -125,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             fleet=args.fleet_name,
             alertmanager=args.alertmanager_url,
         )
+        if problem := compose_problem():
+            raise StartupError(problem)
         start(os.environ, ComposeStack(env=os.environ), contract, timeout_s=args.ready_timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
