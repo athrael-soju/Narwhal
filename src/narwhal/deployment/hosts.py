@@ -192,24 +192,43 @@ def bounded(script: str, limit: float, token: str) -> str:
 
     `timeout` runs in the foreground, so the script keeps the channel's standard input and the
     default SIGINT and SIGQUIT, which a background job of a shell would lose. Before it starts
-    the script, `timeout`'s child records its parent, `timeout`, under `token` for the group
-    kill and for `stop_script`. `timeout`'s arguments name the token, which lets `stop_script`
-    tell this `timeout` from a process that reused its ID.
+    the script, `timeout`'s child checks that its parent is this `timeout`, whose arguments name
+    `token`, and leads its process group, and records that process ID under `token` for the
+    group kill and for `stop_script`. When any of that fails, the script does not run, so no
+    command runs that the limit could not stop.
     """
     marker = _marker(token)
-    start = f"(umask 077 && printf '%s\\n' \"$PPID\" > {marker}) 2> /dev/null\n" + (
+    directory = f'"$HOME"/{COMMANDS_DIRECTORY}'
+    refuse = f'{{ echo "{HOST_CAUSE}$1" >&2; exit 125; }}'
+    start = (
+        f"fail() {refuse}\n"
+        'case "$PPID" in "" | *[!0-9]* | 0 | 1) fail "timeout has no process ID" ;; esac\n'
+        f'tr "\\000" " " < /proc/"$PPID"/cmdline 2> /dev/null | grep -q -- narwhal-{token} ||\n'
+        '  fail "the parent of the command is not its timeout"\n'
+        'group=$(sed "s/^.*) //" /proc/$$/stat | cut -d" " -f3)\n'
+        'test "$group" = "$PPID" || fail "timeout did not give the command a process group"\n'
+        f"(umask 077 && printf '%s\\n' \"$PPID\" > {marker}) 2> /dev/null ||\n"
+        f'  fail "cannot record the command in $HOME/{COMMANDS_DIRECTORY}; make it writable"\n'
         f'exec sh -c "$1" narwhal-{token}'
     )
     return (
         "command -v timeout > /dev/null 2>&1 || "
         f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
-        f'(umask 077 && mkdir -p "$HOME"/{COMMANDS_DIRECTORY}) 2> /dev/null\n'
+        f"(umask 077 && mkdir -p {directory}) 2> /dev/null && test -d {directory} && "
+        f'test -w {directory} || {{ echo "{HOST_CAUSE}cannot create $HOME/{COMMANDS_DIRECTORY} '
+        'to record the command; make it writable" >&2; exit 125; }\n'
         f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(start)} narwhal-{token} "
         f"{shlex.quote(script)}\n"
         "status=$?\n"
         'case "$status" in\n'
-        f"  124 | 137) pid=$(cat {marker} 2> /dev/null) &&\n"
-        '    kill -s KILL -- "-$pid" 2> /dev/null ;;\n'
+        "  124 | 137)\n"
+        f"    pid=$(cat {marker} 2> /dev/null)\n"
+        "    # Only a process ID that the command's own timeout recorded names its group.\n"
+        '    case "$pid" in\n'
+        '      "" | *[!0-9]* | 0 | 1) ;;\n'
+        '      *) kill -s KILL -- "-$pid" 2> /dev/null ;;\n'
+        "    esac\n"
+        "    ;;\n"
         "esac\n"
         f"rm -f {marker}\n"
         'exit "$status"'

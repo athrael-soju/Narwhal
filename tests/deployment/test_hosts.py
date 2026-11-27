@@ -82,6 +82,23 @@ except subprocess.TimeoutExpired:
 """
 
 
+# A `timeout` whose child's parent is another process, as when `timeout` died before its child
+# started. That process leads a process group with a sentinel in it, which must survive.
+STRANGER_TIMEOUT = """#!/usr/bin/env python3
+import json, os, subprocess, sys
+middle = (
+    "import json, os, subprocess\\n"
+    "quiet = {name: subprocess.DEVNULL for name in ('stdin', 'stdout', 'stderr')}\\n"
+    "sentinel = subprocess.Popen(['sleep', '30'], **quiet)\\n"
+    "open(%r, 'w').write(str(sentinel.pid))\\n"
+    "subprocess.call(json.loads(os.environ['NARWHAL_FAKE_COMMAND']))\\n"
+)
+env = {**os.environ, "NARWHAL_FAKE_COMMAND": json.dumps(sys.argv[4:])}
+subprocess.call([sys.executable, "-c", middle], env=env, start_new_session=True)
+sys.exit(124)
+"""
+
+
 class FakeProcess:
     """Stands in for one OpenSSH process, recording how the client started it."""
 
@@ -472,6 +489,53 @@ class SshTests(unittest.TestCase):
         # Stopping the hosts one after another would take twice KILL_AFTER_S.
         self.assertGreater(stopped, 2.5)
         self.assertLess(stopped, 5)
+
+    def test_a_command_that_cannot_be_recorded_does_not_run(self):
+        # Without its record, neither the group kill nor `stop_script` could reach it.
+        ran = self.root / "ran"
+        home = self.root / "host-home"
+        for blocked in (home / ".cache", home / ".cache/narwhal-commands"):
+            with self.subTest(blocked=str(blocked.relative_to(home))), self.sshd_like():
+                blocked.mkdir(parents=True, exist_ok=True)
+                blocked.chmod(0o500)
+                try:
+                    ssh = SSH(self.env, self.root / "logs")
+                    with self.assertRaisesRegex(
+                        RemoteError,
+                        r"cannot create .*/\.cache/narwhal-commands to record the command",
+                    ):
+                        ssh.run(self.hosts[1], "access", "management access", f"touch {ran}")
+                    self.assertFalse(ran.exists())
+                finally:
+                    blocked.chmod(0o700)
+                    ran.unlink(missing_ok=True)
+
+    def test_a_command_whose_parent_is_not_its_timeout_does_not_run_or_kill_a_group(self):
+        tools = self.root / "stranger-timeout"
+        tools.mkdir()
+        sentinel = self.root / "sentinel"
+        (tools / "timeout").write_text(STRANGER_TIMEOUT % str(sentinel))
+        (tools / "timeout").chmod(0o700)
+        ran = self.root / "ran"
+        with (
+            patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"}),
+            self.sshd_like(),
+        ):
+            ssh = SSH(self.env, self.root / "logs")
+            with contextlib.suppress(RemoteError, RemoteTimeout):
+                ssh.run(self.hosts[1], "access", "management access", f"touch {ran}")
+        pid = int(sentinel.read_text())
+
+        def stop_sentinel():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+        self.addCleanup(stop_sentinel)
+        time.sleep(0.2)
+        os.kill(pid, 0)  # The sentinel in the other process group still runs.
+        self.assertFalse(ran.exists(), "the command ran under a process that is not its timeout")
+        log = ssh.log(self.hosts[1]).read_text()
+        self.assertIn("the parent of the command is not its timeout", log)
 
     def test_a_supervisor_input_reaches_standard_input_and_no_log_or_argument_list(self):
         secret = "engine-key-that-must-stay-private"
