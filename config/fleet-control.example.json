@@ -3,7 +3,7 @@
   "port": 8020,
   "token_env": "NARWHAL_CONTROL_TOKEN",
   "runs_dir": "runs/fleet-control",
-  "fleet": "config/fleet.production.json",
+  "fleet": "/path/to/fleet.json",
   "router": {
     "url": "http://127.0.0.1:8000",
     "timeout_s": 600,

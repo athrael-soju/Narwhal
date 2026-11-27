@@ -182,7 +182,7 @@ Each area of the Python package lives in one package or module:
 | Prometheus metrics and request journals                                             | `observability/`                                      |
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
 | Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
-| Engine launch plans and checks, stage runs, process supervision, and attestation capture | `deployment/`                                         |
+| Engine launch plans and checks, stage runs, process supervision, attestation capture, and `narwhal deploy` | `deployment/` |
 | Engine backend registry and backend implementations                                 | `backends/`, `backends/<name>/`                       |
 | Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
@@ -252,13 +252,19 @@ Import each name from the subpackage module that defines it.
 | `deployment/deploy_graph.py`                                                 | The fleet deployment stage graph                                         |
 | `deployment/run_record.py`                                                   | Run record contract and the run directory lock                           |
 | `deployment/runner.py`                                                       | Stage runner: skips, reruns, attempts and cancellation                   |
+| `deployment/hosts.py`                                                        | Host inventory, SSH with pinned host keys, and remote command time limits |
+| `deployment/discovery.py`                                                    | Host discovery and the generated deployment configuration                |
+| `deployment/role_env.py`                                                     | Role environments and the helper snapshots of each backend               |
+| `deployment/install.py`                                                      | Deployment packages and their installation on SSH hosts                  |
+| `deployment/fabric_budget.py`                                                | Fabric workload budget and directed link records, run on engine hosts    |
+| `deployment/cli.py`                                                          | `narwhal deploy`                                                         |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
-| `deployment/launch_engine/backend.py`                                        | Launcher, cache capture and model dimension interfaces for backends      |
+| `deployment/launch_engine/backend.py`                                        | Launcher, cache capture, transfer measurement and model dimension interfaces for backends |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |

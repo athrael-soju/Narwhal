@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.launch_engine.backend import EngineLauncher, TransferMeasurement
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from . import attestation, dev, discovery
 from . import check as runtime_check
@@ -14,8 +14,9 @@ from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
 BOOTSTRAP_HOST_ENV = "NARWHAL_SGLANG_BOOTSTRAP_HOST"
 
 
-class SglangLauncher(EngineLauncher):
+class SglangLauncher(EngineLauncher, TransferMeasurement):
     runtime_script = LAUNCHER
+    transfer_tool = Path(__file__).with_name("transfer_measure.py")
     side_channel = "bootstrap"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES

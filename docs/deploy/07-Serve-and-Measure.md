@@ -41,7 +41,7 @@ Replace `<served-model>` with the fleet model.
 
 ## Starting the monitoring stack on the router
 
-With the router running, start the stack in the router shell:
+With the router running, start the stack in the router shell, from the [tools checkout](02-Install.md#installing-the-repository-tools-on-the-router-host):
 
 ```bash
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
@@ -54,12 +54,11 @@ For a router pair, set both router origins and the load balancer origin as in [M
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 
-1. On the workstation, open a terminal in the checkout with `.env` loaded.
+1. On the workstation, open a terminal in the management checkout with `.env` and `config/deployment.env` loaded.
 2. Open the tunnel:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py tunnel --role router \
-      --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
+    narwhal deploy tunnel --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
     ```
 
 3. Keep the tunnel terminal open.
@@ -85,10 +84,10 @@ For a router pair, set both router origins and the load balancer origin as in [M
 
     - The router role assignment.
     - The workstation hostname.
-    - The source revision.
+    - The wheel's SHA-256.
     - The tunnel mappings.
 
-The tunnel listens on workstation loopback ports and forwards them to `127.0.0.1` on the router. It verifies the router against the recorded SSH host key, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
+The tunnel listens on workstation loopback ports and forwards them to `127.0.0.1` on the router. It verifies the router against its key in `NARWHAL_SSH_KNOWN_HOSTS`, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
 
 ### Troubleshooting the tunnel
 
@@ -130,7 +129,7 @@ Close the trial:
 1. Retain with the private deployment record:
 
     - The service locations.
-    - The approved source revision.
+    - The SHA-256 of the installed wheel.
     - The fleet configuration.
     - The profiles.
     - The router journal.

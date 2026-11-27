@@ -122,6 +122,17 @@ class CacheCapture(ABC):
     def capture_cache(self, run: Path, plan: dict) -> None: ...
 
 
+class TransferMeasurement(ABC):
+    """Optional launcher capability: KV handoff payloads measured between two live engines.
+
+    Engine hosts run `transfer_tool` as a copy checked by its SHA-256, with the host's own
+    Python and only the standard library. It writes the transfer record that the fabric
+    budget's `calculate --transfer-record` sizes a budget from.
+    """
+
+    transfer_tool: ClassVar[Path]
+
+
 class CacheMeasurement(ABC):
     """Optional capability: the KV cache layout from a temporary sizing container."""
 
@@ -165,6 +176,10 @@ class ModelFormats(ABC):
 
 def cache_capture(engine: EngineLauncher) -> CacheCapture | None:
     return engine if isinstance(engine, CacheCapture) else None
+
+
+def transfer_measurement(engine: EngineLauncher) -> TransferMeasurement | None:
+    return engine if isinstance(engine, TransferMeasurement) else None
 
 
 def run_import_check(script: str, label: str, *, traceback_fails: bool = False) -> None:

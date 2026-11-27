@@ -9,8 +9,8 @@ The fleet control service runs on the router host. Write its configuration and b
 ## Prerequisites
 
 - A deployed fleet with its router serving on the router host, as in [Starting and locally verifying the router](../../deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router).
-- The router shell: the router host's Narwhal checkout with `.venv` active, opened with `deploy_hosts.py shell`.
-- The monitoring stack, started with `make observe` on the router host.
+- The router shell: opened with `narwhal deploy shell --run <package> --role router`, then changed to the router host's [tools checkout](../../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host).
+- The monitoring stack, started with `make observe` from the tools checkout.
 - The baseline fleet configuration file that the router is running.
 - A [hook](09-Configuration-Reference.md#hooks) command for each action you plan to run.
 - For load jobs, AIPerf on the router host, at the version in [Ordered benchmark points](../../measure/05-Benchmark-Runner.md).
@@ -23,7 +23,7 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature.
+Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature. The service runs from the tools checkout, so give the deployment's files by absolute path. It refuses a relative `fleet`, and the router environment's `NARWHAL_FLEET` is relative, so set `fleet` to the absolute path of the deployment's `runs/deployment/fleet.json`.
 
 The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 
@@ -39,7 +39,7 @@ Keep the token in your secret store. The console and every API request need it.
 
 ## Start the service
 
-In the router shell, from the checkout root, run:
+In the router shell, from the tools checkout, run:
 
 ```bash
 .venv/bin/python -m tools.fleet_control.cli --config config/fleet-control.local.json

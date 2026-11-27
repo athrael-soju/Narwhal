@@ -10,9 +10,9 @@ Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer
 
 | Host | Responsibilities | Required software and inputs |
 | --- | --- | --- |
-| Management workstation | Generate private configuration, inspect hosts, package and install the approved revision, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH, your site's access tools, and `sshpass` for password authentication. The private `.env`, approved revision, engine image, model paths, fabric interface, run directory, ports, and credentials. |
-| Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv`, Git, Make, curl, Docker Engine, and Compose. The verified bundle and revision, engine and attestation URLs, API credential, model settings, and SLOs. |
-| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
+| Management workstation | Generate private configuration, inspect hosts, package and install the Narwhal wheel, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH 8.5 or later, `uv`, and your site's access tools. The private `.env`, the release wheel, its dependency lock and their SHA-256 values, the known-hosts file, engine image, model paths and tree digest, fabric interface, run directory, ports, and credentials. |
+| Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv` and access to a Python package index, coreutils, Git, Make, curl, Docker Engine, and Compose. The verified package, engine and attestation URLs, API credential, model settings, and SLOs. |
+| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv` and access to a Python package index, coreutils, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
 
 ### Concurrency
 
@@ -26,7 +26,7 @@ Per-engine and per-host rules:
 
 ### Deployment record
 
-Create a private deployment record before the first command. For every stage, retain the host or stable host alias, source revision, starting state, executed commands, exit status, and generated artifacts.
+Create a private deployment record before the first command. For every stage, retain the host or stable host alias, the wheel's SHA-256, starting state, executed commands, exit status, and generated artifacts.
 
 On failure, record the state before changing it, retain the failed evidence, and remove only files and processes from that attempt. Replace private addresses, paths, and credentials with stable aliases before exporting evidence.
 
@@ -42,11 +42,11 @@ Record each gate's result before the next gate.
 
     Freeze inputs and discover the deployment.
 
--   [Install the approved revision](deploy/02-Install.md)
+-   [Install Narwhal on the hosts](deploy/02-Install.md)
 
     ---
 
-    Package and install the approved revision.
+    Package and install the Narwhal wheel.
 
 -   [Validate and start engines](deploy/03-Validate-Engines.md)
 
@@ -94,7 +94,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | --- | --- | --- | --- |
 | `access` | Once for each host in the inventory |  | [Running discovery and access checks](deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `discover` | Once per run, on the management workstation | `access` | [Running discovery and access checks](deploy/01-Discover.md#running-discovery-and-access-checks) |
-| `package` | Once per run, on the management workstation | `discover` | [Building an immutable deployment package](deploy/02-Install.md#building-an-immutable-deployment-package) |
+| `package` | Once per run, on the management workstation | `discover` | [Building the deployment package](deploy/02-Install.md#building-the-deployment-package) |
 | `install` | Once for each host in the inventory | `package` | [Installing engine 1 and the remaining hosts](deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
 | `engine-inspect` | Once for each engine role, on its engine host | `install` | [Inspecting every engine host](deploy/03-Validate-Engines.md#inspecting-every-engine-host) |
 | `engine-prepare` | Once for each engine role, on its engine host | `engine-inspect` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
@@ -102,7 +102,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | `engine-start` | Once for each engine role, on its engine host | `engine-check` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
 | `engine-probe` | Once for each engine role, on its engine host | `engine-start` | [Proving the live HTTP process](deploy/03-Validate-Engines.md#proving-the-live-http-process) |
 | `cache-capture` | Once for each engine role, on its engine host, on TensorRT-LLM or vLLM | `engine-probe` | [Capturing the live cache layout](deploy/03-Validate-Engines.md#capturing-the-live-cache-layout) |
-| `transfer-measure` | Once for each engine role, on its engine host, on backends whose KV handoffs are measured | `engine-probe` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
+| `transfer-measure` | Once for each engine role, on its engine host, on SGLang | `engine-probe` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `cache-groups` | Once per run, on the management workstation | `discover`, `cache-capture`, `transfer-measure` | [Deriving cache-equivalence groups](deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) |
 | `fabric-budget` | Once for each cache-equivalence group | `cache-groups` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `fabric-edge` | Once for each directed edge between engine hosts | `fabric-budget` | [Binding each sample to a directed route](deploy/04-Qualify-Fabric.md#binding-each-sample-to-a-directed-route) |
@@ -122,10 +122,10 @@ A change reruns the stages its row lists and no others. A change that touches se
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
-| SSH credentials or expected host keys | The password variable names and the SHA-256 of the expected host-key file | `access` |
+| SSH credentials, jump host or expected host keys | The password variable names, `NARWHAL_SSH_JUMP` and the SHA-256 of `NARWHAL_SSH_KNOWN_HOSTS` | `access` |
 | SSH destination of a host | Every host's SSH destination | `access`, `package` and every stage after it |
 | Hardware, model, image, checkpoint, launch policy, route or transport | The discovery fields of `.env`, the live image ID and the checkpoint tree digest | `discover` and every stage after it |
-| Approved revision | `NARWHAL_DEPLOYMENT_REVISION` and the SHA-256 of the Narwhal package hosts install | `package` and every stage after it |
+| Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT` | `package` and every stage after it |
 | SLO targets | `slo.ttft_s` and `slo.tpot_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
@@ -135,7 +135,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | Router settings | The bind address, port, lease path, standby options and load balancer | `router-start`, `monitoring`, `trial` |
 | Monitoring origins | The router and load balancer origins and the listen addresses | `monitoring` |
 | Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
-| Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on backends whose KV handoffs are measured, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight` |
+| Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight` |
 | Engine cache geometry | The SHA-256 of `cache-layout.json` | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a host of the engine's group |
 | Measured KV handoff size of an engine | The SHA-256 of the engine's `transfer.json` handoff measurement | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a host of the engine's group |
 | Fabric route of a directed edge | The link fingerprint: roles, addresses, interfaces, both live routes, transport, tool version and test parameters, checked live on every run | `fabric-edge` for that edge; `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
@@ -152,8 +152,8 @@ Record these inputs and artifacts in the private deployment record:
 
 | Stage | Inputs | Evidence to retain |
 | --- | --- | --- |
-| Discovery and access | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
-| Package and install | Approved commit, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
+| Discovery and access | `.env`, installed image and model, the checkpoint tree digest, GPU inspection utilities, launch policy, SSH route and key, the known-hosts file | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
+| Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
 | Fabric | Peer addresses, transport, representative process, live cache layout, workload budget | `budget.json`, `cache-layout.json`, and the `<edge>.*` files of every directed edge |
 | Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json` and `startup.log` in each `ENGINE_RUN` directory, `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |

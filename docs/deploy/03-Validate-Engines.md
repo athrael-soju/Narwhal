@@ -230,7 +230,7 @@ The check uses the tokenizer at `runtime.tokenizer`, or the model directory when
 
 For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
-When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
+When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, build a new deployment package in [Install Narwhal on the hosts](02-Install.md).
 
 Start the engines:
 
@@ -258,9 +258,9 @@ Find the cause of the failure before creating another plan.
 When vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, recover in this order:
 
 1. Retain the failed attempt's evidence.
-2. Rerun discovery from the corrected approved revision into fresh outputs.
-3. Prepare a new deployment run.
-4. Install engine 1 into the new checkout.
+2. Rerun discovery with the corrected inputs into fresh outputs.
+3. Build a new deployment package.
+4. Install engine 1 into its new deployment directory.
 5. Validate engine 1 before updating the rest.
 6. Compare the old and new image IDs, model-config hashes, accelerator and TP allocations, runtime settings, and transport.
 

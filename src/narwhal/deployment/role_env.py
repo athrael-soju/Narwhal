@@ -1,17 +1,16 @@
-"""Write a private router or engine environment from the workstation's loaded values."""
+"""Select each router and engine role's private environment from the workstation's values."""
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import re
 import shlex
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
-from narwhal.deployment.launch_engine.backend import cache_capture, launcher
-from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
+from .launch_engine.backend import EngineLauncher, cache_capture, launcher, transfer_measurement
+from .launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 
 ENGINE_FIELDS = (
     "ENGINE_IMAGE",
@@ -28,22 +27,62 @@ ENGINE_FIELDS = (
 )
 # A deployment that serves a model file names it and pins its SHA-256.
 MODEL_FILE_FIELDS = ("MODEL_PATH", "MODEL_SHA256")
-REPLACED_PORT = re.compile(
-    r"NARWHAL_(NODE_[1-9][0-9]*_)?(?:NIXL_SIDE_CHANNEL_PORT|SGLANG_BOOTSTRAP_PORT)"
-)
 ROUTER_OPTIONAL = (
     "ROUTER_URL",
     "TARGETS_URL",
     "GRAFANA_BIND_ADDRESS",
     "PROMETHEUS_LISTEN_ADDRESS",
 )
+# Engine hosts run helper snapshots from this directory of the deployment directory.
+HELPER_DIRECTORY = "runs/deployment-tools"
+
+
+@dataclass(frozen=True)
+class Helper:
+    """A standard-library script that engine hosts run as a copy checked by its SHA-256."""
+
+    name: str
+    source: Path
+    path_env: str
+    sha256_env: str
+
+
+def helpers(engine: EngineLauncher) -> list[Helper]:
+    """Return the helper snapshots that the engine hosts of a fleet on `engine` receive."""
+    selected = [
+        Helper(
+            "fabric_budget.py",
+            Path(__file__).with_name("fabric_budget.py"),
+            "NARWHAL_FABRIC_BUDGET_TOOL",
+            "NARWHAL_FABRIC_BUDGET_SHA256",
+        )
+    ]
+    if (capture := cache_capture(engine)) is not None:
+        selected.append(
+            Helper(
+                "cache_capture_hook.py",
+                capture.cache_hook,
+                "NARWHAL_CACHE_CAPTURE_HOOK",
+                "NARWHAL_CACHE_CAPTURE_HOOK_SHA256",
+            )
+        )
+    if (measurement := transfer_measurement(engine)) is not None:
+        selected.append(
+            Helper(
+                "transfer_measure.py",
+                measurement.transfer_tool,
+                "NARWHAL_TRANSFER_MEASURE_TOOL",
+                "NARWHAL_TRANSFER_MEASURE_SHA256",
+            )
+        )
+    return selected
 
 
 def select_values(
     role: str, node: int | None, fleet: dict, env: Mapping[str, str]
 ) -> dict[str, str]:
     """Select role inputs, resolving node overrides before shared engine defaults."""
-    values = {}
+    values: dict[str, str] = {}
 
     def include(name: str, source: str | None = None, *, required: bool = True) -> None:
         source = source or name
@@ -54,10 +93,6 @@ def select_values(
             values[name] = value
         elif required:
             raise ValueError(f"{source} is unset or empty")
-
-    include("NARWHAL_DEPLOYMENT_REVISION")
-    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", values["NARWHAL_DEPLOYMENT_REVISION"]):
-        raise ValueError("NARWHAL_DEPLOYMENT_REVISION must contain the full commit SHA")
 
     key_name = fleet.get("engine", {}).get("engine_api_key_env")
     if key_name:
@@ -76,15 +111,9 @@ def select_values(
                     include(reference[1])
     elif role == "engine":
         if node is None or node < 1:
-            raise ValueError("engine export requires a positive --node number")
-        for name in sorted(env):
-            replaced = REPLACED_PORT.fullmatch(name)
-            if replaced:
-                new = f"NARWHAL_{replaced[1] or ''}KV_SIDE_CHANNEL_PORT"
-                raise ValueError(f"rename {name} to {new}")
-        if cache_capture(launcher(fleet.get("engine", {}).get("backend"))) is not None:
-            values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
-        values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
+            raise ValueError("engine export requires a positive node number")
+        for helper in helpers(launcher(fleet.get("engine", {}).get("backend"))):
+            values[helper.path_env] = f"{HELPER_DIRECTORY}/{helper.name}"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
         for field in ENGINE_FIELDS:
             name = f"NARWHAL_{field}"
@@ -114,29 +143,3 @@ def write_environment(path: Path, values: Mapping[str, str]) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         stream.write(content)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Export loaded values locally; report field names and status only."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--role", choices=("router", "engine"), required=True)
-    parser.add_argument("--node", type=int)
-    parser.add_argument("--fleet", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args(argv)
-    try:
-        fleet = json.loads(args.fleet.read_text())
-        values = select_values(args.role, args.node, fleet, os.environ)
-        write_environment(args.out, values)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        if isinstance(error, FileExistsError):
-            parser.exit(1, "Output already exists; select a fresh output path.\n")
-        if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
-            parser.exit(1, f"{error}\n")
-        parser.exit(1, "Check the supplied fleet structure, input access and output directory.\n")
-    print(f"Prepared {args.role} environment ({len(values)} variables, mode 0600).")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
