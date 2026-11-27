@@ -50,7 +50,7 @@ CONTRACTS: dict[str, Contract] = {
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
-    DEPLOYMENT_RUN: Contract("narwhal.deployment-run"),
+    DEPLOYMENT_RUN: Contract("narwhal.deployment-run", 2),
     DEPLOYMENT_STATUS: Contract("narwhal.deployment-status"),
 }
 

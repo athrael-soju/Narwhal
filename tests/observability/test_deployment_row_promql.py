@@ -145,6 +145,30 @@ class DeploymentRowTests(unittest.TestCase):
         tests = ["    promql_expr_test:", *expr_test(deployment_panel("Stages not passed"), 300, 0)]
         self.run_promtool(inputs, tests)
 
+    def test_an_interrupted_and_a_cancelled_stage_count_as_not_passed(self):
+        base = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
+        inputs = []
+        for stage, state in (("fabric-edge", "interrupted"), ("profile", "cancelled")):
+            inputs += series(
+                "narwhal_deployment_stage_state",
+                f'{base},stage="{stage}",stage_instance="",state="{state}"',
+                "1x40",
+            )
+        inputs += series("narwhal_deployment_updated_timestamp_seconds", base, "50x40")
+        tests = [
+            "    promql_expr_test:",
+            *samples_test(deployment_panel("Stages not passed"), 300, {'{fleet="fleet-a"}': 2}),
+            *samples_test(
+                deployment_panel("Stage table"),
+                300,
+                {
+                    '{fleet="fleet-a",stage="fabric-edge",state="interrupted"}': 1,
+                    '{fleet="fleet-a",stage="profile",state="cancelled"}': 1,
+                },
+            ),
+        ]
+        self.run_promtool(inputs, tests)
+
     def test_a_router_left_with_an_older_status_does_not_show(self):
         # The last run's upload reached router a only; router b still exports the run before,
         # which stopped at another stage.

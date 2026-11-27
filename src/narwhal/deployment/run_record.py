@@ -27,13 +27,17 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 TIMEOUT = "timeout"
 INVALIDATED = "invalidated"
-STATUSES = (RUNNING, PASSED, FAILED, CANCELLED, TIMEOUT, INVALIDATED)
+# The runner that held the attempt ended during it; the next runner may resume the attempt.
+INTERRUPTED = "interrupted"
+STATUSES = (RUNNING, PASSED, FAILED, CANCELLED, TIMEOUT, INVALIDATED, INTERRUPTED)
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _RUN_ID = re.compile(r"[0-9a-f]{32}")
 _MODE = re.compile(r"0[0-7]{3}")
 INSTANCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# A Kubernetes Job name: a DNS-1123 label, since the Job controller copies it into a label.
+JOB = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 
 
 class RunLocked(RuntimeError):
@@ -158,6 +162,10 @@ _STAGE = (
     "ended_at",
     "failure",
     "invalidation",
+    "jobs",
+    "stale_jobs",
+    "reasons",
+    "observed_at",
 )
 _OWNER = ("pid", "boot_id", "start_ticks", "hostname", "user", "argv")
 
@@ -277,7 +285,26 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
     check(running == (stage["ended_at"] is None), f"{where}: only a running stage has no end")
     check(
         (stage["status"] in {RUNNING, PASSED, INVALIDATED}) == (failure is None),
-        f"{where}: a failed, cancelled or timed-out stage records its failure",
+        f"{where}: a failed, cancelled, timed-out or interrupted stage records its failure",
+    )
+    for field in ("jobs", "stale_jobs"):
+        jobs = stage[field]
+        check(
+            _strings(jobs)
+            and len(set(jobs)) == len(jobs)
+            and all(bool(JOB.fullmatch(job)) for job in jobs),
+            f"{where}.{field} must list distinct Job names",
+        )
+    check(
+        _strings(stage["reasons"]) and all(_text(reason) for reason in stage["reasons"]),
+        f"{where}.reasons must list why the attempt ran",
+    )
+    observed = stage["observed_at"]
+    check(
+        isinstance(observed, dict)
+        and set(observed) <= set(stage["products"])
+        and all(_number(value) for value in observed.values()),
+        f"{where}.observed_at must map products to the time they were last observed",
     )
     invalidated = stage["status"] == INVALIDATED
     check(

@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import DEPLOYMENT_STATUS, versioned
-from narwhal.deployment import deployment_status
+from narwhal.deployment import deployment_status, run_record
 from narwhal.observability import restarts
-from narwhal.observability.metrics.deployment import read_status, render_deployment
+from narwhal.observability.metrics.deployment import STATES, read_status, render_deployment
 from narwhal.serving.app import create_app
 from narwhal.types import Role
 
@@ -88,6 +88,22 @@ class StatusTests(unittest.TestCase):
             'state="failed"} 1',
             render_deployment(status),
         )
+
+    def test_an_interrupted_or_cancelled_stage_is_not_passed_and_exports_its_state(self):
+        before = self.build(self.record())
+        for state in ("interrupted", "cancelled"):
+            with self.subTest(state=state):
+                status = self.build(self.record(preflight=state), previous=before)
+                self.assertEqual(status["last_passed_at"], 60)
+                self.assertIsNone(status["qualified_at"])
+                self.assertIn(
+                    'narwhal_deployment_stage_state{stage="preflight",stage_instance="node-1",'
+                    f'state="{state}"}} 1',
+                    render_deployment(status),
+                )
+
+    def test_every_run_record_status_is_an_exported_state(self):
+        self.assertEqual(set(STATES), set(run_record.STATUSES))
 
     def test_an_unreadable_document_exports_nothing(self):
         path = self.root / "status.json"
