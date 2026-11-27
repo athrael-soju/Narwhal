@@ -25,7 +25,7 @@ A runner holds an exclusive `flock` on `run.lock` for the whole run and names it
 
 When a runner ends without clearing `lock`, for example after `SIGKILL` or a power loss, the next runner adds the stale lock with its owner to `stale_locks`, and `deploy run` and `dev up` print it, as in `narwhal: deploy run: this run found a stale lock of pid 4242 of operator on workstation (narwhal deploy run --run runs/first-deploy), ...`. With `--format json`, `deploy run` also puts the owner in the result's `data.stale_lock`. It stops any helper processes the interrupted stage left, using the process identities the stage recorded, and records that stage `interrupted` before it continues. If helpers survive, it refuses to run until they are stopped. A recorded owner that still runs on this host without holding `run.lock` is refused too.
 
-An interrupted stage runs a new attempt, unless its action can take over the work the attempt recorded, such as the Jobs in `jobs`. Then the runner resumes the same attempt in its own directory, as long as the stage's `definition` and the `input_digests` the attempt started from still match.
+An interrupted stage runs a new attempt, unless its action can take over the work the attempt recorded, such as the Jobs in `jobs`. Then the runner resumes the same attempt in its own directory, as long as the stage's `definition` and the `input_digests` the attempt started from still match, and no output of a stage before it changed. A changed output marks the interrupted stage `invalidated`, as it does a passed one.
 
 ## Signals
 
@@ -60,12 +60,13 @@ Each stage record:
 | `input_digests` | Digest of each fact whose change reruns this stage, keyed like `slo` or `engine_identity[engine-2]`. A passed attempt records them as it passes. Any other attempt keeps the digests it started from, without the facts the stage produces itself |
 | `outputs` | Each regular file a passed attempt wrote: `path` relative to the run directory, `sha256`, `size` and `mode` |
 | `live_outputs` | Paths, relative to the run directory, of the files and directories in the attempt directory that the stage's processes keep writing, such as their logs. They have no digest, and their changes never rerun the stage |
-| `products` | Each value the stage produces for later stages, such as an engine's binding digest or a process identity. A running or failed attempt keeps the values of the last passed one |
+| `products` | Each value the stage produces for later stages, such as an engine's binding digest or a process identity. A running, failed, cancelled, timed-out or interrupted attempt keeps the values of the last passed one |
 | `processes` | Identities of the long-lived processes the stage started. A running attempt keeps those of the attempt before it until it returns its own |
 | `command` | `null` for a stage that runs in the runner. For a command stage, `argv`, `cwd`, `exit_code` and `log`, with paths relative to the run directory |
 | `started_at`, `ended_at` | Unix seconds. A running stage has no `ended_at` |
 | `invalidation` | Why an `invalidated` stage must rerun, such as `output of engine-check[engine-1] changed`, or `null` |
 | `jobs` | Names of the Kubernetes Jobs the attempt creates, each written to the record before its Job is created. A resumed attempt keeps them. Empty when the attempt creates no Job |
+| `stale_jobs` | Jobs of earlier attempts of this stage that no attempt has deleted yet. A new attempt takes over the earlier attempt's `jobs` and `stale_jobs`, and drops each name only once its Job is deleted, so a crash at any point leaves every Job named |
 | `reasons` | Why the attempt ran, such as `no attempt yet`, `slo changed` or `attempt 1 interrupted`. A resumed attempt keeps the reasons it first ran for |
 | `observed_at` | Unix seconds at which each live product, such as a process identity or a route, was last found to hold. The runner checks a live product again on every run unless the target gives that fact a maximum age and this observation is younger |
 | `failure` | `null` for a running, passed or invalidated stage. Otherwise `message`, `recovery`, the gate section that covers the stage, and `context`, such as the stage timeout and the cleanup of its helper processes |

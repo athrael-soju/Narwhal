@@ -163,6 +163,7 @@ _STAGE = (
     "failure",
     "invalidation",
     "jobs",
+    "stale_jobs",
     "reasons",
     "observed_at",
 )
@@ -286,13 +287,14 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
         (stage["status"] in {RUNNING, PASSED, INVALIDATED}) == (failure is None),
         f"{where}: a failed, cancelled, timed-out or interrupted stage records its failure",
     )
-    jobs = stage["jobs"]
-    check(
-        _strings(jobs)
-        and len(set(jobs)) == len(jobs)
-        and all(bool(JOB.fullmatch(job)) for job in jobs),
-        f"{where}.jobs must list distinct Job names",
-    )
+    for field in ("jobs", "stale_jobs"):
+        jobs = stage[field]
+        check(
+            _strings(jobs)
+            and len(set(jobs)) == len(jobs)
+            and all(bool(JOB.fullmatch(job)) for job in jobs),
+            f"{where}.{field} must list distinct Job names",
+        )
     check(
         _strings(stage["reasons"]) and all(_text(reason) for reason in stage["reasons"]),
         f"{where}.reasons must list why the attempt ran",

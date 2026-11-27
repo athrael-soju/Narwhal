@@ -371,9 +371,10 @@ class StageContext:
 
     `previous` is this instance's record from before the attempt, or None. A stage that starts
     long-lived processes reads the `processes` of an interrupted attempt there, so it can stop
-    or adopt them instead of starting them twice. A new attempt after an interrupted one finds
-    that attempt's Jobs in `previous["jobs"]` and removes them first. A resumed attempt has the
-    attempt number of `previous` and keeps its Jobs.
+    or adopt them instead of starting them twice. A new attempt finds the Jobs of earlier
+    attempts in `stale_jobs`, deletes them and confirms each with `jobs_deleted`; until then
+    every later attempt names them too. A resumed attempt has the attempt number of `previous`
+    and keeps its Jobs.
     """
 
     def __init__(
@@ -412,6 +413,15 @@ class StageContext:
         again and adopts each Job that already exists.
         """
         self._run.record_jobs(key(self.stage, self.instance), names)
+
+    @property
+    def stale_jobs(self) -> tuple[str, ...]:
+        """Jobs of earlier attempts that no attempt has confirmed deleted yet."""
+        return tuple(self._run.record["stages"][key(self.stage, self.instance)]["stale_jobs"])
+
+    def jobs_deleted(self, names: Sequence[str]) -> None:
+        """Drop Jobs from `stale_jobs` once they are deleted, or found already gone."""
+        self._run.jobs_deleted(key(self.stage, self.instance), names)
 
     def product(self, fact: str, instance: str = "") -> Any:
         """The current value of a fact a stage before this one produced."""
@@ -997,19 +1007,21 @@ class _Run:
         return 0 <= self.runner.clock() - observed < limit
 
     def _invalidate_later(self, spec: Stage, instance: str) -> None:
-        """Mark every passed stage after a changed output invalidated, in the record."""
+        """Mark every passed or interrupted stage after a changed output invalidated, in the
+        record. An interrupted attempt's work was built from the old output, so it never
+        resumes; its Jobs pass to the next attempt's `stale_jobs`."""
         reason = f"output of {key(spec.name, instance)} changed"
         later = set(self.graph.downstream(spec.name))
         for entry in self.record["stages"].values():
             if (
                 entry["stage"] in later
-                and entry["status"] == PASSED
+                and entry["status"] in (PASSED, INTERRUPTED)
                 and (
                     self.graph.stages[entry["stage"]].scope != spec.scope
                     or entry["instance"] == instance
                 )
             ):
-                entry.update(status=INVALIDATED, invalidation=reason)
+                entry.update(status=INVALIDATED, invalidation=reason, failure=None)
         with _held():
             run_record.write(self.directory, self.record)
 
@@ -1127,8 +1139,17 @@ class _Run:
             "ended_at": None,
             "failure": None,
             "invalidation": None,
-            # A resumed attempt keeps its Jobs and the reasons it first ran for.
+            # A resumed attempt keeps its Jobs and the reasons it first ran for. A new attempt
+            # names the Jobs of earlier ones until its action confirms them deleted, so no
+            # crash point loses a Job name.
             "jobs": list(previous["jobs"]) if resume and previous else [],
+            "stale_jobs": (
+                []
+                if previous is None
+                else list(previous["stale_jobs"])
+                if resume
+                else list(dict.fromkeys([*previous["stale_jobs"], *previous["jobs"]]))
+            ),
             "reasons": list(previous["reasons"]) if resume and previous else list(reasons),
             "observed_at": {},
         }
@@ -1212,6 +1233,19 @@ class _Run:
             return
         with _held():
             entry["jobs"].extend(added)
+            run_record.write(self.directory, self.record)
+
+    def jobs_deleted(self, name: str, jobs: Sequence[str]) -> None:
+        """Drop deleted Jobs from a running attempt's `stale_jobs`, and write the record."""
+        entry = self.record["stages"][name]
+        if entry["status"] != RUNNING:
+            raise ValueError(f"{name} is not running, so it deletes no Job")
+        if unknown := sorted(set(jobs) - set(entry["stale_jobs"])):
+            raise ValueError(f"{name}: {', '.join(unknown)} are not stale Jobs of this stage")
+        if not jobs:
+            return
+        with _held():
+            entry["stale_jobs"] = [job for job in entry["stale_jobs"] if job not in set(jobs)]
             run_record.write(self.directory, self.record)
 
     def _execute(self, action: Action, context: StageContext, entry: dict) -> Outcome | None:

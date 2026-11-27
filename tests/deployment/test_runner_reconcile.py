@@ -87,6 +87,9 @@ class Rig:
         self.now = 1000.0
         # The engine whose gate ends the process after creating its Job.
         self.exit_in: str | None = None
+        # Whether that gate ends the process before it deletes the earlier attempts' Jobs.
+        self.exit_early = False
+        self.job_name = lambda context: f"gate-{context.instance}-a{context.attempt}"
         # The engine whose gate waits for a cancel or for `release`.
         self.hold: str | None = None
         self.held = threading.Event()
@@ -102,11 +105,13 @@ class Rig:
         return Outcome()
 
     def gate(self, context: StageContext) -> Outcome:
-        name = f"gate-{context.instance}-a{context.attempt}"
-        if not context.resumed:
-            # A new attempt removes the Jobs of the interrupted one before it starts its own.
-            for stale in (context.previous or {}).get("jobs", []):
-                self.cluster.delete(stale)
+        name = self.job_name(context)
+        if context.instance == self.exit_in and self.exit_early:
+            os._exit(3)
+        # The Jobs of earlier attempts go before this attempt starts its own.
+        for stale in context.stale_jobs:
+            self.cluster.delete(stale)
+            context.jobs_deleted([stale])
         context.record_jobs([name])
         (self.created if self.cluster.create(name) else self.adopted).append(name)
         if context.instance == self.exit_in:
@@ -161,8 +166,10 @@ class Rig:
     def record(self) -> dict:
         return run_record.read(self.directory)
 
-    def exit_during(self, instance: str) -> None:
-        """Run in another process that ends during `instance`'s gate, after creating its Job."""
+    def exit_during(self, instance: str, *, early: bool = False) -> None:
+        """Run in another process that ends during `instance`'s gate, after creating its Job,
+        or with `early` before it deletes the earlier attempts' Jobs. It uses this rig's
+        setting."""
         process = subprocess.run(
             [
                 sys.executable,
@@ -171,6 +178,8 @@ class Rig:
                 "exit",
                 str(self.directory.parent),
                 instance,
+                "early" if early else "late",
+                json.dumps(self.inputs["setting"].digest),
             ],
             cwd=ROOT,
             capture_output=True,
@@ -287,6 +296,45 @@ class InterruptedAttemptTests(Fixture):
         self.assertNotIn("gate-engine-1-a1", self.rig.cluster.jobs())
         self.assertEqual(self.rig.record()["stages"]["gate[engine-1]"]["attempt"], 2)
 
+    def test_a_second_crash_before_the_cleanup_keeps_the_first_attempts_job_named(self):
+        self.rig.exit_during("engine-1")
+        # An edit keeps attempt 1 from resuming; attempt 2 ends before it deletes that Job.
+        self.rig.inputs["setting"] = Input.value(2, "test")
+        self.rig.exit_during("engine-1", early=True)
+        entry = self.rig.record()["stages"]["gate[engine-1]"]
+        self.assertEqual((entry["attempt"], entry["jobs"]), (2, []))
+        self.assertEqual(entry["stale_jobs"], ["gate-engine-1-a1"])
+        self.rig.run()
+        self.assertEqual(self.rig.cluster.jobs(), {})
+        entry = self.rig.record()["stages"]["gate[engine-1]"]
+        self.assertEqual((entry["attempt"], entry["stale_jobs"]), (3, []))
+
+    def test_an_upstream_output_change_keeps_an_interrupted_attempt_from_resuming(self):
+        self.rig.exit_during("engine-1")
+        output = self.rig.record()["stages"]["first"]["outputs"][0]["path"]
+        (self.rig.directory / output).write_text('{"changed": true}')
+        result = self.rig.run()
+        self.assertEqual(reasons(result, "gate[engine-1]"), ("output of first changed",))
+        self.assertEqual(self.rig.adopted, [])
+        self.assertNotIn("gate-engine-1-a1", self.rig.cluster.jobs())
+        self.assertEqual(self.rig.record()["stages"]["gate[engine-1]"]["attempt"], 2)
+
+    def test_a_changed_stage_definition_keeps_an_interrupted_attempt_from_resuming(self):
+        self.rig.exit_during("engine-1")
+        record = self.rig.record()
+        record["stages"]["gate[engine-1]"]["definition"] = "sha256:" + "0" * 64
+        run_record.write(self.rig.directory, record)
+        result = self.rig.run()
+        self.assertEqual(reasons(result, "gate[engine-1]"), ("attempt 1 interrupted",))
+        self.assertNotIn("gate-engine-1-a1", self.rig.cluster.jobs())
+
+    def test_a_resumed_attempt_keeps_the_jobs_it_recorded_before(self):
+        self.rig.exit_during("engine-1")
+        self.rig.job_name = lambda context: f"next-{context.instance}"
+        self.rig.run()
+        entry = self.rig.record()["stages"]["gate[engine-1]"]
+        self.assertEqual(entry["jobs"], ["gate-engine-1-a1", "next-engine-1"])
+
 
 class JobRecordTests(Fixture):
     def test_a_job_is_recorded_before_it_is_created(self):
@@ -316,6 +364,14 @@ class JobRecordTests(Fixture):
         self.assertEqual(stages["gate[engine-1]"]["jobs"], ["job-a", "job-b"])
         self.assertEqual(stages["gate[engine-2]"]["jobs"], ["job-a", "job-b"])
 
+    def test_only_a_stale_job_can_be_confirmed_deleted(self):
+        def gate(context):
+            context.jobs_deleted(["gate-engine-1-a1"])
+            return Outcome(products={"link": {}})
+
+        with self.assertRaisesRegex(StageFailed, "gate-engine-1-a1 are not stale Jobs"):
+            self.rig.runner(gate=gate).run(self.rig.inputs)
+
     def test_the_record_refuses_malformed_jobs_reasons_and_observations(self):
         self.rig.run()
         path = self.rig.directory / "run.json"
@@ -323,6 +379,7 @@ class JobRecordTests(Fixture):
         for field, value in (
             ("jobs", ["Not-A-Label"]),
             ("jobs", ["job-a", "job-a"]),
+            ("stale_jobs", ["Not-A-Label"]),
             ("reasons", [""]),
             ("observed_at", {"unknown": 1.0}),
             ("observed_at", {"link": "now"}),
@@ -512,14 +569,16 @@ class ReasonTests(Fixture):
         )
 
 
-def _exit(root: Path, instance: str) -> None:
+def _exit(root: Path, instance: str, when: str, setting: str) -> None:
     rig = Rig(root)
     rig.exit_in = instance
+    rig.exit_early = when == "early"
+    rig.inputs["setting"] = Input(json.loads(setting), "test")
     rig.run()
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["exit"]:
-        _exit(Path(sys.argv[2]), sys.argv[3])
+        _exit(Path(sys.argv[2]), *sys.argv[3:6])
     else:
         unittest.main()
