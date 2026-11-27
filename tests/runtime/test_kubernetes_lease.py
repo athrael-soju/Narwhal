@@ -949,6 +949,74 @@ class ColdStartTests(FleetCase):
         await self.restart_both("absent")
 
 
+class AbsentLeaseFile(FileLease):
+    """A lease file both routers miss, as a cached negative lookup on NFS shows it: every read
+    finds no file, and every claim writes epoch 1."""
+
+    def read(self):
+        return None
+
+    def claim(self) -> bool:
+        self.epoch, self._owned, self._valid_until = 1, True, float("inf")
+        return True
+
+    def renew(self) -> bool:
+        return self._owned
+
+    def release(self) -> None:
+        self._owned = False
+
+
+class FileLeaseColdStartTests(FleetCase):
+    async def test_two_standbys_that_both_miss_the_lease_file_never_both_serve(self):
+        quiet(self)
+        routers = []
+        for n in (0, 1):
+            config = dataclasses.replace(
+                self.cfg, state_path=self.root / f"router-{n}" / "handoff.json"
+            )
+            old = create_app(config).state.router
+            self.addAsyncCleanup(old.engines.aclose)
+            document = state.snapshot(old)
+            # Older than the standby's maximum handoff age.
+            document["at"] -= 3600
+            state.write(config.state_path, document)
+            router = create_app(config).state.router
+            self.addAsyncCleanup(router.engines.aclose)
+            router.standby = True
+            router.lease = AbsentLeaseFile(self.root / "lease.json", f"router-{n}", 5)
+            routers.append(router)
+        refused = httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("refused", request=request))
+        )
+        loops = [
+            asyncio.create_task(
+                standby_loop(
+                    router,
+                    f"http://router-{1 - n}",
+                    router.lease,
+                    probe_interval_s=0.01,
+                    takeover_after=2,
+                    transport=refused,
+                )
+            )
+            for n, router in enumerate(routers)
+        ]
+        try:
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                serving = [router for router in routers if not router.standby]
+                self.assertLessEqual(len(serving), 1)
+            self.assertEqual(
+                [router.failover_blocked for router in routers], ["no fresh handoff"] * 2
+            )
+        finally:
+            for task in loops:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
 class RouterAppTests(FleetCase):
     """The router app on a Kubernetes Lease: its first start, its option and its shutdown."""
 

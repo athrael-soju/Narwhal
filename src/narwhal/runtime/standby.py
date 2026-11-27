@@ -111,11 +111,14 @@ def _cold(lease: RouterLease, max_age_s: float) -> bool:
     """Whether the pair starts cold: the lease is absent, or it expired longer ago than a
     handoff stays fresh, so no router of the pair can hold state worth taking over.
 
-    This is the rule a first start applies to a lease file. A standby applies it to any lease
-    while its own handoff is stale, so a pair that stopped together, both as standbys, elects a
-    primary. A Kubernetes Lease's expiry is this router's own estimate, from when it first saw
-    the Lease unchanged, so a holder still renewing never reads as cold.
+    A standby applies this while its own handoff is stale, so a pair that stopped together,
+    both as standbys, elects a primary. Only a lease whose `cold_start` is true takes it, a
+    Kubernetes Lease, whose claims are conditional updates: its expiry is this router's own
+    estimate, from when it first saw the Lease unchanged, so a holder still renewing never
+    reads as cold. A lease file never does; its first start applies task 10's rule.
     """
+    if not getattr(lease, "cold_start", False):
+        return False
     record = lease.read()
     return record is None or time.time() - record.expires_at > max_age_s
 
@@ -273,6 +276,10 @@ async def _take_control(
     standby and releases the lease."""
     try:
         report = handoff_state.HandoffReport(applied=False, why="cold start")
+        if doc is None and not getattr(lease, "cold_start", False):
+            # Only a conditional claim may serve without the previous epoch's handoff.
+            router.failover_blocked = "no handoff after lease claim"
+            return
         if doc is not None:
             previous_epoch = int(doc.get("epoch", 0))
             if previous_epoch != lease.epoch - 1:

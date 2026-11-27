@@ -95,6 +95,11 @@ class RouterLease(Protocol):
 class FileLease:
     """Coordinate one active router through a shared POSIX lock and JSON file."""
 
+    # A standby never starts the pair cold on a lease file: over NFS two routers can both miss
+    # a file another just wrote and both claim epoch 1. A first start applies the cold-start
+    # rule and the witness instead.
+    cold_start = False
+
     def __init__(
         self,
         path: Path,
