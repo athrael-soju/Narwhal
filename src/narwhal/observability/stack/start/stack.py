@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
-from tools.observability.artifacts import MOUNTS
+from narwhal.observability.stack.artifacts import MOUNTS, STATE
 
 from .services import (
     COMMAND_TIMEOUT_S,
@@ -72,7 +72,7 @@ class ComposeStack:
             "docker",
             "compose",
             "--project-directory",
-            str(BASE),
+            str(STATE.resolve()),
             "-f",
             str(COMPOSE_FILE),
         ]

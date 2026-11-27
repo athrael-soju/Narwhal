@@ -1,1 +1,1 @@
-../../../../../tools/observability/prometheus-alerts.yml
+../../../../../src/narwhal/observability/stack/prometheus-alerts.yml

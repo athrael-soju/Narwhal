@@ -16,13 +16,12 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from tools.measurement.benchmark_evidence import client_row
-
 from .app import API
 from .config import ControlConfig
 from .hooks import tail, terminate
 from .jobs import Job
 from .records import owner_only
+from .rows import client_row
 from .workloads import (
     ARRIVALS,
     BURSTY_SMOOTHNESS,

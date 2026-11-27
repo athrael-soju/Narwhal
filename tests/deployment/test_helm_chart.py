@@ -25,11 +25,11 @@ from narwhal.deployment import direct_engine_set
 from narwhal.deployment.direct_start import DirectEngine
 from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.kubernetes import MANIFESTS
+from narwhal.observability.stack.artifacts import DEFAULT_CONSOLE_URL, stage_artifacts
+from narwhal.observability.stack.chart_dashboard import chart_dashboard
+from narwhal.observability.stack.make_targets import load_contract
 from tests.deployment import chart_fixtures
 from tests.deployment.pod_fixtures import NODE, POD_IP, POD_UID, SECRET_VALUE, expand
-from tools.observability.artifacts import DEFAULT_CONSOLE_URL, stage_artifacts
-from tools.observability.chart_dashboard import chart_dashboard
-from tools.observability.make_targets import load_contract
 
 ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "deploy" / "helm" / "narwhal"

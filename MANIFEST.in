@@ -6,7 +6,6 @@ include constraints-dev.txt
 include mkdocs.yml
 include config/engine-attestation.example.json config/engine-launch.example.json
 include config/fleet.example.json config/hosts.example.json config/fleet-control.example.json
-include tools/fleet_control/console.html
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
 recursive-include docs/assets *.html *.js
@@ -16,4 +15,4 @@ recursive-include tools *.py *.json *.yml *.md
 recursive-include tests *.py
 include tests/data/fleet.json
 recursive-include tests/characterization/golden *.json
-recursive-include src/narwhal py.typed *.json icon.png
+recursive-include src/narwhal py.typed *.json *.yml *.html icon.png

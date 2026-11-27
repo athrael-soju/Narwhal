@@ -11,6 +11,7 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from narwhal.observability.stack import artifacts
 from tests.observability.test_engine_state_promql import (
     RUN_TIMEOUT_S,
     SHIPPED,
@@ -18,7 +19,6 @@ from tests.observability.test_engine_state_promql import (
     UNAVAILABLE,
     promtool,
 )
-from tools.observability import artifacts
 
 STEP = 5
 LENGTH = 1200

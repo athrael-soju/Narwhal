@@ -41,11 +41,11 @@ Replace `<served-model>` with the fleet model.
 
 ## Starting the monitoring stack on the router
 
-With the router running, start the stack in the router shell, from the [tools checkout](02-Install.md#installing-the-repository-tools-on-the-router-host):
+With the router running, start the stack in the router shell:
 
 ```bash
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
-make observe
+python -m narwhal.observability.stack.start.cli
 ```
 
 The command waits until Prometheus scrapes the router, then prints one line for each service: `<service> ready at <URL> (<container ID>, <image>)`. Retain those lines.

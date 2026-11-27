@@ -375,7 +375,6 @@ class InputTests(unittest.TestCase):
         self.assertEqual(self.changed(NARWHAL_RDMA_GID_INDEX="3"), {"fabric_test"})
         self.assertEqual(self.changed(NARWHAL_ROUTER_URL="http://127.0.0.1:9000"), {"router"})
         self.assertEqual(self.changed(NARWHAL_NODE_2_SSH="deploy@h3"), {"destinations"})
-        self.assertEqual(self.changed(NARWHAL_TOOLS_COMMIT="e" * 40), {"revision"})
         self.assertEqual(self.changed(NARWHAL_MODEL_DIR="/models/other"), {"discovery"})
         self.assertEqual(self.changed(NARWHAL_STAGE_TIMEOUT_SECONDS="60"), set())
 

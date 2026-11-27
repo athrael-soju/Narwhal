@@ -15,7 +15,7 @@ python -m pip download --no-deps --only-binary :all: --dest dist 'narwhal-infere
 sha256sum dist/narwhal_inference-<version>-py3-none-any.whl
 ```
 
-`package` refuses a wheel whose version is not `<major>.<minor>.<patch>`, because the router host's tools checkout is the matching release tag. Keep the wheel's SHA-256, and the commit that the tag names, in the private record.
+`package` refuses a wheel whose version is not `<major>.<minor>.<patch>`. Keep the wheel's SHA-256 in the private record.
 
 Compile the hash-pinned lock of the wheel's dependencies, as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes, and keep its SHA-256 with the wheel's.
 
@@ -25,9 +25,8 @@ In the management checkout:
 2. Set `NARWHAL_WHEEL` to the path of the wheel, such as `dist/narwhal_inference-<version>-py3-none-any.whl`.
 3. Set `NARWHAL_WHEEL_SHA256` to the wheel's SHA-256 from the private record.
 4. Set `NARWHAL_REQUIREMENTS` to the dependency lock and `NARWHAL_REQUIREMENTS_SHA256` to its SHA-256.
-5. Set `NARWHAL_TOOLS_COMMIT` to the full commit of the tag `v<version>`.
-6. Set management credentials in the workstation environment.
-7. Build the package into a new `--out` directory:
+5. Set management credentials in the workstation environment.
+6. Build the package into a new `--out` directory:
 
     ```bash
     narwhal deploy package --out runs/deployment-env/first-deploy
@@ -56,7 +55,7 @@ The package holds these files at mode 0600:
 
 The manifest records:
 
-- the wheel's file name and SHA-256, the lock's SHA-256, and `NARWHAL_TOOLS_COMMIT`
+- the wheel's file name and SHA-256, and the lock's SHA-256
 - the role-to-host mapping
 - SHA-256 hashes of the SSH destinations
 - a unique deployment directory under `~/Narwhal-deploy/`
@@ -134,32 +133,6 @@ Each shell opens with:
 - the role environment loaded
 - `.venv` active
 
-## Installing the repository tools on the router host
-
-The wheel holds the router, the engine launcher and the checks. The monitoring stack that `make observe` starts and the [fleet control service](../operate/06-Controlling-the-Fleet.md) live in the repository's `tools/` directory, which the wheel leaves out. Run them from a clone of the repository at the release of the installed wheel, with the deployment's virtual environment.
-
-In the router shell:
-
-1. Clone the repository at the wheel's release tag into a new directory beside the deployment directory, replacing `<version>` with the wheel's version:
-
-    ```bash
-    git clone --depth 1 --branch v<version> https://github.com/athrael-soju/Narwhal.git ../tools-<version>
-    ```
-
-2. Check that the clone is at the commit that the package recorded. The router environment holds it as `NARWHAL_TOOLS_COMMIT`:
-
-    ```bash
-    test "$(git -C ../tools-<version> rev-parse HEAD)" = "$NARWHAL_TOOLS_COMMIT"
-    ```
-
-    If the check fails, remove the clone and stop. The tag differs from the commit in the private record.
-
-3. Link the deployment's virtual environment into the clone, so its commands run on the installed wheel:
-
-    ```bash
-    ln -s "$VIRTUAL_ENV" ../tools-<version>/.venv
-    ```
-
-Later pages call this clone the tools checkout. Run `make observe` and the fleet control service from it, in the router shell.
+The wheel also holds the monitoring stack and the [fleet control service](../operate/06-Controlling-the-Fleet.md), so the router shell runs them from `.venv` with no repository checkout.
 
 [Validate and start engines](03-Validate-Engines.md)

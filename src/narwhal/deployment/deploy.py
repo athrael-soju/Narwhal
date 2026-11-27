@@ -78,7 +78,6 @@ REVISION = (
     "NARWHAL_WHEEL_SHA256",
     "NARWHAL_REQUIREMENTS",
     "NARWHAL_REQUIREMENTS_SHA256",
-    "NARWHAL_TOOLS_COMMIT",
 )
 ROUTER_INPUTS = ("NARWHAL_ROUTER_URL",)
 MONITORING = (
@@ -226,8 +225,6 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
             check(env)
         except ValueError as error:
             problems.append(str(error))
-    if not re.fullmatch(r"[0-9a-f]{40}", env.get("NARWHAL_TOOLS_COMMIT", "")):
-        problems.append("set NARWHAL_TOOLS_COMMIT to a full 40-hex commit SHA")
     for host in hosts:
         for role in host.roles:
             if role == "router":
@@ -272,7 +269,7 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
         "access": Input.value(access, "NARWHAL_SSH_KNOWN_HOSTS and the password variables"),
         "destinations": Input.value(destinations, "the SSH destination variables"),
         "discovery": Input.value(discovered, source),
-        "revision": Input.value(_values(env, REVISION), "the wheel, lock and tools commit"),
+        "revision": Input.value(_values(env, REVISION), "the wheel and lock"),
         "slo": Input.value(_values(env, SLO), source),
         "deadline_margin": Input.value(_values(env, (MARGIN,)), source),
         "profiling": Input.value(_values(env, PROFILE), source),

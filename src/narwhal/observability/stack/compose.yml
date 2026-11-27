@@ -1,4 +1,5 @@
-# Run Prometheus and Grafana on a router node with `make observe`.
+# Run Prometheus and Grafana on a router node with `make observe`. The project directory is
+# runs/observability under the working directory, which holds the staged mounts.
 # Host networking lets Prometheus reach the configured engine addresses.
 services:
   prometheus:
@@ -10,7 +11,7 @@ services:
       narwhal.prometheus-config-digest: "${NARWHAL_PROMETHEUS_CONFIG_DIGEST:-}"
     volumes:
       # Startup stages readable configs and targets before Compose launches services.
-      - ../../runs/observability/mounts/prometheus:/etc/prometheus:ro
+      - ./mounts/prometheus:/etc/prometheus:ro
       - prom-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -32,8 +33,8 @@ services:
       GF_RENDERING_CALLBACK_URL: "${NARWHAL_GRAFANA_URL:-http://127.0.0.1:3000}/"
       GF_RENDERING_RENDERER_TOKEN: "${NARWHAL_RENDERER_TOKEN:?make observe supplies the renderer token}"
     volumes:
-      - ../../runs/observability/mounts/grafana-provisioning:/etc/grafana/provisioning:ro
-      - ../../runs/observability/mounts/grafana-dashboards:/var/lib/grafana/dashboards:ro
+      - ./mounts/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./mounts/grafana-dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
 
   # Renders panels and dashboards to PNG for Grafana on its listener host.

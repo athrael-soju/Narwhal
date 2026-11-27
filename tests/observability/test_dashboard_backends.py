@@ -10,8 +10,8 @@ from unittest import mock
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names
-from tools.observability import artifacts, make_targets
-from tools.observability.start.readiness import _expressions
+from narwhal.observability.stack import artifacts, make_targets
+from narwhal.observability.stack.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
 RENDERED_SHA256 = "77dd2eea2e0dd3fd3231687506cf2a8e25ed8907fc48cf75432b3acf296a9569"

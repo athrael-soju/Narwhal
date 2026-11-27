@@ -11,8 +11,8 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from tools.observability import artifacts
-from tools.observability.start.services import PROMETHEUS_IMAGE, PROMETHEUS_VERSION
+from narwhal.observability.stack import artifacts
+from narwhal.observability.stack.start.services import PROMETHEUS_IMAGE, PROMETHEUS_VERSION
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
 MAJOR = PROMETHEUS_VERSION.split(".")[0]

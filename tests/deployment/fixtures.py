@@ -273,5 +273,4 @@ def package_inputs(root, version="0.13.0"):
         "NARWHAL_WHEEL_SHA256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
         "NARWHAL_REQUIREMENTS": str(lock),
         "NARWHAL_REQUIREMENTS_SHA256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-        "NARWHAL_TOOLS_COMMIT": "d" * 40,
     }

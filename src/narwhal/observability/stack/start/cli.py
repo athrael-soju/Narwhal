@@ -9,14 +9,14 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 
-from tools.observability.artifacts import (
+from narwhal.observability.stack.artifacts import (
     ControlTarget,
     console_url,
     control_target,
     stage_artifacts,
     tool_target,
 )
-from tools.observability.make_targets import (
+from narwhal.observability.stack.make_targets import (
     ROUTER_URL_ENV,
     TARGETS_URL_ENV,
     TargetContract,

@@ -7,10 +7,10 @@
 for a router pair, so Prometheus scrapes each engine once. */}}
 {{- $config := $.Files.Get "files/observability/prometheus.yml" }}
 {{- if not (contains "<<targets>>" $config) }}
-{{- fail "tools/observability/prometheus.yml has no <<targets>> placeholder" }}
+{{- fail "src/narwhal/observability/stack/prometheus.yml has no <<targets>> placeholder" }}
 {{- end }}
 {{- $config = replace "<<targets>>" (printf "haproxy.%s:8000" $suffix) $config }}
-{{- /* The discovery files, byte for byte as tools/observability/artifacts.py stages them. */}}
+{{- /* The discovery files, byte for byte as src/narwhal/observability/stack/artifacts.py stages them. */}}
 {{- $routerTargets := printf "[\n  {\n    \"targets\": [\n      \"%s\",\n      \"%s\"\n    ]\n  }\n]\n" (index $routers 0) (index $routers 1) }}
 {{- $prometheus := dict
   "prometheus.yml" $config
@@ -22,10 +22,10 @@ for a router pair, so Prometheus scrapes each engine once. */}}
 }}
 {{- $dashboard := .grafana.dashboard }}
 {{- if contains "<<" $dashboard }}
-{{- fail "monitoring.grafana.dashboard holds unrendered placeholders; write it with python -m tools.observability.chart_dashboard" }}
+{{- fail "monitoring.grafana.dashboard holds unrendered placeholders; write it with python -m narwhal.observability.stack.chart_dashboard" }}
 {{- end }}
 {{- if hasKey (fromJson $dashboard) "Error" }}
-{{- fail "monitoring.grafana.dashboard is not JSON; write it with python -m tools.observability.chart_dashboard" }}
+{{- fail "monitoring.grafana.dashboard is not JSON; write it with python -m narwhal.observability.stack.chart_dashboard" }}
 {{- end }}
 {{- $provisioning := dict
   "dashboards.yml" ($.Files.Get "files/observability/grafana-dashboards.yml")
@@ -74,7 +74,7 @@ spec:
       containers:
         - name: prometheus
           image: {{ .prometheus.image }}
-          # The flags of tools/observability/compose.yml, listening on the pod address.
+          # The flags of src/narwhal/observability/stack/compose.yml, listening on the pod address.
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.retention.time=30d
@@ -194,7 +194,7 @@ spec:
       containers:
         - name: grafana
           image: {{ .grafana.image }}
-          # The settings of tools/observability/compose.yml, without the image renderer.
+          # The settings of src/narwhal/observability/stack/compose.yml, without the image renderer.
           env:
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "true"

@@ -672,7 +672,7 @@
             },
             "dashboard": {
               "type": "string",
-              "description": "The dashboard python -m tools.observability.chart_dashboard renders"
+              "description": "The dashboard python -m narwhal.observability.stack.chart_dashboard renders"
             },
             "admin": {
               "type": "object",

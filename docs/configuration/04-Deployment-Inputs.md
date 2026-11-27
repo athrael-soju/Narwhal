@@ -18,7 +18,6 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 | `NARWHAL_WHEEL_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that wheel, 64 lowercase hex digits |
 | `NARWHAL_REQUIREMENTS` | `narwhal deploy package`, then `pip` on each host | Hash-checking lock of the wheel's dependencies, as in [Dependency lock](#dependency-lock) |
 | `NARWHAL_REQUIREMENTS_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that lock |
-| `NARWHAL_TOOLS_COMMIT` | `narwhal deploy package`, then the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host) | Full 40-hex commit of the wheel's release tag `v<version>`, from the private record |
 
 `NARWHAL_SSH_JUMP` is optional. It names the one jump host, an alias or `user@host`, through which every connection reaches its destination, as in [Jump host](#jump-host).
 
@@ -54,7 +53,7 @@ narwhal deploy package --out <directory>
 | `narwhal deploy package` | A copy of the wheel checked against `NARWHAL_WHEEL_SHA256`, and role files under `<directory>/<host-id>/`      |
 | `narwhal deploy install` | The package, and a virtual environment with the wheel installed, in each selected host's deployment directory |
 
-Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`. The router environment also carries `NARWHAL_TOOLS_COMMIT`.
+Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`.
 
 ### Dependency lock
 

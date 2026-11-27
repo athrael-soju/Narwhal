@@ -229,7 +229,7 @@ FACTS = (
         WORKSTATION,
         "Approved release",
         "`NARWHAL_WHEEL_SHA256`, which each role environment records as "
-        "`NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT`",
+        "`NARWHAL_DEPLOYMENT_REVISION`, and the SHA-256 of the lock, `NARWHAL_REQUIREMENTS_SHA256`",
         (_onward("package"),),
     ),
     Fact(

@@ -19,12 +19,12 @@ from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
-from tools.observability.make_targets import TargetContract
-from tools.observability.start import cli as observe_cli
-from tools.observability.start import listeners as observe_listeners
-from tools.observability.start import readiness as observe_readiness
-from tools.observability.start import services as observe_services
-from tools.observability.start import stack as observe_stack
+from narwhal.observability.stack.make_targets import TargetContract
+from narwhal.observability.stack.start import cli as observe_cli
+from narwhal.observability.stack.start import listeners as observe_listeners
+from narwhal.observability.stack.start import readiness as observe_readiness
+from narwhal.observability.stack.start import services as observe_services
+from narwhal.observability.stack.start import stack as observe_stack
 
 
 def _container(

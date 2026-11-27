@@ -14,16 +14,15 @@ from typing import Any
 
 import httpx
 
-from tests.fleet_control.test_service_core import FakeRunner, python_hook
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     DEFAULT_JOURNAL_MAX_BYTES,
     ConfigError,
     ControlConfig,
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.journal import (
+from narwhal.fleet_control.journal import (
     CREATED,
     MISSING,
     NOT_CONFIGURED,
@@ -35,7 +34,8 @@ from tools.fleet_control.journal import (
     mark,
     marks,
 )
-from tools.fleet_control.service import ControlService
+from narwhal.fleet_control.service import ControlService
+from tests.fleet_control.test_service_core import FakeRunner, python_hook
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = ROOT / "tests/data/fleet.json"

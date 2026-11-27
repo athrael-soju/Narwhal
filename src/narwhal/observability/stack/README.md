@@ -2,11 +2,11 @@
 
 The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** dashboard, and the Grafana Image Renderer.
 
-Follow [Setting up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
+Follow [Setting up observability](../../../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
 ## Dashboard
 
-<a href="../../docs/observability/05-Dashboard.md"><img src="https://img.shields.io/badge/docs-Reading%20the%20dashboard-0f766e" alt="Reading the dashboard documentation"></a>
+<a href="../../../../docs/observability/05-Dashboard.md"><img src="https://img.shields.io/badge/docs-Reading%20the%20dashboard-0f766e" alt="Reading the dashboard documentation"></a>
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
@@ -38,7 +38,7 @@ Panels that show router state, such as pools, admission, queues and retry credit
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#prometheus-metrics) defines the metric groups and lifecycle.
+[Telemetry and artifact reference](../../../../docs/telemetry/03-Metrics-and-Control.md#prometheus-metrics) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 
@@ -54,7 +54,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
   <tbody>
     <tr>
       <td>Source dashboard</td>
-      <td><code>tools/observability/grafana-narwhal.json</code></td>
+      <td><code>src/narwhal/observability/stack/grafana-narwhal.json</code></td>
     </tr>
     <tr>
       <td>Schema</td>
@@ -73,7 +73,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` builds the staged copy with `narwhal_dashboard` in `tools/observability/artifacts.py`. A `<<name{selector}>>` placeholder becomes the `name` query from each backend's `dashboard_series`, with the selector applied, joined with `or`. `<<backend_badges>>` becomes the icon of each backend. To chart a new engine series, add it to a backend's `dashboard_series`; a panel that queries a name no backend defines is left out.
+`make observe` builds the staged copy with `narwhal_dashboard` in `src/narwhal/observability/stack/artifacts.py`. A `<<name{selector}>>` placeholder becomes the `name` query from each backend's `dashboard_series`, with the selector applied, joined with `or`. `<<backend_badges>>` becomes the icon of each backend. To chart a new engine series, add it to a backend's `dashboard_series`; a panel that queries a name no backend defines is left out.
 
 The staged copy also has the **Fleet control actions** and **Load jobs** annotations from `CONTROL_ANNOTATIONS`, and a **Fleet control** link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
@@ -84,21 +84,21 @@ make observe
 curl -fsS http://127.0.0.1:3000/api/health
 ```
 
-Give every series a fixed colour from the [dashboard colour key](../../docs/observability/05-Dashboard.md#colours).
+Give every series a fixed colour from the [dashboard colour key](../../../../docs/observability/05-Dashboard.md#colours).
 
 Validate changed queries against traffic, idle engines, failed scrapes, router restart and the **Engine detail** selector before deploying the dashboard. Keep live addresses and captured responses under `runs/`.
 
 ## Fleet control scrape job
 
-The `fleet-control` job in `tools/observability/prometheus.yml` scrapes the fleet control service's `/metrics` with the token in `/etc/prometheus/fleet-control-token`. `make observe` writes the target and token from `NARWHAL_CONTROL_METRICS_URL` and `NARWHAL_CONTROL_TOKEN`. Without `NARWHAL_CONTROL_METRICS_URL`, the job has no target. See [Dashboard annotations](../../docs/operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
+The `fleet-control` job in `src/narwhal/observability/stack/prometheus.yml` scrapes the fleet control service's `/metrics` with the token in `/etc/prometheus/fleet-control-token`. `make observe` writes the target and token from `NARWHAL_CONTROL_METRICS_URL` and `NARWHAL_CONTROL_TOKEN`. Without `NARWHAL_CONTROL_METRICS_URL`, the job has no target. See [Dashboard annotations](../../../../docs/operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
 
 ## Tool scrape job
 
-The `narwhal-tools` job in `tools/observability/prometheus.yml` scrapes `narwhal-check` and `narwhal-profile` during preflight, first-token calibration and a live sweep, at the address `make observe` reads from `NARWHAL_TOOL_METRICS_URL`. The engine table's Probing, Calibrating, Profiling and Preflight states read its `narwhal_tool_engine_in_use`. The target is down between those operations, so the target-down alerts select only the `engines` and `narwhal-router` jobs.
+The `narwhal-tools` job in `src/narwhal/observability/stack/prometheus.yml` scrapes `narwhal-check` and `narwhal-profile` during preflight, first-token calibration and a live sweep, at the address `make observe` reads from `NARWHAL_TOOL_METRICS_URL`. The engine table's Probing, Calibrating, Profiling and Preflight states read its `narwhal_tool_engine_in_use`. The target is down between those operations, so the target-down alerts select only the `engines` and `narwhal-router` jobs.
 
 ## Alert rules
 
-Alert rules in `tools/observability/prometheus-alerts.yml`:
+Alert rules in `src/narwhal/observability/stack/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.

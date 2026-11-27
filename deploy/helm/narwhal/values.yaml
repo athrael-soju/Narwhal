@@ -72,7 +72,7 @@ monitoring:
     # The Grafana image by registry digest. Required with monitoring.
     image: ""
     # The rendered dashboard. Pass it with
-    # --set-file monitoring.grafana.dashboard=<file from python -m tools.observability.chart_dashboard>.
+    # --set-file monitoring.grafana.dashboard=<file from python -m narwhal.observability.stack.chart_dashboard>.
     dashboard: ""
     # The Secret that holds the Grafana admin login: {"secretName", "userKey", "passwordKey"}.
     admin: {}

@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.observability import artifacts
-from tools.observability.make_targets import TargetContract
+from narwhal.observability.stack import artifacts
+from narwhal.observability.stack.make_targets import TargetContract
 
 
 class MonitoringArtifactTests(unittest.TestCase):

@@ -176,9 +176,6 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
     """Write the wheel, the helper snapshots and the role files of every host."""
     wheel_path, wheel_sha256 = wheel(env)
     lock, lock_sha256 = requirements(env)
-    tools = required(env, "NARWHAL_TOOLS_COMMIT", "the commit of the wheel's release tag")
-    if not re.fullmatch(r"[0-9a-f]{40}", tools):
-        raise ValueError("Set NARWHAL_TOOLS_COMMIT to a full 40-hex commit SHA")
     fleet_path = Path(required(env, "NARWHAL_FLEET", "the fleet file that discovery wrote"))
     fleet = json.loads(fleet_path.read_text())
     selected = {}
@@ -188,8 +185,6 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
             selected[role] = select_values("engine" if node else "router", node, fleet, env)
             # Launch plans and attestations record the installed wheel as the revision.
             selected[role]["NARWHAL_DEPLOYMENT_REVISION"] = wheel_sha256
-    # The router host checks its tools checkout against this commit.
-    selected["router"]["NARWHAL_TOOLS_COMMIT"] = tools
     engine_roles = [role for role in selected if role.startswith("engine-")]
     launches = load_launches(
         Path(env.get("NARWHAL_LAUNCH_CONFIG", "config/engine-launch.local.json")),
@@ -244,7 +239,6 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
         "wheel": wheel_path.name,
         "wheel_sha256": wheel_sha256,
         "requirements_sha256": lock_sha256,
-        "tools_commit": tools,
         "helpers": list(snapshots),
         "remote_dir": f"Narwhal-deploy/{uuid.uuid4().hex}",
         "hashes": {name: digest(output / name) for name in paths},

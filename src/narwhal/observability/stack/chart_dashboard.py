@@ -1,6 +1,6 @@
 """Write the dashboard the Helm chart's Grafana serves, rendered as `make observe` renders it.
 
-`python -m tools.observability.chart_dashboard <out.json>` writes the file that
+`python -m narwhal.observability.stack.chart_dashboard <out.json>` writes the file that
 `helm install --set-file monitoring.grafana.dashboard=<out.json>` hands the chart. With
 `--console-url`, the dashboard also links to that fleet control console and shows its markers,
 as `make observe` does.
@@ -12,7 +12,7 @@ import argparse
 import json
 from pathlib import Path
 
-from tools.observability.artifacts import (
+from narwhal.observability.stack.artifacts import (
     BASE,
     CONSOLE_URL_ENV,
     console_url,

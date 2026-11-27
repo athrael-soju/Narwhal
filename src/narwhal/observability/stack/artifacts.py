@@ -16,11 +16,18 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
+from narwhal.observability.stack.make_targets import (
+    TargetContract,
+    metrics_authority,
+    write_contract,
+)
 from narwhal.observability.tools import METRICS_URL_ENV as TOOL_METRICS_URL_ENV
-from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
-MOUNTS = BASE.parents[1] / "runs" / "observability" / "mounts"
+# The monitoring state lives under the working directory: the checkout for `make observe`, or a
+# host's deployment directory for the `monitoring` stage of `narwhal deploy run`.
+STATE = Path("runs") / "observability"
+MOUNTS = STATE / "mounts"
 FILES = {
     "prometheus.yml": "prometheus/prometheus.yml",
     "prometheus-alerts.yml": "prometheus/prometheus-alerts.yml",

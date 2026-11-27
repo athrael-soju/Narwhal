@@ -11,9 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-DEFAULT_TARGETS_DIR = (
-    Path(__file__).parents[2] / "runs" / "observability" / "mounts" / "prometheus" / "targets"
-)
+DEFAULT_TARGETS_DIR = Path("runs") / "observability" / "mounts" / "prometheus" / "targets"
 ENGINE_TARGETS_PATH = "/narwhal/targets"
 ROUTER_URL_ENV = "NARWHAL_ROUTER_URL"
 TARGETS_URL_ENV = "NARWHAL_TARGETS_URL"

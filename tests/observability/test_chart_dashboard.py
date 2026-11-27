@@ -9,8 +9,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.observability import chart_dashboard
-from tools.observability.artifacts import BASE, narwhal_dashboard, render_dashboard
+from narwhal.observability.stack import chart_dashboard
+from narwhal.observability.stack.artifacts import BASE, narwhal_dashboard, render_dashboard
 
 
 class ChartDashboardTests(unittest.TestCase):

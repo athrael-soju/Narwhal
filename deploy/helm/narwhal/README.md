@@ -88,14 +88,14 @@ A fabric Job runs on the host network with one HCA from the RDMA device plugin a
 
 ## Monitoring
 
-With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the files `make observe` stages: [`prometheus.yml`](../../../tools/observability/prometheus.yml), [`prometheus-alerts.yml`](../../../tools/observability/prometheus-alerts.yml) and the Grafana provisioning under [`tools/observability/grafana`](../../../tools/observability/grafana). The chart links them from `files/observability/`, so there is one copy, and a chart test fails when the mounted files differ from what `make observe` stages for the same routers.
+With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the files `make observe` stages: [`prometheus.yml`](../../../src/narwhal/observability/stack/prometheus.yml), [`prometheus-alerts.yml`](../../../src/narwhal/observability/stack/prometheus-alerts.yml) and the Grafana provisioning under [`src/narwhal/observability/stack/grafana`](../../../src/narwhal/observability/stack/grafana). The chart links them from `files/observability/`, so there is one copy, and a chart test fails when the mounted files differ from what `make observe` stages for the same routers.
 
 Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana lets anonymous users view dashboards, as under `make observe`, and runs without the image renderer.
 
 The dashboard needs rendering first, because its queries come from the installed engine backends:
 
 ```bash
-python -m tools.observability.chart_dashboard config/helm/dashboard.json
+python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
 helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
   --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
 ```

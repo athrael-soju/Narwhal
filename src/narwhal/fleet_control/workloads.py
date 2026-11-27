@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 WorkloadKind = Literal[
     "synthetic", "mixed", "multi_turn", "public_dataset", "timestamped_trace", "prefix_trace"
@@ -199,11 +199,11 @@ class LoadConfig:
     extra_args: tuple[str, ...] = ()
 
 
-def _positive_int(value: object) -> bool:
+def _positive_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
-def _number(value: object) -> bool:
+def _number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -416,7 +416,7 @@ def _read_mix(problems: list[str], label: str, raw: object) -> tuple[MixEntry, .
         percent = item.get("percent")
         if not (_number(percent) and 0 < percent <= 100):
             problems.append(f"{where}.percent must be a number above 0 and at most 100")
-        if len(problems) == count:
+        if len(problems) == count and _number(percent):
             entries.append(MixEntry(percent=float(percent), **lengths))
     if len(entries) == len(raw) and not math.isclose(
         sum(entry.percent for entry in entries), 100, abs_tol=1e-6

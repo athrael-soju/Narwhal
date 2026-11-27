@@ -48,7 +48,7 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | Retries, failures, refusals, and rejections | Which protection path is active? |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-`tools/observability/prometheus-alerts.yml` defines these alert rules:
+`src/narwhal/observability/stack/prometheus-alerts.yml` defines these alert rules:
 
 | Alert | Condition | Duration | Severity |
 | --- | --- | :---: | --- |

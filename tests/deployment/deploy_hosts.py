@@ -47,7 +47,6 @@ def environment(root: Path) -> dict[str, str]:
         "NARWHAL_WHEEL_SHA256": hashlib.sha256(b"wheel").hexdigest(),
         "NARWHAL_REQUIREMENTS": str(lock),
         "NARWHAL_REQUIREMENTS_SHA256": hashlib.sha256(lock.read_bytes()).hexdigest(),
-        "NARWHAL_TOOLS_COMMIT": "d" * 40,
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "e" * 64,
         "NARWHAL_ENGINE_MODEL_NAME": "served-model",
         "NARWHAL_MODEL_DIR": "/models/checkpoint",

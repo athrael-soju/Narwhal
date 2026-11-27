@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from narwhal.observability.stack import artifacts
 from tests.observability import test_engine_state_promql as state_tests
 from tests.observability.test_engine_state_promql import (
     RUN_TIMEOUT_S,
@@ -19,7 +20,6 @@ from tests.observability.test_engine_state_promql import (
     UNAVAILABLE,
     promtool,
 )
-from tools.observability import artifacts
 
 LENGTH = 130
 # The range end and length that stand in for Grafana's end() and $__range.

@@ -140,7 +140,7 @@ An engine whose container stopped or restarted also spends its launch directory,
 | SSH credentials, jump host or expected host keys | The password variable names, `NARWHAL_SSH_JUMP` and the SHA-256 of `NARWHAL_SSH_KNOWN_HOSTS` | `access` |
 | SSH destination of a host | Every host's SSH destination | `access`, `package` and every stage after it |
 | Hardware, model, image, checkpoint, launch policy, route or transport | The discovery fields of `.env`, the live image ID and the checkpoint tree digest | `discover` and every stage after it |
-| Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT` | `package` and every stage after it |
+| Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, and the SHA-256 of the lock, `NARWHAL_REQUIREMENTS_SHA256` | `package` and every stage after it |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |

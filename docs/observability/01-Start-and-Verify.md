@@ -13,7 +13,7 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 - `curl`
 - network reachability from the router host to every engine metrics endpoint
 
-Run these commands in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells), with `runs/deployment/.env.router` loaded and `.venv` active, from the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host).
+On a deployed fleet, `narwhal deploy run` starts the stack in its `monitoring` stage. To start it by hand, run `python -m narwhal.observability.stack.start.cli` in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells), from the deployment directory with `runs/deployment/.env.router` loaded and `.venv` active. In a repository checkout, `make observe` runs the same command. The pages below write `make observe` for either.
 
 ## Configuring the monitored deployment
 
@@ -72,7 +72,7 @@ make observe
 To pass options, run the start command directly:
 
 ```bash
-.venv/bin/python -m tools.observability.start.cli --router-url http://127.0.0.1:8000 --ready-timeout 120
+.venv/bin/python -m narwhal.observability.stack.start.cli --router-url http://127.0.0.1:8000 --ready-timeout 120
 ```
 
 | Option | Default | Meaning |
@@ -127,11 +127,11 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 
 | Source                                                                                        | Staged path                                                                       |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `tools/observability/prometheus.yml` and `NARWHAL_TARGETS_URL`, or `NARWHAL_ROUTER_URL`       | `prometheus/prometheus.yml`                                                       |
-| `tools/observability/prometheus-alerts.yml`                                                   | `prometheus/prometheus-alerts.yml`                                                |
+| `src/narwhal/observability/stack/prometheus.yml` and `NARWHAL_TARGETS_URL`, or `NARWHAL_ROUTER_URL`       | `prometheus/prometheus.yml`                                                       |
+| `src/narwhal/observability/stack/prometheus-alerts.yml`                                                   | `prometheus/prometheus-alerts.yml`                                                |
 | `NARWHAL_ROUTER_URL`                                                                          | `prometheus/targets/router.json`                                                  |
-| `tools/observability/grafana/provisioning/`                                                   | `grafana-provisioning/`                                                           |
-| `tools/observability/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL`                  | `grafana-dashboards/narwhal.json`                                                 |
+| `src/narwhal/observability/stack/grafana/provisioning/`                                                   | `grafana-provisioning/`                                                           |
+| `src/narwhal/observability/stack/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL`                  | `grafana-dashboards/narwhal.json`                                                 |
 | `NARWHAL_CONTROL_METRICS_URL`                                                                 | `prometheus/targets/fleet-control.json`, empty if unset                           |
 | `NARWHAL_CONTROL_TOKEN`                                                                       | `prometheus/fleet-control-token`, empty if `NARWHAL_CONTROL_METRICS_URL` is unset |
 | `NARWHAL_TOOL_METRICS_URL`                                                                    | `prometheus/targets/tools.json`, empty if unset                                   |

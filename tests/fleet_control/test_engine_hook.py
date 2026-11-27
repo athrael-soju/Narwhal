@@ -16,7 +16,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from narwhal import backends
-from tools.fleet_control import engine_hook
+from narwhal.fleet_control import engine_hook
 
 CID = "c" * 64
 

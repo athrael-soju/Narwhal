@@ -1,1 +1,1 @@
-../../../../../tools/observability/grafana/provisioning/dashboards/narwhal.yml
+../../../../../src/narwhal/observability/stack/grafana/provisioning/dashboards/narwhal.yml

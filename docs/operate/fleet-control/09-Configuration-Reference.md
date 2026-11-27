@@ -65,11 +65,11 @@ Hooks run in the service's working directory, so relative paths in `argv` resolv
 
 ### Reference engine hook
 
-`tools/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches, for every engine backend that runs in a container, and refuses native launches. Use it for all four engine hooks, and pass the hook name without `engine_` as the action:
+`src/narwhal/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches, for every engine backend that runs in a container, and refuses native launches. Use it for all four engine hooks, and pass the hook name without `engine_` as the action:
 
 ```json
 "engine_start": {
-  "argv": [".venv/bin/python", "-m", "tools.fleet_control.engine_hook",
+  "argv": [".venv/bin/python", "-m", "narwhal.fleet_control.engine_hook",
            "--launch-dirs", "config/fleet-control.launch-dirs.json", "start"],
   "timeout_s": 900
 }
