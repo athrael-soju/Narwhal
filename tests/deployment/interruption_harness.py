@@ -113,13 +113,13 @@ def controller(root: Path, selected: str) -> None:
         elif selected == "exited-leader":
             os.kill(record["identity"]["pid"], signal.SIGTERM)
             deadline = time.monotonic() + 2
-            while native_engine._owns_process(record["identity"]) and time.monotonic() < deadline:
+            while native_engine.owns_process(record["identity"]) and time.monotonic() < deadline:
                 time.sleep(0.01)
             barrier(root, selected)
         elif selected == "profiling":
             lifecycle._profiles(run, lifecycle.read(run / "fleet.json"), spec)
 
-    terminate = native_engine._terminate
+    terminate = native_engine.terminate
     with (
         patch.object(lifecycle, "_launch", side_effect=launch),
         patch.object(lifecycle, "_run", side_effect=run_stage),
@@ -128,7 +128,7 @@ def controller(root: Path, selected: str) -> None:
         patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
         patch.object(native_engine, "process_identity", side_effect=child_identity),
         patch.object(
-            native_engine, "_terminate", side_effect=lambda identity: terminate(identity, 0.05)
+            native_engine, "terminate", side_effect=lambda identity: terminate(identity, 0.05)
         ),
         patch.object(lifecycle, "write", side_effect=write),
         patch.object(Path, "replace", replace),
@@ -148,13 +148,13 @@ def wait_workers(registry: Path, count: int) -> None:
 
 
 def inspect(root: Path, operation: str) -> None:
-    terminate = native_engine._terminate
+    terminate = native_engine.terminate
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
     client = httpx.Client(transport=transport)
     with (
         patch.object(lifecycle.httpx, "Client", return_value=client),
         patch.object(
-            native_engine, "_terminate", side_effect=lambda identity: terminate(identity, 0.05)
+            native_engine, "terminate", side_effect=lambda identity: terminate(identity, 0.05)
         ),
     ):
         busy = lifecycle._busy(root)

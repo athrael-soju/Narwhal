@@ -182,7 +182,7 @@ Each area of the Python package lives in one package or module:
 | Prometheus metrics and request journals                                             | `observability/`                                      |
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
 | Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
-| Engine launch plans and checks, stage runs and supervision, and attestation capture | `deployment/`                                         |
+| Engine launch plans and checks, stage runs, process supervision, and attestation capture | `deployment/`                                         |
 | Engine backend registry and backend implementations                                 | `backends/`, `backends/<name>/`                       |
 | Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |

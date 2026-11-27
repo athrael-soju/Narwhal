@@ -41,6 +41,7 @@ from .launch_engine.start import (
 
 
 def process_identity(pid: int) -> dict[str, int | str]:
+    """The pid, boot ID and start ticks of a live process group leader."""
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     stat = Path(f"/proc/{pid}/stat").read_text()
     fields = stat.rsplit(")", 1)[1].split()
@@ -62,7 +63,8 @@ def native_identity(run: Path, plan: dict, pid: int | str) -> EngineIdentity:
     )
 
 
-def _owns_process(identity: dict) -> bool:
+def owns_process(identity: dict) -> bool:
+    """Whether the leader that `identity` records is still alive as that leader."""
     try:
         return process_identity(identity["pid"]) == identity
     except (FileNotFoundError, ProcessLookupError, ValueError):
@@ -74,7 +76,12 @@ def _process_stat(pid: int) -> tuple[str, int, int, int]:
     return fields[0], int(fields[2]), int(fields[3]), int(fields[19])
 
 
-def _group_members(identity: dict) -> dict[int, int]:
+def group_members(identity: dict) -> dict[int, int]:
+    """Live members of the recorded leader's session, by pid and start ticks.
+
+    The members stay visible after the leader exits. A leader pid that now names another
+    process yields none.
+    """
     if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != identity["boot_id"]:
         return {}
     leader = identity["pid"]
@@ -198,7 +205,7 @@ def _wait_ready(run: Path, plan: dict, identity: dict, seconds: int) -> None:
     url = plan["endpoint"].rstrip("/") + "/health"
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if not _owns_process(identity):
+        if not owns_process(identity):
             log = (run / "startup.log").read_text(errors="replace")[-2000:]
             raise ValueError(f"{plan['role']}: native engine exited before readiness: {log}")
         try:
@@ -211,9 +218,10 @@ def _wait_ready(run: Path, plan: dict, identity: dict, seconds: int) -> None:
     raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
 
 
-def _terminate(identity: dict, grace_seconds: float = 10.0) -> None:
-    members = _group_members(identity)
-    if not _owns_process(identity):
+def terminate(identity: dict, grace_seconds: float = 10.0) -> None:
+    """Stop the recorded group with SIGTERM, then SIGKILL, refusing a changed leader."""
+    members = group_members(identity)
+    if not owns_process(identity):
         detail = (
             f"; surviving group PIDs {sorted(members)} require operator inspection"
             if members
@@ -224,7 +232,7 @@ def _terminate(identity: dict, grace_seconds: float = 10.0) -> None:
     _signal_members(owned, signal.SIGTERM)
     deadline = time.monotonic() + grace_seconds
     escalated = False
-    while members := _group_members(identity):
+    while members := group_members(identity):
         # A surviving recorded member anchors this group through leader exit.
         if not any(members.get(pid) == started for pid, started in owned.items()):
             raise ValueError(
@@ -246,7 +254,7 @@ def _terminate(identity: dict, grace_seconds: float = 10.0) -> None:
 
 def stop(run: Path) -> None:
     identity = json.loads((run / "native-process.json").read_text())
-    _terminate(identity)
+    terminate(identity)
     remove_kv_events_directory(json.loads((run / "launch.json").read_text()))
     write_private(
         run / "native-stop.json",
@@ -413,8 +421,8 @@ def _start(selected: list[tuple[Path, dict]], ready_seconds: int, *, shared: boo
                 if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
                     record.update(failure_stage=error.stage, failure_context=error.context)
                 try:
-                    if identity is not None and _group_members(identity):
-                        _terminate(identity)
+                    if identity is not None and group_members(identity):
+                        terminate(identity)
                     elif process is not None and process.poll() is None:
                         os.killpg(process.pid, signal.SIGTERM)
                         try:
