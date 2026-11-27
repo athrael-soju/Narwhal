@@ -11,154 +11,96 @@
         "narwhal": {
           "type": "string",
           "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
-          "description": "Narwhal image by registry digest"
-        },
-        "haproxy": {
-          "type": "string",
-          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
-          "description": "HAProxy image by registry digest"
-        },
-        "fabric": {
-          "type": "string",
-          "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
-          "description": "Image with ib_write_bw, by registry digest; required with fabric gates"
+          "description": "Narwhal image by registry digest: the controller and the routers"
         }
       },
       "required": [
-        "narwhal",
-        "haproxy"
+        "narwhal"
       ]
     },
-    "engines": {
+    "controller": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "schema": {
-          "const": "narwhal.engine-set"
-        },
-        "schemaVersion": {
-          "const": 1
-        },
-        "count": {
+        "runAsUser": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "The controller's non-root user ID"
         },
-        "image": {
-          "type": "string",
-          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
-          "description": "Engine image by registry digest"
-        },
-        "gpuResource": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
-          "description": "GPU device plugin resource name"
-        },
-        "gpus": {
+        "runAsGroup": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "The controller's group ID, which owns the run directories"
         },
-        "rdmaResource": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
-          "description": "RDMA device plugin resource name"
-        },
-        "modelVolume": {
-          "type": "object",
-          "minProperties": 1,
-          "maxProperties": 1
-        },
-        "stateClaim": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-          "description": "State PersistentVolumeClaim name"
-        },
-        "serviceName": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-          "description": "Engines' headless Service name"
-        },
-        "namespace": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-          "description": "Namespace the engine URLs name"
-        },
-        "sidecarImage": {
-          "type": "string",
-          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
-          "description": "Attestation sidecar image"
-        },
-        "configMaps": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object"
-          }
-        },
-        "access": {
+        "resources": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "serviceAccount": {
-              "type": "object"
+            "limits": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "propertyNames": {
+                "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+              }
             },
-            "role": {
-              "type": "object"
-            },
-            "roleBinding": {
-              "type": "object"
+            "requests": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                  },
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "propertyNames": {
+                "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+              }
             }
           },
-          "required": [
-            "serviceAccount",
-            "role",
-            "roleBinding"
-          ]
+          "description": "Container resource requests and limits"
         },
-        "podTemplate": {
+        "nodeSelector": {
           "type": "object",
-          "required": [
-            "initContainers",
-            "containers",
-            "volumes"
-          ]
+          "description": "The node labels the controller pod needs",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
-        "sidecars": {
+        "tolerations": {
           "type": "array",
+          "description": "The controller pod's tolerations",
           "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9.-]+:[0-9]+$"
-          },
-          "description": "Each engine pod's attestation sidecar address, which Prometheus scrapes"
+            "type": "object"
+          }
         }
       },
-      "description": "The attested engines, as chart_values derives them from their launch directories; leave empty with directEngines",
-      "if": {
-        "minProperties": 1
-      },
-      "then": {
-        "required": [
-          "schema",
-          "schemaVersion",
-          "count",
-          "image",
-          "gpuResource",
-          "gpus",
-          "rdmaResource",
-          "modelVolume",
-          "stateClaim",
-          "serviceName",
-          "namespace",
-          "sidecarImage",
-          "configMaps",
-          "access",
-          "podTemplate"
-        ]
-      }
+      "required": [
+        "runAsUser",
+        "runAsGroup"
+      ]
     },
     "directEngines": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Engines that start directly from their image, with no launch plan or attestation, as direct_values derives them; leave empty with engines",
+      "description": "Engines that start directly from their image, with no launch plan or attestation, as direct_values derives them",
       "properties": {
         "schema": {
           "const": "narwhal.direct-engine-set"
@@ -344,7 +286,28 @@
         "claimName": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-          "description": "The state claim's name; the engines' plans name it once they exist"
+          "description": "The state claim's name, which the controller gives the engines and gate Jobs"
+        }
+      },
+      "required": [
+        "claimName",
+        "storageClassName",
+        "size"
+      ]
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storageClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "StorageClass of the lease volume"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+          "description": "Requested size of the lease volume, such as 10Gi"
         }
       },
       "required": [
@@ -379,7 +342,7 @@
         },
         "enabled": {
           "type": "boolean",
-          "description": "Run the router pair and HAProxy"
+          "description": "Run the router pair"
         }
       },
       "required": [
@@ -392,10 +355,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "replicas": {
-          "type": "integer",
-          "minimum": 1
-        },
         "clusterDomain": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
@@ -403,7 +362,6 @@
         }
       },
       "required": [
-        "replicas",
         "clusterDomain"
       ]
     },
@@ -439,134 +397,6 @@
         }
       },
       "required": []
-    },
-    "gates": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-            "description": "Job name"
-          },
-          "kind": {
-            "enum": [
-              "discovery",
-              "prepare",
-              "engine-check",
-              "state",
-              "fabric-probe",
-              "transfer-measure",
-              "fabric-server",
-              "fabric-client",
-              "sidecar-verify",
-              "finalize-fleet",
-              "profile",
-              "calibrate",
-              "preflight",
-              "router-check"
-            ]
-          },
-          "command": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "string"
-            }
-          },
-          "deadlineSeconds": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "node": {
-            "type": "string",
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-            "description": "Node the Job runs on"
-          },
-          "env": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            }
-          },
-          "resources": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string",
-              "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$"
-            },
-            "propertyNames": {
-              "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
-            }
-          },
-          "image": {
-            "type": "string",
-            "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
-            "description": "Image by registry digest; default images.narwhal, or images.fabric for a fabric gate"
-          },
-          "runtimeClassName": {
-            "type": "string",
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-          },
-          "hostNetwork": {
-            "type": "boolean"
-          },
-          "inputs": {
-            "type": "string",
-            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-            "description": "ConfigMap mounted read-only at /narwhal-input"
-          },
-          "modelVolume": {
-            "type": "object",
-            "minProperties": 1,
-            "maxProperties": 1,
-            "description": "Volume source mounted read-only at /model"
-          },
-          "serviceAccount": {
-            "type": "boolean",
-            "description": "Run as the engines' service account, which may get their pods"
-          },
-          "keep": {
-            "type": "string",
-            "pattern": "^deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+$",
-            "description": "State volume directory mounted writable at /narwhal-keep"
-          }
-        },
-        "required": [
-          "name",
-          "kind",
-          "command",
-          "deadlineSeconds",
-          "keep"
-        ],
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "discovery",
-                    "fabric-probe",
-                    "fabric-server",
-                    "fabric-client",
-                    "transfer-measure"
-                  ]
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "node"
-              ]
-            }
-          }
-        ]
-      }
     },
     "monitoring": {
       "type": "object",
@@ -743,6 +573,10 @@
                 }
               },
               "description": "Container resource requests and limits"
+            },
+            "anonymous": {
+              "type": "boolean",
+              "description": "Let anyone who reaches Grafana view the dashboards without signing in"
             }
           }
         },
@@ -808,17 +642,6 @@
         }
       }
     },
-    "placement": {
-      "type": "object",
-      "description": "The node each engine role's pod runs on",
-      "propertyNames": {
-        "pattern": "^engine-[1-9][0-9]*$"
-      },
-      "additionalProperties": {
-        "type": "string",
-        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-      }
-    },
     "modelVolumeSources": {
       "type": "array",
       "maxItems": 4,
@@ -862,59 +685,824 @@
         "maxLength": 63,
         "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
       }
+    },
+    "fleet": {
+      "type": "object",
+      "description": "The NarwhalFleet the chart installs, as its spec; leave it out to apply the fleet another way",
+      "properties": {
+        "images": {
+          "type": "object",
+          "description": "The images the fleet runs besides the engine's, each by registry digest",
+          "properties": {
+            "narwhal": {
+              "type": "string",
+              "description": "The Narwhal image: the controller, routers, gate Jobs and attestation sidecars",
+              "maxLength": 512,
+              "pattern": "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+            },
+            "haproxy": {
+              "type": "string",
+              "description": "The HAProxy image",
+              "maxLength": 512,
+              "pattern": "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+            },
+            "fabric": {
+              "type": "string",
+              "description": "The image the fabric Jobs run ib_write_bw from",
+              "maxLength": 512,
+              "pattern": "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "narwhal",
+            "haproxy",
+            "fabric"
+          ],
+          "additionalProperties": false
+        },
+        "engines": {
+          "type": "object",
+          "description": "The engine pods",
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "The engine image by registry digest",
+              "maxLength": 512,
+              "pattern": "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+            },
+            "model": {
+              "type": "object",
+              "description": "The checkpoint the engines serve",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The served model name",
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                },
+                "treeSha256": {
+                  "type": "string",
+                  "description": "The checkpoint's model_tree_sha256",
+                  "maxLength": 64,
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "file": {
+                  "type": "string",
+                  "description": "For an engine that serves one model file, its path in the model volume",
+                  "maxLength": 1024,
+                  "pattern": "^[^/\\x00-\\x1f\\x7f-\\x9f]+(/[^/\\x00-\\x1f\\x7f-\\x9f]+)*$"
+                },
+                "fileSha256": {
+                  "type": "string",
+                  "description": "The model file's SHA-256",
+                  "maxLength": 64,
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "name",
+                "treeSha256"
+              ],
+              "additionalProperties": false
+            },
+            "modelVolume": {
+              "type": "object",
+              "description": "The volume that serves the staged checkpoint to every engine pod, read-only. Set exactly one source.",
+              "properties": {
+                "persistentVolumeClaim": {
+                  "type": "object",
+                  "description": "A PersistentVolumeClaim in the fleet's namespace",
+                  "properties": {
+                    "claimName": {
+                      "type": "string",
+                      "description": "The claim's name",
+                      "maxLength": 253,
+                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "Always true: engines read the model and never write it",
+                      "default": true
+                    }
+                  },
+                  "required": [
+                    "claimName"
+                  ],
+                  "additionalProperties": false
+                },
+                "hostPath": {
+                  "type": "object",
+                  "description": "A directory on every engine node. The controller refuses it unless the cluster admin lists hostPath in the narwhal chart's modelVolumeSources and a prefix that holds it in modelHostPathPrefixes, which is empty by default.",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The directory's normalised absolute path on the node",
+                      "maxLength": 4096,
+                      "pattern": "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Directory: the kubelet refuses a path that is not an existing directory",
+                      "maxLength": 16,
+                      "enum": [
+                        "Directory"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                "nfs": {
+                  "type": "object",
+                  "description": "An NFS export. The controller refuses it unless the cluster admin lists nfs in the narwhal chart's modelVolumeSources and its server in modelNfsServers.",
+                  "properties": {
+                    "server": {
+                      "type": "string",
+                      "description": "The NFS server's host name or address",
+                      "maxLength": 253,
+                      "pattern": "^[A-Za-z0-9.:\\[\\]-]+$"
+                    },
+                    "path": {
+                      "type": "string",
+                      "description": "The exported directory",
+                      "maxLength": 4096,
+                      "pattern": "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "Always true: engines read the model and never write it",
+                      "default": true
+                    }
+                  },
+                  "required": [
+                    "server",
+                    "path"
+                  ],
+                  "additionalProperties": false
+                },
+                "csi": {
+                  "type": "object",
+                  "description": "A CSI ephemeral volume. The controller refuses it unless the cluster admin lists csi in the narwhal chart's modelVolumeSources and its driver in modelCsiDrivers.",
+                  "properties": {
+                    "driver": {
+                      "type": "string",
+                      "description": "The CSI driver's name",
+                      "maxLength": 63,
+                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "Always true: engines read the model and never write it",
+                      "default": true
+                    },
+                    "volumeAttributes": {
+                      "type": "object",
+                      "description": "The driver's volume attributes",
+                      "maxProperties": 32,
+                      "additionalProperties": {
+                        "type": "string",
+                        "maxLength": 1024,
+                        "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                      }
+                    }
+                  },
+                  "required": [
+                    "driver"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "description": "The device plugins' extended resources, and the engine pods' RuntimeClass",
+              "properties": {
+                "gpu": {
+                  "type": "string",
+                  "description": "The GPU device plugin's extended resource name, <domain>/<name>",
+                  "maxLength": 316,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                },
+                "rdma": {
+                  "type": "string",
+                  "description": "The RDMA device plugin's extended resource name, which hands each engine pod one HCA",
+                  "maxLength": 316,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                },
+                "runtimeClassName": {
+                  "type": "string",
+                  "description": "The RuntimeClass of nodes whose default container runtime exposes no GPUs",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                }
+              },
+              "required": [
+                "gpu",
+                "rdma"
+              ],
+              "additionalProperties": false
+            },
+            "ports": {
+              "type": "object",
+              "description": "The ports each engine pod serves on",
+              "properties": {
+                "engine": {
+                  "type": "integer",
+                  "description": "The engine's HTTP port",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "attestation": {
+                  "type": "integer",
+                  "description": "The attestation sidecar's HTTP port",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              },
+              "required": [
+                "engine",
+                "attestation"
+              ],
+              "additionalProperties": false
+            },
+            "nodes": {
+              "type": "array",
+              "description": "The engines, one entry each",
+              "items": {
+                "type": "object",
+                "description": "One engine: the node its pod runs on, in role order, so the first entry is engine-1. Two engines may share a node.",
+                "properties": {
+                  "node": {
+                    "type": "string",
+                    "description": "The Kubernetes node's name",
+                    "maxLength": 253,
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                  },
+                  "fabricInterface": {
+                    "type": "string",
+                    "description": "The network interface that carries the engine's KV transfers",
+                    "maxLength": 15,
+                    "pattern": "^[^\\s/:\\x00-\\x1f\\x7f-\\x9f]+$"
+                  },
+                  "rdma": {
+                    "type": "object",
+                    "description": "The RDMA port settings of a ucx_rdma engine",
+                    "properties": {
+                      "gidIndex": {
+                        "type": "integer",
+                        "description": "The GID index of the HCA port",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "roceMode": {
+                        "type": "string",
+                        "description": "v2 or v1 for RoCE, or infiniband for a native InfiniBand port",
+                        "maxLength": 16,
+                        "enum": [
+                          "v2",
+                          "v1",
+                          "infiniband"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "node",
+                  "fabricInterface"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 2,
+              "maxItems": 64
+            },
+            "apiKeySecret": {
+              "type": "object",
+              "description": "The Secret that holds the engines' API key. Name a new Secret to rotate the key.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "The Secret's name",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The key in the Secret",
+                  "maxLength": 253,
+                  "pattern": "^[-._A-Za-z0-9]+$"
+                }
+              },
+              "required": [
+                "name",
+                "key"
+              ],
+              "additionalProperties": false
+            },
+            "launch": {
+              "type": "array",
+              "description": "More launch inputs of the engine backend, as the variables discovery reads, such as NARWHAL_ENGINE_BACKEND or NARWHAL_TRANSFER_NET_DEVICES. A name another field of the fleet sets, or that names a credential, is refused.",
+              "items": {
+                "type": "object",
+                "description": "One launch input",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The variable's name",
+                    "maxLength": 128,
+                    "pattern": "^NARWHAL_[A-Z0-9_]+$"
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "The variable's value",
+                    "maxLength": 4096,
+                    "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                  }
+                },
+                "required": [
+                  "name",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 64
+            }
+          },
+          "required": [
+            "image",
+            "model",
+            "modelVolume",
+            "resources",
+            "ports",
+            "nodes"
+          ],
+          "additionalProperties": false
+        },
+        "slo": {
+          "type": "object",
+          "description": "The fleet's service-level objective, in seconds",
+          "properties": {
+            "ttftS": {
+              "type": "string",
+              "description": "The time-to-first-token target",
+              "maxLength": 16,
+              "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+            },
+            "tpotS": {
+              "type": "string",
+              "description": "The time-per-output-token target",
+              "maxLength": 16,
+              "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+            },
+            "routerOverheadS": {
+              "type": "string",
+              "description": "The router's own share of each request",
+              "maxLength": 16,
+              "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+            }
+          },
+          "required": [
+            "ttftS",
+            "tpotS",
+            "routerOverheadS"
+          ],
+          "additionalProperties": false
+        },
+        "firstTokenMarginS": {
+          "type": "string",
+          "description": "Seconds the first-token deadline adds to the calibrated candidate",
+          "maxLength": 16,
+          "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+        },
+        "profiling": {
+          "type": "object",
+          "description": "The profiling sweep",
+          "properties": {
+            "prefillLens": {
+              "type": "array",
+              "description": "The prompt lengths of the prefill sweep",
+              "items": {
+                "type": "integer",
+                "description": "A token count",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "decodeInputLens": {
+              "type": "array",
+              "description": "The input lengths of the decode sweep",
+              "items": {
+                "type": "integer",
+                "description": "A token count",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "decodeConcurrency": {
+              "type": "array",
+              "description": "The concurrency levels of the decode sweep",
+              "items": {
+                "type": "integer",
+                "description": "A token count",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "warmupRequests": {
+              "type": "integer",
+              "description": "Requests sent before measuring",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          },
+          "required": [
+            "prefillLens",
+            "decodeInputLens"
+          ],
+          "additionalProperties": false
+        },
+        "calibration": {
+          "type": "object",
+          "description": "The first-token calibration",
+          "properties": {
+            "inputTokens": {
+              "type": "array",
+              "description": "The input lengths calibration measures",
+              "items": {
+                "type": "integer",
+                "description": "A token count",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "samples": {
+              "type": "integer",
+              "description": "Samples per group, at least the 100 that preflight accepts",
+              "minimum": 100,
+              "maximum": 100000
+            },
+            "observationTimeoutS": {
+              "type": "string",
+              "description": "Seconds calibration waits for one observation",
+              "maxLength": 16,
+              "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+            }
+          },
+          "required": [
+            "inputTokens",
+            "observationTimeoutS"
+          ],
+          "additionalProperties": false
+        },
+        "fabric": {
+          "type": "object",
+          "description": "Fabric qualification",
+          "properties": {
+            "workload": {
+              "type": "object",
+              "description": "The workload the fabric budget sizes each edge for",
+              "properties": {
+                "promptTokens": {
+                  "type": "integer",
+                  "description": "Prompt tokens per KV handoff",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "handoffsPerS": {
+                  "type": "string",
+                  "description": "Peak remote KV handoffs per second on each directed edge, for each source cache group",
+                  "maxLength": 16,
+                  "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                },
+                "burst": {
+                  "type": "integer",
+                  "description": "Handoffs in a burst",
+                  "minimum": 1,
+                  "maximum": 1000000
+                },
+                "transferBudgetS": {
+                  "type": "string",
+                  "description": "Seconds in which one burst must transfer",
+                  "maxLength": 16,
+                  "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                },
+                "headroom": {
+                  "type": "string",
+                  "description": "Multiplier on the required rate",
+                  "maxLength": 16,
+                  "pattern": "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                }
+              },
+              "required": [
+                "promptTokens",
+                "handoffsPerS",
+                "burst",
+                "transferBudgetS",
+                "headroom"
+              ],
+              "additionalProperties": false
+            },
+            "testPort": {
+              "type": "integer",
+              "description": "The TCP port the fabric test listens on",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "workload",
+            "testPort"
+          ],
+          "additionalProperties": false
+        },
+        "routers": {
+          "type": "object",
+          "description": "The router pair",
+          "properties": {
+            "storageClassName": {
+              "type": "string",
+              "description": "The storage class of each router's volume",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+            },
+            "size": {
+              "type": "string",
+              "description": "The size of each router's volume",
+              "maxLength": 32,
+              "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$"
+            },
+            "args": {
+              "type": "array",
+              "description": "More narwhal-serve options, such as --lease-ttl 6",
+              "items": {
+                "type": "string",
+                "description": "One option or value",
+                "maxLength": 256,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+              },
+              "maxItems": 32
+            }
+          },
+          "required": [
+            "storageClassName",
+            "size"
+          ],
+          "additionalProperties": false
+        },
+        "haproxy": {
+          "type": "object",
+          "description": "The HAProxy load balancer in front of the routers",
+          "properties": {
+            "replicas": {
+              "type": "integer",
+              "description": "HAProxy pods",
+              "minimum": 1,
+              "maximum": 16,
+              "default": 1
+            },
+            "clusterDomain": {
+              "type": "string",
+              "description": "The cluster's DNS domain",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+              "default": "cluster.local"
+            }
+          },
+          "additionalProperties": false
+        },
+        "timeouts": {
+          "type": "object",
+          "description": "Seconds a stage may run",
+          "properties": {
+            "defaultSeconds": {
+              "type": "integer",
+              "description": "Every stage's limit",
+              "minimum": 1,
+              "maximum": 604800
+            },
+            "stages": {
+              "type": "object",
+              "description": "One stage's limit, by stage name",
+              "properties": {
+                "access": {
+                  "type": "integer",
+                  "description": "The access stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "discover": {
+                  "type": "integer",
+                  "description": "The discover stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "engine-prepare": {
+                  "type": "integer",
+                  "description": "The engine-prepare stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "install": {
+                  "type": "integer",
+                  "description": "The install stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "engine-start": {
+                  "type": "integer",
+                  "description": "The engine-start stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "engine-check": {
+                  "type": "integer",
+                  "description": "The engine-check stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "cache-capture": {
+                  "type": "integer",
+                  "description": "The cache-capture stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "transfer-measure": {
+                  "type": "integer",
+                  "description": "The transfer-measure stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "cache-groups": {
+                  "type": "integer",
+                  "description": "The cache-groups stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "fabric-budget": {
+                  "type": "integer",
+                  "description": "The fabric-budget stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "fabric-edge": {
+                  "type": "integer",
+                  "description": "The fabric-edge stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "attest-capture": {
+                  "type": "integer",
+                  "description": "The attest-capture stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "sidecar-start": {
+                  "type": "integer",
+                  "description": "The sidecar-start stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "sidecar-verify": {
+                  "type": "integer",
+                  "description": "The sidecar-verify stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "finalize-fleet": {
+                  "type": "integer",
+                  "description": "The finalize-fleet stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "profile": {
+                  "type": "integer",
+                  "description": "The profile stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "calibrate": {
+                  "type": "integer",
+                  "description": "The calibrate stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "fleet-limits": {
+                  "type": "integer",
+                  "description": "The fleet-limits stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "preflight": {
+                  "type": "integer",
+                  "description": "The preflight stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                },
+                "router-start": {
+                  "type": "integer",
+                  "description": "The router-start stage's limit",
+                  "minimum": 1,
+                  "maximum": 604800
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "until": {
+          "type": "string",
+          "description": "The last stage to run; every stage by default",
+          "maxLength": 63,
+          "enum": [
+            "access",
+            "discover",
+            "engine-prepare",
+            "install",
+            "engine-start",
+            "engine-check",
+            "cache-capture",
+            "transfer-measure",
+            "cache-groups",
+            "fabric-budget",
+            "fabric-edge",
+            "attest-capture",
+            "sidecar-start",
+            "sidecar-verify",
+            "finalize-fleet",
+            "profile",
+            "calibrate",
+            "fleet-limits",
+            "preflight",
+            "router-start"
+          ]
+        },
+        "stopped": {
+          "type": "boolean",
+          "description": "Stop the routers, HAProxy, engines and Jobs, keeping the volumes",
+          "default": false
+        },
+        "retainRuns": {
+          "type": "integer",
+          "description": "Run directories kept, the current one included",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 3
+        }
+      },
+      "required": [
+        "images",
+        "engines",
+        "slo",
+        "firstTokenMarginS",
+        "profiling",
+        "calibration",
+        "fabric",
+        "routers"
+      ],
+      "additionalProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Admit connections to the routers only from HAProxy, the gate Jobs, the other router and monitoring"
+        },
+        "monitoring": {
+          "type": "array",
+          "description": "More NetworkPolicy peers that may reach the routers, such as a cluster Prometheus",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "enabled"
+      ]
     }
   },
   "required": [
     "images",
-    "engines",
+    "controller",
     "state",
-    "routers"
-  ],
-  "if": {
-    "properties": {
-      "directEngines": {
-        "minProperties": 1
-      }
-    },
-    "required": [
-      "directEngines"
-    ]
-  },
-  "then": {
-    "properties": {
-      "engines": {
-        "maxProperties": 0,
-        "description": "Set engines or directEngines, not both"
-      },
-      "gates": {
-        "maxItems": 0,
-        "description": "Gate Jobs check attested engines; directEngines take none"
-      }
-    }
-  },
-  "else": {
-    "if": {
-      "properties": {
-        "routers": {
-          "properties": {
-            "enabled": {
-              "const": false
-            }
-          },
-          "required": [
-            "enabled"
-          ]
-        }
-      }
-    },
-    "then": {},
-    "else": {
-      "properties": {
-        "engines": {
-          "minProperties": 1,
-          "description": "The engines, from chart_values, or directEngines"
-        }
-      }
-    }
-  }
+    "lease",
+    "routers",
+    "haproxy"
+  ]
 }

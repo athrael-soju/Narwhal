@@ -1,0 +1,941 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Narwhal fleet",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "narwhal": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+          "description": "Narwhal image by registry digest"
+        },
+        "haproxy": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+          "description": "HAProxy image by registry digest"
+        },
+        "fabric": {
+          "type": "string",
+          "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
+          "description": "Image with ib_write_bw, by registry digest; required with fabric gates"
+        }
+      },
+      "required": [
+        "narwhal",
+        "haproxy"
+      ]
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "narwhal.engine-set"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+          "description": "Engine image by registry digest"
+        },
+        "gpuResource": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+          "description": "GPU device plugin resource name"
+        },
+        "gpus": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rdmaResource": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+          "description": "RDMA device plugin resource name"
+        },
+        "modelVolume": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1
+        },
+        "stateClaim": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "State PersistentVolumeClaim name"
+        },
+        "serviceName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Engines' headless Service name"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Namespace the engine URLs name"
+        },
+        "sidecarImage": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+          "description": "Attestation sidecar image"
+        },
+        "configMaps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "access": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serviceAccount": {
+              "type": "object"
+            },
+            "role": {
+              "type": "object"
+            },
+            "roleBinding": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "serviceAccount",
+            "role",
+            "roleBinding"
+          ]
+        },
+        "podTemplate": {
+          "type": "object",
+          "required": [
+            "initContainers",
+            "containers",
+            "volumes"
+          ]
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+:[0-9]+$"
+          },
+          "description": "Each engine pod's attestation sidecar address, which Prometheus scrapes"
+        }
+      },
+      "description": "The attested engines, as chart_values derives them from their launch directories; leave empty with directEngines",
+      "if": {
+        "minProperties": 1
+      },
+      "then": {
+        "required": [
+          "schema",
+          "schemaVersion",
+          "count",
+          "image",
+          "gpuResource",
+          "gpus",
+          "rdmaResource",
+          "modelVolume",
+          "stateClaim",
+          "serviceName",
+          "namespace",
+          "sidecarImage",
+          "configMaps",
+          "access",
+          "podTemplate"
+        ]
+      }
+    },
+    "directEngines": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Engines that start directly from their image, with no launch plan or attestation, as direct_values derives them; leave empty with engines",
+      "properties": {
+        "schema": {
+          "const": "narwhal.direct-engine-set"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "backend": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Backend whose direct start rendered the command"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Engines in the fleet; a disaggregated fleet needs a prefill and a decode engine"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+          "description": "Engine image by registry digest"
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "The engine command the backend's direct start renders"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ]
+          },
+          "description": "Variables the engine process needs beyond the image's environment"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port each engine listens on in its pod"
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^(cpu|memory)$"
+              },
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              }
+            },
+            "limits": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^(cpu|memory)$"
+              },
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              }
+            }
+          },
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "description": "Each engine's CPU and memory; the command's thread count follows the CPU limit"
+        },
+        "modelVolume": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1
+        },
+        "modelMount": {
+          "type": "string",
+          "pattern": "^/[^\\s]*$",
+          "description": "Where each engine pod mounts the model volume"
+        },
+        "sharedMount": {
+          "type": "string",
+          "pattern": "^/[^\\s]*$",
+          "description": "Where each engine pod mounts the directory every engine of the fleet shares"
+        },
+        "shared": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "storageClassName": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+              "description": "StorageClass of the shared claim"
+            },
+            "size": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+              "description": "Requested size of the shared claim"
+            }
+          },
+          "required": [
+            "storageClassName",
+            "size"
+          ],
+          "description": "The ReadWriteMany claim every engine shares, for the backend's KV handoff files"
+        },
+        "stateClaim": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "State PersistentVolumeClaim name"
+        },
+        "serviceName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Engines' headless Service name"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Namespace the engine URLs name"
+        }
+      },
+      "if": {
+        "minProperties": 1
+      },
+      "then": {
+        "required": [
+          "schema",
+          "schemaVersion",
+          "backend",
+          "count",
+          "image",
+          "command",
+          "env",
+          "port",
+          "resources",
+          "modelVolume",
+          "modelMount",
+          "sharedMount",
+          "shared",
+          "stateClaim",
+          "serviceName",
+          "namespace"
+        ]
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storageClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "StorageClass of the state volume"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+          "description": "Requested size of the state volume, such as 10Gi"
+        },
+        "claimName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "The state claim's name; the engines' plans name it once they exist"
+        }
+      },
+      "required": [
+        "storageClassName",
+        "size"
+      ]
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storageClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "StorageClass of the lease volume"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+          "description": "Requested size of the lease volume, such as 10Gi"
+        }
+      },
+      "required": [
+        "storageClassName",
+        "size"
+      ]
+    },
+    "routers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fleet": {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\\.json$",
+          "description": "Fleet file path on the state volume"
+        },
+        "storageClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "StorageClass of each router's own volume"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+          "description": "Size of each router's own volume"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the router pair and HAProxy"
+        }
+      },
+      "required": [
+        "fleet",
+        "storageClassName",
+        "size"
+      ]
+    },
+    "haproxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "clusterDomain": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "The cluster's DNS domain"
+        }
+      },
+      "required": [
+        "replicas",
+        "clusterDomain"
+      ]
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "engineApiKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "Variable the fleet file names"
+            },
+            "secretName": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+              "description": "Secret that holds the key"
+            },
+            "key": {
+              "type": "string",
+              "pattern": "^[-._A-Za-z0-9]+$",
+              "description": "Key in the Secret"
+            }
+          },
+          "required": [
+            "env",
+            "secretName",
+            "key"
+          ]
+        }
+      },
+      "required": []
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "description": "Job name"
+          },
+          "kind": {
+            "enum": [
+              "discovery",
+              "prepare",
+              "engine-check",
+              "state",
+              "fabric-probe",
+              "transfer-measure",
+              "fabric-server",
+              "fabric-client",
+              "sidecar-verify",
+              "finalize-fleet",
+              "profile",
+              "calibrate",
+              "preflight",
+              "router-check"
+            ]
+          },
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "deadlineSeconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "node": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "description": "Node the Job runs on"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$"
+            },
+            "propertyNames": {
+              "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+            }
+          },
+          "image": {
+            "type": "string",
+            "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+            "description": "Image by registry digest; default images.narwhal, or images.fabric for a fabric gate"
+          },
+          "runtimeClassName": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "hostNetwork": {
+            "type": "boolean"
+          },
+          "inputs": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "description": "ConfigMap mounted read-only at /narwhal-input"
+          },
+          "modelVolume": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1,
+            "description": "Volume source mounted read-only at /model"
+          },
+          "serviceAccount": {
+            "type": "boolean",
+            "description": "Run as the engines' service account, which may get their pods"
+          },
+          "keep": {
+            "type": "string",
+            "pattern": "^deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+$",
+            "description": "State volume directory mounted writable at /narwhal-keep"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "command",
+          "deadlineSeconds",
+          "keep"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "discovery",
+                    "fabric-probe",
+                    "fabric-server",
+                    "fabric-client",
+                    "transfer-measure"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "node"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "prometheus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
+              "description": "Prometheus image by registry digest"
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "storageClassName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                  "description": "StorageClass of the data claim"
+                },
+                "size": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+                  "description": "Requested size of the data claim, such as 20Gi"
+                }
+              },
+              "required": [
+                "storageClassName",
+                "size"
+              ]
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                },
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                }
+              },
+              "description": "Container resource requests and limits"
+            }
+          }
+        },
+        "grafana": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
+              "description": "Grafana image by registry digest"
+            },
+            "dashboard": {
+              "type": "string",
+              "description": "The dashboard python -m narwhal.observability.stack.chart_dashboard renders"
+            },
+            "admin": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "secretName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                },
+                "userKey": {
+                  "type": "string",
+                  "pattern": "^[-._a-zA-Z0-9]+$"
+                },
+                "passwordKey": {
+                  "type": "string",
+                  "pattern": "^[-._a-zA-Z0-9]+$"
+                }
+              },
+              "description": "The Secret that holds the Grafana admin login"
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "storageClassName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                  "description": "StorageClass of the data claim"
+                },
+                "size": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+                  "description": "Requested size of the data claim, such as 20Gi"
+                }
+              },
+              "required": [
+                "storageClassName",
+                "size"
+              ]
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                },
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                }
+              },
+              "description": "Container resource requests and limits"
+            }
+          }
+        },
+        "fleet": {
+          "type": "string",
+          "pattern": "^(|[a-z0-9][a-z0-9_.-]{0,62})$",
+          "description": "The fleet label of every series Prometheus scrapes; empty for the release name"
+        },
+        "alertmanagerUrl": {
+          "type": "string",
+          "pattern": "^(|https?://[^\\s/@?#]+:[0-9]+(/[^\\s?#]*)?)$",
+          "description": "Alertmanager that Prometheus sends alerts to; without one, alerts show only on the Prometheus alerts page"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "prometheus",
+          "grafana"
+        ],
+        "properties": {
+          "prometheus": {
+            "required": [
+              "image"
+            ],
+            "properties": {
+              "image": {
+                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          "grafana": {
+            "required": [
+              "image",
+              "dashboard",
+              "admin"
+            ],
+            "properties": {
+              "image": {
+                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+              },
+              "dashboard": {
+                "minLength": 1
+              },
+              "admin": {
+                "required": [
+                  "secretName",
+                  "userKey",
+                  "passwordKey"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "description": "The node each engine role's pod runs on",
+      "propertyNames": {
+        "pattern": "^engine-[1-9][0-9]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+      }
+    },
+    "modelVolumeSources": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "The model volume sources a fleet may use",
+      "items": {
+        "type": "string",
+        "enum": [
+          "persistentVolumeClaim",
+          "hostPath",
+          "nfs",
+          "csi"
+        ]
+      }
+    },
+    "modelHostPathPrefixes": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Host directories a fleet's hostPath model volume may be or lie in; empty turns hostPath off",
+      "items": {
+        "type": "string",
+        "maxLength": 4096,
+        "pattern": "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+      }
+    },
+    "modelNfsServers": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The NFS servers a fleet's nfs model volume may name; empty turns nfs off",
+      "items": {
+        "type": "string",
+        "maxLength": 253,
+        "pattern": "^[A-Za-z0-9.:\\[\\]-]+$"
+      }
+    },
+    "modelCsiDrivers": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The CSI drivers a fleet's csi model volume may use; empty turns csi off",
+      "items": {
+        "type": "string",
+        "maxLength": 63,
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+      }
+    }
+  },
+  "required": [
+    "images",
+    "engines",
+    "state",
+    "lease",
+    "routers"
+  ],
+  "if": {
+    "properties": {
+      "directEngines": {
+        "minProperties": 1
+      }
+    },
+    "required": [
+      "directEngines"
+    ]
+  },
+  "then": {
+    "properties": {
+      "engines": {
+        "maxProperties": 0,
+        "description": "Set engines or directEngines, not both"
+      },
+      "gates": {
+        "maxItems": 0,
+        "description": "Gate Jobs check attested engines; directEngines take none"
+      }
+    }
+  },
+  "else": {
+    "if": {
+      "properties": {
+        "routers": {
+          "properties": {
+            "enabled": {
+              "const": false
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        }
+      }
+    },
+    "then": {},
+    "else": {
+      "properties": {
+        "engines": {
+          "minProperties": 1,
+          "description": "The engines, from chart_values, or directEngines"
+        }
+      }
+    }
+  }
+}

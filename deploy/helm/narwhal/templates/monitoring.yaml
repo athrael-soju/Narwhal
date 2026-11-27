@@ -15,7 +15,13 @@ for a router pair, so Prometheus scrapes each engine once. */}}
 {{- $config = replace "<<alertmanager_scheme>>" $alertmanager.scheme $config }}
 {{- $config = replace "<<alertmanager_path>>" ($alertmanager.path | trimSuffix "/" | default "/") $config }}
 {{- $config = replace "<<alertmanagers>>" (ternary (quote $alertmanager.host) "" (ne .alertmanagerUrl "")) $config }}
-{{- $sidecars := (($.Values.engines).sidecars) | default list }}
+{{- /* Each engine pod's attestation sidecar, at the address the fleet's engine URLs give it. */}}
+{{- $sidecars := list }}
+{{- with ($.Values.fleet).engines }}
+{{- range $n, $_ := .nodes }}
+{{- $sidecars = append $sidecars (printf "engine-%d.engines.%s.svc:%d" (add1 $n) $.Release.Namespace (int $.Values.fleet.engines.ports.attestation)) }}
+{{- end }}
+{{- end }}
 {{- $sidecarTargets := "[]\n" }}
 {{- if $sidecars }}
 {{- $sidecarTargets = printf "[\n  {\n    \"targets\": [\n%s\n    ]\n  }\n]\n" (include "narwhal.jsonLines" $sidecars) }}
@@ -206,12 +212,17 @@ spec:
       containers:
         - name: grafana
           image: {{ .grafana.image }}
-          # The settings of src/narwhal/observability/stack/compose.yml, without the image renderer.
+          # The settings of src/narwhal/observability/stack/compose.yml, without the image
+          # renderer and with anonymous access off.
           env:
+            # Only a release that sets monitoring.grafana.anonymous lets anyone view the
+            # dashboards without signing in, as make observe does on a workstation.
             - name: GF_AUTH_ANONYMOUS_ENABLED
-              value: "true"
+              value: {{ .grafana.anonymous | default false | toString | quote }}
+            {{- if .grafana.anonymous }}
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: Viewer
+            {{- end }}
             - name: GF_SECURITY_ALLOW_EMBEDDING
               value: "true"
             - name: NARWHAL_PROMETHEUS_URL

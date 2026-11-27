@@ -51,7 +51,7 @@ from unittest.mock import patch
 
 import httpx
 
-from narwhal.deployment import kubernetes_gate, kubernetes_target
+from narwhal.deployment import kubernetes_gate, kubernetes_objects, kubernetes_target
 from narwhal.deployment.hosts import Host, write_private
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import helpers, write_environment
@@ -3138,7 +3138,7 @@ NARWHAL_IMAGE = "registry.example/narwhal@sha256:" + "a" * 64
 FABRIC_IMAGE = "registry.example/fabric@sha256:" + "b" * 64
 TREE = "f" * 64
 SECRET = "engine-key-value"
-GATES = Path(__file__).resolve().parents[2] / "deploy/helm/narwhal/templates/gates.yaml"
+CHART = Path(__file__).resolve().parents[2] / "deploy/helm/narwhal"
 # The gate kinds whose commands call an engine's API.
 ENGINE_CALLERS = {"transfer-measure", "finalize-fleet", "profile", "calibrate", "preflight"}
 COMPONENT = "app.kubernetes.io/component"
@@ -3148,9 +3148,8 @@ CLUSTER_NODES = (*NODES.values(), "gpu-c", "cpu-a")
 
 
 def keyed_kinds() -> set[str]:
-    """The gate kinds the chart gives the engine API key, as its gate template lists them."""
-    [names] = re.findall(r"has \.kind \(list ([^)]*)\)", GATES.read_text())
-    return set(re.findall(r'"([^"]+)"', names))
+    """The gate kinds whose Jobs get the engine API key, as the controller's builder gives it."""
+    return set(kubernetes_objects.CREDENTIAL_KINDS)
 
 
 def environment(root: Path) -> dict[str, str]:

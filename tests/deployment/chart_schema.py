@@ -1,8 +1,12 @@
-"""Check chart values against the chart's values.schema.json, as helm does before it renders.
+"""Check chart values against a values.schema.json, as helm does before it renders.
 
 The tests that drive the Kubernetes target upgrade a stubbed release dozens of times per run,
 too often to render each with helm. This checks the keywords the schema uses and refuses one
 it does not know, so a schema change cannot pass here unchecked.
+
+`SCHEMA` is the task 18 chart's schema, kept in `golden/` for the target's Helm release until
+task 26 moves the target onto the controller's objects. The chart itself no longer takes
+engines, gates or placement.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-SCHEMA = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "narwhal" / "values.schema.json"
+SCHEMA = Path(__file__).resolve().parent / "golden" / "release-values.schema.json"
 _ANNOTATIONS = {"$schema", "$id", "title", "description", "default", "examples"}
 _TYPES = {
     "object": dict,

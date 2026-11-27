@@ -1,0 +1,174 @@
+{{- /*
+The namespace's admission policy, so write access to the fleet cannot run a privileged pod
+beyond the engine and fabric pods the controller derives. It checks every pod, and the pod
+template of every Job, StatefulSet and Deployment, created or changed in the release's
+namespace:
+
+- Only engine pods and the gate Jobs that measure the fabric or KV transfers use the host
+  network or add IPC_LOCK. No pod adds another capability.
+- No pod is privileged, shares the host's process or IPC namespace, or runs without a seccomp
+  filter, except that an engine pod may run unconfined as the ROCm launch does.
+- Every image is named by registry digest.
+- The model volume follows the cluster admin's allow-lists, as the controller's
+  check_model_volume does, and is mounted read-only. Every other volume is a ConfigMap, Secret,
+  emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a
+  host path.
+*/ -}}
+{{- $name := include "narwhal.clusterName" . }}
+{{- $model := include "narwhal.fleet.modelVolume" . }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "admission") | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [statefulsets, deployments]
+  variables:
+    - name: pod
+      expression: "object.kind == 'Pod' ? object : object.spec.template"
+    - name: spec
+      expression: variables.pod.spec
+    - name: labels
+      expression: |-
+        has(variables.pod.metadata) && has(variables.pod.metadata.labels)
+          ? variables.pod.metadata.labels : {}
+    - name: component
+      expression: |-
+        'app.kubernetes.io/name' in variables.labels
+          && variables.labels['app.kubernetes.io/name'] == 'narwhal'
+          && 'app.kubernetes.io/component' in variables.labels
+          ? variables.labels['app.kubernetes.io/component'] : ''
+    - name: engine
+      expression: variables.component == 'engine'
+    - name: hostNetworkGate
+      expression: |-
+        variables.component == 'gate'
+          && '{{ include "narwhal.fleet.gateLabel" . }}' in variables.labels
+          && variables.labels['{{ include "narwhal.fleet.gateLabel" . }}'] in {{ include "narwhal.fleet.hostNetworkGates" . }}
+    - name: hostNetworkAllowed
+      expression: variables.engine || variables.hostNetworkGate
+    - name: containers
+      expression: |-
+        variables.spec.containers
+          + (has(variables.spec.initContainers) ? variables.spec.initContainers : [])
+          + (has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])
+    - name: volumes
+      expression: "has(variables.spec.volumes) ? variables.spec.volumes : []"
+    # The cluster admin's allow-lists, from the chart's values.
+    - name: sources
+      expression: {{ .Values.modelVolumeSources | toJson | toJson }}
+    - name: hostPathPrefixes
+      expression: {{ .Values.modelHostPathPrefixes | toJson | toJson }}
+    - name: nfsServers
+      expression: {{ .Values.modelNfsServers | toJson | toJson }}
+    - name: csiDrivers
+      expression: {{ .Values.modelCsiDrivers | toJson | toJson }}
+  validations:
+    - expression: |-
+        !has(variables.spec.hostNetwork) || !variables.spec.hostNetwork
+          || variables.hostNetworkAllowed
+      message: only an engine pod or a fabric or transfer-measure gate Job uses the host network
+      reason: Forbidden
+    - expression: |-
+        !(has(variables.spec.hostPID) && variables.spec.hostPID)
+          && !(has(variables.spec.hostIPC) && variables.spec.hostIPC)
+      message: no pod shares the host's process or IPC namespace
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.securityContext)
+          || !has(c.securityContext.privileged) || !c.securityContext.privileged)
+      message: no container is privileged
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.securityContext)
+          || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add)
+          || c.securityContext.capabilities.add.all(a,
+               a == 'IPC_LOCK' && variables.hostNetworkAllowed))
+      message: only an engine pod or a fabric or transfer-measure gate Job adds a capability, and only IPC_LOCK
+      reason: Forbidden
+    - expression: |-
+        variables.engine || (
+          !(has(variables.spec.securityContext) && has(variables.spec.securityContext.seccompProfile)
+            && variables.spec.securityContext.seccompProfile.type == 'Unconfined')
+          && variables.containers.all(c, !(has(c.securityContext)
+            && has(c.securityContext.seccompProfile)
+            && c.securityContext.seccompProfile.type == 'Unconfined')))
+      message: only an engine pod runs without a seccomp filter
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, has(c.image)
+          && c.image.matches(r'{{ include "narwhal.fleet.digest" . }}'))
+      message: every image is named by registry digest, <repository>@sha256:<hex>
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name == '{{ $model }}'
+          || has(v.configMap) || has(v.secret) || has(v.emptyDir) || has(v.projected)
+          || has(v.downwardAPI) || has(v.persistentVolumeClaim))
+      messageExpression: |-
+        'volume ' + variables.volumes.filter(v, !(v.name == '{{ $model }}'
+          || has(v.configMap) || has(v.secret) || has(v.emptyDir) || has(v.projected)
+          || has(v.downwardAPI) || has(v.persistentVolumeClaim)))[0].name
+          + ' is of a type only the model volume may use, or of none the namespace allows'
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}'
+          || (has(v.persistentVolumeClaim) && 'persistentVolumeClaim' in variables.sources)
+          || (has(v.hostPath) && 'hostPath' in variables.sources)
+          || (has(v.nfs) && 'nfs' in variables.sources)
+          || (has(v.csi) && 'csi' in variables.sources))
+      message: the model volume uses a source the cluster admin does not list in modelVolumeSources
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.hostPath) || (
+          has(v.hostPath.type) && v.hostPath.type == 'Directory'
+          && v.hostPath.path.matches(r'{{ include "narwhal.fleet.normalisedPath" . }}')
+          && !v.hostPath.path.matches(r'{{ include "narwhal.fleet.dotSegment" . }}')
+          && !v.hostPath.path.matches(r'{{ include "narwhal.fleet.hostPathRefused" . }}')
+          && variables.hostPathPrefixes.exists(p,
+               v.hostPath.path == p || v.hostPath.path.startsWith(p + '/'))))
+      message: a hostPath model volume is a normalised directory at or below one of modelHostPathPrefixes, outside every system, kubelet and container runtime directory
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.nfs)
+          || v.nfs.server in variables.nfsServers)
+      message: an nfs model volume names a server in modelNfsServers
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.csi)
+          || v.csi.driver in variables.csiDrivers)
+      message: a csi model volume uses a driver in modelCsiDrivers
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.volumeMounts)
+          || c.volumeMounts.all(m, m.name != '{{ $model }}' || (has(m.readOnly) && m.readOnly)))
+      message: every container mounts the model volume read-only
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "admission") | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}

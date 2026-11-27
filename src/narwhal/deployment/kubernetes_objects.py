@@ -72,6 +72,18 @@ HAPROXY = "haproxy"
 ROUTER_SERVICE = "routers"
 ROUTER_PODS = ("router-0", "router-1")
 HAPROXY_PORT = 8000
+# The routes HAProxy forwards to the active router: the completion routes, what a client or an
+# external load balancer reads about the fleet, and the engine targets Prometheus reads. Every
+# other route, such as /narwhal/state, /metrics or a lifecycle action, answers 404 there, and
+# the gate Jobs, the other router and monitoring reach it at a router's own address.
+SERVING_ROUTES = (
+    ("POST", "/v1/completions"),
+    ("POST", "/v1/chat/completions"),
+    ("GET", "/v1/models"),
+    ("GET", "/health"),
+    ("GET", "/ready"),
+    ("GET", "/narwhal/targets"),
+)
 
 # Gate Jobs, as `kubernetes_target` runs them.
 GATE_KINDS = (
@@ -101,6 +113,10 @@ CREDENTIAL_KINDS = (
 )
 # The gates that inspect or measure one node run there.
 NODE_KINDS = ("discovery", "fabric-probe", "fabric-server", "fabric-client", "transfer-measure")
+# The gates that run on the host's network: a fabric Job measures the interface KV uses, as
+# a transfer measurement does. The chart's admission policy allows the host network and
+# IPC_LOCK on these and on the engine pods only.
+HOST_NETWORK_KINDS = ("fabric-probe", "fabric-server", "fabric-client", "transfer-measure")
 # The one gate that reads the engine pods through the API, as their sidecars do.
 ACCOUNT_KIND = "sidecar-verify"
 KEEP_ENV = "NARWHAL_GATE_KEEP"
@@ -563,6 +579,10 @@ class GateJob:
             _name(self.inputs, f"{self.name}'s inputs ConfigMap")
         if self.model_volume is not None:
             _volume_source(self.model_volume, f"{self.name}'s model volume")
+        if self.host_network and self.kind not in HOST_NETWORK_KINDS:
+            raise ValueError(
+                f"{self.name}: only {', '.join(HOST_NETWORK_KINDS)} Jobs run on the host network"
+            )
         if self.service_account and self.kind != ACCOUNT_KIND:
             raise ValueError(
                 f"{self.name}: only a {ACCOUNT_KIND} Job runs as the engines' ServiceAccount"
@@ -696,10 +716,28 @@ def inputs(fleet: Fleet, gate: GateJob, files: Mapping[str, bytes]) -> dict[str,
 # HAProxy.
 
 
+def route_rules() -> str:
+    """The frontend lines that refuse every request but those `SERVING_ROUTES` names, matched
+    by method and by the exact path, so no encoding or extra slash reaches another route."""
+    lines = []
+    methods = sorted({method for method, _ in SERVING_ROUTES})
+    for method in methods:
+        paths = " ".join(path for verb, path in SERVING_ROUTES if verb == method)
+        lines.append(f"    acl narwhal_{method.lower()} method {method}")
+        lines.append(f"    acl narwhal_{method.lower()}_routes path {paths}")
+    allowed = " || ".join(f"narwhal_{m.lower()} narwhal_{m.lower()}_routes" for m in methods)
+    lines.append(f"    http-request deny deny_status 404 unless {allowed}")
+    return "\n".join(lines) + "\n"
+
+
 def haproxy_config(namespace: str, cluster_domain: str) -> str:
-    """deploy/ha/haproxy.cfg, with each router found by its pod's DNS name. A replaced router
-    pod is found at its new address within a second."""
+    """deploy/ha/haproxy.cfg, forwarding only `SERVING_ROUTES` and finding each router by its
+    pod's DNS name. A replaced router pod is found at its new address within a second."""
     config = resources.files("narwhal.deployment").joinpath("haproxy.cfg").read_text()
+    bind = f"    bind :{HAPROXY_PORT}\n"
+    if config.count(bind) != 1:
+        raise ValueError(f"deploy/ha/haproxy.cfg has no single line {bind.strip()!r}")
+    config = config.replace(bind, bind + route_rules())
     domain = f"{ROUTER_SERVICE}.{namespace}.svc.{cluster_domain}"
     for server, pod in zip("ab", ROUTER_PODS, strict=True):
         placeholder = f"server router-{server} ROUTER_{server.upper()}_ADDRESS:{HAPROXY_PORT}"

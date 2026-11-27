@@ -6,6 +6,7 @@ has no engine_contract, as for the engines of `narwhal dev`.
 */ -}}
 {{- with .Values.directEngines }}
 {{- if . }}
+{{- include "narwhal.directChecks" $ }}
 apiVersion: v1
 kind: Service
 metadata:

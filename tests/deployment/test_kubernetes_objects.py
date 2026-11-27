@@ -220,6 +220,62 @@ class GoldenTests(unittest.TestCase):
             annotations, {f"{GROUP}/config-sha256": hashlib.sha256(text.encode()).hexdigest()}
         )
 
+    def test_haproxy_forwards_only_the_serving_routes(self):
+        text = objects.haproxy(fleet())[0]["data"]["haproxy.cfg"]
+        frontend = text.split("frontend narwhal\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(frontend[0], "    bind :8000")
+        # The deny rule comes before anything sends a request on.
+        deny = next(n for n, line in enumerate(frontend) if "http-request deny" in line)
+        backend = next(n for n, line in enumerate(frontend) if "default_backend" in line)
+        self.assertLess(deny, backend)
+        acls: dict[str, list[str]] = {}
+        for line in frontend:
+            words = line.split()
+            if words[:1] == ["acl"]:
+                acls[words[1]] = words[2:]
+        condition = frontend[deny].split(" unless ", 1)[1]
+        self.assertEqual(
+            frontend[deny].split(" unless ")[0].split(),
+            ["http-request", "deny", "deny_status", "404"],
+        )
+
+        def forwarded(method: str, path: str) -> bool:
+            def holds(name: str) -> bool:
+                kind, *values = acls[name]
+                return (method if kind == "method" else path) in values
+
+            return any(
+                all(holds(name) for name in alternative.split())
+                for alternative in condition.split(" || ")
+            )
+
+        routes = {
+            ("GET", "/narwhal/state"),
+            ("GET", "/narwhal/handoff"),
+            ("GET", "/narwhal/lifecycle"),
+            ("POST", "/narwhal/lifecycle/drain"),
+            ("POST", "/narwhal/lifecycle/readmit"),
+            ("GET", "/narwhal/engines"),
+            ("POST", "/narwhal/engines"),
+            ("DELETE", "/narwhal/engines/n1"),
+            ("GET", "/metrics"),
+            ("GET", "/openapi.json"),
+            ("GET", "/docs"),
+            ("GET", "/v1/completions"),
+            ("POST", "/v1/models"),
+            ("POST", "/narwhal/targets"),
+            ("GET", "//health"),
+            *objects.SERVING_ROUTES,
+        }
+        self.assertEqual(
+            {route for route in routes if forwarded(*route)}, set(objects.SERVING_ROUTES)
+        )
+        self.assertIn(("GET", "/narwhal/targets"), objects.SERVING_ROUTES)
+        self.assertEqual(
+            {path for _, path in objects.SERVING_ROUTES if path.startswith("/narwhal/")},
+            {"/narwhal/targets"},
+        )
+
 
 class EngineTests(unittest.TestCase):
     @classmethod
@@ -378,6 +434,24 @@ class GateTests(unittest.TestCase):
         own = {v["name"]: v for v in jobs["discover-node-b"]["volumes"]}
         self.assertEqual(own["model"]["hostPath"], {"path": "/models", "type": "Directory"})
         self.assertEqual(jobs["discover-node-b"]["runtimeClassName"], "nvidia")
+
+    def test_only_fabric_and_transfer_jobs_run_on_the_host_network(self):
+        # The chart's admission policy allows the host network on these gate kinds alone.
+        for kind in objects.GATE_KINDS:
+            with self.subTest(kind):
+                settings = {"kind": kind, "node": "node-a", "host_network": True}
+                if kind in objects.HOST_NETWORK_KINDS:
+                    job = objects.job(fleet(), gate(entry("preflight"), **settings))
+                    self.assertTrue(template(job)["hostNetwork"])
+                else:
+                    with self.assertRaisesRegex(ValueError, "run on the host network"):
+                        gate(entry("preflight"), **settings)
+        on_host = {
+            item["kind"]
+            for item in INPUTS["gates"]
+            if template(objects.job(fleet(), gate(item))).get("hostNetwork")
+        }
+        self.assertLessEqual(on_host, set(objects.HOST_NETWORK_KINDS))
 
     def test_only_a_sidecar_verify_job_gets_a_token(self):
         for name, spec in self.jobs().items():

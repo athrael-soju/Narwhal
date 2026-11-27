@@ -718,7 +718,7 @@ class ModelVolumes(unittest.TestCase):
         )
 
     def test_the_chart_allows_a_claim_only_by_default(self):
-        chart = kubernetes_cluster.GATES.parents[1]
+        chart = kubernetes_cluster.CHART
         values = yaml.safe_load((chart / "values.yaml").read_text())
         self.assertEqual(fleet_resource.VolumePolicy.from_values(values), POLICY)
         self.assertEqual(fleet_resource.VolumePolicy.from_values({}), fleet_resource.VolumePolicy())

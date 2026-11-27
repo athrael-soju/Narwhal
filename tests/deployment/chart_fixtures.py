@@ -1,8 +1,9 @@
-"""Synthetic Kubernetes engine launches and the chart values a fleet of them takes.
+"""Synthetic Kubernetes engine launches, the engine values a fleet of them takes, and the chart
+values `make chart-check` renders the chart with.
 
-`python -m tests.deployment.chart_fixtures <values.json> <direct-values.json>` writes the
-values `make chart-check` renders the chart with: a fleet of attested engines, and a fleet of
-engines that start directly.
+`python -m tests.deployment.chart_fixtures <values.json> <direct-values.json>` writes those
+values: a release that installs a fleet of attested engines, and a release of engines that
+start directly.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import copy
 import io
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 from narwhal.backends import load as load_backend
@@ -23,6 +23,7 @@ from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.observability.stack.chart_dashboard import chart_dashboard
 from tests.backends.contract import MODEL_CONFIG, fixtures, launch_record
+from tests.deployment import fleet_fixtures
 from tests.deployment.fixtures import launcher_inputs
 from tests.deployment.pod_fixtures import INPUTS, RDMA_TRANSFER, kubernetes_env
 
@@ -73,20 +74,38 @@ def prepare_role(root: Path, number: int, backend: str = "vllm", **environment: 
     return run
 
 
-def values(engines: dict, **overrides: object) -> dict:
-    """Complete chart values around the `engines` values of a fleet."""
+# The engines' API credential, as the routers read it.
+CREDENTIALS = {
+    "engineApiKey": {
+        "env": "NARWHAL_ENGINE_API_KEY",
+        "secretName": "engine-credential",
+        "key": "api-key",
+    }
+}
+
+
+def example(root: Path, count: int = 2, backend: str = "vllm") -> tuple[list[Path], dict]:
+    """The launches of `count` engines, and what the controller builds their objects from:
+    their `engines` values, the Narwhal image their sidecars run and their API credential."""
+    runs = [prepare_role(root / f"engine-{n}", n, backend) for n in range(1, count + 1)]
     document = {
         "images": {"narwhal": NARWHAL_IMAGE, "haproxy": HAPROXY_IMAGE, "fabric": FABRIC_IMAGE},
-        "engines": engines,
-        "state": {"storageClassName": "shared", "size": "10Gi"},
+        "engines": engine_set.chart_values(runs),
+        "credentials": CREDENTIALS,
+    }
+    return runs, document
+
+
+def values(**overrides: object) -> dict:
+    """Complete chart values: a release that installs `fleet_fixtures.fleet()`, with monitoring."""
+    spec = fleet_fixtures.fleet()["spec"]
+    document = {
+        "images": {"narwhal": spec["images"]["narwhal"]},
+        "fleet": spec,
+        "state": {"claimName": "narwhal-state", "storageClassName": "shared", "size": "10Gi"},
+        "lease": {"storageClassName": "shared", "size": "1Gi"},
         "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
-        "credentials": {
-            "engineApiKey": {
-                "env": "NARWHAL_ENGINE_API_KEY",
-                "secretName": "engine-credential",
-                "key": "api-key",
-            }
-        },
+        "credentials": CREDENTIALS,
         "monitoring": {
             "enabled": True,
             "prometheus": {
@@ -104,39 +123,9 @@ def values(engines: dict, **overrides: object) -> dict:
                 },
             },
         },
-        "gates": [
-            {
-                "name": "discover-node-a",
-                "keep": "deploy/run-1/jobs/discover-node-a",
-                "kind": "discovery",
-                "command": ["python3", "-I", "-m", "narwhal.deployment.discovery"],
-                "deadlineSeconds": 3600,
-                "node": "node-a",
-            },
-            {
-                "name": "fabric-node-a-node-b-server",
-                "keep": "deploy/run-1/jobs/fabric-node-a-node-b-server",
-                "kind": "fabric-server",
-                "command": ["ib_write_bw"],
-                "deadlineSeconds": 300,
-                "node": "node-b",
-            },
-            {
-                "name": "preflight",
-                "keep": "deploy/run-1/jobs/preflight",
-                "kind": "preflight",
-                "command": ["narwhal-check", "--fleet", "/narwhal-state/fleet.json"],
-                "deadlineSeconds": 300,
-            },
-        ],
     }
     document.update(overrides)
     return document
-
-
-def example(root: Path, count: int = 2, backend: str = "vllm") -> tuple[list[Path], dict]:
-    runs = [prepare_role(root / f"engine-{n}", n, backend) for n in range(1, count + 1)]
-    return runs, values(engine_set.chart_values(runs))
 
 
 def direct_engines(count: int = 2, **overrides: object) -> dict:
@@ -162,12 +151,12 @@ def direct_engines(count: int = 2, **overrides: object) -> dict:
 
 
 def direct_example(count: int = 2) -> dict:
-    """Complete chart values of a fleet of direct engines, which take no gate Jobs."""
-    return values({}, directEngines=direct_engines(count), gates=[], credentials={})
+    """Complete chart values of direct engines, with no fleet resource."""
+    document = values(directEngines=direct_engines(count), credentials={})
+    del document["fleet"]
+    return document
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as folder:
-        _, document = example(Path(folder))
-    Path(sys.argv[1]).write_text(json.dumps(document, indent=2) + "\n")
+    Path(sys.argv[1]).write_text(json.dumps(values(), indent=2) + "\n")
     Path(sys.argv[2]).write_text(json.dumps(direct_example(), indent=2) + "\n")

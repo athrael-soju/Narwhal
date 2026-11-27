@@ -1,0 +1,33 @@
+{{- /*
+The routers accept connections only from HAProxy, the gate Jobs, the other router and
+monitoring. HAProxy forwards only the serving routes, so a client that reaches HAProxy reaches
+no control route. The engine pods run on the host network, where a NetworkPolicy does not apply.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-routers
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "router") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: narwhal
+      app.kubernetes.io/component: router
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range list "haproxy" "gate" "router" "prometheus" }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: narwhal
+              app.kubernetes.io/component: {{ . }}
+        {{- end }}
+        {{- with .Values.networkPolicy.monitoring }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8000
+{{- end }}

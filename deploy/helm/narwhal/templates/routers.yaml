@@ -35,19 +35,7 @@ spec:
         {{- include "narwhal.selector" (dict "root" . "component" "router") | nindent 8 }}
     spec:
       enableServiceLinks: false
-      # Only the router container mounts the token, below, for the router Lease.
-      serviceAccountName: {{ include "narwhal.routerName" . }}
       automountServiceAccountToken: false
-      # On several nodes the two routers never share one, so losing a node leaves a router. On
-      # one node both still schedule. Tainted nodes the routers cannot run on do not count.
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          nodeTaintsPolicy: Honor
-          labelSelector:
-            matchLabels:
-              {{- include "narwhal.selector" (dict "root" . "component" "router") | nindent 14 }}
       containers:
         - name: router
           image: {{ .Values.images.narwhal }}
@@ -66,8 +54,8 @@ spec:
             - "8000"
             - --journal
             - /narwhal-router/journal.jsonl
-            - --kubernetes-lease
-            - {{ include "narwhal.routerName" . }}
+            - --lease-path
+            - /narwhal-lease/router.lease
             {{- range .Values.routers.args }}
             - {{ . | quote }}
             {{- end }}
@@ -92,9 +80,8 @@ spec:
             - name: narwhal-state
               mountPath: /narwhal-state
               readOnly: true
-            - name: narwhal-api
-              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              readOnly: true
+            - name: narwhal-lease
+              mountPath: /narwhal-lease
             - name: router-state
               mountPath: /narwhal-router
       volumes:
@@ -102,23 +89,9 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "narwhal.stateClaim" . }}
             readOnly: true
-        - name: narwhal-api
-          projected:
-            defaultMode: 0444
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  expirationSeconds: 3600
-              - configMap:
-                  name: kube-root-ca.crt
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
-              - downwardAPI:
-                  items:
-                    - path: namespace
-                      fieldRef:
-                        fieldPath: metadata.namespace
+        - name: narwhal-lease
+          persistentVolumeClaim:
+            claimName: narwhal-lease
   volumeClaimTemplates:
     - metadata:
         name: router-state

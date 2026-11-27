@@ -1,0 +1,55 @@
+{{- /*
+The engines' ServiceAccount, which each engine pod's attestation sidecar and the sidecar-verify
+Jobs run as: it may get the namespace's pods and nothing else. The fleet-editor Role is the
+access to bind to whoever writes the fleet. Kubernetes' edit and admin roles do not include it,
+because writing a fleet lets the controller run hostNetwork engine and fabric pods and hand the
+engine API key Secret to them.
+*/ -}}
+{{- $engine := include "narwhal.engineAccount" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $engine }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "engine") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $engine }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "engine") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $engine }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "engine") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $engine }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $engine }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-fleet-editor
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  - apiGroups: [{{ include "narwhal.group" . | quote }}]
+    resources: [{{ include "narwhal.fleet.plural" . | quote }}]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [{{ include "narwhal.group" . | quote }}]
+    resources: [{{ printf "%s/status" (include "narwhal.fleet.plural" .) | quote }}]
+    verbs: [get]
