@@ -400,11 +400,15 @@ def _inputs(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any] | N
 def _decisions(decisions: Any) -> list[dict[str, Any]]:
     rows = []
     for decision in decisions:
-        rows.append(
-            {"stage": decision.key, "runs": decision.ran, "reasons": list(decision.reasons)}
-        )
+        row = {"stage": decision.key, "runs": decision.ran, "reasons": list(decision.reasons)}
+        if decision.unobserved:
+            row["unobserved"] = list(decision.unobserved)
+        rows.append(row)
         if decision.ran:
             print(f"{decision.key}: runs; {'; '.join(decision.reasons)}")
+        elif decision.unobserved:
+            facts = ", ".join(decision.unobserved)
+            print(f"{decision.key}: skipped unless run finds a change; {facts} not observed")
         else:
             print(f"{decision.key}: skipped; its recorded result holds")
     return rows

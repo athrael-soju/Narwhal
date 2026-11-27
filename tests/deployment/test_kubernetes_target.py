@@ -137,9 +137,8 @@ class KubernetesDeployTests(unittest.TestCase):
         for job in self.rig.jobs.values():
             entry = job["entry"]
             self.assertEqual(entry["command"][:2], ["sh", "-c"])
-            keep = entry["env"][kubernetes_target.KEEP_ENV]
             self.assertRegex(
-                keep, rf"^/narwhal-state/deploy/{record['run_id']}/stages/.+/jobs/{entry['name']}$"
+                entry["keep"], rf"^deploy/{record['run_id']}/stages/.+/jobs/{entry['name']}$"
             )
         # The inputs ConfigMaps go once their Job finished.
         self.assertEqual(self.rig.config_maps, {})
@@ -190,7 +189,7 @@ class KubernetesDeployTests(unittest.TestCase):
         for role, node in NODES.items():
             pod = self.rig.pods[role]
             self.assertEqual(pod["spec"]["nodeName"], node)
-            self.assertEqual(pod["spec"]["schedulingGates"], [])
+            self.assertNotIn("schedulingGates", pod["spec"])
             terms = pod["spec"]["affinity"]["nodeAffinity"][
                 "requiredDuringSchedulingIgnoredDuringExecution"
             ]["nodeSelectorTerms"]
@@ -248,6 +247,8 @@ class KubernetesDeployTests(unittest.TestCase):
             )
             self.assertIn(f"runs/deployment/.env.{role}", files)
             self.assertIn(f"config/engine-launch.{role}.json", files)
+            # The measurement calls no engine, so its Job neither gets nor asks for the key.
+            self.assertNotIn(b"API_KEY", files[f"runs/deployment/.env.{role}"])
         [profile] = [entry for entry in jobs if entry["kind"] == "profile"]
         self.assertIn("--no-router", profile["command"][-1])
         record = json.loads((self.run / "run.json").read_text())
@@ -314,7 +315,7 @@ class KubernetesDeployTests(unittest.TestCase):
             },
         )
 
-    def test_plan_starts_no_job_and_takes_each_link_as_recorded(self):
+    def test_plan_starts_no_job_and_says_it_did_not_observe_the_links(self):
         code, result = self.deploy("plan")
         self.assertEqual(code, 0, result)
         self.assertEqual(self.rig.releases, [])
@@ -322,10 +323,216 @@ class KubernetesDeployTests(unittest.TestCase):
         self.assertEqual(self.deploy("run")[0], 0)
         releases = len(self.rig.releases)
         self.rig.routes["gpu-a-to-gpu-b"] = "route-2"
-        code, result = self.deploy("plan")
-        self.assertEqual(code, 0, result)
-        self.assertFalse(any(row["runs"] for row in result["data"]["stages"]))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(["deploy", "plan", "--run", str(self.run), "--target", "kubernetes"])
+        self.assertEqual(code, 0)
         self.assertEqual(len(self.rig.releases), releases)
+        self.assertEqual(self.rig.calls["observe[gpu-a-to-gpu-b]"], 0)
+        # Observing a route takes a Job on each node, so plan reports the link unobserved
+        # rather than holding; run observes it.
+        lines = out.getvalue().splitlines()
+        for edge in EDGES:
+            self.assertIn(
+                f"fabric-edge[{edge}]: skipped unless run finds a change; "
+                f"link[{edge}] not observed",
+                lines,
+            )
+        self.assertIn("router-start: skipped; its recorded result holds", lines)
+        code, result = self.deploy("plan")
+        rows = {row["stage"]: row for row in result["data"]["stages"]}
+        self.assertEqual(
+            rows["fabric-edge[gpu-a-to-gpu-b]"]["unobserved"], ["link[gpu-a-to-gpu-b]"]
+        )
+        self.assertNotIn("unobserved", rows["router-start"])
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("fabric-edge[gpu-a-to-gpu-b]", result["data"]["ran"])
+
+    def assert_kept_running(self, releases: list[dict]) -> None:
+        """Every upgrade after the install keeps the engines, and every one after the routers
+        started keeps the routers and their dashboard."""
+        engines = routers = None
+        for number, release in enumerate(releases):
+            gates = [gate["kind"] for gate in release["gates"]]
+            if engines is not None:
+                self.assertTrue(release["engines"], f"release {number} {gates} dropped the engines")
+                self.assertEqual(release["placement"], NODES)
+            if routers is not None:
+                self.assertTrue(release["routers"]["enabled"], f"release {number} {gates}")
+                if gates:
+                    # Only router-start, which runs no Job in its upgrade, changes the fleet.
+                    self.assertEqual(release["routers"], routers, f"release {number} {gates}")
+                if "monitoring" in release:
+                    dashboard = release["monitoring"]["grafana"]["dashboard"]
+                    self.assertEqual(dashboard, "rendered dashboard")
+            engines = engines or release["engines"] or None
+            if release["routers"]["enabled"]:
+                routers = release["routers"]
+
+    def monitored(self) -> None:
+        values = json.loads(Path(self.rig.env["NARWHAL_KUBERNETES_VALUES"]).read_text())
+        values["monitoring"] = {
+            "enabled": True,
+            "prometheus": {
+                "image": "registry.example/prometheus@sha256:" + "d" * 64,
+                "storage": {"storageClassName": "local", "size": "20Gi"},
+            },
+            "grafana": {
+                "image": "registry.example/grafana@sha256:" + "9" * 64,
+                "admin": {"secretName": "grafana-admin", "userKey": "u", "passwordKey": "p"},
+            },
+        }
+        Path(self.rig.env["NARWHAL_KUBERNETES_VALUES"]).write_text(json.dumps(values))
+        dashboard = patch.object(
+            kubernetes_target.KubernetesDeployment,
+            "_dashboard",
+            staticmethod(lambda: "rendered dashboard"),
+        )
+        dashboard.start()
+        self.addCleanup(dashboard.stop)
+
+    def test_every_upgrade_keeps_the_engines_routers_and_dashboard_that_run(self):
+        self.monitored()
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assert_kept_running(self.rig.releases)
+        # A replaced engine is readmitted through the routers that still run.
+        old = self.rig.pods["engine-2"]
+        self.rig.pods["engine-2"] = {**old, "metadata": {**old["metadata"], "uid": "new-uid"}}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assert_kept_running(self.rig.releases)
+        self.assertIn("router-0", self.rig.pods)
+        # A link that changed is measured again with the engines and routers running.
+        self.rig.routes["gpu-a-to-gpu-b"] = "route-2"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("fabric-edge[gpu-a-to-gpu-b]", result["data"]["ran"])
+        self.assert_kept_running(self.rig.releases)
+
+    def test_preparing_one_engine_again_leaves_the_running_engines_in_the_release(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        installed = next(release for release in self.rig.releases if release["engines"])
+        record = json.loads((self.run / "run.json").read_text())
+        attempt = self.run / record["stages"]["engine-prepare[engine-1]"]["directory"]
+        (attempt / "launch" / "launch.json").write_text('{"entry": "changed"}')
+        before = len(self.rig.releases)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("engine-prepare[engine-1]", result["data"]["ran"])
+        self.assertNotIn("engine-prepare[engine-2]", result["data"]["ran"])
+        rerun = self.rig.releases[before:]
+        prepare = [r for r in rerun if any(g["kind"] == "prepare" for g in r["gates"])]
+        self.assertEqual(len(prepare), 1)
+        # Until install gives the release the new engines, it keeps the ones that run.
+        self.assertEqual(prepare[0]["engines"], installed["engines"])
+        self.assert_kept_running(self.rig.releases)
+        self.assertIn("engine-1", self.rig.pods)
+
+    def test_a_pin_whose_gate_removal_was_lost_is_finished_by_the_next_run(self):
+        self.rig.drop_ungate = {"engine-2"}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["data"]["failed_stage"], "engine-start[engine-2]")
+        spec = self.rig.pods["engine-2"]["spec"]
+        self.assertIn("affinity", spec)
+        self.assertEqual(spec["schedulingGates"], [{"name": kubernetes_target.PLACEMENT_GATE}])
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.rig.pods["engine-2"]["spec"]["nodeName"], NODES["engine-2"])
+        self.assertEqual(self.rig.calls["delete pod"], 0)
+
+    def test_a_gate_another_controller_added_ahead_of_the_placement_gate_stays(self):
+        self.rig.gate_ahead = {"engine-1"}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["data"]["failed_stage"], "engine-start[engine-1]")
+        # The patch tests the gate at the index it removes, so it removed neither gate.
+        self.assertEqual(
+            self.rig.pods["engine-1"]["spec"]["schedulingGates"],
+            [{"name": "example.com/other"}, {"name": kubernetes_target.PLACEMENT_GATE}],
+        )
+        # Its controller then releases its own gate.
+        self.rig.pods["engine-1"]["spec"]["schedulingGates"].pop(0)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.rig.pods["engine-1"]["spec"]["nodeName"], NODES["engine-1"])
+
+    def test_access_names_an_old_server_and_each_permission_the_identity_lacks(self):
+        self.rig.server = "v1.26.9"
+        self.rig.denied = {("patch", "pods"), ("list", "secrets"), ("get", "jobs.batch")}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        [error] = result["errors"]
+        self.assertEqual(error["stage"], "access")
+        self.assertIn("Kubernetes v1.26.9", error["message"])
+        self.assertIn("1.27 or later", error["message"])
+        for denied in ("patch pods", "list secrets", "get jobs.batch"):
+            self.assertIn(denied, error["message"])
+        for verb, resource in kubernetes_target.PERMISSIONS:
+            self.assertEqual(self.rig.calls[f"can-i {verb} {resource}"], 1, (verb, resource))
+        self.assertEqual(self.rig.releases, [])
+
+    def test_down_changes_only_the_release_this_run_installed(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        releases = len(self.rig.releases)
+        for name, value in (
+            ("NARWHAL_KUBERNETES_RELEASE", "another"),
+            ("NARWHAL_KUBERNETES_NAMESPACE", "elsewhere"),
+            ("NARWHAL_KUBERNETES_CONTEXT", "other-cluster"),
+        ):
+            with patch.dict(os.environ, {name: value}):
+                code, result = self.deploy("down")
+            self.assertEqual(code, 2, result)
+            self.assertIn("load the environment the run used", result["errors"][0]["message"])
+        self.assertEqual(len(self.rig.releases), releases)
+        # Another run upgraded the release since: down leaves its routers alone.
+        other = json.loads(json.dumps(self.rig.releases[-1]))
+        other["routers"]["fleet"] = "deploy/another-run/stages/fleet-limits/attempt-1/fleet.json"
+        self.rig.releases.append(other)
+        code, result = self.deploy("down")
+        self.assertEqual(code, 2, result)
+        self.assertIn("another run's fleet", result["errors"][0]["message"])
+        self.rig.releases.pop()
+        record = json.loads((self.run / "run.json").read_text())
+        record["target"] = "ssh"
+        (self.run / "run.json").write_text(json.dumps(record))
+        code, result = self.deploy("down")
+        self.assertEqual(code, 2, result)
+        self.assertIn("holds a ssh run", result["errors"][0]["message"])
+        self.assertEqual(len(self.rig.releases), releases)
+        self.assertIn("router-0", self.rig.pods)
+
+    def test_status_and_down_refuse_a_run_directory_other_users_may_write(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        releases = len(self.rig.releases)
+        self.run.chmod(0o770)
+        for action in ("status", "down"):
+            code, result = self.deploy(action)
+            self.assertEqual(code, 2, result)
+            self.assertIn("lets other users in", result["errors"][0]["message"])
+        self.assertEqual(len(self.rig.releases), releases)
+        self.run.chmod(0o700)
+        record = self.run / "run.json"
+        moved = self.run / "elsewhere.json"
+        record.rename(moved)
+        record.symlink_to(moved)
+        code, result = self.deploy("status")
+        self.assertEqual(code, 2, result)
+        self.assertIn("must be a regular file", result["errors"][0]["message"])
+        record.unlink()
+        moved.rename(record)
+        # The SSH target applies the same check to the same directory.
+        self.run.chmod(0o750)
+        for action in ("status", "down"):
+            out = io.StringIO()
+            argv = ["deploy", action, "--run", str(self.run), "--target", "ssh"]
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = cli.main([*argv, "--format", "json"])
+            result = json.loads(out.getvalue())
+            self.assertEqual(code, 2, result)
+            self.assertIn("lets other users in", result["errors"][0]["message"])
 
     def test_a_rejected_gate_names_its_recovery_and_the_next_run_resumes_there(self):
         self.rig.fail_kind = "engine-check"
@@ -387,6 +594,66 @@ class KubernetesDeployTests(unittest.TestCase):
         self.assertEqual(self.rig.releases, [])
 
 
+class StubClusterTests(unittest.TestCase):
+    """The stub refuses what the cluster refuses, so the tests above cannot pass on values or
+    patches a real cluster would reject."""
+
+    def setUp(self):
+        self.rig = Rig(Path(tempfile.mkdtemp()))
+        self.cluster = self.rig.cluster(self.rig.env, self.rig.root / "logs")
+
+    def values(self, **overrides) -> dict:
+        values = json.loads(Path(self.rig.env["NARWHAL_KUBERNETES_VALUES"]).read_text())
+        values["state"]["claimName"] = "narwhal-state"
+        values.update(engines={}, gates=[], placement={})
+        values["routers"]["enabled"] = False
+        values.update(overrides)
+        return values
+
+    def test_an_upgrade_checks_its_values_against_the_charts_schema(self):
+        self.cluster.upgrade(Path("chart"), self.values())
+        gate = {"name": "x", "kind": "fabric-probe", "command": ["ip"], "deadlineSeconds": 1}
+        for gates, reason in (
+            ([gate], "node is required"),
+            ([{**gate, "kind": "unknown", "keep": "deploy/x"}], "is not one of"),
+        ):
+            with self.assertRaisesRegex(ValueError, reason):
+                self.cluster.upgrade(Path("chart"), self.values(gates=gates))
+        values = self.values()
+        values["routers"]["enabled"] = True
+        with self.assertRaisesRegex(ValueError, "engines: minProperties"):
+            self.cluster.upgrade(Path("chart"), values)
+
+    def test_a_router_check_fails_while_no_router_runs(self):
+        entry = {
+            "name": "check",
+            "kind": "router-check",
+            "command": ["true"],
+            "deadlineSeconds": 1,
+            "keep": "deploy/run/jobs/check",
+        }
+        self.cluster.upgrade(Path("chart"), self.values(gates=[entry]))
+        self.assertEqual(self.rig.jobs["check"]["status"]["conditions"][0]["type"], "Failed")
+
+    def test_only_a_gated_pod_takes_node_affinity(self):
+        self.rig.pods["engine-1"] = self.rig.engine_pod("engine-1")
+        affinity = {"nodeAffinity": {"x": 1}}
+        self.cluster.patch(
+            "pod", "engine-1", [{"op": "add", "path": "/spec/affinity", "value": affinity}]
+        )
+        with self.assertRaises(kubernetes_target.ClusterError):
+            self.cluster.patch(
+                "pod",
+                "engine-1",
+                [{"op": "replace", "path": "/spec/affinity", "value": {"nodeAffinity": {}}}],
+            )
+        self.cluster.patch("pod", "engine-1", [{"op": "remove", "path": "/spec/schedulingGates/0"}])
+        with self.assertRaises(kubernetes_target.ClusterError):
+            self.cluster.patch(
+                "pod", "engine-1", [{"op": "replace", "path": "/spec/affinity", "value": affinity}]
+            )
+
+
 class GateTests(unittest.TestCase):
     def test_a_gate_returns_its_files_and_the_runner_checks_them(self):
         log = "noise\n" + emitted({"a.json": b"{}", "dir/b": b"x"})
@@ -433,6 +700,14 @@ class GateTests(unittest.TestCase):
     def test_every_job_keeps_its_output_and_status_on_the_state_volume(self):
         with tempfile.TemporaryDirectory() as folder:
             keep = Path(folder) / "jobs" / "one"
+            # The chart mounts the Job's keep directory; a Job without one fails at once.
+            missing = subprocess.run(
+                ["sh", "-c", kubernetes_target._KEEP, "sh", "true"],
+                env={**os.environ, kubernetes_target.KEEP_ENV: str(keep)},
+                check=False,
+            )
+            self.assertEqual(missing.returncode, 4)
+            keep.mkdir(parents=True)
             archive = Path(folder) / "inputs.tar.gz"
             archive.write_bytes(kubernetes_gate.pack({"a.txt": b"kept"}))
             inner = [

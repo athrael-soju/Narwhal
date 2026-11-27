@@ -440,6 +440,7 @@ class ChartTests(Rendering, unittest.TestCase):
         values["gates"] = [
             {
                 "name": "prepare-engine-1",
+                "keep": "deploy/run-1/jobs/prepare-engine-1",
                 "kind": "prepare",
                 "command": ["narwhal-engine", "prepare"],
                 "deadlineSeconds": 600,
@@ -449,6 +450,7 @@ class ChartTests(Rendering, unittest.TestCase):
             },
             {
                 "name": "probe-node-a",
+                "keep": "deploy/run-1/jobs/probe-node-a",
                 "kind": "fabric-probe",
                 "command": ["ip", "route"],
                 "deadlineSeconds": 60,
@@ -456,6 +458,7 @@ class ChartTests(Rendering, unittest.TestCase):
             },
             {
                 "name": "verify-engine-1",
+                "keep": "deploy/run-1/jobs/verify-engine-1",
                 "kind": "sidecar-verify",
                 "command": ["python", "-m", "narwhal.deployment.attestation_contract.cli"],
                 "deadlineSeconds": 300,
@@ -477,10 +480,61 @@ class ChartTests(Rendering, unittest.TestCase):
         probe = jobs["probe-node-a"]
         self.assertTrue(probe["hostNetwork"])
         self.assertNotIn("resources", probe["containers"][0])
-        self.assertNotIn("securityContext", probe["containers"][0])
+        self.assertEqual(
+            probe["containers"][0]["securityContext"],
+            {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+        )
         verify = jobs["verify-engine-1"]
         self.assertEqual(verify["serviceAccountName"], "narwhal-attestation")
         self.assertTrue(verify["automountServiceAccountToken"])
+
+    def test_only_the_gates_that_call_engines_get_the_key_and_fabric_jobs_are_confined(self):
+        values = copy.deepcopy(self.values)
+        values["gates"].append({**values["gates"][2], "name": "prepare", "kind": "prepare"})
+        jobs = {
+            d["metadata"]["name"]: d["spec"]["template"]["spec"]
+            for d in self.render(values)
+            if d["kind"] == "Job"
+        }
+
+        def env(job: str) -> dict:
+            return {e["name"]: e for e in jobs[job]["containers"][0]["env"]}
+
+        for job in ("preflight", "prepare"):
+            self.assertEqual(
+                env(job)["NARWHAL_ENGINE_API_KEY"]["valueFrom"]["secretKeyRef"],
+                {"name": "engine-credential", "key": "api-key"},
+            )
+        for job in ("discover-node-a", "fabric-node-a-node-b-server"):
+            self.assertNotIn("NARWHAL_ENGINE_API_KEY", env(job))
+            self.assertEqual(env(job)["NARWHAL_GATE_KEEP"]["value"], "/narwhal-keep")
+        server = jobs["fabric-node-a-node-b-server"]["containers"][0]
+        # The fabric image writes only its own keep directory and sees no other state.
+        self.assertEqual(
+            server["volumeMounts"],
+            [
+                {
+                    "name": "narwhal-state",
+                    "mountPath": "/narwhal-keep",
+                    "subPath": values["gates"][1]["keep"],
+                }
+            ],
+        )
+        self.assertEqual(
+            server["securityContext"],
+            {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
+            },
+        )
+        preflight = {m["mountPath"]: m for m in jobs["preflight"]["containers"][0]["volumeMounts"]}
+        self.assertEqual(set(preflight), {"/narwhal-keep", "/narwhal-state"})
+        self.assertNotIn("securityContext", jobs["preflight"]["containers"][0])
+        for keep in ("deploy/../fleet.json", "fleet.json", "deploy/run/.hidden"):
+            values["gates"][1]["keep"] = keep
+            self.assertIn("keep", self.helm(values).stderr, keep)
+        del values["gates"][1]["keep"]
+        self.assertIn("keep", self.helm(values).stderr)
 
     def test_placement_holds_each_engine_pod_until_the_run_pins_it(self):
         values = copy.deepcopy(self.values)

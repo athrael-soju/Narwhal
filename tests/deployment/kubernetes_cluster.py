@@ -1,16 +1,21 @@
 """A stubbed Kubernetes cluster for `narwhal deploy --target kubernetes` tests.
 
-`FakeCluster` stands in for `kubernetes_target.Cluster`. A release upgrade creates the engine
-pods, the router pods and one finished Job per gate entry, with the log its command would
-print. `Rig` holds the cluster's state across runs and patches the library functions the
-SSH tests also stub: record building, chart values, cache groups, the fabric and the
-attestation document.
+`FakeCluster` stands in for `kubernetes_target.Cluster`. A release upgrade checks its values
+against the chart's schema, then creates the engine pods, the router pods and one finished Job
+per gate entry, with the log its command would print. A router check fails when no router pod
+runs, and a pod patch is refused as the API server refuses it: node affinity only on a pod
+held at a scheduling gate, a failed `test` operation leaves the pod as it was.
+
+`Rig` holds the cluster's state across runs and patches the library functions the SSH tests
+also stub: record building, chart values, cache groups, the fabric and the attestation
+document.
 """
 
 from __future__ import annotations
 
 import base64
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -27,6 +32,7 @@ from narwhal.deployment import kubernetes_gate, kubernetes_target
 from narwhal.deployment.hosts import Host, write_private
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import helpers, write_environment
+from tests.deployment import chart_schema
 
 NAMESPACE = "fleet"
 NODES = {"engine-1": "gpu-a", "engine-2": "gpu-b"}
@@ -159,6 +165,14 @@ class Rig:
         self.layouts: dict[str, str] = {}
         # Engine pods a scheduler places off their node, once.
         self.misplace: dict[str, str] = {}
+        self.server = "v1.31.0"
+        # The (verb, resource) pairs the identity may not use.
+        self.denied: set[tuple[str, str]] = set()
+        # Pods whose scheduling gate removal the connection drops once, after their affinity.
+        self.drop_ungate: set[str] = set()
+        # Pods another controller adds its own scheduling gate to, ahead of the placement
+        # gate, once, between the run's read and its patch.
+        self.gate_ahead: set[str] = set()
 
     def engine_pod(self, role: str) -> dict:
         """A new engine pod: held at the placement gate, so it runs no container yet."""
@@ -172,7 +186,11 @@ class Rig:
         return pod
 
     def cluster(self, env: Mapping[str, str], logs: Path) -> FakeCluster:
-        return FakeCluster(self, logs)
+        return FakeCluster(self, env, logs)
+
+    def release(self) -> dict:
+        """The values the release runs now."""
+        return self.releases[-1] if self.releases else {}
 
     # The gates' outputs.
 
@@ -251,6 +269,10 @@ class Rig:
         target = kubernetes_target
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(target, "Cluster", self.cluster))
+            # A pod that never starts fails its wait at once rather than in half an hour.
+            stack.enter_context(patch.object(target, "POLL_SECONDS", 0.001))
+            stack.enter_context(patch.object(target, "START_SECONDS", 0.05))
+            stack.enter_context(patch.object(target, "ROUTER_SECONDS", 0.05))
             stack.enter_context(
                 patch.object(target.KubernetesDeployment, "_write_records", _write_records)
             )
@@ -268,11 +290,28 @@ class Rig:
             yield
 
     def chart_values(self, runs: Sequence[Path]) -> dict:
+        """Engine set values in the shape the chart's schema requires."""
         digest = hashlib.sha256(b"".join((Path(r) / "launch.json").read_bytes() for r in runs))
         return {
+            "schema": "narwhal.engine-set",
+            "schemaVersion": 1,
             "count": len(runs),
+            "image": IMAGE,
+            "gpuResource": "gpu.example.com/gpu",
+            "gpus": 1,
+            "rdmaResource": "rdma.example.com/hca",
+            "modelVolume": {"persistentVolumeClaim": {"claimName": "model"}},
+            "stateClaim": "narwhal-state",
+            "serviceName": "engines",
+            "namespace": NAMESPACE,
+            "sidecarImage": NARWHAL_IMAGE,
             "configMaps": [{"metadata": {"name": f"hooks-{digest.hexdigest()[:8]}"}, "data": {}}],
-            "access": {"serviceAccount": {"metadata": {"name": "narwhal-attestation"}}},
+            "access": {
+                "serviceAccount": {"metadata": {"name": "narwhal-attestation"}},
+                "role": {"metadata": {"name": "narwhal-attestation"}},
+                "roleBinding": {"metadata": {"name": "narwhal-attestation"}},
+            },
+            "podTemplate": {"initContainers": [], "containers": [], "volumes": []},
         }
 
     def derive(self, launch_config, layouts, transfers, package, out) -> dict:
@@ -302,19 +341,28 @@ class Rig:
 class FakeCluster:
     """`kubernetes_target.Cluster` over the rig's state."""
 
-    def __init__(self, rig: Rig, logs: Path) -> None:
+    def __init__(self, rig: Rig, env: Mapping[str, str], logs: Path) -> None:
         self.rig = rig
-        self.namespace = NAMESPACE
+        self.namespace = env.get(kubernetes_target.NAMESPACE, "")
+        self.release = env.get(kubernetes_target.RELEASE) or "narwhal"
+        self.context = env.get(kubernetes_target.CONTEXT, "")
         self.logs_dir = logs
 
+    def _refused(self, verb: str, cause: str) -> kubernetes_target.ClusterError:
+        return kubernetes_target.ClusterError(["kubectl", verb], 1, cause, self.logs_dir)
+
     def version(self) -> dict:
-        return {"serverVersion": {"gitVersion": "v1.31.0"}, "clientVersion": {}}
+        return {"serverVersion": {"gitVersion": self.rig.server}, "clientVersion": {}}
 
     def helm_version(self) -> str:
         return "v3.16.0"
 
     def can_i(self, verb: str, resource: str) -> bool:
-        return True
+        self.rig.calls[f"can-i {verb} {resource}"] += 1
+        return (verb, resource) not in self.rig.denied
+
+    def release_values(self) -> dict:
+        return json.loads(json.dumps(self.rig.release()))
 
     def kubectl(self, *args: str, data: str | None = None, timeout: float = 120) -> str:
         if args[:2] == ("get", "namespace"):
@@ -327,7 +375,7 @@ class FakeCluster:
     def get(self, kind: str, name: str) -> dict | None:
         rig = self.rig
         if kind == "pod":
-            return rig.pods.get(name)
+            return copy.deepcopy(rig.pods.get(name))
         if kind == "job":
             return rig.jobs.get(name)
         if kind == "statefulset":
@@ -359,21 +407,58 @@ class FakeCluster:
         return self.rig.logs[job]
 
     def patch(self, kind: str, name: str, operations: Sequence[Mapping[str, Any]]) -> None:
-        """A gated pod takes node affinity, then the scheduler places it once ungated."""
-        pod = self.rig.pods[name]
+        """A JSON patch of a pod, all or nothing. A gated pod takes node affinity it did not
+        have; the scheduler places it on that node once no gate holds it."""
+        rig = self.rig
+        if name in rig.gate_ahead:
+            rig.gate_ahead.discard(name)
+            rig.pods[name]["spec"]["schedulingGates"].insert(0, {"name": "example.com/other"})
+        pod = copy.deepcopy(rig.pods[name])
+        spec = pod["spec"]
         for operation in operations:
-            if operation["path"] == "/spec/affinity":
-                pod["spec"]["affinity"] = operation["value"]
-            elif operation["path"].startswith("/spec/schedulingGates/"):
-                del pod["spec"]["schedulingGates"][int(operation["path"].rsplit("/", 1)[1])]
-                terms = pod["spec"]["affinity"]["nodeAffinity"][
-                    "requiredDuringSchedulingIgnoredDuringExecution"
-                ]["nodeSelectorTerms"]
-                pod["spec"]["nodeName"] = terms[0]["matchFields"][0]["values"][0]
-                pod["status"] = _pod(name, "", ("engine", "attestation"))["status"]
-        self.rig.calls[f"pinned {name}"] += 1
+            op, path = operation["op"], operation["path"]
+            gates = spec.get("schedulingGates") or []
+            if path == "/spec/affinity":
+                if not gates:
+                    raise self._refused("patch", "pod updates may not change fields other than ...")
+                if (op == "add") == ("affinity" in spec):
+                    raise self._refused("patch", f"{op} /spec/affinity: wrong operation")
+                before = (spec.get("affinity") or {}).get("nodeAffinity")
+                if before is not None and before != operation["value"].get("nodeAffinity"):
+                    raise self._refused("patch", "a gated pod's node affinity may only be added")
+                spec["affinity"] = copy.deepcopy(operation["value"])
+            elif path.startswith("/spec/schedulingGates/"):
+                index = int(path.split("/")[3])
+                if index >= len(gates):
+                    raise self._refused("patch", f"{path}: no such index")
+                if op == "test":
+                    if gates[index]["name"] != operation["value"]:
+                        raise self._refused("patch", f"testing {path} failed")
+                elif op == "remove":
+                    if name in rig.drop_ungate:
+                        rig.drop_ungate.discard(name)
+                        raise self._refused("patch", "the connection to the server was lost")
+                    del gates[index]
+                else:
+                    raise AssertionError(operation)
+            else:
+                raise AssertionError(operation)
+        if "schedulingGates" in spec and not spec["schedulingGates"]:
+            del spec["schedulingGates"]
+            terms = (
+                (spec.get("affinity") or {})
+                .get("nodeAffinity", {})
+                .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+                .get("nodeSelectorTerms", [])
+            )
+            # Unpinned, the scheduler takes whichever node fits.
+            spec["nodeName"] = terms[0]["matchFields"][0]["values"][0] if terms else "gpu-any"
+            pod["status"] = _pod(name, "", ("engine", "attestation"))["status"]
+        rig.pods[name] = pod
+        rig.calls[f"pinned {name}"] += 1
 
     def upgrade(self, chart: Path, values: Mapping[str, Any]) -> None:
+        chart_schema.check(values)
         rig = self.rig
         rig.releases.append(json.loads(json.dumps(values)))
         engines = values.get("engines") or {}
@@ -390,13 +475,15 @@ class FakeCluster:
         else:
             for name in kubernetes_target.ROUTERS:
                 rig.pods.pop(name, None)
+        routers = all(name in rig.pods for name in kubernetes_target.ROUTERS)
         for entry in values["gates"]:
             if entry["name"] in rig.jobs:
                 continue
             rig.kinds.append(entry["kind"])
             if "inputs" in entry:
                 rig.inputs[entry["name"]] = rig.config_maps[entry["inputs"]]
-            failed = entry["kind"] == rig.fail_kind
+            unreachable = entry["kind"] == "router-check" and not routers
+            failed = entry["kind"] == rig.fail_kind or unreachable
             status = rig.fail_status if failed else 0
             pod = {
                 "metadata": {"name": entry["name"] + "-pod", "uid": str(uuid.uuid4())},
@@ -416,9 +503,12 @@ class FakeCluster:
                 "pod": pod,
                 "entry": dict(entry),
             }
-            rig.logs[entry["name"]] = (
-                "narwhal-gate: the check rejected the engine\n" if failed else rig.log(entry)
-            )
+            if unreachable:
+                rig.logs[entry["name"]] = "narwhal-host: no router answered at haproxy:8000\n"
+            elif failed:
+                rig.logs[entry["name"]] = "narwhal-gate: the check rejected the engine\n"
+            else:
+                rig.logs[entry["name"]] = rig.log(entry)
 
 
 def _write_records(self: kubernetes_target.KubernetesDeployment, context, observations) -> None:

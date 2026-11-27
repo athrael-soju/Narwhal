@@ -542,13 +542,19 @@
           "serviceAccount": {
             "type": "boolean",
             "description": "Run as the engines' service account, which may get their pods"
+          },
+          "keep": {
+            "type": "string",
+            "pattern": "^deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+$",
+            "description": "State volume directory mounted writable at /narwhal-keep"
           }
         },
         "required": [
           "name",
           "kind",
           "command",
-          "deadlineSeconds"
+          "deadlineSeconds",
+          "keep"
         ],
         "allOf": [
           {

@@ -64,6 +64,7 @@ __all__ = [
     "StageFailed",
     "StaticTopology",
     "Topology",
+    "Unobserved",
 ]
 
 # A temporary record that a crash left before its rename.
@@ -134,6 +135,33 @@ class Refreshed:
     checked: bool = True
 
 
+@dataclass(frozen=True)
+class Unobserved:
+    """What a probe returns in a pass that must not change the target when observing its fact
+    would, such as a route that only a Job on the node can read. `plan` keeps the recorded
+    value and says it did not observe it; `run` and `inspect` never take it as holding."""
+
+    value: Any
+
+
+def check_directory(directory: Path) -> None:
+    """Refuse a run directory another user owns or may write, or a run record that is not a
+    regular file: `run`, `status` and `down` act on what the record names."""
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError(f"{directory} must be a directory this user owns")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError(
+            f"{directory} has mode {stat.S_IMODE(info.st_mode):04o}, which lets other "
+            "users in; run chmod 700 on it"
+        )
+    record = directory / run_record.RECORD
+    if record.exists() or record.is_symlink():
+        found = record.lstat()
+        if not stat.S_ISREG(found.st_mode) or found.st_uid != os.getuid():
+            raise ValueError(f"{record} must be a regular file this user owns")
+
+
 Action = Callable[["StageContext"], "Outcome | None"] | Command
 # A probe reads a live fact again from the value its stage recorded. It returns the current
 # value, `Refreshed` for a restarted process that passed its check, or None when the process
@@ -191,11 +219,13 @@ class StaticTopology:
 
 @dataclass(frozen=True)
 class Decision:
-    """Whether one stage instance ran, and why."""
+    """Whether one stage instance ran, and why. `unobserved` names the live facts of a skipped
+    stage that `plan` could not observe without changing the target; `run` observes them."""
 
     key: str
     ran: bool
     reasons: tuple[str, ...]
+    unobserved: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -340,14 +370,7 @@ class Runner:
         self._check_inputs(inputs)
         with contextlib.suppress(FileExistsError):
             self.directory.mkdir(mode=0o700)
-        info = self.directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-            raise ValueError(f"{self.directory} must be a directory this user owns")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise ValueError(
-                f"{self.directory} has mode {stat.S_IMODE(info.st_mode):04o}, which lets other "
-                "users in; run chmod 700 on it"
-            )
+        check_directory(self.directory)
         with run_record.locked(self.directory), stages.cancellation():
             return _Run(self, inputs, until, order).execute()
 
@@ -372,6 +395,7 @@ class Runner:
         """
         if not (self.directory / run_record.RECORD).exists():
             raise ValueError(f"{self.directory} holds no run record; run narwhal deploy run")
+        check_directory(self.directory)
         guard = run_record.locked(self.directory) if refresh else contextlib.nullcontext()
         with guard:
             record = run_record.read(self.directory)
@@ -390,7 +414,9 @@ class Runner:
                     except Exception as error:  # a probe's own failure is what status reports
                         checks.append(LiveCheck(fact_key, name, "unreadable", str(error)))
                         continue
-                    if current is None:
+                    if isinstance(current, Unobserved):
+                        checks.append(LiveCheck(fact_key, name, "not observed"))
+                    elif current is None:
                         checks.append(LiveCheck(fact_key, name, "gone"))
                     elif isinstance(current, Refreshed) and not current.checked:
                         checks.append(LiveCheck(fact_key, name, "restarted, not checked"))
@@ -462,6 +488,8 @@ class _Run:
         self.pending: dict[str, str] = {}
         self.unknown: list[str] = []
         self.notes: list[str] = []
+        # The live facts of each stage instance a dry pass could not observe.
+        self.unobserved: dict[str, list[str]] = {}
         self.graph = runner.graph
         self.directory = runner.directory
         self.inputs = inputs
@@ -553,7 +581,12 @@ class _Run:
                     reasons = [f"runs after {invalidated}, whose output changed"]
                 elif self.unknown and not reasons:
                     reasons = [self._after(self.unknown[0])]
-                self.decisions.append(Decision(stage_key, bool(reasons), tuple(reasons)))
+                unobserved = tuple(self.unobserved.pop(stage_key, ()))
+                self.decisions.append(
+                    Decision(
+                        stage_key, bool(reasons), tuple(reasons), () if reasons else unobserved
+                    )
+                )
                 if reasons:
                     self.pending.setdefault(name, stage_key)
                     if any(reason.startswith("output ") for reason in reasons):
@@ -709,7 +742,8 @@ class _Run:
         previous = self.record["stages"].get(name)
         reasons = self._reasons(spec, instance, previous)
         if first or reasons:
-            self.decisions.append(Decision(name, bool(reasons), tuple(reasons)))
+            unobserved = () if reasons else tuple(self.unobserved.pop(name, ()))
+            self.decisions.append(Decision(name, bool(reasons), tuple(reasons), unobserved))
         if not reasons:
             assert previous is not None
             for fact in spec.produces:
@@ -741,6 +775,12 @@ class _Run:
                 except Exception as error:
                     error.add_note(f"live check of {fact_key} for {key(spec.name, instance)}")
                     raise
+                if isinstance(current, Unobserved):
+                    if self.dry:
+                        self.unobserved.setdefault(key(spec.name, instance), []).append(fact_key)
+                        current = current.value
+                    else:
+                        current = None
                 if isinstance(current, Refreshed) and not current.checked:
                     if self.dry:
                         self.notes.append(

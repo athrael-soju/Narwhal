@@ -108,6 +108,7 @@ def values(engines: dict, **overrides: object) -> dict:
         "gates": [
             {
                 "name": "discover-node-a",
+                "keep": "deploy/run-1/jobs/discover-node-a",
                 "kind": "discovery",
                 "command": ["python3", "-I", "-m", "narwhal.deployment.discovery"],
                 "deadlineSeconds": 3600,
@@ -115,6 +116,7 @@ def values(engines: dict, **overrides: object) -> dict:
             },
             {
                 "name": "fabric-node-a-node-b-server",
+                "keep": "deploy/run-1/jobs/fabric-node-a-node-b-server",
                 "kind": "fabric-server",
                 "command": ["ib_write_bw"],
                 "deadlineSeconds": 300,
@@ -122,6 +124,7 @@ def values(engines: dict, **overrides: object) -> dict:
             },
             {
                 "name": "preflight",
+                "keep": "deploy/run-1/jobs/preflight",
                 "kind": "preflight",
                 "command": ["narwhal-check", "--fleet", "/narwhal-state/fleet.json"],
                 "deadlineSeconds": 300,

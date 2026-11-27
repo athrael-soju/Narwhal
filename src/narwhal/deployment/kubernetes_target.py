@@ -57,7 +57,7 @@ from .launch_engine.kubernetes import LAUNCHES
 from .launch_engine.plan import conv_state_layers
 from .role_env import HELPER_DIRECTORY, helpers, read_environment, select_values, write_environment
 from .run_record import PASSED, key
-from .runner import Input, Outcome, Runner, StageContext
+from .runner import Input, Outcome, Runner, StageContext, Unobserved, check_directory
 
 TARGET = "kubernetes"
 LAST_STAGE = "router-start"
@@ -221,6 +221,16 @@ class Cluster:
             data=json.dumps(values),
         )
 
+    def release_values(self) -> dict:
+        """The values the release runs now, or {} before the first install."""
+        try:
+            output = self.helm("get", "values", self.release, "--output", "json")
+        except ClusterError as error:
+            if "not found" in str(error):
+                return {}
+            raise
+        return dict(json.loads(output) or {})
+
     def version(self) -> dict:
         return dict(json.loads(self.kubectl("version", "--output", "json")))
 
@@ -287,6 +297,44 @@ def gate_files(output: str) -> dict[str, bytes]:
     return files
 
 
+# The release's objects, which helm reads, creates, changes and removes; helm keeps its
+# releases in Secrets.
+_RELEASE_KINDS = (
+    "secrets",
+    "configmaps",
+    "services",
+    "serviceaccounts",
+    "persistentvolumeclaims",
+    "statefulsets.apps",
+    "deployments.apps",
+    "jobs.batch",
+    "roles.rbac.authorization.k8s.io",
+    "rolebindings.rbac.authorization.k8s.io",
+)
+# Every verb and resource a run needs, as `kubectl auth can-i` takes them.
+PERMISSIONS = (
+    *(
+        (verb, kind)
+        for kind in _RELEASE_KINDS
+        for verb in ("get", "list", "create", "patch", "delete")
+    ),
+    ("get", "pods"),
+    ("list", "pods"),
+    ("patch", "pods"),
+    ("delete", "pods"),
+    ("get", "pods/log"),
+    ("get", "nodes"),
+)
+# Pod scheduling gates are on by default from this Kubernetes version.
+MINIMUM_SERVER = (1, 27)
+
+
+def server_version(server: Mapping[str, Any]) -> tuple[int, int]:
+    """The server's major and minor version, as (0, 0) when it reports none."""
+    match = re.match(r"v?(\d+)\.(\d+)", str(server.get("gitVersion", "")))
+    return (int(match[1]), int(match[2])) if match else (0, 0)
+
+
 def _job_name(kind: str, label: str, seed: str) -> str:
     stem = re.sub(r"[^a-z0-9-]+", "-", f"{kind}-{label}".lower()).strip("-")[:48].strip("-")
     return f"{stem}-{hashlib.sha256(seed.encode()).hexdigest()[:10]}"
@@ -305,7 +353,7 @@ def _gate_command(*, inputs: bool, returns: Mapping[str, str], command: Sequence
 # Every gate Job keeps its output on the state volume, in the directory this variable names,
 # and still prints it for the runner: the log, the exit status, and the files it returns.
 KEEP_ENV = kubernetes_gate.KEEP_ENV
-_KEEP = f"""mkdir -p "${KEEP_ENV}" || exit 4
+_KEEP = f"""[ -d "${KEEP_ENV}" ] || exit 4
 {{ "$@"; echo "$?" > "${KEEP_ENV}/status"; }} 2>&1 | tee "${KEEP_ENV}/output.log"
 exit "$(cat "${KEEP_ENV}/status")"
 """
@@ -630,7 +678,6 @@ class KubernetesDeployment:
         self.announce: Callable[[str], None] = lambda line: print(line, flush=True)
         self._fabric: tuple[str, fabric.Fabric] | None = None
         # The fleet file router-start gives the routers, while it runs.
-        self._router_fleet: str | None = None
         self._started = 0
 
     # The runner.
@@ -733,44 +780,51 @@ class KubernetesDeployment:
             )
         return {role: nodes[role] for role in roles}
 
-    def router_fleet(self) -> str:
-        """The fleet file the routers serve, once router-start set it: every later upgrade
-        keeps the routers running."""
-        if self._router_fleet is not None:
-            return self._router_fleet
-        try:
-            return str(_json(self.recorded("router-start") / "router.json")["fleet"])
-        except (ValueError, OSError, KeyError):
-            return ""
-
     def values(
         self,
+        cluster: Cluster,
         gates: Sequence[Mapping[str, Any]] = (),
         *,
-        engines: bool = True,
+        engines: Mapping[str, Any] | None = None,
         fleet: str | None = None,
     ) -> dict:
-        fleet = self.router_fleet() if fleet is None else fleet
+        """The release's values for one upgrade: the base values, the gate Jobs, and what the
+        release runs now.
+
+        Every upgrade keeps the engines, their placement, the routers and the rendered
+        dashboard the release runs, read from the release itself, so a stage that only runs
+        Jobs leaves them running. `engines` replaces the engines, and `fleet` starts the
+        routers on that fleet file, or stops them when empty.
+        """
+        current = cluster.release_values()
         values = copy.deepcopy(base_values(self.env))
         values.setdefault("state", {})["claimName"] = self.env[STATE_CLAIM]
+        if engines is None:
+            values["engines"] = copy.deepcopy(current.get("engines") or {})
+            values["placement"] = dict(current.get("placement") or {})
+        else:
+            values["engines"] = dict(engines)
+            roles = [f"engine-{n}" for n in range(1, int(engines.get("count", 0)) + 1)]
+            values["placement"] = self.placement(roles) if engines else {}
         routers = values.setdefault("routers", {})
-        routers["enabled"] = bool(fleet)
-        if fleet:
-            routers["fleet"] = fleet
-        values["engines"] = {}
-        if engines:
-            try:
-                launches = self.launches()
-            except ValueError:
-                launches = {}
-            if launches:
-                values["engines"] = engine_set.chart_values(list(launches.values()))
-                values["placement"] = self.placement(list(launches))
+        running = current.get("routers") or {}
+        if fleet is None:
+            routers["enabled"] = bool(running.get("enabled"))
+            if routers["enabled"]:
+                routers["fleet"] = running["fleet"]
+        else:
+            routers["enabled"] = bool(fleet)
+            if fleet:
+                routers["fleet"] = fleet
         values["gates"] = list(gates)
-        if values.get("monitoring", {}).get("enabled") and fleet:
-            values["monitoring"].setdefault("grafana", {})
-            if not values["monitoring"]["grafana"].get("dashboard"):
-                values["monitoring"]["grafana"]["dashboard"] = self._dashboard()
+        monitoring = values.get("monitoring") or {}
+        # The chart's schema needs the dashboard whenever monitoring is on, though the chart
+        # runs monitoring only with the routers.
+        if monitoring.get("enabled"):
+            grafana = monitoring.setdefault("grafana", {})
+            shown = ((current.get("monitoring") or {}).get("grafana") or {}).get("dashboard")
+            if not grafana.get("dashboard"):
+                grafana["dashboard"] = shown or self._dashboard()
         return values
 
     @staticmethod
@@ -835,14 +889,12 @@ class KubernetesDeployment:
                         },
                     }
                 )
-            keep = f"{self.state_dir(context)}/jobs/{name}"
-            kept = replace(
-                gate,
-                command=["sh", "-c", _KEEP, "sh", *gate.command],
-                env={**gate.env, KEEP_ENV: keep},
-            )
-            entries.append(self._entry(kept, name, inputs))
-        cluster.upgrade(chart_path(self.env), self.values([*running, *entries]))
+            kept = replace(gate, command=["sh", "-c", _KEEP, "sh", *gate.command])
+            entry = self._entry(kept, name, inputs)
+            # The chart sets the Job's keep directory, the only one a confined Job may write.
+            entry["keep"] = self.state_dir(context).removeprefix(f"{STATE}/") + f"/jobs/{name}"
+            entries.append(entry)
+        cluster.upgrade(chart_path(self.env), self.values(cluster, [*running, *entries]))
         return entries
 
     def finish_gate(
@@ -935,24 +987,22 @@ class KubernetesDeployment:
         version = cluster.version()
         helm = cluster.helm_version()
         namespace = cluster.kubectl("get", "namespace", cluster.namespace, "--output", "name")
-        needed = [
-            ("create", "jobs.batch"),
-            ("get", "pods"),
-            ("get", "pods/log"),
-            ("delete", "pods"),
-            ("create", "configmaps"),
-            ("delete", "configmaps"),
-            ("create", "statefulsets.apps"),
-            ("create", "persistentvolumeclaims"),
-            ("create", "roles.rbac.authorization.k8s.io"),
-        ]
+        problems = []
+        server = version.get("serverVersion", {})
+        if server_version(server) < MINIMUM_SERVER:
+            problems.append(
+                f"the cluster runs Kubernetes {server.get('gitVersion', 'of an unknown version')}; "
+                "the chart holds engine pods at a scheduling gate, which needs "
+                f"{'.'.join(map(str, MINIMUM_SERVER))} or later"
+            )
         denied = [
-            f"{verb} {resource}" for verb, resource in needed if not cluster.can_i(verb, resource)
+            f"{verb} {resource}"
+            for verb, resource in PERMISSIONS
+            if not cluster.can_i(verb, resource)
         ]
         nodes = {}
         resource = self.env[GPU_RESOURCE]
         rdma = self.env.get(RDMA_RESOURCE, "")
-        problems = []
         for role, name in engine_nodes(self.env).items():
             node = cluster.kubectl("get", "node", name, "--output", "json")
             allocatable = json.loads(node).get("status", {}).get("allocatable", {})
@@ -967,7 +1017,9 @@ class KubernetesDeployment:
         _private(
             context.directory / "access.json",
             {
-                "server": version.get("serverVersion", {}),
+                # down acts only on this context, namespace and release.
+                "cluster": self.identity(),
+                "server": server,
                 "client": version.get("clientVersion", {}),
                 "helm": helm,
                 "namespace": namespace.strip(),
@@ -1189,15 +1241,17 @@ class KubernetesDeployment:
 
     # engine-prepare
 
-    def job_env(self, role_env: Mapping[str, str]) -> bytes:
-        """A role file for a Job's inputs ConfigMap, which holds no secret: the engine API key
-        comes from the Job's own variable, which the chart reads from its Secret."""
+    def job_env(self, role_env: Mapping[str, str], *, credential: bool) -> bytes:
+        """A role file for a Job's inputs ConfigMap, which holds no secret. With `credential`,
+        the engine API key comes from the Job's own variable, which the chart sets from its
+        Secret for the gates that need it; without, the file names no key."""
         fleet = _json(self.package() / "fleet.json")
         key = fleet.get("engine", {}).get("engine_api_key_env")
         lines = []
         for name, value in sorted(role_env.items()):
             if key and name in (key, "NARWHAL_ENGINE_API_KEY"):
-                lines.append(f'export {name}="${{{key}:?the Job has no {key}}}"\n')
+                if credential:
+                    lines.append(f'export {name}="${{{key}:?the Job has no {key}}}"\n')
             else:
                 lines.append(f"export {name}={shlex.quote(value)}\n")
         return "".join(lines).encode()
@@ -1208,7 +1262,7 @@ class KubernetesDeployment:
         host = self.node(role)
         role_env = read_environment(package / host / f".env.{role}")
         files = {
-            ".env": self.job_env(role_env),
+            ".env": self.job_env(role_env, credential=True),
             f"config/engine-launch.{role}.json": (
                 package / host / f"engine-launch.{role}.json"
             ).read_bytes(),
@@ -1277,7 +1331,8 @@ class KubernetesDeployment:
 
     def install(self, context: StageContext) -> None:
         cluster = self.cluster(context)
-        values = self.values()
+        launches = self.launches()
+        values = self.values(cluster, engines=engine_set.chart_values(list(launches.values())))
         if retained := self._retained_maps(cluster, values):
             values["engines"]["configMaps"] = [*values["engines"]["configMaps"], *retained]
         _private(context.directory / "values.json", _redacted(values))
@@ -1376,21 +1431,39 @@ class KubernetesDeployment:
         engine on, then release it to the scheduler.
 
         A gated pod accepts added node affinity, so each pod of the one StatefulSet lands on
-        its own node."""
+        its own node. A pin an earlier attempt half applied, with the affinity already naming
+        this node, only needs the gate removed.
+        """
         spec = pod.get("spec", {})
         gates = [gate.get("name") for gate in spec.get("schedulingGates", []) or []]
         if PLACEMENT_GATE not in gates:
             return
-        if spec.get("affinity", {}).get("nodeAffinity"):
-            raise ValueError(f"pod {role} already has node affinity; the chart sets none")
         node = self.node(role)
         term = {"matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]}
         affinity = {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [term]}}
-        operation = "replace" if "affinity" in spec else "add"
-        value = {**spec.get("affinity", {}), "nodeAffinity": affinity}
-        cluster.patch("pod", role, [{"op": operation, "path": "/spec/affinity", "value": value}])
+        present = (spec.get("affinity") or {}).get("nodeAffinity")
+        if present is None:
+            value = {**(spec.get("affinity") or {}), "nodeAffinity": affinity}
+            operation = "replace" if "affinity" in spec else "add"
+            cluster.patch(
+                "pod", role, [{"op": operation, "path": "/spec/affinity", "value": value}]
+            )
+        elif present != affinity:
+            raise ValueError(
+                f"pod {role} has node affinity for another node than {node}; delete the pod so "
+                "the StatefulSet makes a new one"
+            )
         index = gates.index(PLACEMENT_GATE)
-        cluster.patch("pod", role, [{"op": "remove", "path": f"/spec/schedulingGates/{index}"}])
+        path = f"/spec/schedulingGates/{index}"
+        cluster.patch(
+            "pod",
+            role,
+            [
+                # The gate at this index must still be this one when the API applies the patch.
+                {"op": "test", "path": f"{path}/name", "value": PLACEMENT_GATE},
+                {"op": "remove", "path": path},
+            ],
+        )
         self.announce(f"engine-start[{role}]: pinned pod {role} to node {node}")
 
     def _wait_pod(
@@ -1484,7 +1557,7 @@ fi
         node = engine.host.id
         files = {
             f"runs/deployment/.env.{role}": self.job_env(
-                read_environment(package / node / f".env.{role}")
+                read_environment(package / node / f".env.{role}"), credential=False
             ),
             f"config/engine-launch.{role}.json": (
                 package / node / f"engine-launch.{role}.json"
@@ -1862,8 +1935,7 @@ fi
             kept = self._readmit(context, cluster, previous, state)
             if kept is not None:
                 return kept
-        self._router_fleet = fleet_path
-        values = self.values()
+        values = self.values(cluster, fleet=fleet_path)
         _private(context.directory / "values.json", _redacted(values))
         cluster.upgrade(chart_path(self.env), values)
         deadline = self.clock() + ROUTER_SECONDS
@@ -1957,8 +2029,8 @@ fi
 
     def link_now(self, instance: str, recorded: Any) -> Any:
         if self.dry:
-            # Observing a route runs Jobs, which a dry pass must not; it takes the record.
-            return recorded
+            # Observing a route needs a Job on each node, which a dry pass must not start.
+            return Unobserved(recorded)
         plan = self.fabric_plan()
         edge = next(edge for edge in plan.edges() if edge.name == instance)
         shell = JobShell(self, None)
@@ -1970,14 +2042,33 @@ fi
     # down
 
     def down(self) -> list[dict[str, Any]]:
-        """Remove the routers, engines and gate Jobs from the release, keeping the volumes.
+        """Remove the routers, engines and gate Jobs this run installed, keeping the volumes.
 
-        Reports each process the run recorded, and whether it still ran until now.
+        Only a release this run installed is changed: the record must be a Kubernetes run of
+        the same context, namespace and release, and the release must still run the engines
+        and fleet this run gave it. Reports each process the run recorded, and whether it ran
+        until now.
         """
+        check_directory(self.directory)
         stopped = []
         with run_record.locked(self.directory):
             record = run_record.read(self.directory)
+            if record["target"] != TARGET:
+                raise ValueError(f"{self.directory} holds a {record['target']} run")
+            try:
+                access = _json(self.recorded("access") / "access.json")
+            except ValueError:
+                return []
+            recorded_cluster = access.get("cluster", {})
+            here = self.identity()
+            if differing := sorted(k for k in here if recorded_cluster.get(k) != here[k]):
+                raise ValueError(
+                    f"the run deployed to another {', '.join(differing)} than the environment "
+                    f"names: {recorded_cluster}; load the environment the run used"
+                )
             cluster = self.cluster()
+            current = cluster.release_values()
+            self._owned(record, current)
             for entry in record["stages"].values():
                 if entry["stage"] not in ("router-start", "sidecar-start", "engine-start"):
                     continue
@@ -1985,16 +2076,43 @@ fi
                     pod = cluster.get("pod", process.get("pod", process["name"]))
                     uid = process.get("pod_uid")
                     ran = pod is not None and (uid is None or pod["metadata"].get("uid") == uid)
-                    stopped.append(
-                        {
-                            "name": process["name"],
-                            "host": process.get("host", "cluster"),
-                            "stopped": ran,
-                        }
-                    )
-            values = self.values(engines=False, fleet="")
-            cluster.upgrade(chart_path(self.env), values)
+                    host = process.get("host", "cluster")
+                    stopped.append({"name": process["name"], "host": host, "stopped": ran})
+            if current:
+                values = self.values(cluster, engines={}, fleet="")
+                cluster.upgrade(chart_path(self.env), values)
         return stopped
+
+    def identity(self) -> dict[str, str]:
+        """The cluster, namespace and release the environment names."""
+        cluster = self.cluster()
+        return {
+            "context": cluster.context,
+            "namespace": cluster.namespace,
+            "release": cluster.release,
+        }
+
+    def _owned(self, record: Mapping[str, Any], current: Mapping[str, Any]) -> None:
+        """Refuse a release that runs engines or a fleet another run gave it."""
+        try:
+            installed = _json(self.recorded("install") / "values.json")["engines"]
+        except ValueError:
+            installed = {}
+        names = {item["metadata"]["name"] for item in installed.get("configMaps", [])}
+        engines = current.get("engines") or {}
+        live = {item["metadata"]["name"] for item in engines.get("configMaps", [])}
+        if not live <= names:
+            raise ValueError(
+                "the release runs engines another run installed; down leaves them to that run"
+            )
+        routers = current.get("routers") or {}
+        if routers.get("enabled") and not str(routers.get("fleet", "")).startswith(
+            f"deploy/{record['run_id']}/"
+        ):
+            raise ValueError(
+                f"the release's routers serve {routers.get('fleet')}, another run's fleet; down "
+                "leaves them to that run"
+            )
 
 
 def _b64(data: bytes) -> str:

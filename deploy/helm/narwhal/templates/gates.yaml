@@ -1,14 +1,21 @@
 {{- /*
 One Job per entry of `gates`, which `narwhal deploy --target kubernetes` sets for the stage it
-runs. Every gate Job mounts the whole state volume writable at /narwhal-state; it is the only
-workload that may write the engines' records there. A Job runs once, within its stage's time
-limit, and the runner reruns a failed stage itself. A gate's `inputs` names the ConfigMap the
-runner made for it, mounted read-only at /narwhal-input.
+runs. A Job runs once, within its stage's time limit, and the runner reruns a failed stage
+itself. A gate's `inputs` names the ConfigMap the runner made for it, mounted read-only at
+/narwhal-input, and its `keep` names the state volume directory mounted writable at
+/narwhal-keep, where the Job keeps its output and exit status.
+
+A Narwhal gate mounts the whole state volume writable at /narwhal-state; the gates are the only
+workloads that may write the engines' records there. A fabric gate runs the third-party
+fabric image, so it mounts only its keep directory, keeps no capability but IPC_LOCK, and gets
+no engine API key. Only the gates that call engines, or that prepare the launch the engines'
+checks read the key from, get the key.
 */ -}}
 {{- range .Values.gates }}
 {{- $fabric := hasPrefix "fabric-" .kind }}
 {{- /* A probe reads the host's interfaces and routes; a sample opens the RDMA device. */}}
 {{- $rdma := and $fabric (ne .kind "fabric-probe") }}
+{{- $credentials := and $.Values.credentials.engineApiKey (has .kind (list "prepare" "finalize-fleet" "profile" "calibrate" "preflight")) }}
 {{- /* Discovery reads the engines' model volume unless its entry names one. */}}
 {{- $model := .modelVolume }}
 {{- if and (not $model) (eq .kind "discovery") $.Values.engines }}
@@ -57,14 +64,16 @@ spec:
           image: {{ .image | default (ternary $.Values.images.fabric $.Values.images.narwhal $fabric) }}
           command:
             {{- toYaml .command | nindent 12 }}
-          {{- if or .env $.Values.credentials.engineApiKey }}
           env:
+            - name: NARWHAL_GATE_KEEP
+              value: /narwhal-keep
             {{- range $name, $value := .env }}
             - name: {{ $name | quote }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if $credentials }}
             {{- include "narwhal.credentials" $ | nindent 12 }}
-          {{- end }}
+            {{- end }}
           {{- if or $rdma .resources }}
           resources:
             limits:
@@ -75,15 +84,24 @@ spec:
               {{ $name | quote }}: {{ $quantity | quote }}
               {{- end }}
           {{- end }}
-          {{- if $rdma }}
+          {{- if $fabric }}
           securityContext:
+            allowPrivilegeEscalation: false
             capabilities:
+              drop: [ALL]
+              {{- if $rdma }}
               # RDMA memory registration locks memory.
               add: [IPC_LOCK]
+              {{- end }}
           {{- end }}
           volumeMounts:
             - name: narwhal-state
+              mountPath: /narwhal-keep
+              subPath: {{ .keep }}
+            {{- if not $fabric }}
+            - name: narwhal-state
               mountPath: /narwhal-state
+            {{- end }}
             {{- if .inputs }}
             - name: narwhal-input
               mountPath: /narwhal-input

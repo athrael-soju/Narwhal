@@ -33,11 +33,13 @@ The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/mode
 
 ## How the stages run
 
-Each stage that checks something in the cluster sets the chart's `gates` list to its Jobs and upgrades the release, so the engines and routers keep running. A Job runs once, within its kind's time limit. It receives its inputs in a ConfigMap mounted at `/narwhal-input`, which the run deletes once the Job finishes. Its outputs come back in its log: each file as a `narwhal-file` line, then a manifest of their SHA-256 values and sizes. A log whose files differ from the manifest fails the stage, so a log the kubelet rotated or truncated is never read as complete. Each Job also keeps its log, exit status and returned files on the state volume, in `deploy/<run-id>/stages/<stage>/<instance>/attempt-<n>/jobs/<job>/`, and the run copies its log and files into the stage's attempt directory.
+Each stage that checks something in the cluster sets the chart's `gates` list to its Jobs and upgrades the release. Every upgrade reads the values the release runs and keeps its engines, their placement, the routers and the Grafana dashboard: only `install` changes the engines, `router-start` the routers, and `down` removes both. A Job runs once, within its kind's time limit. It receives its inputs in a ConfigMap mounted at `/narwhal-input`, which the run deletes once the Job finishes. Its outputs come back in its log: each file as a `narwhal-file` line, then a manifest of their SHA-256 values and sizes. A log whose files differ from the manifest fails the stage, so a log the kubelet rotated or truncated is never read as complete. Each Job also keeps its log, exit status and returned files on the state volume, in `deploy/<run-id>/stages/<stage>/<instance>/attempt-<n>/jobs/<job>/`, mounted at `/narwhal-keep`, and the run copies its log and files into the stage's attempt directory.
+
+The Narwhal Jobs mount the whole state volume writable. A fabric Job runs the third-party `images.fabric`, so it mounts only its own keep directory, drops every capability but `IPC_LOCK`, which an RDMA sample needs, and may not gain more. The engine API key reaches only the Jobs that call engines or prepare their launch: `prepare`, `finalize-fleet`, `profile`, `calibrate` and `preflight`.
 
 The fabric stages run the same checks as on SSH hosts, each host script in a Job on the node's host network in `images.fabric`. A sample runs its server and client as two Jobs, the client once the server listens. On a backend that measures KV handoffs, `transfer-measure` runs the packaged measurement tool in a Job on the engine's node.
 
-`plan` and a `status` that finds the run held by another runner start no Job. Observing a fabric route runs Jobs, so they take each edge's link as recorded; `run` and `status` observe it again.
+`plan` and a `status` that finds the run held by another runner start no Job. On SSH hosts `plan` observes each fabric route read-only. On a cluster, observing a route takes a Job on each node, so `plan` does not observe it: it prints `fabric-edge[<edge>]: skipped unless run finds a change; link[<edge>] not observed`, and its JSON row lists the fact under `unobserved`. A `status` held off by another runner reports the link `not observed`. `run` and `status` observe each route, and `run` measures an edge whose route changed again.
 
 ## Rerunning after a change
 
@@ -92,7 +94,7 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 
 ## Checking cluster access
 
-`access` reads the client and server versions, `helm version`, the namespace and the `kubectl auth can-i` answers for each verb the run needs. It reads each engine node's allocatable GPU and RDMA resources. It fails when the identity may not do something the run needs, or a node offers no GPU or RDMA device. `access.json` holds what it found. Fix the RBAC binding or the node, then run again.
+`access` reads the client and server versions, `helm version`, the namespace and the `kubectl auth can-i` answers for each verb and resource the run needs: get, list, create, patch and delete on the release's kinds, Secrets included because helm keeps its releases in them, then get, list, patch and delete on pods, get on `pods/log` and get on nodes. The server must run Kubernetes 1.27 or later, where pod scheduling gates are on by default. `access.json` records the context, namespace and release, which `down` checks. It reads each engine node's allocatable GPU and RDMA resources. It fails when the server is older, the identity may not do something the run needs, naming each verb and resource, or a node offers no GPU or RDMA device. `access.json` holds what it found. Fix the RBAC binding or the node, then run again.
 
 ## Discovering the engine nodes
 
@@ -112,7 +114,7 @@ An engine pod that started before keeps its spec, so the release keeps the hook 
 
 ## Starting the engine pods
 
-The chart holds each new engine pod at the `narwhal.io/placement` scheduling gate. `engine-start` adds node affinity for the node discovery measured the engine on, removes the gate, and waits for the engine container to be ready. It replaces a pod that runs on another node, and a pod of an older spec that runs another plan. It fails when the engine container cannot start; `pod.json` holds the pod's status.
+The chart holds each new engine pod at the `narwhal.io/placement` scheduling gate. `engine-start` adds node affinity for the node discovery measured the engine on, removes the gate, and waits for the engine container to be ready. The removal tests that the gate is still at the index it read, so a gate another controller added stays. A pin that an earlier attempt half applied, with the affinity already naming this node, only has its gate removed; affinity for another node fails the stage, and deleting the pod lets the StatefulSet make a new one. It replaces a pod that runs on another node, and a pod of an older spec that runs another plan. It fails when the engine container cannot start; `pod.json` holds the pod's status.
 
 A pod the controller replaces between runs waits at the gate until the next `run`, so an engine never serves from a node discovery did not measure.
 
@@ -132,4 +134,4 @@ The sidecar captures the attestation once the launch directory exists. `cache-ca
 
 `router-start` upgrades the release with the routers on and the fleet file `fleet-limits` wrote on the state volume, waits for both router pods, and records the health, readiness, state and one completion through HAProxy. Each router keeps its recovery state on its own volume, at `/narwhal-router/router-state.json`. After an engine pod is replaced, a router pair that still runs the same fleet readmits it instead of restarting.
 
-`down` upgrades the release without engines, routers or Jobs. The state and lease volumes stay, with the engines' records.
+`down` upgrades the release without engines, routers or Jobs. The state and lease volumes stay, with the engines' records. It first checks that the run directory holds a Kubernetes run, that the environment names the context, namespace and release `access` recorded, and that the release still runs the engines `install` gave it and the fleet of this run. It changes nothing when one differs.
