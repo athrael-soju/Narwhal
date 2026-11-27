@@ -32,9 +32,24 @@ from typing import Any
 
 from narwhal import __version__
 
-from .fleet_resource import GROUP, KIND, VERSION
 from .launch_engine import engine_set
 from .launch_engine.kubernetes import MODEL_VOLUME_SOURCES
+
+try:
+    from .fleet_resource import (  # type: ignore[import-not-found, unused-ignore]
+        ENGINE_SERVICE,
+        GROUP,
+        KIND,
+        VERSION,
+    )
+except ModuleNotFoundError as error:
+    # Until task 26 step A's fleet_resource merges: its values. Drop this branch on rebase.
+    if error.name != f"{__package__}.fleet_resource":
+        raise
+    GROUP = "narwhal.example.com"
+    VERSION = "v1alpha1"
+    KIND = "NarwhalFleet"
+    ENGINE_SERVICE = "engines"
 
 API_VERSION = f"{GROUP}/{VERSION}"
 # The field manager of every apply, and the value of the managed-by label.
@@ -69,8 +84,6 @@ HAPROXY = "haproxy"
 ROUTER_SERVICE = "routers"
 ROUTER_PODS = ("router-0", "router-1")
 HAPROXY_PORT = 8000
-# Services the controller names itself, which the engines' headless Service may not reuse.
-RESERVED_SERVICES = (ROUTER_SERVICE, HAPROXY)
 
 # Gate Jobs, as `kubernetes_target` runs them.
 GATE_KINDS = (
@@ -231,7 +244,8 @@ def metadata(
     return document
 
 
-def _denied(key: str, value: object) -> bool:
+def denied(key: str, value: object) -> bool:
+    """Whether `NEVER_COPIED` refuses this label or annotation, whatever the allow-list says."""
     for entry in NEVER_COPIED:
         if isinstance(entry, tuple):
             if (key, value) == entry:
@@ -244,7 +258,7 @@ def _denied(key: str, value: object) -> bool:
 def _check_keys(document: Mapping[str, Any], where: str) -> None:
     for field_name in ("labels", "annotations"):
         for key, value in (document.get(field_name) or {}).items():
-            if _denied(key, value):
+            if denied(key, value):
                 raise ValueError(f"{where}: {field_name} may never hold {key}={value}")
             allowed = key.startswith(ALLOWED_PREFIX) or (
                 field_name == "labels" and key in ALLOWED_LABELS
@@ -406,9 +420,24 @@ def engines(
         narwhal_image=fleet.narwhal_image,
         api_key_secret=fleet.api_key.reference() if fleet.api_key else None,
     )
-    service = _name(values["serviceName"], "the engines' Service", DNS_LABEL)
-    if service in RESERVED_SERVICES:
-        raise ValueError(f"the engines' headless Service may not be named {service}")
+    # The engine URLs, and so the plans, name the pods in this Service.
+    if values["serviceName"] != ENGINE_SERVICE:
+        raise ValueError(
+            f"the engine URLs name the headless Service {values['serviceName']}; prepare the "
+            f"engines with engine URLs in the fleet's Service {ENGINE_SERVICE}"
+        )
+    # The fabric and discovery gates read these from the fleet, so the pods must use the same.
+    if values["rdmaResource"] != fleet.rdma_resource:
+        raise ValueError(
+            f"the engine pods request RDMA resource {values['rdmaResource']} and the fleet "
+            f"names {fleet.rdma_resource}; prepare the engines with the fleet's RDMA resource"
+        )
+    if values["modelVolume"] != fleet.model_volume:
+        raise ValueError(
+            "the engine pods mount another model volume than the fleet names; prepare the "
+            "engines with the fleet's model volume"
+        )
+    service = ENGINE_SERVICE
     spec = engine_pod(values)
     account = spec.get("serviceAccountName")
     if account != fleet.engine_account:
@@ -769,17 +798,20 @@ class Deletion:
 
     kind: str
     name: str
-    uid: str | None = None
+    namespace: str
+    uid: str | None
 
     def options(self) -> dict[str, Any]:
-        document: dict[str, Any] = {
+        if not self.uid:
+            raise ValueError(
+                f"{self.kind} {self.name}: no uid to delete it by; read the object first"
+            )
+        return {
             "apiVersion": "v1",
             "kind": "DeleteOptions",
             "propagationPolicy": BACKGROUND,
+            "preconditions": {"uid": self.uid},
         }
-        if self.uid:
-            document["preconditions"] = {"uid": self.uid}
-        return document
 
 
 def mounted_maps(pods: Iterable[Mapping[str, Any]]) -> set[str]:
@@ -807,9 +839,9 @@ def prune(
 ) -> list[Deletion]:
     """The live objects the fleet controls that `desired` no longer holds, in deletion order.
 
-    Only the kinds in `PRUNED_KINDS` are deleted, and only objects whose controlling owner is
-    this fleet, so the chart's objects and another fleet's stay. A ConfigMap one of `pods`
-    still mounts stays, and so does an object already being deleted.
+    Only the kinds in `PRUNED_KINDS` are deleted, and only objects in the fleet's namespace
+    whose controlling owner is this fleet, so the chart's objects and another fleet's stay. A
+    ConfigMap one of `pods` still mounts stays, and so does an object already being deleted.
     """
     wanted = set()
     for document in desired:
@@ -825,11 +857,12 @@ def prune(
         name = meta.get("name")
         if (
             kind not in PRUNED_KINDS
+            or meta.get("namespace") != owner.namespace
             or not controlled(owner, document)
             or (kind, name) in wanted
             or meta.get("deletionTimestamp")
             or (kind == "ConfigMap" and name in kept)
         ):
             continue
-        found.append(Deletion(str(kind), str(name), meta.get("uid")))
+        found.append(Deletion(str(kind), str(name), owner.namespace, meta.get("uid")))
     return sorted(found, key=lambda item: (PRUNED_KINDS.index(item.kind), item.name))

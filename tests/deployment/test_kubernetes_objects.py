@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from narwhal.deployment import kubernetes_objects as objects
-from narwhal.deployment.fleet_resource import GROUP
 from narwhal.deployment.kubernetes_objects import (
     ApiKey,
     Deletion,
@@ -29,6 +28,7 @@ from tests.deployment import chart_fixtures
 from tests.deployment.test_helm_chart import Comparison
 
 ROOT = Path(__file__).resolve().parents[2]
+GROUP = objects.GROUP
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "kubernetes_objects.json").read_text())
 INPUTS = GOLDEN["inputs"]
 OWNER = Owner("fleet", "0b6f4c1e-5d1a-4c55-9f7e-3a1f0f5e9a11", chart_fixtures.NAMESPACE)
@@ -283,14 +283,32 @@ class EngineTests(unittest.TestCase):
             ),
             "ServiceAccount": (self.fleet_with(engine_account="other"), self.values),
         }
-        for service in ("routers", "haproxy"):
-            cases[f"may not be named {service}"] = (
-                self.fleet,
-                {**self.values, "serviceName": service},
-            )
+        cases["fleet's Service engines"] = (self.fleet, {**self.values, "serviceName": "routers"})
+        cases["fleet's RDMA resource"] = (
+            self.fleet_with(rdma_resource="rdma.example.com/other"),
+            self.values,
+        )
+        cases["the fleet names None"] = (self.fleet_with(rdma_resource=None), self.values)
+        cases["another model volume"] = (
+            self.fleet_with(model_volume={"hostPath": {"path": "/models"}}),
+            self.values,
+        )
+        cases["mount another model volume"] = (self.fleet_with(model_volume=None), self.values)
         for message, (target, values) in cases.items():
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
                 objects.engines(target, values)
+
+    def test_the_fabric_and_discovery_gates_use_the_engine_pods_resource_and_volume(self):
+        statefulset = by_name(self.documents)[("StatefulSet", "engine")]
+        pod = template(statefulset)
+        limits = [c["resources"]["limits"] for c in pod["containers"] if c.get("resources")]
+        [model] = [v for v in pod["volumes"] if v["name"] == "model"]
+        server = template(objects.job(self.fleet, gate(entry("fabric-node-a-node-b-server"))))
+        [rdma] = server["containers"][0]["resources"]["limits"]
+        self.assertTrue(limits)
+        self.assertTrue(all(limit[rdma] == "1" for limit in limits))
+        discovery = template(objects.job(self.fleet, gate(entry("discover-node-a"))))
+        self.assertIn(model, discovery["volumes"])
 
     def fleet_with(self, **overrides: Any) -> Fleet:
         settings = {name: getattr(self.fleet, name) for name in self.fleet.__dataclass_fields__}
@@ -564,6 +582,20 @@ class MetadataTests(unittest.TestCase):
                     )
                     self.assertNotIn("app.kubernetes.io/instance", block.get("labels", {}))
 
+    def test_the_denylist_names_every_helm_argo_cd_and_flux_key(self):
+        # Apart from the allow-list, which would refuse these keys as well.
+        for key, value in DENIED.items():
+            with self.subTest(key):
+                self.assertTrue(objects.denied(key, value))
+        for key, value in (
+            ("app.kubernetes.io/managed-by", objects.MANAGER),
+            ("app.kubernetes.io/name", "narwhal"),
+            (f"{GROUP}/gate", "preflight"),
+            ("team", "inference"),
+        ):
+            with self.subTest(key):
+                self.assertFalse(objects.denied(key, value))
+
     def test_check_metadata_refuses_every_denied_key_wherever_it_stands(self):
         job = objects.job(fleet(), gate(entry("preflight")))
         objects.check_metadata(job)
@@ -611,10 +643,20 @@ def live(document: dict, *, uid: str = "", owner: Owner | None = OWNER, **meta: 
     return document
 
 
-def named(kind: str, name: str, owner: Owner | None = OWNER, **meta: Any) -> dict:
+def named(
+    kind: str,
+    name: str,
+    owner: Owner | None = OWNER,
+    namespace: str = chart_fixtures.NAMESPACE,
+    **meta: Any,
+) -> dict:
     api = {"Deployment": "apps/v1", "StatefulSet": "apps/v1", "Job": "batch/v1"}
     return live(
-        {"apiVersion": api.get(kind, "v1"), "kind": kind, "metadata": {"name": name}},
+        {
+            "apiVersion": api.get(kind, "v1"),
+            "kind": kind,
+            "metadata": {"name": name, "namespace": namespace},
+        },
         owner=owner,
         **meta,
     )
@@ -670,10 +712,25 @@ class PruneTests(unittest.TestCase):
                 options = deletion.options()
                 self.assertEqual(options["propagationPolicy"], "Background")
                 self.assertEqual(options["preconditions"], {"uid": deletion.uid})
+            self.assertEqual(deletion.namespace, chart_fixtures.NAMESPACE)
         self.assertEqual(
-            Deletion("Job", "preflight-0123456789ab").options(),
-            {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"},
+            Deletion("Job", "preflight-0123456789ab", "example", "1234").options(),
+            {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Background",
+                "preconditions": {"uid": "1234"},
+            },
         )
+        with self.assertRaisesRegex(ValueError, "no uid"):
+            Deletion("Job", "preflight-0123456789ab", "example", None).options()
+
+    def test_prune_leaves_objects_in_other_namespaces(self):
+        elsewhere = [
+            named("Job", "preflight-0123456789ab", namespace="other"),
+            named("ConfigMap", "stale", namespace=None),
+        ]
+        self.assertEqual(objects.prune(OWNER, [], elsewhere), [])
 
     def test_a_hook_map_a_running_engine_pod_mounts_stays(self):
         old = "narwhal-engine-1-000000000000-hooks"
