@@ -8,7 +8,7 @@ import json
 import statistics
 import sys
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 
 from .cpus import Allocation
 from .files import open_private

@@ -40,7 +40,7 @@ mkdir -p runs
 
 TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 
-.venv/bin/python tools/measurement/load_trial.py prepare \
+.venv/bin/python -m narwhal.deployment.load_trial prepare \
   --base "$NARWHAL_TRIAL_URL" \
   --input-tokens 8192 \
   --output-tokens 128 \
@@ -83,7 +83,7 @@ Check client CPU and scheduling lag before raising either limit.
 Run the first rate:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py run \
+.venv/bin/python -m narwhal.deployment.load_trial run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 0.5 \
@@ -94,7 +94,7 @@ Run the first rate:
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
-`load_trial.py run` exits with one of these codes:
+`load_trial run` exits with one of these codes:
 
 | Exit  | Meaning                                                | Required action                                          |
 | :---: | ------------------------------------------------------ | -------------------------------------------------------- |
@@ -124,7 +124,7 @@ A drain wait longer than `--timeout` (default 120 s) exits `1` with a drain-dead
 Run the second rate:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py run \
+.venv/bin/python -m narwhal.deployment.load_trial run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 1 \

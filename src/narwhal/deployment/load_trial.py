@@ -1,4 +1,8 @@
-"""Run a reproducible synthetic token-length workload through the deployment router."""
+"""Run a reproducible synthetic token-length workload through the deployment router.
+
+`narwhal deploy run --trial` runs it from the installed wheel for the capacity trial, and
+`python -m narwhal.deployment.load_trial` runs it alone.
+"""
 
 from __future__ import annotations
 
@@ -11,17 +15,18 @@ import os
 import platform
 import random
 import resource
-import subprocess
 import sys
 import time
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from narwhal import provenance as build
 from narwhal.engines.stream import event_choices, event_object, token_ids
 
 SEED_PROMPT = (
@@ -41,16 +46,14 @@ def digest(path: Path) -> str:
 
 
 def provenance() -> dict:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=Path(__file__).resolve().parents[2],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    """Where and from which build the client ran: the Narwhal version, the Git description of
+    a checkout, the package's source digest and this module's SHA-256."""
+    meta = build.stamp()["meta"]
     return {
         "host": platform.node(),
-        "revision": result.stdout.strip(),
+        "narwhal_version": meta["version"],
+        "revision": meta["git"],
+        "source_sha256": meta["source"],
         "helper_sha256": digest(Path(__file__)),
         "python": platform.python_version(),
         "httpx": httpx.__version__,
@@ -146,9 +149,17 @@ def warmup_body(workload: dict, sequence: int, run_seed: int = 0) -> dict:
     return body_for(workload, sequence, run_seed)
 
 
-async def request_one(client, base, body, rid, scheduled, timeout, clock=time.monotonic):
+async def request_one(
+    client: httpx.AsyncClient,
+    base: str,
+    body: dict,
+    rid: str,
+    scheduled: float,
+    timeout: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
     started = clock()
-    row = {
+    row: dict[str, Any] = {
         "client_rid": rid,
         "scheduled_mono": scheduled,
         "started_at": time.time(),
@@ -257,9 +268,11 @@ def idle(state: dict) -> bool:
     )
 
 
-async def poll_drain(client, base, timeout, poll_s=1):
+async def poll_drain(
+    client: httpx.AsyncClient, base: str, timeout: float, poll_s: float = 1
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
-    result = {"condition": "timeout", "polls": 0}
+    result: dict[str, Any] = {"condition": "timeout", "polls": 0}
     while True:
         try:
             response = await client.get(
@@ -283,7 +296,7 @@ async def poll_drain(client, base, timeout, poll_s=1):
     return result
 
 
-async def drain(client, base, timeout):
+async def drain(client: httpx.AsyncClient, base: str, timeout: float) -> dict:
     result = await poll_drain(client, base, timeout)
     if result["condition"] == "idle":
         return result["last_state"]
@@ -292,7 +305,7 @@ async def drain(client, base, timeout):
     raise ValueError("Router drain deadline: inspect admission and resident work")
 
 
-def summary(rows, args, elapsed):
+def summary(rows: list[dict], args: argparse.Namespace, elapsed: float) -> dict[str, Any]:
     valid = len(rows) == args.requests and all(
         r["sent"] and r["schedule_lag_s"] <= args.max_lag for r in rows
     )
@@ -304,7 +317,7 @@ def summary(rows, args, elapsed):
         and (r["output_tokens"] == 1 or (r["tpot_s"] is not None and r["tpot_s"] <= args.tpot))
     ]
 
-    def distribution(key):
+    def distribution(key: str) -> dict[str, float | None]:
         values = sorted(r[key] for r in completed if r[key] is not None)
         return {
             f"p{p}": values[max(0, math.ceil(len(values) * p / 100) - 1)] if values else None
@@ -335,7 +348,7 @@ def summary(rows, args, elapsed):
     }
 
 
-async def prepare(client, base, args):
+async def prepare(client: httpx.AsyncClient, base: str, args: argparse.Namespace) -> None:
     response = await client.get(base + "/v1/models")
     response.raise_for_status()
     models = response.json()["data"]
@@ -404,7 +417,7 @@ async def prepare(client, base, args):
     private_json(args.out / "workload.json", workload)
 
 
-async def run_trial(client, base, args):
+async def run_trial(client: httpx.AsyncClient, base: str, args: argparse.Namespace) -> int:
     run_id = getattr(args, "run_id", uuid.uuid4().hex)
     workload = load_workload(args.workload)
     if args.run_seed and workload["kind"] != SHARED_PREFIX:
@@ -429,17 +442,19 @@ async def run_trial(client, base, args):
         args.out / "network-before.json", {"proc_net_dev": Path("/proc/net/dev").read_text()}
     )
     start, cpu = time.monotonic(), time.process_time()
-    rows, pending, tasks = [], set(), []
+    rows: list[dict] = []
+    pending: set[asyncio.Task[None]] = set()
+    tasks: list[asyncio.Task[None]] = []
     with open(
         args.out / "requests.jsonl", "x", opener=lambda p, flags: os.open(p, flags, 0o600)
     ) as output:
 
-        def record(row):
+        def record(row: dict) -> None:
             rows.append(row)
             output.write(json.dumps(row, allow_nan=False) + "\n")
             output.flush()
 
-        async def send(sequence, scheduled):
+        async def send(sequence: int, scheduled: float) -> None:
             row = await request_one(
                 client,
                 base,
@@ -490,7 +505,7 @@ async def run_trial(client, base, args):
     return 0 if report["candidate_pass"] else 2
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "run"))
     parser.add_argument("--base", required=True)
@@ -571,7 +586,7 @@ def main(argv=None):
     args.out = args.out.resolve()
     args.run_id = uuid.uuid4().hex
 
-    async def execute():
+    async def execute() -> int:
         async with httpx.AsyncClient(
             headers=headers,
             timeout=args.timeout,

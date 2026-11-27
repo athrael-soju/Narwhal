@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 
 WORKLOAD = {
     "schema": 1,

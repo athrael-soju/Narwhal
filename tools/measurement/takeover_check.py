@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 from tools.measurement.router_benchmark.client import client_bodies
 from tools.measurement.router_benchmark.fleet import Shape, write_fleet
 from tools.measurement.router_benchmark.processes import (
