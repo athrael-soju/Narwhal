@@ -65,7 +65,7 @@ def live_container(run: Path, checked: dict) -> str:
         raise ValueError("Serving container differs from the checked image or recorded ID")
     state = observed.get("State", {})
     if state.get("Running") is not True:
-        raise ValueError("Serving container must be running before attestation")
+        raise ValueError("Serving container is not running; inspect its logs")
     recorded = container_start(run)
     if recorded["container_id"] != cid or state.get("StartedAt") != recorded["started_at"]:
         raise ValueError(

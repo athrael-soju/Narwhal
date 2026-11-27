@@ -229,7 +229,7 @@ class EngineProbeTests(unittest.TestCase):
 
     def test_an_engine_other_than_the_recorded_one_fails_before_any_request(self):
         cases = (
-            ({"Running": False}, "must be running"),
+            ({"Running": False}, "is not running"),
             ({"StartedAt": "1970-01-01T00:05:00.000000000Z"}, "started again"),
         )
         for state, message in cases:
