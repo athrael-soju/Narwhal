@@ -436,11 +436,14 @@ async def residency_loop(router: NarwhalRouter) -> None:
             await router.residency.refresh(router.residency_client)
 
 
-async def monitor_loop(router: NarwhalRouter) -> None:
+async def monitor_loop(
+    router: NarwhalRouter, *, cpu_time: Callable[[], float] = time.thread_time
+) -> None:
+    """`cpu_time` reads CPU seconds of the calling thread, which is the event-loop thread."""
     loop = asyncio.get_running_loop()
     interval = router.cfg.monitor_interval_s
     next_pass = loop.time() + interval
-    busy_from = time.thread_time()
+    busy_from = cpu_time()
     while True:
         timeout = max(0.0, next_pass - loop.time())
         try:
@@ -450,7 +453,7 @@ async def monitor_loop(router: NarwhalRouter) -> None:
             woke = False
         if woke:
             router.control_wakeup.clear()
-        router.monitoring.observe_event_loop_busy(time.thread_time() - busy_from)
+        router.monitoring.observe_event_loop_busy(cpu_time() - busy_from)
         due = loop.time() >= next_pass
         if due:
             router.monitoring.observe_event_loop_lag(loop.time() - next_pass)
