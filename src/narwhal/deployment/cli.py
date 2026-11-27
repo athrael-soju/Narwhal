@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ from . import deploy as stage_run
 from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 from .launch_engine.evidence import CheckFailed
-from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed
+from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed, stale_notice
 
 # The stages `narwhal deploy run --until` can stop after. Every Kubernetes stage is named as
 # the SSH stage it corresponds to.
@@ -471,13 +472,23 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     results.add_artifact("run_record", directory / "run.json")
     target = TARGETS[args.target]
     runner = target.Deployment(directory, env).runner()
+
+    def stale(found: Mapping[str, Any] | None) -> dict[str, Any]:
+        """Print a stale lock the run found, and return the result data that carries it."""
+        if found is None:
+            return {}
+        print(f"narwhal: deploy run: {stale_notice(found)}", file=sys.stderr)
+        return {"stale_lock": dict(found)}
+
     try:
         result = runner.run(inputs, until=args.until)
     except StageFailed as error:
         failure = error.record["failure"]
         recovery = target.recovery_url(failure["recovery"])
         status, code, exit_code = _stage_failure(error)
-        results.set_data({"run": str(directory), "failed_stage": error.key})
+        results.set_data(
+            {"run": str(directory), "failed_stage": error.key, **stale(error.stale_lock)}
+        )
         results.record_error(
             code,
             failure["message"],
@@ -493,13 +504,17 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         print(f"Evidence: {directory / error.record['directory']}", file=sys.stderr)
         return exit_code
     except RunCancelled as error:
-        results.set_data({"run": str(directory), "cancelled_stage": error.key})
+        results.set_data(
+            {"run": str(directory), "cancelled_stage": error.key, **stale(error.stale_lock)}
+        )
         results.record_error("stage_cancelled", str(error), stage=error.key)
         results.set_status("interrupted")
         print(f"narwhal: deploy run: {error}", file=sys.stderr)
         return 130
     ran = [decision.key for decision in result.decisions if decision.ran]
-    results.set_data({"run": str(directory), "run_id": result.run_id, "ran": ran})
+    results.set_data(
+        {"run": str(directory), "run_id": result.run_id, "ran": ran, **stale(result.stale_lock)}
+    )
     print(f"Run {result.run_id} reached {args.until}; {len(ran)} stage instances ran.")
     return 0
 
@@ -567,6 +582,10 @@ def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
             return commands[args.action](args, env)
         except (RunLocked, HelpersSurvived) as error:
             # Another runner holds the run, or this run's helpers outlived it.
+            found = getattr(error, "stale_lock", None)
+            if found is not None:
+                print(f"narwhal: deploy {args.action}: {stale_notice(found)}", file=sys.stderr)
+                results.set_data({"stale_lock": dict(found)})
             results.record_error("operation_failed", str(error), stage=args.action)
             results.set_status("error")
             print(f"narwhal: deploy {args.action}: {error}", file=sys.stderr)

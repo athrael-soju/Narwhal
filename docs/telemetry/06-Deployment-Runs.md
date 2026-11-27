@@ -23,7 +23,7 @@ The run directory must belong to the user who runs it and give no access to othe
 
 A runner holds an exclusive `flock` on `run.lock` for the whole run and names itself in the record's `lock` field. A second runner on the same directory is refused. The refusal names the owner from `lock` when that owner is a live process on this host. Otherwise the holder has not recorded itself yet, and the refusal says so.
 
-When a runner ends without clearing `lock`, for example after `SIGKILL` or a power loss, the next runner reports the stale lock with its owner and adds it to `stale_locks`. It stops any helper processes the interrupted stage left, using the process identities the stage recorded, and records that stage as failed before it continues. If helpers survive, it refuses to run until they are stopped. A recorded owner that still runs on this host without holding `run.lock` is refused too.
+When a runner ends without clearing `lock`, for example after `SIGKILL` or a power loss, the next runner adds the stale lock with its owner to `stale_locks`, and `deploy run` and `dev up` print it, as in `narwhal: deploy run: this run found a stale lock of pid 4242 of operator on workstation (narwhal deploy run --run runs/first-deploy), ...`. With `--format json`, `deploy run` also puts the owner in the result's `data.stale_lock`. It stops any helper processes the interrupted stage left, using the process identities the stage recorded, and records that stage as failed before it continues. If helpers survive, it refuses to run until they are stopped. A recorded owner that still runs on this host without holding `run.lock` is refused too.
 
 ## Signals
 

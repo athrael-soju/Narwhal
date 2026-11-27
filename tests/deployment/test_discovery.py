@@ -3,10 +3,14 @@ import hashlib
 import inspect
 import io
 import json
+import os
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -631,6 +635,43 @@ class DiscoveryTests(unittest.TestCase):
             ):
                 discover(env, root / "discovery")
             self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
+
+    def test_an_interrupt_during_checkpoint_hashing_stops_every_host_at_once(self):
+        started = []
+        stopped = threading.Event()
+
+        class SlowCheckpointSSH(FakeInspectionSSH):
+            def run(self, host, stage, operation, script, payload=None, reason=None):
+                if operation != "hash checkpoint files":
+                    return super().run(host, stage, operation, script, payload)
+                started.append(host.id)
+                if stopped.wait(20):
+                    raise RuntimeError(f"{host.id}: the hash was stopped")
+                return super().run(host, stage, operation, script, payload)
+
+            def cancel(self):
+                stopped.set()
+
+        def interrupt():
+            deadline = time.monotonic() + 10
+            while len(started) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            threading.Thread(target=interrupt, daemon=True).start()
+            began = time.monotonic()
+            with (
+                patch("narwhal.deployment.discovery.SSH", SlowCheckpointSSH),
+                redirect_stdout(io.StringIO()),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                discover(env, root / "discovery")
+            self.assertLess(time.monotonic() - began, 10)
+            self.assertTrue(stopped.is_set())
+            self.assertEqual(len(started), 2)
 
     def test_router_management_destination_defaults_to_first_engine(self):
         env = environment(Path("/synthetic"))

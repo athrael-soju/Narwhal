@@ -33,6 +33,7 @@ from narwhal.contracts import canonical_digest
 
 from . import run_record, stages
 from .graph import INPUT, LIVE, PRODUCT, Fact, Rerun, Stage, StageGraph
+from .hosts import RemoteTimeout
 from .launch_engine.runtime import regular_file_digest
 from .run_record import (
     CANCELLED,
@@ -525,7 +526,7 @@ class _Run:
         except (StageFailed, RunCancelled, HelpersSurvived) as error:
             error.stale_lock = stale
             if stale is not None:
-                error.add_note(f"this run found a stale lock of {run_record.describe(stale)}")
+                error.add_note(stale_notice(stale))
             raise
         finally:
             # Once the record names this runner, every way out clears it again.
@@ -954,7 +955,8 @@ class _Run:
         except KeyboardInterrupt as error:
             self._finish(spec, entry, CANCELLED, error)
             raise RunCancelled(name, entry) from error
-        except stages.StageTimeout as error:
+        except (stages.StageTimeout, RemoteTimeout) as error:
+            # A host command past its stage limit is a timeout, as a local helper's is.
             self._finish(spec, entry, TIMEOUT, error)
             raise StageFailed(name, entry) from error
         except Spent as error:
@@ -1074,14 +1076,36 @@ class _Run:
             run_record.write(self.directory, self.record)
 
 
+def stale_notice(stale: Mapping[str, Any]) -> str:
+    """The line that tells the operator about a stale lock a run found."""
+    return (
+        f"this run found a stale lock of {run_record.describe(stale)}, which stopped without "
+        "releasing the run; its owner is kept in the record's stale_locks"
+    )
+
+
 @contextlib.contextmanager
 def _held() -> Iterator[None]:
-    """Hold SIGINT and SIGTERM until the record write completes; they arrive right after it."""
+    """Hold SIGINT and SIGTERM until the record write completes; they arrive right after it.
+
+    Python runs signal handlers in the main thread whichever thread the kernel delivers a signal
+    to, so the main thread swaps in handlers that note the signal and raises it again after the
+    write. Blocking the signals would cover only the main thread, while the runner's stages may
+    leave other threads running.
+    """
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    pending: list[int] = []
+
+    def defer(signum: int, _frame: object) -> None:
+        pending.append(signum)
+
+    previous = {held: signal.signal(held, defer) for held in (signal.SIGINT, signal.SIGTERM)}
     try:
         yield
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        for held, handler in previous.items():
+            signal.signal(held, signal.SIG_DFL if handler is None else handler)
+        for signum in dict.fromkeys(pending):
+            signal.raise_signal(signum)

@@ -19,7 +19,7 @@ import httpx
 
 from narwhal.backends import load
 from narwhal.backends.llamacpp.dev import PROBE_OUTPUT_TOKENS, LlamacppDirect
-from narwhal.deployment import native_engine
+from narwhal.deployment import native_engine, run_record
 from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures, measure
 from narwhal.dev import direct, lifecycle, template
 from narwhal.dev.template import _check_free_ports, _read_template
@@ -342,6 +342,29 @@ class DirectLifecycleTests(DirectInstance):
         self.assertEqual(state["processes"], [])
         _check_free_ports({first}, "127.0.0.1")
         self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
+
+    def test_up_tells_the_operator_about_a_stale_lock(self):
+        self.init()
+        with (
+            patch("narwhal.dev.launch.measure", side_effect=ValueError("measurement failed")),
+            self.assertRaisesRegex(ValueError, "measurement failed"),
+        ):
+            lifecycle.up(self.root)
+        self.addCleanup(self.stop)
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        directory = Path(state["run"]) / "launch"
+        ended = subprocess.Popen([sys.executable, "-c", "pass"])
+        ended.wait()
+        record = run_record.read(directory)
+        owner = {**run_record.owner(), "pid": ended.pid}
+        record["lock"] = {"owner": owner, "acquired_at": time.time()}
+        run_record.write(directory, record)
+        with contextlib.redirect_stderr(io.StringIO()) as progress:
+            lifecycle.up(self.root)
+        self.assertIn(
+            f"narwhal: dev up: this run found a stale lock of pid {ended.pid} of",
+            progress.getvalue(),
+        )
 
     def test_a_failed_up_resumes_at_the_stage_that_failed(self):
         self.init()

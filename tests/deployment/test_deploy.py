@@ -4,7 +4,10 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,7 +66,8 @@ class DeployTests(unittest.TestCase):
 
     def deploy(self, action: str, *args: str) -> tuple[int, dict]:
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        self.stderr = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(self.stderr):
             code = cli.main(["deploy", action, "--run", str(self.run), *args, "--format", "json"])
         return code, json.loads(out.getvalue())
 
@@ -91,6 +95,25 @@ class DeployTests(unittest.TestCase):
         self.assertEqual((code, self.ran(result)), (0, set()))
         self.assertEqual(self.fleet.calls["package"], 1)
         self.assertEqual(self.fleet.calls["install[node-1]"], 1)
+
+    def test_run_tells_the_operator_about_a_stale_lock(self):
+        self.deploy("run")
+        ended = subprocess.Popen([sys.executable, "-c", "pass"])
+        ended.wait()
+        record = run_record.read(self.run)
+        owner = {**run_record.owner(), "pid": ended.pid}
+        record["lock"] = {"owner": owner, "acquired_at": time.time()}
+        run_record.write(self.run, record)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["data"]["stale_lock"]["pid"], ended.pid)
+        self.assertIn(
+            f"narwhal: deploy run: this run found a stale lock of pid {ended.pid} of",
+            self.stderr.getvalue(),
+        )
+        code, result = self.deploy("run")
+        self.assertNotIn("stale_lock", result["data"])
+        self.assertNotIn("stale lock", self.stderr.getvalue())
 
     def test_a_stopped_engine_is_prepared_again_and_readmitted_to_the_running_router(self):
         self.deploy("run")

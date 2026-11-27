@@ -88,9 +88,10 @@ def require_live_process_start(run: Path, plan: dict, process_start: float) -> N
 def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> list[str]:
     """Return `--hca` when the plan sends KV through its one HCA port, even on its own host.
 
-    UCX then has no shared-memory device and no CUDA IPC, so KV between engines on one host
-    crosses their HCAs, and preflight checks that through the port's transmit counter. A
-    Kubernetes engine sends through the HCA its pod was allocated, `engine`'s.
+    UCX then has no shared-memory device and no GPU IPC, with `cuda_copy` on CUDA or
+    `rocm_copy` on ROCm, so KV between engines on one host crosses their HCAs, and preflight
+    checks that through the port's transmit counter. A Kubernetes engine sends through the HCA
+    its pod was allocated, `engine`'s.
     """
     path = run / env_file_name(plan)
     if digest(path) != plan.get("env_sha256"):
@@ -103,8 +104,9 @@ def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> lis
     transports = set(env.get("UCX_TLS", "").split(","))
     devices = env.get("UCX_NET_DEVICES", "").split(",")
     if (
-        {"rc", "cuda_copy"} <= transports
-        and not {"cuda", "cuda_ipc"} & transports
+        "rc" in transports
+        and len({"cuda_copy", "rocm_copy"} & transports) == 1
+        and not {"cuda", "cuda_ipc", "rocm", "rocm_ipc"} & transports
         and env.get("UCX_SHM_DEVICES") == "none"
         and len(devices) == 1
         and re.fullmatch(r"[A-Za-z0-9_.-]+:[1-9][0-9]{0,2}", devices[0])

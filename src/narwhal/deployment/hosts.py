@@ -10,12 +10,15 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+import uuid
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar
 
 ROLE = re.compile(r"router|engine-[1-9][0-9]*")
 # Seconds one remote command of each stage may run. NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS sets
@@ -45,6 +48,9 @@ STAGE_LIMITS = {
     "router-start": 600.0,
     "down": 300.0,
 }
+# The shortest stage limit: `bounded` passes limits to `timeout` in milliseconds, and `timeout`
+# reads a zero duration as no limit at all.
+MIN_STAGE_LIMIT_S = 0.001
 # Seconds OpenSSH waits for a connection before it gives up, for every command.
 CONNECT_TIMEOUT_S = 30
 # The host sends SIGKILL to a command this many seconds after its time limit's SIGTERM.
@@ -52,6 +58,11 @@ KILL_AFTER_S = 5
 # Seconds past a time limit that the workstation waits for the host to stop the command and
 # answer, before it ends the connection itself.
 HOST_GRACE_S = 30.0
+# Seconds the workstation gives the host to stop an interrupted command.
+STOP_LIMIT_S = 30.0
+# Where each host command records the process ID of its `timeout`, relative to the SSH user's
+# home, so an interrupted command can be stopped from a second connection.
+COMMANDS_DIRECTORY = ".cache/narwhal-commands"
 # Exit statuses of coreutils `timeout` when it stopped the command with SIGTERM or SIGKILL.
 TIMEOUT_STATUSES = (124, 137)
 # The remote scripts start a line with this to name the cause of their failure.
@@ -129,8 +140,8 @@ def stage_limit(env: Mapping[str, str], stage: str) -> float:
                 value = float(env[name])
             except ValueError:
                 value = math.nan
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be finite and positive")
+            if not math.isfinite(value) or value < MIN_STAGE_LIMIT_S:
+                raise ValueError(f"{name} must be finite and at least {MIN_STAGE_LIMIT_S:g}")
             return value
     return default
 
@@ -166,17 +177,65 @@ def trust_options(store: Path) -> list[str]:
     return [argument for name, value in values.items() for argument in ("-o", f"{name}={value}")]
 
 
-def bounded(script: str, limit: float) -> str:
+def _marker(token: str) -> str:
+    return f'"$HOME"/{COMMANDS_DIRECTORY}/{token}'
+
+
+def bounded(script: str, limit: float, token: str) -> str:
     """Return a host command that runs `script` under coreutils `timeout` at `limit`.
 
-    The shell stays the parent of `timeout`, which puts itself and the script in a process
-    group of their own. When the script ignores SIGTERM, `timeout` sends SIGKILL to that group
-    and dies with it, and the shell still exits with 137, which `ssh` passes back.
+    `timeout` puts itself and the script in a process group of their own and sends SIGTERM to
+    that group at the limit. When the script outlives SIGTERM, GNU `timeout` sends the group
+    SIGKILL `KILL_AFTER_S` later, but the uutils `timeout` of Ubuntu 25.10 and later never does.
+    So after `timeout` reports a time limit with 124 or 137, the shell sends SIGKILL to the
+    group itself, and exits with that status, which `ssh` passes back.
+
+    `timeout` runs as a job of the shell so that the shell can record its process ID under
+    `token` for `stop_script`. It reads the channel's standard input through descriptor 3,
+    since a job of a shell without job control would otherwise read /dev/null. The script's
+    `$0` names the token, which lets `stop_script` tell this `timeout` from a process that
+    reused its ID.
     """
+    marker = _marker(token)
     return (
         "command -v timeout > /dev/null 2>&1 || "
         f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
-        f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)}; exit $?"
+        f'(umask 077 && mkdir -p "$HOME"/{COMMANDS_DIRECTORY}) 2> /dev/null\n'
+        "exec 3<&0\n"
+        f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)} narwhal-{token} "
+        "0<&3 3<&- &\n"
+        "pid=$!\n"
+        "exec 3<&-\n"
+        f"(umask 077 && printf '%s\\n' \"$pid\" > {marker}) 2> /dev/null\n"
+        'wait "$pid"; status=$?\n'
+        'case "$status" in 124 | 137) kill -s KILL -- "-$pid" 2> /dev/null ;; esac\n'
+        f"rm -f {marker}\n"
+        'exit "$status"'
+    )
+
+
+def stop_script(token: str) -> str:
+    """Return a host command that stops the command `bounded` started under `token`.
+
+    It sends SIGTERM to the process group of the command's `timeout`, and SIGKILL to what is
+    left of the group `KILL_AFTER_S` later, as at the time limit. A recorded process ID that no
+    longer names this command's `timeout` is left alone.
+    """
+    marker = _marker(token)
+    return (
+        f"test -f {marker} || {{ echo 'no command is running'; exit 0; }}\n"
+        f"pid=$(cat {marker})\n"
+        f"rm -f {marker}\n"
+        'case "$pid" in "" | *[!0-9]*) exit 0 ;; esac\n'
+        f'tr "\\000" " " < /proc/"$pid"/cmdline 2> /dev/null | grep -q -- narwhal-{token} ||\n'
+        "  { echo 'already ended'; exit 0; }\n"
+        'kill -s TERM -- "-$pid" 2> /dev/null\n'
+        "tries=0\n"
+        f'while kill -s 0 -- "-$pid" 2> /dev/null && test "$tries" -lt {KILL_AFTER_S * 10}; do\n'
+        "  sleep 0.1; tries=$((tries + 1))\n"
+        "done\n"
+        'kill -s KILL -- "-$pid" 2> /dev/null\n'
+        'echo "stopped $pid"'
     )
 
 
@@ -223,6 +282,9 @@ class SSH:
             )
         self.logs = logs
         self.logs.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # The host commands in flight, by token, so `cancel` can stop them from any thread.
+        self._running: dict[str, tuple[Host, str, str, subprocess.Popen]] = {}
+        self._lock = threading.Lock()
         self.options = trust_options(trusted)
         if jump := env.get("NARWHAL_SSH_JUMP"):
             # The jump connection holds to the same known-hosts file and authenticates with a
@@ -318,7 +380,11 @@ class SSH:
         """
         limit = stage_limit(self.env, stage)
         log_path = self.log(host)
-        command = "sh -c " + shlex.quote(bounded(script, limit))
+        token = uuid.uuid4().hex
+        command = "sh -c " + shlex.quote(bounded(script, limit, token))
+        # An interrupted or unanswered command may still run on the host, since sshd signals
+        # no command that has no terminal. A second connection stops it before this one is
+        # read to its end.
         with self._record(host, f"{stage}: {operation}") as log, self._client(host) as client:
             log.write(script + "\n")
             log.flush()
@@ -333,17 +399,24 @@ class SSH:
                     env=client,
                     start_new_session=True,
                 )
+                with self._lock:
+                    self._running[token] = (host, stage, operation, process)
                 unanswered = False
                 try:
                     stdout, stderr = process.communicate(timeout=limit + HOST_GRACE_S)
                 except subprocess.TimeoutExpired:
                     unanswered = True
                     os.killpg(process.pid, signal.SIGKILL)
+                    self.stop(host, stage, operation, token)
                     stdout, stderr = process.communicate()
                 except BaseException:
                     os.killpg(process.pid, signal.SIGKILL)
+                    self.stop(host, stage, operation, token)
                     process.communicate()
                     raise
+                finally:
+                    with self._lock:
+                        self._running.pop(token, None)
             expired = unanswered or (
                 process.returncode in TIMEOUT_STATUSES and time.monotonic() - started >= limit
             )
@@ -373,6 +446,50 @@ class SSH:
             cause = f": {causes[-1]}" if causes else ""
             raise RemoteError(host.id, stage, operation, log_path, cause)
         return stdout.decode(errors="replace").strip()
+
+    def stop(self, host: Host, stage: str, operation: str, token: str) -> None:
+        """Stop the host command started under `token`, within `STOP_LIMIT_S`.
+
+        A failure to reach the host is logged, not raised, so it never hides the error that
+        led here. The host's own time limit still ends the command.
+        """
+        with self._record(host, f"{stage}: stop {operation}") as log:
+            try:
+                with self._client(host) as client:
+                    args = [
+                        *self._arguments(host, ["-T", "-o", "ClearAllForwardings=yes"]),
+                        "sh -c " + shlex.quote(stop_script(token)),
+                    ]
+                    process = subprocess.Popen(
+                        args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        env=client,
+                        start_new_session=True,
+                    )
+                    try:
+                        output, _ = process.communicate(timeout=STOP_LIMIT_S)
+                    finally:
+                        with suppress(ProcessLookupError):
+                            os.killpg(process.pid, signal.SIGKILL)
+                log.write(f"exit={process.returncode}\n" + output.decode(errors="replace"))
+            except (OSError, subprocess.SubprocessError) as error:
+                log.write(f"the command may still run until its time limit: {error}\n")
+
+    def cancel(self) -> None:
+        """Stop every host command in flight, locally and on its host.
+
+        Their `run` calls return in their own threads with a failed command. Call this from the
+        thread that received an interruption, so commands that other threads run end as well.
+        """
+        with self._lock:
+            running = dict(self._running)
+        for _, _, _, process in running.values():
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        for token, (host, stage, operation, _) in running.items():
+            self.stop(host, stage, operation, token)
 
     def shell(self, host: Host, script: str) -> None:
         """Run an interactive `script` on `host` in this terminal, with no time limit."""
@@ -408,3 +525,35 @@ class SSH:
             log.write(f"exit={result.returncode}\n")
         if result.returncode:
             raise RemoteError(host.id, "tunnel", "service tunnel", self.log(host))
+
+
+Item = TypeVar("Item")
+Result = TypeVar("Result")
+
+
+def parallel(
+    ssh: SSH, function: Callable[[Item], Result], items: Iterable[Item], workers: int
+) -> Iterator[tuple[Item, Result]]:
+    """Run `function` over `items` in up to `workers` threads, yielding results in order.
+
+    When the caller is interrupted or one call fails, the calls not yet started are dropped and
+    the host commands in flight are stopped through `ssh.cancel`, so the threads end at once
+    instead of running on to their time limits.
+    """
+    jobs = list(items)
+    pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(jobs))))
+    futures = [pool.submit(function, job) for job in jobs]
+    try:
+        for job, future in zip(jobs, futures, strict=True):
+            yield job, future.result()
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        # Stand-ins for SSH in tests may run nothing that needs stopping.
+        cancel = getattr(ssh, "cancel", None)
+        while not all(future.done() for future in futures):
+            if cancel is not None:
+                cancel()
+            wait(futures, timeout=0.1)
+        raise
+    finally:
+        pool.shutdown()

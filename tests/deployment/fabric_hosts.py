@@ -108,6 +108,10 @@ elif name in ("iperf3", "ib_write_bw"):
     record()
     server = "--server" in args if name == "iperf3" else args[-2] == "--bind_source_ip"
     if server:
+        (host / "server-pid").write_text(str(os.getpid()))
+        if (host / "silent-server").exists():
+            time.sleep(60)
+            sys.exit(0)
         (host / f"listening-{port}").touch()
         try:
             for _ in range(400):

@@ -5,15 +5,17 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment import remote
+from narwhal.deployment import hosts, remote
 from narwhal.deployment.hosts import (
     HOST_GRACE_S,
     SSH,
@@ -54,6 +56,28 @@ if helper and subprocess.run([helper, "password:"], capture_output=True).stdout 
 shell = subprocess.Popen(["bash", "-c", sys.argv[-1]], start_new_session=True)
 status = shell.wait()
 sys.exit(255 if status < 0 else status)
+"""
+
+# A `timeout` that, like uutils coreutils on Ubuntu 25.10 and later, signals only its child
+# and never its process group.
+CHILD_ONLY_TIMEOUT = """#!/usr/bin/env python3
+import os, signal, subprocess, sys
+args = sys.argv[1:]
+kill_after = float(args[1])
+limit, command = float(args[2].rstrip("s")), args[3:]
+os.setpgid(0, 0)
+child = subprocess.Popen(command)
+try:
+    sys.exit(child.wait(limit))
+except subprocess.TimeoutExpired:
+    child.send_signal(signal.SIGTERM)
+try:
+    child.wait(kill_after)
+    sys.exit(124)
+except subprocess.TimeoutExpired:
+    child.kill()
+    child.wait()
+    sys.exit(137)
 """
 
 
@@ -182,8 +206,10 @@ class SshTests(unittest.TestCase):
             self.assertEqual(process.stdin, payload.read_bytes())
             self.assertEqual(process.timeout, 1800 + HOST_GRACE_S)
             self.assertEqual(shlex.split(args[-1])[:2], ["sh", "-c"])
-            self.assertTrue(
-                shlex.split(args[-1])[2].endswith("\ntimeout -k 5 1800.000s sh -c cat; exit $?")
+            self.assertRegex(
+                shlex.split(args[-1])[2],
+                r"\ntimeout -k 5 1800.000s sh -c cat narwhal-[0-9a-f]{32} 0<&3 3<&- &\n"
+                r"(.|\n)*\ncase \"\$status\" in 124 \| 137\) kill -s KILL -- \"-\$pid\" ",
             )
         self.assertEqual(password.password, (PASSWORD + "\n").encode())
         self.assertEqual(password.kwargs["env"]["SSH_ASKPASS_REQUIRE"], "force")
@@ -322,12 +348,16 @@ class SshTests(unittest.TestCase):
             "NARWHAL_STAGE_INSTALL_TIMEOUT_SECONDS": "2.5",
         }
         self.assertEqual(stage_limit(both, "install"), 2.5)
-        for value in ("0", "-1", "inf", "nan", "soon"):
+        # A limit that `timeout` would see as 0.000s would remove the host-side limit.
+        for value in ("0", "-1", "inf", "nan", "soon", "0.0001", "0.0009"):
             with (
                 self.subTest(value=value),
-                self.assertRaisesRegex(ValueError, "must be finite and positive"),
+                self.assertRaisesRegex(ValueError, "must be finite and at least 0.001"),
             ):
                 stage_limit({"NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS": value}, "access")
+        self.assertEqual(
+            stage_limit({"NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS": "0.001"}, "access"), 0.001
+        )
 
     def sshd_like(self):
         """Put an `ssh` on PATH that runs the remote command as OpenSSH and sshd would."""
@@ -336,7 +366,60 @@ class SshTests(unittest.TestCase):
         fake = tools / "ssh"
         fake.write_text(SSHD_LIKE % (PASSWORD + "\n").encode())
         fake.chmod(0o700)
-        return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"})
+        # The "host" keeps its command records in a home of its own.
+        home = self.root / "host-home"
+        home.mkdir(exist_ok=True)
+        return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}", "HOME": str(home)})
+
+    def interrupt_when(self, *paths):
+        """Send this process SIGINT once every path in `paths` exists."""
+
+        def interrupt():
+            deadline = time.monotonic() + 10
+            while not all(path.exists() for path in paths) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.2)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        threading.Thread(target=interrupt, daemon=True).start()
+
+    def test_an_interrupted_command_is_stopped_on_the_host(self):
+        # sshd sends no signal to a command without a terminal when its client dies, so the
+        # client must stop the command on the host through a second connection.
+        children = self.root / "children"
+        script = f"sleep 30 & echo $! > {shlex.quote(str(children))}; wait"
+        with self.sshd_like():
+            ssh = SSH(self.env, self.root / "logs")
+            self.interrupt_when(children)
+            began = time.monotonic()
+            with self.assertRaises(KeyboardInterrupt):
+                ssh.run(self.hosts[1], "access", "management access", script)
+            self.assertLess(time.monotonic() - began, 10)
+            self.assert_stopped(children)
+            self.assertEqual(list((self.root / "host-home/.cache/narwhal-commands").iterdir()), [])
+            self.assertIn("access: stop management access", ssh.log(self.hosts[1]).read_text())
+        self.assert_private_logs()
+
+    def test_an_interrupt_stops_the_commands_that_other_threads_run(self):
+        first, second = self.root / "first", self.root / "second"
+        scripts = {
+            path: f"sleep 30 & echo $! > {shlex.quote(str(path))}; wait" for path in (first, second)
+        }
+        with self.sshd_like():
+            ssh = SSH(self.env, self.root / "logs")
+            self.interrupt_when(first, second)
+            began = time.monotonic()
+            with self.assertRaises(KeyboardInterrupt):
+                for _ in hosts.parallel(
+                    ssh,
+                    lambda job: ssh.run(job[0], "access", "management access", scripts[job[1]]),
+                    zip(self.hosts, scripts, strict=True),
+                    2,
+                ):
+                    pass
+            self.assertLess(time.monotonic() - began, 10)
+            self.assert_stopped(first)
+            self.assert_stopped(second)
 
     def test_a_supervisor_input_reaches_standard_input_and_no_log_or_argument_list(self):
         secret = "engine-key-that-must-stay-private"
@@ -371,14 +454,28 @@ class SshTests(unittest.TestCase):
     def test_the_host_stops_a_command_that_exceeds_its_time_limit(self):
         # `timeout` on the "host" must stop the script and its child, whether the script
         # leaves at SIGTERM or ignores it until SIGKILL.
+        # The host's own `timeout`, and one that signals only its child, must both stop it.
         children = self.root / "children"
         self.env["NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS"] = "0.5"
-        for host, ignore in ((self.hosts[0], ""), (self.hosts[1], ""), (self.hosts[1], "x")):
+        child_only = self.root / "child-only-timeout"
+        child_only.mkdir()
+        (child_only / "timeout").write_text(CHILD_ONLY_TIMEOUT)
+        (child_only / "timeout").chmod(0o700)
+        cases = [
+            (tools, host, ignore)
+            for tools in ("host", "child-only")
+            for host, ignore in ((self.hosts[0], ""), (self.hosts[1], ""), (self.hosts[1], "x"))
+        ]
+        for tools, host, ignore in cases:
             script = f"sleep 30 & echo $! > {shlex.quote(str(children))}; wait"
             if ignore:
                 script = "trap '' TERM; " + script
+            path = os.environ["PATH"]
+            if tools == "child-only":
+                path = f"{child_only}:{path}"
             with (
-                self.subTest(host=host.id, ignores_term=bool(ignore)),
+                self.subTest(timeout=tools, host=host.id, ignores_term=bool(ignore)),
+                patch.dict(os.environ, {"PATH": path}),
                 self.sshd_like(),
                 patch("narwhal.deployment.hosts.HOST_GRACE_S", 60.0),
                 patch("narwhal.deployment.hosts.KILL_AFTER_S", 1),

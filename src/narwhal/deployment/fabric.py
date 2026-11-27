@@ -218,6 +218,16 @@ class Fabric:
                         f"{sample.destination.transport}, so KV between them would leave the "
                         "configured transport; give both one transfer.transport"
                     )
+                sizes = {self.engines[role].tensor_parallel for role in sample.source_roles}
+                if sample.source.rdma is None and len(sizes) > 1:
+                    # One TCP sample runs one stream per TP rank, so it cannot stand for
+                    # source roles of different TP sizes that share the host's endpoint.
+                    raise ValueError(
+                        f"{name}: {', '.join(sample.source_roles)} share one TCP fabric "
+                        f"endpoint on {source.id} but differ in tensor parallel size "
+                        f"({', '.join(str(size) for size in sorted(sizes))}), so one sample "
+                        "cannot qualify them; give the engines on one host one TP size"
+                    )
                 samples.append(sample)
             edges.append(Edge(source, destination, tuple(samples)))
         return tuple(edges)
@@ -983,7 +993,8 @@ done
     )
     stop = (
         _prelude(fabric.remote_dir)
-        + f"""test -f {scratch}/server.pid || exit 0
+        + f"""test -d {scratch} || exit 0
+test -f {scratch}/server.pid || {{ rm -rf {scratch}; exit 0; }}
 read -r pid ticks < {scratch}/server.pid
 alive() {{
   test -r "/proc/$pid/stat" &&
@@ -991,13 +1002,20 @@ alive() {{
 }}
 tries=0
 while alive && test "$tries" -lt {EXIT_TENTHS}; do sleep 0.1; tries=$((tries + 1)); done
-if alive; then kill -TERM "$pid"; fi
+if alive; then
+  kill -TERM "$pid"
+  tries=0
+  while alive && test "$tries" -lt 50; do sleep 0.1; tries=$((tries + 1)); done
+  # Not every timeout sends SIGKILL to its process group after -k.
+  if alive; then kill -s KILL -- "-$pid"; fi
+fi
 cat {scratch}/server.log >&2 || true
 rm -rf {scratch}
 """
     )
-    ssh.run(destination, FABRIC_EDGE, f"{where} {server[0]} server on {destination.id}", start)
     try:
+        # A start that fails or runs out of time may already have left a server running.
+        ssh.run(destination, FABRIC_EDGE, f"{where} {server[0]} server on {destination.id}", start)
         report = ssh.run(
             sample.source.host,
             FABRIC_EDGE,
@@ -1074,7 +1092,12 @@ def _sample_name(sample: Sample) -> str:
 
 
 def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, Path] | None:
-    """Return a retained sample and one of its evidence files that hold for `fingerprint`."""
+    """Return a retained sample and one of its evidence files that hold for `fingerprint`.
+
+    Only evidence that met its budget counts. A sample below its budget is measured again, since
+    what the operator fixes after it, such as MTU, flow control or cabling, is not in the link
+    record.
+    """
     if folder is None:
         return None
     for root in (folder, folder / "retained"):
@@ -1087,7 +1110,7 @@ def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, P
                 record = json.loads(evidence.read_text())
             except (OSError, json.JSONDecodeError):
                 continue
-            if retained_evidence(record, fingerprint, data):
+            if record.get("passed") is True and retained_evidence(record, fingerprint, data):
                 return sample, evidence
     return None
 
@@ -1139,7 +1162,10 @@ def qualify_edge(
                     role,
                     folder / f"{role}.comparison.json",
                 )
-        else:
+            if not all(record["passed"] for record in records.values()):
+                # The retained rate falls short of a current budget: measure the link again.
+                found, records = None, {}
+        if found is None:
             # A runner that starts a sample's server and client itself, as the Kubernetes
             # target does with Jobs, samples it; an SSH host runs both from one session each.
             sampler = getattr(ssh, "sample", None)
