@@ -8,13 +8,17 @@ import logging
 import math
 import socket
 import sys
+import time
+from pathlib import Path
 
 import uvicorn
 
 from .cli_errors import failure
 from .cli_support import add_version_argument
 from .config import FleetConfig
+from .runtime.lease import DEFAULT_SAFETY_MARGIN_S, FileLease, LeaseError
 from .runtime.listeners import check_http_bind
+from .runtime.standby import MAX_HANDOFF_AGE_S
 from .serving.app import create_app
 
 # uvicorn logs its shutdown steps here.
@@ -34,6 +38,28 @@ LOG_LEVELS = {
     "debug": "DEBUG",
     "trace": "DEBUG",
 }
+
+
+def _first_start(args: argparse.Namespace) -> bool:
+    """Whether a `--first-start-primary` router starts as the primary and claims the lease.
+
+    It does when no lease exists, or when the lease expired longer ago than the
+    `--standby-max-handoff-age`, since no standby then holds a handoff fresh enough to take
+    over. A live lease, or one a standby can still take over, makes it the standby of its
+    peer, as does a lease directory without its `--lease-witness`.
+    """
+    lease = FileLease(
+        Path(args.lease_path),
+        "first-start",
+        args.lease_ttl,
+        witness=Path(args.lease_witness) if args.lease_witness else None,
+    )
+    try:
+        record = lease.read()
+    except (LeaseError, ValueError):
+        # A missing directory or witness, or a lease this version cannot read.
+        return False
+    return record is None or time.time() - record.expires_at > args.standby_max_handoff_age
 
 
 def serve(argv: list[str] | None = None) -> int:
@@ -86,6 +112,12 @@ def serve(argv: list[str] | None = None) -> int:
         "after the primary is silent and its shared lease expires",
     )
     ap.add_argument(
+        "--first-start-primary",
+        action="store_true",
+        help="start as the primary while no lease file exists at --lease-path, and as the "
+        "standby of --standby-of once one does, so a supervisor's restart rejoins the pair",
+    )
+    ap.add_argument(
         "--standby-probe-interval",
         type=float,
         default=None,
@@ -100,13 +132,19 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--standby-max-handoff-age",
         type=float,
-        default=30.0,
+        default=MAX_HANDOFF_AGE_S,
         help="finite positive maximum state age in seconds for automatic takeover (default 30)",
     )
     ap.add_argument(
         "--lease-path",
         default="",
         help="lease JSON on storage shared by the primary and standby",
+    )
+    ap.add_argument(
+        "--lease-witness",
+        default="",
+        help="file on the shared lease storage that must exist before the router touches the "
+        "lease, such as the one narwhal deploy's lease check leaves beside it",
     )
     ap.add_argument(
         "--router-id",
@@ -129,9 +167,16 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--lease-safety-margin",
         type=float,
-        default=1.0,
+        default=DEFAULT_SAFETY_MARGIN_S,
         help="finite nonnegative relative clock skew in seconds reserved before expiry "
         "(default: %(default)s)",
+    )
+    ap.add_argument(
+        "--deployment-status",
+        default="",
+        metavar="PATH",
+        help="narwhal.deployment-status document whose stage states, times, fabric edges and "
+        "attested engines /metrics exports, read on every scrape",
     )
     ap.add_argument(
         "--resume",
@@ -188,6 +233,13 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--standby-max-handoff-age must be positive")
     if args.standby_of and not args.lease_path:
         ap.error("--standby-of requires --lease-path for fenced takeover")
+    if args.first_start_primary and not args.standby_of:
+        ap.error("--first-start-primary requires --standby-of")
+    if args.lease_witness and not args.lease_path:
+        ap.error("--lease-witness requires --lease-path")
+    # A first start claims the lease, and keeps its peer to shadow should another router
+    # claim first.
+    claim_first = bool(args.first_start_primary and _first_start(args))
     if args.lease_safety_margin < 0:
         ap.error("--lease-safety-margin must be nonnegative")
     if (
@@ -201,14 +253,17 @@ def serve(argv: list[str] | None = None) -> int:
             max_concurrent=args.max_concurrent,
             journal_path=args.journal or None,
             standby_of=args.standby_of.rstrip("/") or None,
+            claim_first=claim_first,
             standby_probe_interval_s=args.standby_probe_interval,
             standby_takeover_after=args.standby_takeover_after,
             standby_max_handoff_age_s=args.standby_max_handoff_age,
             lease_path=args.lease_path or None,
+            lease_witness=args.lease_witness or None,
             router_id=args.router_id or f"{socket.gethostname()}:{args.port}",
             lease_ttl_s=args.lease_ttl,
             lease_renew_interval_s=args.lease_renew_interval,
             lease_safety_margin_s=args.lease_safety_margin,
+            deployment_status=args.deployment_status or None,
         )
     except (OSError, ValueError) as exc:
         return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)

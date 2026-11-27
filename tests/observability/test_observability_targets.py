@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.observability.stack import make_targets
 from narwhal.observability.targets import scrape_targets
-from tools.observability import make_targets
 
 
 def fleet(*engines: EngineSpec, backend: str = "vllm") -> FleetConfig:

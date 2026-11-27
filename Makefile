@@ -110,7 +110,7 @@ docs-build: $(BOOTSTRAP)
 
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
-	$(VENV_PYTHON) -m tools.observability.start.cli
+	$(VENV_PYTHON) -m narwhal.observability.stack.start.cli
 
 # The Helm chart, rendered for the synthetic fleet of the chart tests and validated against the
 # Kubernetes API schemas of CHART_KUBE_VERSION.

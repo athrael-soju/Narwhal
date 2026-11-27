@@ -16,11 +16,18 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
+from narwhal.observability.stack.make_targets import (
+    TargetContract,
+    metrics_authority,
+    write_contract,
+)
 from narwhal.observability.tools import METRICS_URL_ENV as TOOL_METRICS_URL_ENV
-from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
-MOUNTS = BASE.parents[1] / "runs" / "observability" / "mounts"
+# The monitoring state lives under the working directory: the checkout for `make observe`, or a
+# host's deployment directory for the `monitoring` stage of `narwhal deploy run`.
+STATE = Path("runs") / "observability"
+MOUNTS = STATE / "mounts"
 FILES = {
     "prometheus.yml": "prometheus/prometheus.yml",
     "prometheus-alerts.yml": "prometheus/prometheus-alerts.yml",
@@ -219,9 +226,58 @@ def render_dashboard(source: Mapping[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], rendered)
 
 
+# A metric selector of a dashboard query or variable, which the fleet matcher joins.
+_SELECTOR = re.compile(r"\b((?:narwhal_[A-Za-z0-9_:]*)|up|ALERTS)\{")
+FLEET_MATCHER = 'fleet=~"$fleet"'
+FLEET_VARIABLE = {
+    "kind": "QueryVariable",
+    "spec": {
+        "name": "fleet",
+        # One fleet at a time: the panels that follow the active router expect one pair.
+        "current": {},
+        "label": "Fleet",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": False,
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "query": {
+            "kind": "prometheus",
+            "spec": {"query": 'label_values(up{job="narwhal-router"}, fleet)', "refId": "fleet"},
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "options": [],
+        "multi": False,
+        "includeAll": False,
+        "allowCustomValue": True,
+    },
+}
+
+
+def scope_to_fleet(dashboard: Any) -> Any:
+    """The dashboard with a fleet variable, and every selector of a query or variable scoped to
+    the selected fleet, so one Prometheus serves several fleets on one dashboard."""
+
+    def scoped(value: Any, key: str = "") -> Any:
+        if isinstance(value, str) and key in ("expr", "query"):
+            return _SELECTOR.sub(lambda match: f"{match[1]}{{{FLEET_MATCHER},", value)
+        if isinstance(value, list):
+            return [scoped(item) for item in value]
+        if isinstance(value, dict):
+            return {name: scoped(item, name) for name, item in value.items()}
+        return value
+
+    result = scoped(dashboard)
+    variables = result["spec"]["variables"]
+    # The fleet comes first after the data source, so the router and engine lists follow it.
+    variables.insert(1, copy.deepcopy(FLEET_VARIABLE))
+    return result
+
+
 def narwhal_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
-    """Return the shipped dashboard with the fleet control markers and a link to `console`."""
-    dashboard = render_dashboard(source)
+    """Return the shipped dashboard scoped to a fleet, with the fleet control markers and a link
+    to `console`."""
+    dashboard = scope_to_fleet(render_dashboard(source))
     spec = dashboard["spec"]
     spec["annotations"] = [*spec["annotations"], *map(_annotation, CONTROL_ANNOTATIONS)]
     spec["links"] = [*spec["links"], _console_link(console)]
@@ -246,6 +302,22 @@ def _write_targets(target: Path, authority: str | None) -> None:
     _write(target, (json.dumps(targets, indent=2) + "\n").encode())
 
 
+def render_prometheus(text: str, contract: TargetContract) -> str:
+    """The shipped Prometheus configuration with the deployment's origins and fleet label."""
+    scheme, authority, path = contract.alertmanager or ("http", "", "/")
+    for placeholder, value in (
+        ("<<targets>>", contract.targets),
+        ("<<fleet>>", contract.fleet),
+        ("<<alertmanager_scheme>>", scheme),
+        ("<<alertmanager_path>>", path),
+        ("<<alertmanagers>>", json.dumps(authority) if authority else ""),
+    ):
+        if placeholder not in text:
+            raise ValueError(f"prometheus.yml has no {placeholder} placeholder")
+        text = text.replace(placeholder, value)
+    return text
+
+
 def stage_artifacts(
     contract: TargetContract,
     console: str = DEFAULT_CONSOLE_URL,
@@ -268,7 +340,7 @@ def stage_artifacts(
     for origin, destination in FILES.items():
         data = (source / origin).read_bytes()
         if origin == "prometheus.yml":
-            data = data.replace(b"<<targets>>", contract.targets.encode())
+            data = render_prometheus(data.decode(), contract).encode()
         _write(root / destination, data)
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)

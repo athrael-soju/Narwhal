@@ -14,6 +14,7 @@ from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
+from ..observability.stack.start.stack import compose_problem
 from . import (
     cache_groups,
     discovery,
@@ -38,13 +39,14 @@ TARGETS: dict[str, Any] = {"ssh": stage_run, "kubernetes": kubernetes_target}
 
 DESCRIPTIONS = {
     "plan": "Check every deployment input and each host's systemd user manager, then print "
-    "each stage up to the router start and whether run would run or skip it, and why.",
-    "run": "Run the stages from host access to a ready router in the run directory, skipping "
+    "each stage up to the monitoring stack and whether run would run or skip it, and why.",
+    "run": "Run the stages from host access to a ready router pair in the run directory, skipping "
     "each stage whose recorded result still holds, and stop at the first stage that fails.",
     "status": "Print each stage's state and evidence from the run record, and check whether "
-    "each engine, sidecar and router the run started still runs or has stopped.",
-    "down": "Stop the router, sidecars and engines the run started, each only while its "
-    "recorded identity still matches, and print each as stopped or not running.",
+    "each engine, sidecar, router and container the run started still runs or has stopped.",
+    "down": "Stop the monitoring stack, load balancer, routers, sidecars and engines the run "
+    "started, each only while its recorded identity still matches, and print each as stopped "
+    "or not running.",
     "discover": "Log in to every host named in the loaded environment with its pinned host key, "
     "inspect GPUs, the engine image and the checkpoint, and write the host inventory, launch "
     "records, fleet and deployment.env.",
@@ -92,7 +94,8 @@ def add_commands(commands: Any) -> None:
         "deploy",
         help="Deploy a fleet on SSH hosts, or run one of its stages alone",
         description="Deploy a fleet on SSH hosts. plan checks the inputs and prints what run "
-        "would do, run takes the hosts to a ready router and resumes at the stage that did not "
+        "would do, run takes the hosts to a ready router pair and resumes at the stage that "
+        "did not "
         "pass, status reports the run and down stops what it started. discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
         "writes the wheel and role files, install copies and installs them, transfer-measure "
@@ -124,9 +127,9 @@ def add_commands(commands: Any) -> None:
                 action.add_argument(
                     "--until",
                     choices=RUN_STAGES,
-                    default=stage_run.LAST_STAGE,
                     metavar="STAGE",
-                    help="stop after this stage (default: %(default)s)",
+                    help=f"stop after this stage (default: {stage_run.LAST_STAGE}, or "
+                    f"{kubernetes_target.LAST_STAGE} with --target kubernetes)",
                 )
             continue
         if name not in ("discover", "cache-groups"):
@@ -425,17 +428,20 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
         ssh = SSH(env, _access_logs())
         for host in discovery.derive_hosts(env):
             runner = remote.SSHRunner(ssh, host, "access")
-            if found := supervision.check_systemd_host(runner):
+            found = supervision.check_systemd_host(runner)
+            # The primary router's host runs the monitoring stack with Docker Compose.
+            if "router" in host.roles and (problem := compose_problem(runner)):
+                found.append(problem)
+            if found:
                 problems[host.id] = found
     directory = args.run.resolve()
     deployment = TARGETS[args.target].Deployment(directory, env, dry=True)
-    result = deployment.runner().plan(inputs, until=args.until)
+    result = deployment.runner().plan(inputs, until=_until(args))
     rows = _decisions(result.decisions)
-    for note in result.notes:
+    notes = [*_topology_notes(args, env), *result.notes]
+    for note in notes:
         print(f"Note: {note}")
-    results.set_data(
-        {"run": str(directory), "stages": rows, "hosts": problems, "notes": list(result.notes)}
-    )
+    results.set_data({"run": str(directory), "stages": rows, "hosts": problems, "notes": notes})
     if problems:
         for name, found in problems.items():
             for problem in found:
@@ -463,6 +469,26 @@ def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
     return "error", "operation_failed", 4
 
 
+def _topology_notes(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
+    """What the inventory leaves out that an operator should know before a run."""
+    if args.target == "ssh" and not stage_run.paired(env):
+        return [stage_run.SINGLE_ROUTER]
+    return []
+
+
+def _until(args: argparse.Namespace) -> str:
+    """The last stage to plan or run: `--until`, else the target's last stage."""
+    return str(args.until or TARGETS[args.target].LAST_STAGE)
+
+
+def _publish(deployment: Any) -> None:
+    """Give the routers the run's status; a missed upload is a warning, not a failure. A target
+    without router hosts to copy it to publishes nothing."""
+    publish = getattr(deployment, "publish_status", None)
+    for warning in publish() if publish else ():
+        print(f"narwhal: deploy run: warning: {warning}", file=sys.stderr)
+
+
 def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     inputs = _inputs(args, env)
     if inputs is None:
@@ -471,7 +497,10 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     results.add_artifact("run_record", directory / "run.json")
     target = TARGETS[args.target]
-    runner = target.Deployment(directory, env).runner()
+    deployment = target.Deployment(directory, env)
+    runner = deployment.runner()
+    for note in _topology_notes(args, env):
+        print(f"Note: {note}")
 
     def stale(found: Mapping[str, Any] | None) -> dict[str, Any]:
         """Print a stale lock the run found, and return the result data that carries it."""
@@ -481,7 +510,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         return {"stale_lock": dict(found)}
 
     try:
-        result = runner.run(inputs, until=args.until)
+        result = runner.run(inputs, until=_until(args))
     except StageFailed as error:
         failure = error.record["failure"]
         recovery = target.recovery_url(failure["recovery"])
@@ -502,6 +531,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         )
         print(f"Recovery: {recovery}", file=sys.stderr)
         print(f"Evidence: {directory / error.record['directory']}", file=sys.stderr)
+        _publish(deployment)
         return exit_code
     except RunCancelled as error:
         results.set_data(
@@ -511,11 +541,12 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         results.set_status("interrupted")
         print(f"narwhal: deploy run: {error}", file=sys.stderr)
         return 130
+    _publish(deployment)
     ran = [decision.key for decision in result.decisions if decision.ran]
     results.set_data(
         {"run": str(directory), "run_id": result.run_id, "ran": ran, **stale(result.stale_lock)}
     )
-    print(f"Run {result.run_id} reached {args.until}; {len(ran)} stage instances ran.")
+    print(f"Run {result.run_id} reached {_until(args)}; {len(ran)} stage instances ran.")
     return 0
 
 

@@ -21,10 +21,13 @@ ROUTER = "R"
 # handoffs are measured instead.
 CACHE_CAPTURE = "cache_capture"
 TRANSFER_MEASUREMENT = "transfer_measurement"
+# A fleet capability: a standby router, so the fleet has a shared lease and a load balancer.
+ROUTER_PAIR = "router_pair"
 # What each capability means where no installed backend names it.
 CAPABILITIES = {
     CACHE_CAPTURE: "backends that capture the live cache layout",
     TRANSFER_MEASUREMENT: "backends whose KV handoffs are measured",
+    ROUTER_PAIR: "fleets with a standby router",
 }
 
 _DISCOVER = "deploy/01-Discover.md"
@@ -145,8 +148,11 @@ STAGES = (
         ("sidecar-start",),
     ),
     _stage("finalize-fleet", ROUTER, _ATTEST, "Finalizing the fleet contract", ("sidecar-verify",)),
-    _stage("profile", ROUTER, _PROFILE, "Profiling idle engines", ("finalize-fleet",)),
-    _stage("calibrate", ROUTER, _PROFILE, "Calibrating the first-token deadline", ("profile",)),
+    # Profiling and calibration run once, from the primary router's host.
+    _stage("profile", WORKSTATION, _PROFILE, "Profiling idle engines", ("finalize-fleet",)),
+    _stage(
+        "calibrate", WORKSTATION, _PROFILE, "Calibrating the first-token deadline", ("profile",)
+    ),
     _stage(
         "fleet-limits",
         WORKSTATION,
@@ -156,19 +162,37 @@ STAGES = (
     ),
     _stage("preflight", ROUTER, _PROFILE, "Running preflight", ("fleet-limits",)),
     _stage(
+        "lease-check",
+        WORKSTATION,
+        _SERVE,
+        "Checking the shared lease path",
+        ("install",),
+        capability=ROUTER_PAIR,
+    ),
+    _stage(
         "router-start",
         ROUTER,
         _SERVE,
-        "Starting and locally verifying the router",
-        ("preflight",),
+        "Starting the router pair",
+        ("preflight", "lease-check"),
         ("router_identity",),
     ),
     _stage(
-        "monitoring",
-        ROUTER,
+        "load-balancer",
+        WORKSTATION,
         _SERVE,
-        "Starting the monitoring stack on the router",
+        "Starting the load balancer",
         ("router-start",),
+        ("load_balancer_identity",),
+        capability=ROUTER_PAIR,
+    ),
+    _stage(
+        "monitoring",
+        WORKSTATION,
+        _SERVE,
+        "Starting the monitoring stack",
+        ("load-balancer",),
+        ("monitoring_identity",),
     ),
     _stage(
         "tunnel",
@@ -211,8 +235,8 @@ FACTS = (
         "destinations",
         INPUT,
         WORKSTATION,
-        "SSH destination of a host",
-        "Every host's SSH destination",
+        "SSH destination or roles of a host",
+        "Every host's SSH destination and roles",
         (Rerun("access"), _onward("package")),
     ),
     Fact(
@@ -229,7 +253,7 @@ FACTS = (
         WORKSTATION,
         "Approved release",
         "`NARWHAL_WHEEL_SHA256`, which each role environment records as "
-        "`NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT`",
+        "`NARWHAL_DEPLOYMENT_REVISION`, and the SHA-256 of the lock, `NARWHAL_REQUIREMENTS_SHA256`",
         (_onward("package"),),
     ),
     Fact(
@@ -287,16 +311,16 @@ FACTS = (
         "router",
         INPUT,
         WORKSTATION,
-        "Router settings",
-        "The bind address, port, lease path, standby options and load balancer",
-        _reruns("router-start", "monitoring", "trial"),
+        "Router pair settings",
+        "Both routers' origins, the load balancer's origin, the lease path and the HAProxy image",
+        _reruns("lease-check", "router-start", "load-balancer", "monitoring", "trial"),
     ),
     Fact(
         "monitoring",
         INPUT,
         WORKSTATION,
-        "Monitoring origins",
-        "The router and load balancer origins and the listen addresses",
+        "Monitoring settings",
+        "The Prometheus and Grafana listen addresses",
         _reruns("monitoring"),
     ),
     Fact(
@@ -404,6 +428,22 @@ FACTS = (
         "Router restarted",
         "The router's recorded process identity",
         _reruns("router-start"),
+    ),
+    Fact(
+        "load_balancer_identity",
+        LIVE,
+        WORKSTATION,
+        "Load balancer restarted",
+        "The HAProxy container ID and start time",
+        _reruns("load-balancer"),
+    ),
+    Fact(
+        "monitoring_identity",
+        LIVE,
+        WORKSTATION,
+        "Monitoring container stopped or replaced",
+        "The container ID of each monitoring service",
+        _reruns("monitoring"),
     ),
 )
 

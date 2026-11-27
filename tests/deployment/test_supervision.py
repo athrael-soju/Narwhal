@@ -213,7 +213,9 @@ class SystemdUnitTests(unittest.TestCase):
         self.supervisor.start(self.spec())
         self.assertEqual(
             self.environment_file.read_text(),
-            'NARWHAL_ENGINE_API_KEY="secret\\"\\$\\`\\\\value"\n',
+            'NARWHAL_ENGINE_API_KEY="secret\\"\\$\\`\\\\value"\n'
+            # The unit's name, so the process reads its restart count.
+            f'NARWHAL_SUPERVISOR_UNIT="{UNIT}"\n',
         )
         self.assertEqual(stat.S_IMODE(self.environment_file.stat().st_mode), 0o600)
         self.assertEqual([p.name for p in self.directory.iterdir()], ["router.env"])

@@ -9,15 +9,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.observability import artifacts
-from tools.observability.make_targets import TargetContract
+from narwhal.observability.stack import artifacts
+from narwhal.observability.stack.make_targets import TargetContract
 
 
 class MonitoringArtifactTests(unittest.TestCase):
     def test_private_checkout_produces_readable_mounts_without_exposing_role_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = Path(temporary)
-            source = checkout / "tools" / "observability"
+            source = checkout / "stack"
             root = checkout / "runs" / "observability" / "mounts"
             contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
             previous_umask = os.umask(0o077)
@@ -37,6 +37,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                     artifacts.CONTROL_TOKEN_FILE,
                     artifacts.TOOL_TARGETS,
                     "prometheus/targets/router.json",
+                    "prometheus/targets/sidecars.json",
                 }
                 self.assertEqual(
                     {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}, expected
@@ -56,7 +57,9 @@ class MonitoringArtifactTests(unittest.TestCase):
                 for relative, target in artifacts.FILES.items():
                     expected_bytes = (source / relative).read_bytes()
                     if relative == "prometheus.yml":
-                        expected_bytes = expected_bytes.replace(b"<<targets>>", b"127.0.0.1:8000")
+                        expected_bytes = artifacts.render_prometheus(
+                            expected_bytes.decode(), contract
+                        ).encode()
                     self.assertEqual((root / target).read_bytes(), expected_bytes)
                 for path, mode in original_modes.items():
                     self.assertEqual(path.stat().st_mode, mode, str(path))
@@ -91,12 +94,42 @@ class OrchestratorDashboardTests(unittest.TestCase):
         )
         self.console = "http://127.0.0.1:18020/console"
 
+    def test_the_served_dashboard_selects_a_fleet_in_every_query(self):
+        marked = artifacts.narwhal_dashboard(self.shipped, self.console)
+        variables = [v["spec"]["name"] for v in marked["spec"]["variables"]]
+        self.assertEqual(variables[:2], ["DS_PROMETHEUS", "fleet"])
+        expressions = []
+
+        def collect(value, key=""):
+            if isinstance(value, str) and key in ("expr", "query"):
+                expressions.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for name, item in value.items():
+                    collect(item, name)
+
+        # The fleet variable lists every fleet; everything else reads the selected one.
+        collect({k: v for k, v in marked["spec"].items() if k != "variables"})
+        collect(marked["spec"]["variables"][2:])
+        self.assertTrue(expressions)
+        for expression in expressions:
+            for selector in re.findall(r"\b(?:narwhal_\w+|up|ALERTS)\{[^}]*\}", expression):
+                self.assertIn(artifacts.FLEET_MATCHER, selector)
+        fleet = next(v for v in marked["spec"]["variables"] if v["spec"]["name"] == "fleet")
+        self.assertNotIn("$fleet", fleet["spec"]["query"]["spec"]["query"])
+        # One fleet at a time, so a count-once query never spans two fleets' routers.
+        self.assertFalse(fleet["spec"]["includeAll"])
+        self.assertFalse(fleet["spec"]["multi"])
+
     def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):
         marked = artifacts.narwhal_dashboard(self.shipped, self.console)
-        shipped = self.shipped["spec"]["annotations"]
+        scoped = artifacts.scope_to_fleet(self.shipped)
+        shipped = scoped["spec"]["annotations"]
         annotations = marked["spec"]["annotations"]
         self.assertEqual(annotations[: len(shipped)], shipped)
-        self.assertEqual(marked["spec"]["elements"], self.shipped["spec"]["elements"])
+        self.assertEqual(marked["spec"]["elements"], scoped["spec"]["elements"])
         names = {a["spec"]["name"]: a["spec"] for a in annotations}
         actions = names["Fleet control actions"]["query"]["spec"]
         self.assertEqual(actions["expr"], "narwhal_control_action_started_ms")

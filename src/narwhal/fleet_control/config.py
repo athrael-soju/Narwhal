@@ -164,8 +164,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
     if not isinstance(fleet, str) or not fleet:
         problems.append("fleet must name the baseline fleet configuration (or set NARWHAL_FLEET)")
     elif not Path(fleet).is_absolute():
-        # A relative path would resolve from wherever the service starts, which on a deployed
-        # router host is a tools checkout beside the deployment directory.
+        # A relative path would resolve from wherever the service starts.
         problems.append(f"fleet must be an absolute path, got {fleet!r}")
     hooks = _read_hooks(problems, raw.get("hooks"))
     router = _read_router(problems, raw.get("router", {}))

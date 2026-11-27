@@ -18,6 +18,7 @@ from narwhal.diagnostics.check.report import Report
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
 from narwhal.observability.metrics.render import render
+from narwhal.observability.stack.artifacts import render_dashboard
 from narwhal.profiling.generation import binding_digest
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime.release import PeerRelease, release_peers
@@ -26,7 +27,6 @@ from tests.characterization.golden import assert_golden
 from tests.characterization.vllm_fake import ENGINES, PROCESS_START, VERSION, FakeVllm, untimed
 from tests.fixtures import ROOT, contract_free_router, fleet, profile
 from tests.wire import EngineWire, engine_clients, routed, vllm_engine
-from tools.observability.artifacts import render_dashboard
 
 SECONDS = re.compile(r"[0-9]+\.[0-9]+s\b")
 
@@ -234,7 +234,8 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             for line in text.splitlines()
             if line.startswith(("narwhal_kv_lease_seconds", "narwhal_handoff_bound_seconds"))
         ]
-        shipped = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        dashboard_path = ROOT / "src/narwhal/observability/stack/grafana-narwhal.json"
+        shipped = json.loads(dashboard_path.read_text())
         dashboard = json.dumps(render_dashboard(shipped))
         series = sorted(set(re.findall(r"vllm:[A-Za-z0-9_:]+", dashboard)))
         assert_golden(

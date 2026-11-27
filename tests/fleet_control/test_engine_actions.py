@@ -16,13 +16,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.runtime.lifecycle import leave as leave_module
-from narwhal.runtime.lifecycle.records import ValidationOutcome
-from narwhal.serving import app as serving_app
-from narwhal.types import Request
-from tests.fixtures import fleet
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     DEFAULT_ROUTER_TIMEOUT_S,
     DEFAULT_ROUTER_URL,
     ConfigError,
@@ -31,14 +26,19 @@ from tools.fleet_control.config import (
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.engines import (
+from narwhal.fleet_control.engines import (
     EngineActions,
     baseline_engines,
     engine_routes,
     engine_slice,
 )
-from tools.fleet_control.overlays import Overlays, overlay_routes
-from tools.fleet_control.service import ActionError, ControlService
+from narwhal.fleet_control.overlays import Overlays, overlay_routes
+from narwhal.fleet_control.service import ActionError, ControlService
+from narwhal.runtime.lifecycle import leave as leave_module
+from narwhal.runtime.lifecycle.records import ValidationOutcome
+from narwhal.serving import app as serving_app
+from narwhal.types import Request
+from tests.fixtures import fleet
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = ROOT / "tests/data/fleet.json"

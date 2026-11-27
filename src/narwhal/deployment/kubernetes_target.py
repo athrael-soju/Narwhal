@@ -846,14 +846,8 @@ class KubernetesDeployment:
     @staticmethod
     def _dashboard() -> str:
         """The Grafana dashboard the chart serves, rendered as `make observe` renders it."""
-        try:
-            from tools.observability.chart_dashboard import chart_dashboard
-        except ImportError:
-            raise ValueError(
-                "monitoring is enabled and monitoring.grafana.dashboard is empty; render it with "
-                "python -m tools.observability.chart_dashboard <file> from a checkout and set it "
-                f"in {VALUES}"
-            ) from None
+        from ..observability.stack.chart_dashboard import chart_dashboard
+
         return chart_dashboard()
 
     def _entry(self, gate: Gate, name: str, inputs: str | None) -> dict[str, Any]:

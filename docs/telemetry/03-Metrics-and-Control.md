@@ -40,6 +40,8 @@ The router exports these series on `/metrics`, grouped by area:
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_leaving`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 | Membership | `narwhal_membership_generation`, `narwhal_engine_joins_total`, `narwhal_engine_leaves_total` |
+| Deployment | `narwhal_deployment_info`, `narwhal_deployment_stage_state`, `narwhal_deployment_updated_timestamp_seconds`, `narwhal_deployment_last_passed_timestamp_seconds`, `narwhal_deployment_qualified_timestamp_seconds`, `narwhal_deployment_profiled_timestamp_seconds`, `narwhal_deployment_calibrated_timestamp_seconds`, `narwhal_fabric_edge_measured_gbps`, `narwhal_fabric_edge_budget_gbps`, `narwhal_engine_attestation_generation_info`, `narwhal_engine_attested_timestamp_seconds` |
+| Supervision | `narwhal_supervisor_restarts` |
 
 `narwhal_engine_requests_total` counts the requests the router has sent to each engine since the router started or the engine joined, including its verification, readmission and peer release probes. A joining engine's count starts at 0 when the join adds it to the membership, after its join checks. A join's fabric check counts toward each member it pairs with.
 
@@ -55,6 +57,25 @@ With `--metrics-url` or `NARWHAL_TOOL_METRICS_URL`, `narwhal-check` serves these
 | `narwhal_tool_engine_in_use` | `1` for each engine the operation sends requests to, labelled with the engine's `iid` |
 | `narwhal_tool_steps_completed` | Steps completed |
 | `narwhal_tool_steps_total` | Steps planned |
+
+### Deployment and restart metrics
+
+A router started with `--deployment-status PATH` exports the [deployment status](06-Deployment-Runs.md#deployment-status) in that file. It reads the file on each scrape and exports nothing for a missing or unreadable file.
+
+| Series | Labels | Value |
+| --- | --- | --- |
+| `narwhal_deployment_info` | `run_id`, `target` | 1 for the run that wrote the status |
+| `narwhal_deployment_stage_state` | `stage`, `stage_instance`, `state` | 1 for the state of each stage instance of that run |
+| `narwhal_deployment_updated_timestamp_seconds` | | When a stage of that run last ended |
+| `narwhal_deployment_last_passed_timestamp_seconds` | | When a run last passed every stage, carried across later runs that failed |
+| `narwhal_deployment_qualified_timestamp_seconds`, `narwhal_deployment_profiled_timestamp_seconds`, `narwhal_deployment_calibrated_timestamp_seconds` | | When `preflight`, `profile` and `calibrate` last passed |
+| `narwhal_fabric_edge_measured_gbps`, `narwhal_fabric_edge_budget_gbps` | `edge` | The lowest bandwidth fabric qualification measured on the edge, and the highest that one of its KV handoffs needs, in Gbit/s |
+| `narwhal_engine_attestation_generation_info` | `iid`, `generation` | 1 for the binding digest of each engine's attestation |
+| `narwhal_engine_attested_timestamp_seconds` | `iid` | When the attestation was captured |
+
+Both routers of a pair export the same status, so read these series with `max by` over the routers rather than `sum`. A router that missed the last upload keeps exporting the status before it; keep only the routers whose `narwhal_deployment_updated_timestamp_seconds` is the fleet's newest, as the dashboard does.
+
+`narwhal_supervisor_restarts{process}` counts how often systemd restarted the process since its unit started. The router exports it as `process="router"`, and each attestation sidecar on its own `/metrics` as `process="sidecar"`, when they run under the systemd unit that `narwhal deploy` writes. A sidecar in an engine pod started with `--pod NAMESPACE/NAME` also exports `narwhal_kubelet_restarts{container}`, the kubelet restart count of each container in its pod. Both read their counts at most every 15 seconds.
 
 ## Reading outcome reasons
 

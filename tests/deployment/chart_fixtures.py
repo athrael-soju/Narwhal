@@ -21,10 +21,10 @@ from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.backend import cache_capture
 from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.observability.stack.chart_dashboard import chart_dashboard
 from tests.backends.contract import MODEL_CONFIG, fixtures, launch_record
 from tests.deployment.fixtures import launcher_inputs
 from tests.deployment.pod_fixtures import INPUTS, RDMA_TRANSFER, kubernetes_env
-from tools.observability.chart_dashboard import chart_dashboard
 
 NAMESPACE = "example"
 NARWHAL_IMAGE = INPUTS["NARWHAL_KUBERNETES_SIDECAR_IMAGE"]

@@ -13,9 +13,8 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from tools.measurement.benchmark_evidence import client_row
-
 from .app import API
+from .rows import client_row
 from .service import ControlService
 
 ARTIFACTS = "aiperf"

@@ -134,6 +134,14 @@ class StepTests(unittest.TestCase):
         with self.assertRaises(RemoteError):
             remote.upload(self.ssh, HOST, "profile", source, "dir/sub/fleet.json")
 
+    def test_a_replacement_arrives_checked_over_the_file_before(self):
+        source = self.home / "status.json"
+        for text in ("{}", '{"run": 2}'):
+            source.write_text(text)
+            remote.replace(self.ssh, HOST, "deployment-status", source, "dir/status.json")
+            self.assertEqual((self.home / "dir/status.json").read_text(), text)
+        self.assertEqual(sorted(p.name for p in (self.home / "dir").iterdir()), ["status.json"])
+
 
 class SSHRunnerTests(unittest.TestCase):
     def setUp(self):

@@ -11,6 +11,12 @@ import httpx
 from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
+from narwhal.fleet_control.engines import Availability, AvailableEngine
+from narwhal.fleet_control.signals import metrics as control_metrics
+from narwhal.observability.metrics.deployment import render_deployment
+from narwhal.observability.restarts import render_restarts
+from narwhal.observability.stack.artifacts import render_dashboard
+from narwhal.observability.stack.start import readiness as observe_readiness
 from narwhal.observability.tools import ToolActivity
 from narwhal.runtime.lease import FileLease
 from narwhal.runtime.lifecycle.records import DrainRecord
@@ -19,10 +25,6 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
-from tools.fleet_control.engines import Availability, AvailableEngine
-from tools.fleet_control.signals import metrics as control_metrics
-from tools.observability.artifacts import render_dashboard
-from tools.observability.start import readiness as observe_readiness
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,7 +63,7 @@ DASHBOARD_PALETTE = {
 
 def dashboard():
     return render_dashboard(
-        json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        json.loads((ROOT / "src/narwhal/observability/stack/grafana-narwhal.json").read_text())
     )
 
 
@@ -110,7 +112,7 @@ def override_colors(panel):
 
 
 def alert_rules():
-    text = (ROOT / "tools/observability/prometheus-alerts.yml").read_text()
+    text = (ROOT / "src/narwhal/observability/stack/prometheus-alerts.yml").read_text()
     rules = {}
     for block in re.split(r"\n\s*- alert: ", text)[1:]:
         name, _, body = block.partition("\n")
@@ -384,14 +386,14 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dashboard()["metadata"]["name"], "narwhal-router")
         response = await self.client.get("/metrics")
         required = {
-            "tools/observability/grafana-narwhal.json": (
+            "src/narwhal/observability/stack/grafana-narwhal.json": (
                 "narwhal_failed_total",
                 "narwhal_served_total",
                 "narwhal_engine_lifecycle_state",
                 "narwhal_slo_met_total",
                 "narwhal_event_loop_busy_seconds_total",
             ),
-            "tools/observability/prometheus-alerts.yml": (
+            "src/narwhal/observability/stack/prometheus-alerts.yml": (
                 "narwhal_failed_total",
                 "narwhal_pool_instances",
                 "narwhal_unserved_total",
@@ -412,7 +414,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(session=None, jobs=None, status=lambda: {"in_progress": None}),
             Availability((AvailableEngine("e1", "vllm", True, True),)),
         )
-        exposition = response.text + ToolActivity("preflight").render() + control
+        # A router with a deployment status exports its series, and a sidecar its restarts.
+        deployment = "\n".join([*render_deployment({}), *render_restarts({}, {})])
+        exposition = response.text + ToolActivity("preflight").render() + control + deployment
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":
@@ -429,7 +433,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             for template in load_backend("vllm").metrics.dashboard_series.values()
             for name in re.findall(r"vllm:\w+", template)
         }
-        readme = (ROOT / "tools/observability/README.md").read_text()
+        readme = (ROOT / "src/narwhal/observability/stack/README.md").read_text()
         engine = {name for expr in expressions for name in re.findall(r"vllm:\w+", expr)}
         self.assertEqual(engine, series)
         for name in series:
@@ -517,7 +521,10 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             for rule in alert_rules().values()
             for selector in re.findall(r"\bup(\{[^}]*\})?", rule["expr"])
         ]
-        self.assertEqual(sorted(set(selectors)), ['{job="engines"}', '{job="narwhal-router"}'])
+        self.assertEqual(
+            sorted(set(selectors)),
+            ['{job="engines"}', '{job="narwhal-router"}', '{job="sidecars"}'],
+        )
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()

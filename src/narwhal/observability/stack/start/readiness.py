@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 
-from tools.observability.make_targets import TargetContract
+from narwhal.observability.stack.make_targets import TargetContract
 
 from .services import Container, Service, StartupError
 from .stack import Stack

@@ -99,9 +99,9 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `tools/observability` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the chart's routers, HAProxy or direct engines, or to the router lease. It needs Docker and about 6 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
+Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `src/narwhal/observability/stack` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the chart's routers, HAProxy or direct engines, or to the router lease. It needs Docker and about 6 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
 
-`tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
+`tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `src/narwhal/observability/stack/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
 To measure the router's per-request bookkeeping cost before and after a change, run `python tools/measurement/bookkeeping_bench.py`. It prints one JSON line per measurement with the median microseconds per call. `--calls` sets the calls per round, default 20000, and `--rounds` sets the rounds, default 7.
 
@@ -114,7 +114,7 @@ Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 3. Qualify directed links against the live cache.
 4. Attest and profile those processes.
 5. Run preflight.
-6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack-on-the-router) with `make observe`. Keep it running until the fleet stops.
+6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack) with `make observe`. Keep it running until the fleet stops.
 7. Run routed load through the private path.
 8. Check the behaviour under test in the **Narwhal Orchestrator** dashboard, and keep screenshots of those panels with the private records.
 
@@ -292,18 +292,18 @@ Import each name from the subpackage module that defines it.
 | `deployment/attestation_contract/fleet.py`                                   | Router engine contract finalization                                      |
 | `deployment/attestation_contract/cli.py`                                     | Contract tool command                                                    |
 
-`make observe` runs `tools/observability/start/cli.py`:
+`make observe` runs `src/narwhal/observability/stack/start/cli.py`:
 
 | Module                                      | Contents                                         |
 | ------------------------------------------- | ------------------------------------------------ |
-| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router targets |
-| `tools/observability/start/services.py`     | Listener and service contracts                   |
-| `tools/observability/start/stack.py`        | Docker Compose control                           |
-| `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |
-| `tools/observability/start/readiness.py`    | Service, dashboard and target readiness          |
-| `tools/observability/start/cli.py`          | Startup sequence and command                     |
+| `src/narwhal/observability/stack/make_targets.py`       | Router origin validation and the Prometheus router targets |
+| `src/narwhal/observability/stack/start/services.py`     | Listener and service contracts                   |
+| `src/narwhal/observability/stack/start/stack.py`        | Docker Compose control                           |
+| `src/narwhal/observability/stack/start/listeners.py`    | Listener occupancy and owner diagnostics         |
+| `src/narwhal/observability/stack/start/readiness.py`    | Service, dashboard and target readiness          |
+| `src/narwhal/observability/stack/start/cli.py`          | Startup sequence and command                     |
 
-`tools/observability/chart_dashboard.py` renders the same dashboard for the Helm chart's Grafana.
+`src/narwhal/observability/stack/chart_dashboard.py` renders the same dashboard for the Helm chart's Grafana.
 
 The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurement/router_benchmark/cli.py`:
 
@@ -321,27 +321,27 @@ The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurem
 | `tools/measurement/router_benchmark/run.py`        | One run: engines, router, rate sweep and report               |
 | `tools/measurement/router_benchmark/cli.py`        | Options and command                                           |
 
-The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `tools/fleet_control/cli.py`:
+The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `src/narwhal/fleet_control/cli.py`:
 
 | Module                               | Contents                                                                |
 | ------------------------------------ | ----------------------------------------------------------------------- |
-| `tools/fleet_control/config.py`      | Private configuration, hooks, router, console settings and the token    |
-| `tools/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
-| `tools/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
-| `tools/fleet_control/records.py`     | Action log and per-session run records                                  |
-| `tools/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
-| `tools/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
-| `tools/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
-| `tools/fleet_control/engine_hook.py` | Reference engine hook for container launches                            |
-| `tools/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
-| `tools/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
-| `tools/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
-| `tools/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
-| `tools/fleet_control/live.py`        | Live load-job results from AIPerf's per-request records                 |
-| `tools/fleet_control/signals.py`     | Router readiness, firing alerts and the service's Prometheus metrics    |
-| `tools/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
-| `tools/fleet_control/console.html`   | Console page                                                            |
-| `tools/fleet_control/cli.py`         | Options and command                                                     |
+| `src/narwhal/fleet_control/config.py`      | Private configuration, hooks, router, console settings and the token    |
+| `src/narwhal/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
+| `src/narwhal/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
+| `src/narwhal/fleet_control/records.py`     | Action log and per-session run records                                  |
+| `src/narwhal/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
+| `src/narwhal/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
+| `src/narwhal/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
+| `src/narwhal/fleet_control/engine_hook.py` | Reference engine hook for container launches                            |
+| `src/narwhal/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
+| `src/narwhal/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
+| `src/narwhal/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
+| `src/narwhal/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
+| `src/narwhal/fleet_control/live.py`        | Live load-job results from AIPerf's per-request records                 |
+| `src/narwhal/fleet_control/signals.py`     | Router readiness, firing alerts and the service's Prometheus metrics    |
+| `src/narwhal/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
+| `src/narwhal/fleet_control/console.html`   | Console page                                                            |
+| `src/narwhal/fleet_control/cli.py`         | Options and command                                                     |
 
 ### Working files and deployment artifacts
 

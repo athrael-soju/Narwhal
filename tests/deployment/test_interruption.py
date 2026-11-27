@@ -19,6 +19,11 @@ from narwhal.dev import lifecycle, template
 MODULE = "tests.deployment.interruption_harness"
 ROOT = Path(__file__).resolve().parents[2]
 
+# Seconds the controller has to reach the stage under test. It starts three cold interpreters
+# first, the controller, the helper and its worker, which takes far longer than a second on a
+# loaded host; a controller that exits early fails at once.
+BARRIER_S = 60
+
 
 @unittest.skipUnless(sys.platform == "linux", "Linux process ownership contract")
 class InterruptionTests(unittest.TestCase):
@@ -113,7 +118,7 @@ class InterruptionTests(unittest.TestCase):
         return value
 
     def await_barrier(self, root, selected, controller):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + BARRIER_S
         while time.monotonic() < deadline:
             if controller.poll() is not None:
                 self.fail(

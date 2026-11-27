@@ -13,11 +13,17 @@ from typing import Any
 
 import httpx
 
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import ConfigError, ControlConfig, Hook, RouterEndpoint, load_config
-from tools.fleet_control.jobs import Job
-from tools.fleet_control.service import ControlService
-from tools.fleet_control.signals import ALERTS_QUERY, FleetSignals, metrics, signal_routes
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
+    ConfigError,
+    ControlConfig,
+    Hook,
+    RouterEndpoint,
+    load_config,
+)
+from narwhal.fleet_control.jobs import Job
+from narwhal.fleet_control.service import ControlService
+from narwhal.fleet_control.signals import ALERTS_QUERY, FleetSignals, metrics, signal_routes
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = ROOT / "tests/data/fleet.json"

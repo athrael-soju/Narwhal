@@ -28,7 +28,7 @@ jobs:
       - run: pip install -e '.[dev]' -c constraints-dev.txt
       - name: Pull the pinned Prometheus image for the State query tests
         run: |
-          docker pull "$(sed -n 's/^ *image: *\(prom\/prometheus:.*\)$/\1/p' tools/observability/compose.yml)"
+          docker pull "$(sed -n 's/^ *image: *\(prom\/prometheus:.*\)$/\1/p' src/narwhal/observability/stack/compose.yml)"
       - run: make check VENV_PYTHON=python
       - name: Lint, render and validate the Helm chart with the pinned helm and kubeconform
         run: make chart-check VENV_PYTHON=python

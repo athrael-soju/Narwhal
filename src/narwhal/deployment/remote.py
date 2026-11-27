@@ -183,6 +183,27 @@ ln "$temporary" {path} || fail "{target} already exists"
     ssh.run(host, stage, f"copy {source.name}", script, payload=source)
 
 
+def replace(ssh: SSH, host: Host, stage: str, source: Path, target: str) -> None:
+    """Copy `source` over `target` on `host`, checked against the source's SHA-256 and renamed
+    into place, so a reader sees the old file or the new one."""
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    path = shlex.quote(target)
+    temporary = shlex.quote(f"{target}.part-{expected[:16]}")
+    script = f"""set -eu
+umask 077
+fail() {{ printf '{HOST_CAUSE}%s\\n' "$1" >&2; exit 4; }}
+mkdir -p "$(dirname {path})"
+temporary={temporary}
+trap 'rm -f "$temporary"' EXIT
+rm -f "$temporary"
+(set -C; cat > "$temporary")
+test "$(sha256sum "$temporary" | cut -d' ' -f1)" = {expected} ||
+  fail "{target} arrived with another SHA-256"
+mv -f "$temporary" {path}
+"""
+    ssh.run(host, stage, f"replace {source.name}", script, payload=source)
+
+
 class SSHRunner:
     """A supervision `Runner` that runs each command on `host` over `ssh`.
 

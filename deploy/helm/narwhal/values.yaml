@@ -62,6 +62,11 @@ placement: {}
 # both routers and finds the engines through the load balancer's /narwhal/targets.
 monitoring:
   enabled: false
+  # The fleet label of every series Prometheus scrapes. Empty for the release name.
+  fleet: ""
+  # The Alertmanager Prometheus sends alerts to, such as http://alertmanager.monitoring:9093.
+  # Without one, alerts show only on the Prometheus alerts page.
+  alertmanagerUrl: ""
   prometheus:
     # The Prometheus image by registry digest. Required with monitoring.
     image: ""
@@ -72,7 +77,7 @@ monitoring:
     # The Grafana image by registry digest. Required with monitoring.
     image: ""
     # The rendered dashboard. Pass it with
-    # --set-file monitoring.grafana.dashboard=<file from python -m tools.observability.chart_dashboard>.
+    # --set-file monitoring.grafana.dashboard=<file from python -m narwhal.observability.stack.chart_dashboard>.
     dashboard: ""
     # The Secret that holds the Grafana admin login: {"secretName", "userKey", "passwordKey"}.
     admin: {}

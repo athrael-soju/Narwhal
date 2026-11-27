@@ -222,6 +222,7 @@ def serve(run: Path, pod_evidence: Path | None = None) -> int:
         # Under host networking the pod's address is its node's.
         host = engine.identity.pod_ip
         pod_engine: PodEngine | None = engine
+        process += ["--pod", f"{engine.identity.namespace}/{engine.identity.pod}"]
     else:
         pod_engine = None
         plan, checked, _ = checked_plan(run)

@@ -224,10 +224,21 @@ def derive_hosts(env: Mapping[str, str]) -> list[Host]:
     router_name = (
         "NARWHAL_ROUTER_SSH" if env.get("NARWHAL_ROUTER_SSH") else f"NARWHAL_NODE_{nodes[0]}_SSH"
     )
-    for role, name in [
-        *((f"engine-{n}", f"NARWHAL_NODE_{n}_SSH") for n in nodes),
-        ("router", router_name),
-    ]:
+    roles = [*((f"engine-{n}", f"NARWHAL_NODE_{n}_SSH") for n in nodes), ("router", router_name)]
+    if env.get("NARWHAL_STANDBY_ROUTER_SSH"):
+        # A router pair: its standby on another host, and the load balancer in front of both,
+        # on the primary router's host unless the inventory names its own.
+        if env["NARWHAL_STANDBY_ROUTER_SSH"] == env.get(router_name):
+            raise ValueError(
+                f"Set NARWHAL_STANDBY_ROUTER_SSH to another host than {router_name}'s, so one "
+                "host's loss leaves a router"
+            )
+        balancer = "NARWHAL_LOAD_BALANCER_SSH"
+        roles += [
+            ("standby-router", "NARWHAL_STANDBY_ROUTER_SSH"),
+            ("load-balancer", balancer if env.get(balancer) else router_name),
+        ]
+    for role, name in roles:
         destination = env.get(name, "")
         if not destination or destination.startswith("-") or any(c.isspace() for c in destination):
             raise ValueError(f"Set {name} to an SSH alias or user@host")
@@ -437,7 +448,7 @@ def discover(env: Mapping[str, str], out: Path) -> Path:
         role: expected_tree(env, int(role.split("-")[1]))
         for host in hosts
         for role in host.roles
-        if role != "router"
+        if role.startswith("engine-")
     }
     env = {**env, **{name: str(path) for name, path in paths.items()}}
     out.mkdir(mode=0o700, parents=True)
@@ -449,7 +460,7 @@ def discover(env: Mapping[str, str], out: Path) -> Path:
         ssh.run(host, "access", "management access", "hostname")
         print(f"{host.id}: host key matched the known-hosts file; SSH login verified", flush=True)
         for role in host.roles:
-            if role == "router":
+            if not role.startswith("engine-"):
                 continue
             node = int(role.split("-")[1])
             fields = {

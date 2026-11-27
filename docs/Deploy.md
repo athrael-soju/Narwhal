@@ -32,7 +32,7 @@ On failure, record the state before changing it, retain the failed evidence, and
 
 ## Running the deployment
 
-`narwhal deploy run` runs every stage of the [stage table](#rerunning-after-a-change) from host access to a ready router, and keeps each stage's evidence in its run directory. With `.env` loaded, check the inputs and hosts first:
+`narwhal deploy run` runs every stage of the [stage table](#rerunning-after-a-change) from host access to a ready router pair behind HAProxy with the monitoring stack running, and keeps each stage's evidence in its run directory. With `.env` loaded, check the inputs and hosts first:
 
 ```bash
 narwhal deploy plan --run runs/deploy/first-deploy
@@ -126,29 +126,31 @@ An engine whose container stopped or restarted also spends its launch directory,
 | `sidecar-start` | Once for each engine role, on its engine host | `attest-capture` | [Starting the sidecar](deploy/05-Attest.md#starting-the-sidecar) |
 | `sidecar-verify` | Once for each engine role, on its engine host | `sidecar-start` | [Verifying the sidecar](deploy/05-Attest.md#verifying-the-sidecar) |
 | `finalize-fleet` | Once for each router host | `sidecar-verify` | [Finalizing the fleet contract](deploy/05-Attest.md#finalizing-the-fleet-contract) |
-| `profile` | Once for each router host | `finalize-fleet` | [Profiling idle engines](deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
-| `calibrate` | Once for each router host | `profile` | [Calibrating the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) |
+| `profile` | Once per run, on the management workstation | `finalize-fleet` | [Profiling idle engines](deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
+| `calibrate` | Once per run, on the management workstation | `profile` | [Calibrating the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) |
 | `fleet-limits` | Once per run, on the management workstation | `calibrate` | [Reusing or repeating the calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration) |
 | `preflight` | Once for each router host | `fleet-limits` | [Running preflight](deploy/06-Profile-and-Preflight.md#running-preflight) |
-| `router-start` | Once for each router host | `preflight` | [Starting and locally verifying the router](deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router) |
-| `monitoring` | Once for each router host | `router-start` | [Starting the monitoring stack on the router](deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack-on-the-router) |
+| `lease-check` | Once per run, on the management workstation, on fleets with a standby router | `install` | [Checking the shared lease path](deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) |
+| `router-start` | Once for each router host | `preflight`, `lease-check` | [Starting the router pair](deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
+| `load-balancer` | Once per run, on the management workstation, on fleets with a standby router | `router-start` | [Starting the load balancer](deploy/07-Serve-and-Measure.md#starting-the-load-balancer) |
+| `monitoring` | Once per run, on the management workstation | `load-balancer` | [Starting the monitoring stack](deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack) |
 | `tunnel` | Once per run, on the management workstation | `monitoring` | [Tunnelling router, Prometheus, and Grafana to the workstation](deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) |
 | `trial` | Once per run, on the management workstation | `tunnel` | [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) |
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
 | SSH credentials, jump host or expected host keys | The password variable names, `NARWHAL_SSH_JUMP` and the SHA-256 of `NARWHAL_SSH_KNOWN_HOSTS` | `access` |
-| SSH destination of a host | Every host's SSH destination | `access`, `package` and every stage after it |
+| SSH destination or roles of a host | Every host's SSH destination and roles | `access`, `package` and every stage after it |
 | Hardware, model, image, checkpoint, launch policy, route or transport | The discovery fields of `.env`, the live image ID and the checkpoint tree digest | `discover` and every stage after it |
-| Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT` | `package` and every stage after it |
+| Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, and the SHA-256 of the lock, `NARWHAL_REQUIREMENTS_SHA256` | `package` and every stage after it |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `transfer-measure` on SGLang when the prompt tokens change, `fabric-budget`, `fabric-edge` |
 | Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
-| Router settings | The bind address, port, lease path, standby options and load balancer | `router-start`, `monitoring`, `trial` |
-| Monitoring origins | The router and load balancer origins and the listen addresses | `monitoring` |
+| Router pair settings | Both routers' origins, the load balancer's origin, the lease path and the HAProxy image | `lease-check` on fleets with a standby router, `router-start`, `load-balancer` on fleets with a standby router, `monitoring`, `trial` |
+| Monitoring settings | The Prometheus and Grafana listen addresses | `monitoring` |
 | Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
 | Launch directory whose engine has stopped | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check`, `engine-start` for that engine |
 | Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight`, `router-start` to readmit the engine to a router that still runs |
@@ -159,6 +161,8 @@ An engine whose container stopped or restarted also spends its launch directory,
 | Engine contract fields of an engine | The `EngineContract` fields of its attestation | `attest-capture` for every engine; `finalize-fleet`, `profile`, `calibrate`, `fleet-limits`, `preflight`, `router-start` |
 | Attestation sidecar restarted | The sidecar's recorded process identity, checked live on every run | `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet` |
 | Router restarted | The router's recorded process identity, checked live on every run | `router-start` for that router host |
+| Load balancer restarted | The HAProxy container ID and start time, checked live on every run | `load-balancer` on fleets with a standby router |
+| Monitoring container stopped or replaced | The container ID of each monitoring service, checked live on every run | `monitoring` |
 
 <!-- End of the generated stage tables. -->
 

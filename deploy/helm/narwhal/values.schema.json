@@ -121,6 +121,14 @@
             "containers",
             "volumes"
           ]
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+:[0-9]+$"
+          },
+          "description": "Each engine pod's attestation sidecar address, which Prometheus scrapes"
         }
       },
       "description": "The attested engines, as chart_values derives them from their launch directories; leave empty with directEngines",
@@ -672,7 +680,7 @@
             },
             "dashboard": {
               "type": "string",
-              "description": "The dashboard python -m tools.observability.chart_dashboard renders"
+              "description": "The dashboard python -m narwhal.observability.stack.chart_dashboard renders"
             },
             "admin": {
               "type": "object",
@@ -757,6 +765,16 @@
               "description": "Container resource requests and limits"
             }
           }
+        },
+        "fleet": {
+          "type": "string",
+          "pattern": "^(|[a-z0-9][a-z0-9_.-]{0,62})$",
+          "description": "The fleet label of every series Prometheus scrapes; empty for the release name"
+        },
+        "alertmanagerUrl": {
+          "type": "string",
+          "pattern": "^(|https?://[^\\s/@?#]+:[0-9]+(/[^\\s?#]*)?)$",
+          "description": "Alertmanager that Prometheus sends alerts to; without one, alerts show only on the Prometheus alerts page"
         }
       },
       "required": [

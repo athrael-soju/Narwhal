@@ -4215,6 +4215,582 @@
             }
           }
         }
+      },
+      "panel-107": {
+        "kind": "Panel",
+        "spec": {
+          "id": 107,
+          "title": "Stages not passed",
+          "description": "Stage instances of the last deployment run that did not pass, read from the router with the newest deployment status. A fleet whose last run stopped at a failed stage shows it in the stage table.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "count by (fleet) (max by (fleet, stage, stage_instance) ((narwhal_deployment_stage_state{job=\"narwhal-router\",state!=\"passed\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))) or on () vector(0)",
+                        "legendFormat": "Stages not passed"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "stat",
+            "spec": {
+              "options": {
+                "colorMode": "background_solid",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "orientation": "vertical",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "text": {
+                  "titleSize": 12,
+                  "valueSize": 22
+                },
+                "textMode": "value_and_name",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "noValue": "N/A",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "#56A64B",
+                        "value": null
+                      },
+                      {
+                        "color": "#D44A3A",
+                        "value": 1
+                      }
+                    ]
+                  },
+                  "mappings": []
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-108": {
+        "kind": "Panel",
+        "spec": {
+          "id": 108,
+          "title": "Deployment age",
+          "description": "Time since the last run that passed every stage, the last passed preflight, profiling and calibration, from the deployment status the routers export.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "time() - max by (fleet) ((narwhal_deployment_last_passed_timestamp_seconds{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "legendFormat": "Last passed run"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "time() - max by (fleet) ((narwhal_deployment_qualified_timestamp_seconds{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "legendFormat": "Qualified"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "time() - max by (fleet) ((narwhal_deployment_profiled_timestamp_seconds{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "legendFormat": "Profiles"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "time() - max by (fleet) ((narwhal_deployment_calibrated_timestamp_seconds{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "legendFormat": "Calibration"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "D"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "stat",
+            "spec": {
+              "options": {
+                "colorMode": "background_solid",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "orientation": "vertical",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "text": {
+                  "titleSize": 12,
+                  "valueSize": 22
+                },
+                "textMode": "value_and_name",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "decimals": 0,
+                  "noValue": "N/A",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "#5794F2",
+                        "value": null
+                      }
+                    ]
+                  },
+                  "mappings": []
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-109": {
+        "kind": "Panel",
+        "spec": {
+          "id": 109,
+          "title": "Stage table",
+          "description": "Each stage instance of the last deployment run that did not pass, with its state.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, stage, stage_instance, state) ((narwhal_deployment_stage_state{job=\"narwhal-router\",state!=\"passed\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "merge",
+                  "spec": {
+                    "id": "merge",
+                    "options": {}
+                  }
+                },
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true
+                      },
+                      "renameByName": {
+                        "stage": "Stage",
+                        "stage_instance": "Instance",
+                        "state": "State",
+                        "Value": "Instances",
+                        "fleet": "Fleet"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Stage",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "N/A",
+                  "custom": {
+                    "minWidth": 70
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-110": {
+        "kind": "Panel",
+        "spec": {
+          "id": 110,
+          "title": "Fabric edges",
+          "description": "Each directed edge's bandwidth that fabric qualification measured, against the budget its sources' KV handoffs need.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, edge) ((narwhal_fabric_edge_measured_gbps{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, edge) ((narwhal_fabric_edge_budget_gbps{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "joinByField",
+                  "spec": {
+                    "id": "joinByField",
+                    "options": {
+                      "byField": "edge",
+                      "mode": "outer"
+                    }
+                  }
+                },
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true
+                      },
+                      "renameByName": {
+                        "edge": "Edge",
+                        "Value #A": "Measured Gbit/s",
+                        "Value #B": "Budget Gbit/s",
+                        "fleet": "Fleet"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Edge",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "N/A",
+                  "custom": {
+                    "minWidth": 70
+                  },
+                  "decimals": 2
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-111": {
+        "kind": "Panel",
+        "spec": {
+          "id": 111,
+          "title": "Engine attestation",
+          "description": "Each engine's attested binding digest. A change means the engine was attested again.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, iid, generation) ((narwhal_engine_attestation_generation_info{job=\"narwhal-router\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "merge",
+                  "spec": {
+                    "id": "merge",
+                    "options": {}
+                  }
+                },
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true
+                      },
+                      "renameByName": {
+                        "iid": "Engine",
+                        "generation": "Attested binding",
+                        "Value": "Engines",
+                        "fleet": "Fleet"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Engine",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "N/A",
+                  "custom": {
+                    "minWidth": 70
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-112": {
+        "kind": "Panel",
+        "spec": {
+          "id": 112,
+          "title": "Supervisor restarts",
+          "description": "Restarts of each router and sidecar by its systemd unit, and on Kubernetes the kubelet's restarts of each engine pod container.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, instance, process) (narwhal_supervisor_restarts{job=~\"narwhal-router|sidecars\"})",
+                        "legendFormat": "{{process}} {{instance}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (fleet, instance, container) (narwhal_kubelet_restarts{job=\"sidecars\"})",
+                        "legendFormat": "{{container}} {{instance}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "timeseries",
+            "spec": {
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "custom": {
+                    "lineWidth": 2,
+                    "showPoints": "never",
+                    "lineInterpolation": "stepAfter"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -4585,6 +5161,98 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-59"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "Deployment",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 4,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-107"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 4,
+                        "y": 0,
+                        "width": 12,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-108"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 0,
+                        "width": 8,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-109"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 6,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-110"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 6,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-111"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 6,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-112"
                         }
                       }
                     }

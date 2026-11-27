@@ -98,6 +98,15 @@ narwhal = ["py.typed", "fleet.example.json"]
   "direct-qwen35-08b-v1.json",
   "direct-ernie45-03b-v1.json",
 ]
+"narwhal.observability.stack" = [
+  "compose.yml",
+  "prometheus.yml",
+  "prometheus-alerts.yml",
+  "grafana-narwhal.json",
+  "grafana/provisioning/dashboards/narwhal.yml",
+  "grafana/provisioning/datasources/prometheus.yml",
+]
+"narwhal.fleet_control" = ["console.html"]
 "narwhal.deployment" = ["haproxy.cfg"]
 "narwhal.backends.vllm" = ["icon.png"]
 "narwhal.backends.sglang" = ["icon.png"]
@@ -121,6 +130,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S"]
 "src/narwhal/backends/sglang/*.py" = ["S"]
 "src/narwhal/backends/llamacpp/*.py" = ["S"]
 "src/narwhal/backends/trtllm/*.py" = ["S"]
+# The monitoring stack and fleet control service keep the baseline they had under tools/.
+"src/narwhal/fleet_control/*.py" = ["S"]
+"src/narwhal/observability/stack/**/*.py" = ["S"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -18,9 +18,9 @@ from unittest import mock
 
 import httpx
 
-from tools.fleet_control import cli as control_cli
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control import cli as control_cli
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     DEFAULT_HOST,
     ConfigError,
     ControlConfig,
@@ -29,8 +29,8 @@ from tools.fleet_control.config import (
     load_config,
     read_token,
 )
-from tools.fleet_control.jobs import Job
-from tools.fleet_control.service import ControlService
+from narwhal.fleet_control.jobs import Job
+from narwhal.fleet_control.service import ControlService
 from tools.maintenance.check_publication import private_path
 
 ROOT = Path(__file__).resolve().parents[2]

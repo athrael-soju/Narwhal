@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+from narwhal.fleet_control.rows import client_row
+
 
 def stamp() -> str:
     return datetime.now(UTC).isoformat()
@@ -42,26 +44,6 @@ def retain_client_file(path: Path, directory: Path, snapshot_name: str) -> tuple
     return content.decode("utf-8"), {
         "path": str(retained.relative_to(root)),
         "sha256": hashlib.sha256(content).hexdigest(),
-    }
-
-
-def client_row(row: dict) -> dict:
-    """Return a load trial row, or the same fields for an AIPerf `profile_export.jsonl` record."""
-    metadata = row.get("metadata")
-    if not isinstance(metadata, dict) or "metrics" not in row:
-        return row
-    error = row.get("error")
-    if metadata.get("was_cancelled"):
-        outcome = "cancelled"
-    elif error:
-        outcome = f"http_{error['code']}" if error.get("code") else error.get("type") or "error"
-    else:
-        outcome = "completed"
-    return {
-        "client_rid": metadata.get("x_request_id"),
-        "sent": True,
-        "outcome": outcome,
-        "benchmark_warmup": metadata.get("benchmark_phase") == "warmup",
     }
 
 

@@ -46,7 +46,11 @@ TOPOLOGY = StaticTopology(
         "group_edges": {"engine-1": ("node-1-to-node-2",), "engine-2": ("node-2-to-node-1",)},
     },
     # engine-1's backend captures a cache layout; engine-2's handoffs are measured.
-    capabilities={"cache_capture": ("engine-1",), "transfer_measurement": ("engine-2",)},
+    capabilities={
+        "cache_capture": ("engine-1",),
+        "transfer_measurement": ("engine-2",),
+        "router_pair": ("",),
+    },
 )
 
 ORDER = (
@@ -73,7 +77,9 @@ ORDER = (
     "calibrate",
     "fleet-limits",
     "preflight",
+    "lease-check",
     "router-start",
+    "load-balancer",
     "monitoring",
     "tunnel",
     "trial",
@@ -94,7 +100,7 @@ ROWS = {
     "calibration": {"all": ("calibrate", "fleet-limits", *SERVING)},
     "fabric_workload": {"all": ("transfer-measure", "fabric-budget", "fabric-edge")},
     "fabric_test": {"all": ("fabric-edge",)},
-    "router": {"all": ("router-start", "monitoring", "trial")},
+    "router": {"all": ("lease-check", "router-start", "load-balancer", "monitoring", "trial")},
     "monitoring": {"all": ("monitoring",)},
     "trial": {"all": ("trial",)},
     "launch": {"same": ("engine-check", "engine-start")},
@@ -137,6 +143,8 @@ ROWS = {
     },
     "sidecar_identity": {"same": ("sidecar-start", "sidecar-verify"), "all": ("finalize-fleet",)},
     "router_identity": {"same": ("router-start",)},
+    "load_balancer_identity": {"all": ("load-balancer",)},
+    "monitoring_identity": {"all": ("monitoring",)},
 }
 
 
@@ -152,6 +160,11 @@ def instances(stage):
     if spec.capability is not None:
         names = tuple(name for name in names if TOPOLOGY.capable(spec.capability, name))
     return names
+
+
+def scope_instances(scope):
+    """A scope's instances, the one unnamed instance for a single scope."""
+    return ("",) if DEPLOY_GRAPH.scopes[scope].single else TOPOLOGY.instances(scope)
 
 
 def expected(fact, instance=""):
@@ -181,7 +194,14 @@ def runs(result):
     return Counter(decision.key for decision in result.decisions if decision.ran)
 
 
-PROCESSES = ("launch", "engine_identity", "sidecar_identity", "router_identity")
+PROCESSES = (
+    "launch",
+    "engine_identity",
+    "sidecar_identity",
+    "router_identity",
+    "load_balancer_identity",
+    "monitoring_identity",
+)
 
 
 class Fleet:
@@ -291,7 +311,7 @@ class RunnerTests(unittest.TestCase):
     def test_each_live_change_reruns_the_stages_its_row_names(self):
         self.baseline()
         for fact in facts(LIVE):
-            for instance in TOPOLOGY.instances(DEPLOY_GRAPH.facts[fact].scope):
+            for instance in scope_instances(DEPLOY_GRAPH.facts[fact].scope):
                 with self.subTest(fact=fact, instance=instance):
                     self.fleet.live[(fact, instance)] = {"restarted": fact + instance}
                     self.assertEqual(ran(self.fleet.run(self.directory)), expected(fact, instance))
@@ -358,7 +378,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(running["fleet-limits"], ("slo changed",))
         self.assertEqual(running["preflight[router-host]"], ("slo changed",))
         self.assertEqual(set(running), expected("slo"))
-        self.assertNotIn("calibrate[router-host]", running)
+        self.assertNotIn("calibrate", running)
         self.assertEqual((self.directory / "run.json").read_bytes(), before)
         self.assertEqual(
             {d.key for d in self.fleet.run(self.directory).decisions if d.ran},
@@ -390,7 +410,7 @@ class RunnerTests(unittest.TestCase):
                 self.fleet.inputs[fact] = Input.value(fact + "-planned", "test")
                 self.assert_plan_matches_run()
         for fact in facts(LIVE):
-            for instance in TOPOLOGY.instances(DEPLOY_GRAPH.facts[fact].scope):
+            for instance in scope_instances(DEPLOY_GRAPH.facts[fact].scope):
                 for value in ({"planned": fact + instance}, None):
                     with self.subTest(fact=fact, instance=instance, gone=value is None):
                         self.fleet.live[(fact, instance)] = value
@@ -439,7 +459,7 @@ class RunnerTests(unittest.TestCase):
         self.baseline()
         for fact in facts(LIVE):
             producer = DEPLOY_GRAPH.producer(fact)
-            instance = TOPOLOGY.instances(DEPLOY_GRAPH.facts[fact].scope)[0]
+            instance = scope_instances(DEPLOY_GRAPH.facts[fact].scope)[0]
             with self.subTest(fact=fact):
                 self.fleet.live[(fact, instance)] = None
                 result = self.fleet.run(self.directory)
@@ -571,9 +591,9 @@ class RunnerTests(unittest.TestCase):
     def test_a_changed_stage_definition_reruns_that_stage(self):
         self.baseline()
         record = self.record()
-        record["stages"]["monitoring[router-host]"]["definition"] = "sha256:" + "0" * 64
+        record["stages"]["monitoring"]["definition"] = "sha256:" + "0" * 64
         run_record.write(self.directory, record)
-        self.assertEqual(ran(self.fleet.run(self.directory)), {"monitoring[router-host]"})
+        self.assertEqual(ran(self.fleet.run(self.directory)), {"monitoring"})
 
     def test_interruption_at_each_stage_records_cleanup_and_resumes_there(self):
         for index, stage in enumerate(ORDER):

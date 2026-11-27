@@ -200,7 +200,7 @@ class FleetSignals:
                 )
             response.raise_for_status()
             series = response.json()["data"]["result"]
-            firing = [
+            firing: list[dict[str, Any]] = [
                 {
                     "alertname": str(item["metric"]["alertname"]),
                     "labels": {

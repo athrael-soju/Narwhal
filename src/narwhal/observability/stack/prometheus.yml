@@ -1,0 +1,52 @@
+# Startup writes each deployed router address and each attestation sidecar address to the
+# gitignored discovery files under runs/observability/mounts/prometheus/targets. It puts the
+# origin that serves the engine targets, the router or the load balancer in front of a pair,
+# in place of <<targets>>, the fleet name in place of <<fleet>>, and the Alertmanager, when one
+# is given, in place of the <<alertmanager_...>> and <<alertmanagers>> values.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/prometheus-alerts.yml
+
+# Without an Alertmanager the list is empty, and alerts show only on the Prometheus alerts page.
+alerting:
+  alertmanagers:
+    - scheme: <<alertmanager_scheme>>
+      path_prefix: <<alertmanager_path>>
+      static_configs:
+        - targets: [<<alertmanagers>>]
+
+scrape_configs:
+  - job_name: narwhal-router
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/router.json"]
+    relabel_configs: &fleet
+      # Every series carries the fleet, so one Prometheus can hold several fleets.
+      - target_label: fleet
+        replacement: <<fleet>>
+  - job_name: engines
+    http_sd_configs:
+      - url: http://<<targets>>/narwhal/targets
+        refresh_interval: 15s
+    relabel_configs: *fleet
+  # The attestation sidecar of each engine, from the fleet rather than the router, so an engine
+  # host that stops reporting stays a target, after a reboot too.
+  - job_name: sidecars
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/sidecars.json"]
+    relabel_configs: *fleet
+  # Empty unless NARWHAL_CONTROL_METRICS_URL is set.
+  - job_name: fleet-control
+    authorization:
+      credentials_file: /etc/prometheus/fleet-control-token
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/fleet-control.json"]
+    relabel_configs: *fleet
+  # Empty unless NARWHAL_TOOL_METRICS_URL is set. Up only while narwhal-check or
+  # narwhal-profile runs an operation that sends requests to engines.
+  - job_name: narwhal-tools
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/tools.json"]
+    relabel_configs: *fleet

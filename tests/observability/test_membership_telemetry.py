@@ -11,14 +11,14 @@ import httpx
 
 from narwhal.contracts import JOURNAL, current
 from narwhal.observability.journal import RunJournal
+from narwhal.observability.stack.artifacts import render_dashboard
 from narwhal.runtime.lifecycle import leave
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.types import Request
 from tests.runtime.test_join import NEW, JoinHarness
-from tools.observability.artifacts import render_dashboard
 
 ROOT = Path(__file__).resolve().parents[2]
-DASHBOARD = ROOT / "tools/observability/grafana-narwhal.json"
+DASHBOARD = ROOT / "src/narwhal/observability/stack/grafana-narwhal.json"
 NEW_ROW = {
     "iid": NEW.iid,
     "url": NEW.url,
@@ -360,13 +360,14 @@ class MembershipTelemetryContractTests(unittest.TestCase):
         )
 
     def test_the_engine_variable_follows_the_router_scrape_targets(self):
-        dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        path = ROOT / "src/narwhal/observability/stack/grafana-narwhal.json"
+        dashboard = json.loads(path.read_text())
         variable = next(v for v in dashboard["spec"]["variables"] if v["spec"]["name"] == "iid")
         query = 'label_values(up{job="engines"}, iid)'
         self.assertEqual(variable["spec"]["query"]["spec"]["query"], query)
         self.assertEqual(variable["spec"]["definition"], query)
         self.assertNotEqual(variable["spec"]["refresh"], "never")
-        config = (ROOT / "tools/observability/prometheus.yml").read_text()
+        config = (ROOT / "src/narwhal/observability/stack/prometheus.yml").read_text()
         job = config.split("- job_name: engines", 1)[1].split("- job_name:", 1)[0]
         self.assertIn("http_sd_configs:", job)
         self.assertIn("/narwhal/targets", job)

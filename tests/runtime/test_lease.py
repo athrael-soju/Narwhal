@@ -2,7 +2,9 @@
 
 import fcntl
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +24,68 @@ class LeaseTests(unittest.TestCase):
         self.mono = 50.0
         self.a = self.lease("a")
         self.b = self.lease("b")
+
+    def test_orphaned_temporary_files_of_this_lease_alone_are_removed(self):
+        # The storage's clock, not the host's, ages the files: this host's wall clock reads
+        # far in the future, which would make every file look orphaned.
+        self.wall = 1e12
+        now = time.time()
+        old = now - 10 * 10 - 60
+        directory = self.path.parent
+        token = "0123456789abcdef" * 2
+        orphans = [
+            directory / f".router.lease.4242.{token}.tmp",
+            # A storage clock probe that its writer left.
+            directory / f".router.lease.4242.{token}.now",
+        ]
+        kept = [
+            # A write in progress, younger than 10 TTLs by the storage's clock.
+            directory / f".router.lease.4243.{token}.tmp",
+            # Old, but not this lease's temporary file name.
+            directory / f".other.lease.4242.{token}.tmp",
+            directory / f".router.lease.4242.{token.upper()}.tmp",
+            directory / f".router.lease.4242.{token}.tmp.keep",
+            directory / f"router.lease.4242.{token}.tmp",
+            directory / f".router.lease.x.{token}.tmp",
+            directory / "router.lease.lock",
+            directory / ".narwhal-lease-witness",
+            self.path,
+        ]
+        for path in (*orphans, *kept):
+            path.write_text("{}")
+            os.utime(path, (old, old))
+        os.utime(kept[0], (now - 30, now - 30))
+        # Old, matching names that are not regular files.
+        linked = directory / f".router.lease.4244.{token}.tmp"
+        linked.symlink_to(self.path)
+        os.utime(linked, (old, old), follow_symlinks=False)
+        folder = directory / f".router.lease.4245.{token}.tmp"
+        folder.mkdir()
+        os.utime(folder, (old, old))
+        self.assertEqual(self.a.remove_orphans(), sorted(orphans))
+        for path in orphans:
+            self.assertFalse(path.exists(), path)
+        for path in (*kept, linked, folder):
+            self.assertTrue(path.exists() or path.is_symlink(), path)
+        # The clock probe is gone too.
+        self.assertEqual(sorted(directory.glob("*.now")), [])
+
+    def test_orphan_removal_waits_for_the_lease_lock(self):
+        orphan = self.path.parent / f".router.lease.4242.{'ab' * 16}.tmp"
+        orphan.write_text("{}")
+        os.utime(orphan, (1.0, 1.0))
+        self.hold_lock()
+        with self.assertRaisesRegex(LeaseError, "stayed held"):
+            self.a.remove_orphans()
+        self.assertTrue(orphan.exists())
+        self.holder_lock.close()
+        self.assertEqual(self.a.remove_orphans(), [orphan])
+
+    def test_orphan_removal_without_the_lease_directory_removes_nothing(self):
+        missing = FileLease(self.path.parent / "absent" / "router.lease", "a", 5.0)
+        with self.assertRaisesRegex(LeaseError, "does not exist"):
+            missing.remove_orphans()
+        self.assertFalse(missing.path.parent.exists())
 
     def lease(self, holder):
         """Give a holder the shared file and the current test clocks."""
@@ -49,6 +113,26 @@ class LeaseTests(unittest.TestCase):
         self.holder_lock = self.a.lock_path.open("a+")
         self.addCleanup(self.holder_lock.close)
         fcntl.flock(self.holder_lock.fileno(), fcntl.LOCK_EX)
+
+    def test_a_missing_lease_directory_is_an_error_and_never_created(self):
+        # An unmounted shared directory must not become a local lease of this host's own.
+        missing = self.path.parent / "unmounted" / "router.lease"
+        lease = FileLease(missing, "a", 10)
+        with self.assertRaisesRegex(LeaseError, "does not exist"):
+            lease.claim()
+        with self.assertRaisesRegex(LeaseError, "does not exist"):
+            lease.read()
+        self.assertFalse(missing.parent.exists())
+
+    def test_a_missing_witness_refuses_the_lease_until_it_appears(self):
+        witness = self.path.with_name(".narwhal-lease-witness")
+        lease = FileLease(self.path, "a", 10, witness=witness)
+        with self.assertRaisesRegex(LeaseError, "witness"):
+            lease.claim()
+        self.assertFalse(self.path.exists())
+        self.assertFalse(lease.lock_path.exists())
+        witness.write_text("narwhal lease directory\n")
+        self.assertTrue(lease.claim())
 
     def test_constructor_checks_lease_parameters(self):
         """Holder, TTL and safety margin failures identify the invalid setting."""

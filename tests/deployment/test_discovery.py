@@ -279,6 +279,20 @@ class DiscoveryTests(unittest.TestCase):
                     discover(env, root / "discovery")
                 self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
 
+    def test_a_router_pair_adds_the_standby_and_load_balancer_roles(self):
+        env = {**environment(Path("/synthetic")), "NARWHAL_STANDBY_ROUTER_SSH": "deploy@other"}
+        env["NARWHAL_ROUTER_SSH"] = ""
+        roles = {host.id: host.roles for host in derive_hosts(env)}
+        self.assertIn("router", roles["node-1"])
+        self.assertIn("load-balancer", roles["node-1"])
+        self.assertEqual(roles["standby-router"], ("standby-router",))
+        env["NARWHAL_LOAD_BALANCER_SSH"] = env["NARWHAL_STANDBY_ROUTER_SSH"]
+        roles = {host.id: host.roles for host in derive_hosts(env)}
+        self.assertEqual(roles["standby-router"], ("standby-router", "load-balancer"))
+        env["NARWHAL_STANDBY_ROUTER_SSH"] = env["NARWHAL_NODE_1_SSH"]
+        with self.assertRaisesRegex(ValueError, "another host than NARWHAL_NODE_1_SSH"):
+            derive_hosts(env)
+
     def test_a_model_path_through_a_subdirectory_segment_names_the_same_file(self):
         env = environment(Path("/synthetic"))
         env["NARWHAL_MODEL_PATH"] = "/models/synthetic-model/sub/../weights.gguf"

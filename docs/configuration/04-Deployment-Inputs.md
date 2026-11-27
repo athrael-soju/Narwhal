@@ -18,7 +18,6 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 | `NARWHAL_WHEEL_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that wheel, 64 lowercase hex digits |
 | `NARWHAL_REQUIREMENTS` | `narwhal deploy package`, then `pip` on each host | Hash-checking lock of the wheel's dependencies, as in [Dependency lock](#dependency-lock) |
 | `NARWHAL_REQUIREMENTS_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that lock |
-| `NARWHAL_TOOLS_COMMIT` | `narwhal deploy package`, then the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host) | Full 40-hex commit of the wheel's release tag `v<version>`, from the private record |
 
 `NARWHAL_SSH_JUMP` is optional. It names the one jump host, an alias or `user@host`, through which every connection reaches its destination, as in [Jump host](#jump-host).
 
@@ -54,7 +53,7 @@ narwhal deploy package --out <directory>
 | `narwhal deploy package` | A copy of the wheel checked against `NARWHAL_WHEEL_SHA256`, and role files under `<directory>/<host-id>/`      |
 | `narwhal deploy install` | The package, and a virtual environment with the wheel installed, in each selected host's deployment directory |
 
-Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`. The router environment also carries `NARWHAL_TOOLS_COMMIT`.
+Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`.
 
 ### Dependency lock
 
@@ -79,7 +78,7 @@ Paths are relative to the deployment directory.
 
 | Remote file                                   | Contents                                                                                                                                                                       | Source                                                                                                                                                                                                   |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runs/deployment/.env.router`                 | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine credential, and optional router and monitoring stack settings. | `NARWHAL_WHEEL_SHA256`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_TARGETS_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
+| `runs/deployment/.env.router`                 | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine credential, and optional router and monitoring stack settings. | `NARWHAL_WHEEL_SHA256`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_TARGETS_URL`, `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `runs/deployment/.env.engine-<n>`             | Revision, launch and artifact fields, helper snapshot paths and SHA-256 values, selected node URLs, fabric peer addresses, and configured engine credential.                  | `NARWHAL_WHEEL_SHA256`, shared engine fields, optional `NARWHAL_NODE_<n>_<field>` overrides, derived service URLs and fabric addresses, the packaged helper snapshots, and configured engine credential. |
 | `config/engine-launch.engine-<n>.json`        | GPU allocation, TP size, device mappings, resolved UCX selection, and generated launch arguments.                                                                              | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                  |
 | `runs/deployment-tools/cache_capture_hook.py` | Copy of the cache-capture hook for a vLLM or TensorRT-LLM fleet, with its path and SHA-256 in `.env.engine-<n>`.                                                               | `narwhal/backends/<backend>/cache_capture_hook.py` in the wheel that `NARWHAL_WHEEL` names, for `vllm` or `trtllm`.                                                                                    |
@@ -171,9 +170,31 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 | `NARWHAL_CALIBRATION_INPUT_TOKENS` | `calibrate` | `narwhal-check --input-tokens`, comma-separated positive integers |
 | `NARWHAL_CALIBRATION_SAMPLES` | `calibrate` | `--samples`, an integer of at least 100, the fewest that preflight accepts as calibration evidence |
 | `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | `calibrate` | `--observation-timeout-s`, positive seconds |
-| `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the router binds and that the router host checks |
+| `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the primary router binds, as in [Router pair](#router-pair) |
+| `NARWHAL_STANDBY_ROUTER_URL`, `NARWHAL_LOAD_BALANCER_URL`, `NARWHAL_LEASE_PATH`, `NARWHAL_HAPROXY_IMAGE` | `lease-check`, `router-start`, `load-balancer`, `monitoring` | The [router pair](#router-pair) |
+| `NARWHAL_FLEET_NAME` | `monitoring` | Required. The `fleet` label of every series, 1 to 63 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit |
+| `NARWHAL_ALERTMANAGER_URL` | `monitoring` | Optional Alertmanager that Prometheus sends alerts to, `http(s)://HOST:PORT` with an optional path. Without one, alerts show only on the Prometheus alerts page |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `monitoring` | Optional listen addresses of the [monitoring stack](../observability/02-Access.md) |
 
 Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-change), and a change reruns the stages of its row. Every other `NARWHAL_` variable belongs to discovery, apart from the SSH, inventory, stage limit and trial variables. A secret enters the run record only as part of a digest.
+
+### Router pair
+
+With `NARWHAL_STANDBY_ROUTER_SSH` set, `run` deploys a primary router, a standby router and an HAProxy load balancer, as in [Serve and measure](../deploy/07-Serve-and-Measure.md), and needs every variable below.
+
+Without it, the fleet runs one router at `NARWHAL_ROUTER_URL` with no standby, no lease and no load balancer, so it has no router failover; `plan` and `run` say so. The `lease-check` and `load-balancer` stages do not run, clients use `NARWHAL_ROUTER_URL`, and the other variables below are not read. A fleet on one SSH host sets every `NARWHAL_NODE_<n>_SSH` to that host and leaves `NARWHAL_STANDBY_ROUTER_SSH` unset.
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_STANDBY_ROUTER_SSH` | SSH destination of the standby router's host, another host than the primary router's. Unset for a fleet with one router |
+| `NARWHAL_LOAD_BALANCER_SSH` | Optional SSH destination of the load balancer's host. Without it, HAProxy runs on the primary router's host |
+| `NARWHAL_ROUTER_URL` | `http://HOST:PORT` the primary router binds. The standby and the load balancer reach it there, so HOST is not a loopback address |
+| `NARWHAL_STANDBY_ROUTER_URL` | `http://HOST:PORT` the standby router binds, reachable from the primary and the load balancer |
+| `NARWHAL_LOAD_BALANCER_URL` | `http://HOST:PORT` that HAProxy binds on its host, and the origin clients use |
+| `NARWHAL_LEASE_PATH` | Absolute path of the pair's lease file, in a directory below the root that both router hosts mount at that path with the [mount options the lease needs](../deploy/07-Serve-and-Measure.md#mount-options-for-the-lease), as the [`lease-check` stage](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) checks. Each path segment holds only letters, digits, `.`, `_` and `-`, and starts with a letter, digit or `_` |
+| `NARWHAL_HAPROXY_IMAGE` | HAProxy image pinned by image ID or registry digest, such as `haproxy@sha256:<digest>` |
+
+Each router binds its own port, so a router and HAProxy on one host need different ports.
 
 ### Profiling limits
 
@@ -198,7 +219,7 @@ A host with both roles holds both role files in one deployment directory.
 
 `narwhal deploy access`, `package`, `install`, `shell` and `tunnel` read the physical-host inventory from `--hosts PATH`, then from `NARWHAL_HOSTS`, then from `config/hosts.local.json`, as in `narwhal deploy access --hosts <path>`.
 
-Roles with identical `NARWHAL_NODE_<n>_SSH` or `NARWHAL_ROUTER_SSH` destinations share one physical-host record.
+Roles with identical `NARWHAL_NODE_<n>_SSH`, `NARWHAL_ROUTER_SSH`, `NARWHAL_STANDBY_ROUTER_SSH` or `NARWHAL_LOAD_BALANCER_SSH` destinations share one physical-host record.
 
 Each `hosts` entry contains:
 
@@ -211,7 +232,9 @@ Each `hosts` entry contains:
 
 Role names:
 
-- `router`, assigned once
+- `router`, the primary router, assigned once
+- `standby-router`, the standby router of a pair, on another host than `router`
+- `load-balancer`, the HAProxy host of a pair
 - `engine-<n>`, where `<n>` matches the numbered deployment variables
 
 The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.

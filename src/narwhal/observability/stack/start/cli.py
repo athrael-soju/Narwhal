@@ -9,15 +9,19 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 
-from tools.observability.artifacts import (
+from narwhal.observability.stack.artifacts import (
     ControlTarget,
     console_url,
     control_target,
     stage_artifacts,
     tool_target,
 )
-from tools.observability.make_targets import (
+from narwhal.observability.stack.make_targets import (
+    ALERTMANAGER_ENV,
+    DEFAULT_FLEET,
+    FLEET_ENV,
     ROUTER_URL_ENV,
+    SIDECAR_URLS_ENV,
     TARGETS_URL_ENV,
     TargetContract,
     load_contract,
@@ -27,7 +31,7 @@ from tools.observability.make_targets import (
 from .listeners import check_listeners
 from .readiness import DEFAULT_READY_TIMEOUT_S, HttpGet, http_get, wait_collection, wait_ready
 from .services import Container, StartupError, configured_services
-from .stack import ComposeStack, Stack
+from .stack import ComposeStack, Stack, compose_problem
 
 
 def start(
@@ -88,6 +92,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             "else the router)"
         ),
     )
+    parser.add_argument(
+        "--sidecar-url",
+        action="append",
+        help="attestation sidecar origin Prometheus scrapes for the restart counts and the host "
+        f"down alert; repeat it for each engine (default: {SIDECAR_URLS_ENV}, with commas "
+        "between origins)",
+    )
+    parser.add_argument(
+        "--fleet-name",
+        default=os.environ.get(FLEET_ENV) or DEFAULT_FLEET,
+        help=f"the fleet label of every scraped series (default: {FLEET_ENV}, else "
+        f"{DEFAULT_FLEET})",
+    )
+    parser.add_argument(
+        "--alertmanager-url",
+        default=os.environ.get(ALERTMANAGER_ENV) or None,
+        help="Alertmanager Prometheus sends alerts to; without one, alerts show only on the "
+        f"Prometheus alerts page (default: {ALERTMANAGER_ENV})",
+    )
     args = parser.parse_args(argv)
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
@@ -95,7 +118,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not router_urls(routers):
         parser.error(f"--router-url or {ROUTER_URL_ENV} is required")
     try:
-        contract = load_contract(routers, args.targets_url)
+        contract = load_contract(
+            routers,
+            args.targets_url,
+            sidecars=args.sidecar_url or [os.environ.get(SIDECAR_URLS_ENV, "")],
+            fleet=args.fleet_name,
+            alertmanager=args.alertmanager_url,
+        )
+        if problem := compose_problem():
+            raise StartupError(problem)
         start(os.environ, ComposeStack(env=os.environ), contract, timeout_s=args.ready_timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()

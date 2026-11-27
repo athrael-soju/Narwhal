@@ -247,8 +247,6 @@ class PackageTests(unittest.TestCase):
                 {"NARWHAL_WHEEL": str(wheel.with_name(wheel.name.replace("13.0", "13.0.dev1")))},
                 "Set NARWHAL_WHEEL to a release wheel",
             ),
-            ({"NARWHAL_TOOLS_COMMIT": ""}, "^Set NARWHAL_TOOLS_COMMIT to the commit of"),
-            ({"NARWHAL_TOOLS_COMMIT": "v0.13.0"}, "full 40-hex commit SHA"),
             ({"NARWHAL_WHEEL_SHA256": "A" * 64}, "Set NARWHAL_WHEEL_SHA256"),
             ({"NARWHAL_WHEEL_SHA256": "0" * 64}, "NARWHAL_WHEEL differs from"),
             (
@@ -340,10 +338,8 @@ class PackageTests(unittest.TestCase):
         lock = Path(self.env["NARWHAL_REQUIREMENTS"]).read_bytes()
         self.assertEqual((run / "requirements.txt").read_bytes(), lock)
         self.assertEqual(manifest["requirements_sha256"], self.env["NARWHAL_REQUIREMENTS_SHA256"])
-        self.assertIn(
-            f"export NARWHAL_TOOLS_COMMIT={'d' * 40}\n", (run / "node-1/.env.router").read_text()
-        )
-        self.assertNotIn("NARWHAL_TOOLS_COMMIT", (run / "node-2/.env.engine-2").read_text())
+        for path in run.glob("node-*/.env.*"):
+            self.assertNotIn("NARWHAL_TOOLS_COMMIT", path.read_text())
         for path in run.glob("node-*/.env.*"):
             self.assertIn(
                 f"export NARWHAL_DEPLOYMENT_REVISION={self.env['NARWHAL_WHEEL_SHA256']}\n",

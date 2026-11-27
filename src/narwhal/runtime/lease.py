@@ -7,6 +7,8 @@ import fcntl
 import json
 import math
 import os
+import re
+import stat
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -19,6 +21,15 @@ from ..contracts import LEASE, ContractVersionError, validate_document, versione
 # Seconds between attempts on a held coordination lock. A blocking lock on a network file
 # system waits out the client's retry backoff instead, which can outlast the lease itself.
 LOCK_RETRY_S = 0.01
+# Seconds of relative clock skew between router hosts that a lease reserves before its expiry
+# by default. The deployment's lease check fails a pair whose hosts' clocks differ by more.
+DEFAULT_SAFETY_MARGIN_S = 1.0
+# The file the deployment's lease check leaves in the shared lease directory. A router given
+# it refuses to touch the lease while it is missing, as it is in an unmounted directory.
+WITNESS_NAME = ".narwhal-lease-witness"
+# A lease temporary file older than this many lease TTLs lost its writer mid-write: a live
+# writer renames its temporary file within one write.
+ORPHAN_TTLS = 10
 
 
 class LeaseError(RuntimeError):
@@ -48,6 +59,7 @@ class FileLease:
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        witness: Path | None = None,
     ) -> None:
         if not holder:
             raise ValueError("lease holder must not be empty")
@@ -61,6 +73,7 @@ class FileLease:
             raise ValueError("lease safety margin must be nonnegative and less than the ttl")
         self.path = path
         self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.witness = witness
         self.holder = holder
         self.ttl_s = ttl_s
         self.safety_margin_s = safety_margin_s
@@ -79,6 +92,46 @@ class FileLease:
     def valid(self) -> bool:
         """Return whether local ownership remains inside its monotonic deadline."""
         return self._owned and self._monotonic_clock() < self._valid_until
+
+    def remove_orphans(self) -> list[Path]:
+        """Remove this lease's temporary files that a writer left when it died mid-write.
+
+        Only regular files named as `_write_unlocked` or `_storage_now` name them, for this
+        lease file, and last modified more than `ORPHAN_TTLS` lease TTLs before the lease
+        storage's own clock, are removed. Nothing else in the directory is touched. It holds
+        the lease lock, so no writer of this lease is mid-write meanwhile.
+        """
+        name = re.compile(rf"\.{re.escape(self.path.name)}\.[0-9]+\.[0-9a-f]{{32}}\.(tmp|now)")
+        with self._locked():
+            # File times on shared storage come from its server's clock, not this host's.
+            cutoff = self._storage_now() - ORPHAN_TTLS * self.ttl_s
+            entries = sorted(self.path.parent.iterdir())
+            return [entry for entry in entries if self._orphaned(entry, name, cutoff)]
+
+    @staticmethod
+    def _orphaned(entry: Path, name: re.Pattern[str], cutoff: float) -> bool:
+        """Remove `entry` if it is an orphaned temporary file, and say whether it was."""
+        if not name.fullmatch(entry.name):
+            return False
+        try:
+            info = entry.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
+                return False
+            entry.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _storage_now(self) -> float:
+        """The lease storage's clock: the modification time of a file created on it now."""
+        probe = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.now")
+        descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.close(descriptor)
+            return os.stat(probe).st_mtime
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                probe.unlink()
 
     def read(self) -> LeaseRecord | None:
         """Read the shared record while holding the coordination lock."""
@@ -165,7 +218,15 @@ class FileLease:
         """
         if deadline is None:
             deadline = self._monotonic_clock() + self.ttl_s - self.safety_margin_s
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The lease directory is shared storage. A missing one is a missing mount, and creating
+        # it would give this host a lease of its own.
+        if not self.path.parent.is_dir():
+            raise LeaseError(f"lease directory {self.path.parent} does not exist")
+        if self.witness is not None and not self.witness.is_file():
+            raise LeaseError(
+                f"lease witness {self.witness} is missing; the shared lease directory is not "
+                "mounted here"
+            )
         lock = self.lock_path.open("a+")
         try:
             while True:
@@ -229,6 +290,7 @@ class FileLease:
             },
         )
         temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        # `remove_orphans` matches exactly this name.
         try:
             temporary.write_text(json.dumps(document, sort_keys=True) + "\n")
             os.replace(temporary, self.path)

@@ -17,7 +17,9 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
 from ..config import FleetConfig
+from ..observability import restarts
 from ..observability.journal import RunJournal
+from ..observability.metrics.deployment import read_status, render_deployment
 from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
@@ -75,14 +77,25 @@ def create_app(
     standby_max_handoff_age_s: float | None = None,
     standby_transport: httpx.AsyncBaseTransport | None = None,
     lease_path: Path | str | None = None,
+    lease_witness: Path | str | None = None,
     router_id: str = "router",
     lease_ttl_s: float = 5.0,
     lease_renew_interval_s: float = 1.0,
     lease_safety_margin_s: float = 1.0,
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
+    deployment_status: Path | str | None = None,
+    claim_first: bool = False,
 ) -> FastAPI:
+    """Build the router application.
+
+    With `standby_of`, the router shadows that peer and takes over its lease. `claim_first`
+    makes it try to claim the lease at start instead: it is the primary when the claim
+    succeeds, and shadows the peer as any standby does when another router claimed first.
+    """
     cfg = cfg or FleetConfig.from_env()
+    if claim_first and not standby_of:
+        raise ValueError("claim_first needs standby_of, the peer to shadow after a lost claim")
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
     for name, value in (
@@ -113,7 +126,15 @@ def create_app(
             holder,
             lease_ttl_s,
             safety_margin_s=lease_safety_margin_s,
+            witness=Path(lease_witness) if lease_witness else None,
         )
+        try:
+            orphans = lease.remove_orphans()
+        except (OSError, LeaseError) as exc:
+            log.warning("could not remove orphaned lease temporary files: %s", exc)
+            orphans = []
+        for orphan in orphans:
+            log.info("removed the orphaned lease temporary file %s", orphan)
     journal = RunJournal(
         path=Path(journal_path) if journal_path else cfg.profiles_path.parent / "journal.jsonl"
     )
@@ -173,25 +194,32 @@ def create_app(
             raise RuntimeError("; ".join(generation_failures))
         watch = None
         lease_watch = None
+        claimed = False
         if lease is not None:
-            if standby_of:
+            if standby_of and not claim_first:
                 router.standby = True
             else:
                 try:
                     claimed = lease.claim()
                 except LeaseError as exc:
-                    claimed = False
-                    router.failover_blocked = f"lease unavailable: {exc}"
+                    if not standby_of:
+                        router.failover_blocked = f"lease unavailable: {exc}"
+                    log.warning("could not claim the lease at start: %s", exc)
                 if claimed:
                     router.lease_epoch = lease.epoch
                     router.lease_holder = lease.holder
                 else:
                     router.standby = True
-                    router.failover_blocked = (
-                        router.failover_blocked or "lease held by another router"
-                    )
+                    if not standby_of:
+                        router.failover_blocked = (
+                            router.failover_blocked or "lease held by another router"
+                        )
+                    else:
+                        log.warning(
+                            "another router claimed the lease first; shadowing %s", standby_of
+                        )
             lease_watch = asyncio.create_task(lease_renew_loop(router, lease_renew_interval_s))
-        if standby_of:
+        if standby_of and not claimed:
             # A polled handoff is fresher than the local resume file.
             if lease is None:
                 raise ValueError("automatic standby takeover requires a shared lease")
@@ -355,8 +383,14 @@ def create_app(
     async def handoff() -> dict[str, Any]:
         return handoff_state.snapshot(router)
 
+    status_path = Path(deployment_status) if deployment_status is not None else None
+    restart_count = restarts.supervisor("router")
+
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
     async def metrics() -> Response:
+        extra = render_deployment(read_status(status_path)) if status_path is not None else []
+        if restart_count is not None:
+            extra += restarts.render_restarts(await asyncio.to_thread(restart_count))
         return Response(
             content=render(
                 router.state(),
@@ -366,7 +400,8 @@ def create_app(
                 router.queue_wait,
                 router.monitor.requests_sent,
                 adopted=router.adopted,
-            ),
+            )
+            + "".join(line + "\n" for line in extra),
             media_type=CONTENT_TYPE,
         )
 

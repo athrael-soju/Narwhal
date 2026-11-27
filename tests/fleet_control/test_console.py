@@ -18,17 +18,17 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 from fastapi import FastAPI
 
-from tools.fleet_control import cli as control_cli
-from tools.fleet_control.aiperf import workload_routes
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control import cli as control_cli
+from narwhal.fleet_control.aiperf import workload_routes
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     ConfigError,
     ConsoleConfig,
     ControlConfig,
     Hook,
     load_config,
 )
-from tools.fleet_control.console import (
+from narwhal.fleet_control.console import (
     PAGE,
     PUBLIC_PATHS,
     console_document,
@@ -37,17 +37,17 @@ from tools.fleet_control.console import (
     panel_url,
     with_token,
 )
-from tools.fleet_control.engines import ACTIONS, EngineActions, engine_routes
-from tools.fleet_control.live import live_routes
-from tools.fleet_control.overlays import Overlays, overlay_routes
-from tools.fleet_control.service import ControlService
-from tools.fleet_control.signals import FleetSignals, signal_routes
-from tools.fleet_control.workloads import LoadConfig, Workload
+from narwhal.fleet_control.engines import ACTIONS, EngineActions, engine_routes
+from narwhal.fleet_control.live import live_routes
+from narwhal.fleet_control.overlays import Overlays, overlay_routes
+from narwhal.fleet_control.service import ControlService
+from narwhal.fleet_control.signals import FleetSignals, signal_routes
+from narwhal.fleet_control.workloads import LoadConfig, Workload
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = ROOT / "tests/data/fleet.json"
-DASHBOARD = ROOT / "tools/observability/grafana-narwhal.json"
-COMPOSE = ROOT / "tools/observability/compose.yml"
+DASHBOARD = ROOT / "src/narwhal/observability/stack/grafana-narwhal.json"
+COMPOSE = ROOT / "src/narwhal/observability/stack/compose.yml"
 TOKEN = "fake-control-token-" + "0" * 24
 GRAFANA = "http://127.0.0.1:13000"
 CONSOLE = ConsoleConfig(GRAFANA, (105, 50))
