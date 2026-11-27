@@ -362,7 +362,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 
 The plan's `evidence.identity` holds the engine image reference and the host and GPU map (`gpu_allocation`), and the collector copies it into the point's `evidence.json`. A benchmark point's `summary.shareable.json` is the one evidence file meant for publication. The collector builds it from a fixed list of fields, so it holds no URLs, credentials, private file paths or request failure text. It names engines `engine-1`, `engine-2` and onward in order of first appearance, replaces the engine image reference and GPU allocation with SHA-256 digests, and keeps `narwhal_revision`, `model_id`, `benchmark_client_version`, `engine_version`, `checkpoint_revision` and `gpu_shape` exactly as supplied in the plan. Review those labels for sensitive data before you publish the file.
 
-Site automation provides host credentials, the source distribution, network configuration, and engine process launch. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
+Site automation provides the hosts, their credentials and packages, the network configuration, and the staged checkpoint and engine image, as the [production boundary](docs/operate/01-Start-Routers.md#production-boundary) lists. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
 
 ## Issues
 

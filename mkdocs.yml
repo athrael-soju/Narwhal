@@ -76,6 +76,7 @@ nav:
       - Recovery and qualification: dev/Recovery-and-Qualification.md
   - Deploying a fleet:
       - Overview: Deploy.md
+      - Getting started: deploy/Getting-Started.md
       - Command reference: cli/Deploy.md
       - Discovering the deployment: deploy/01-Discover.md
       - Installing Narwhal on the hosts: deploy/02-Install.md

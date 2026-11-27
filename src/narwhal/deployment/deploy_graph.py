@@ -78,7 +78,7 @@ STAGES = (
     _stage("access", HOST, _DISCOVER, _ACCESS),
     _stage("discover", WORKSTATION, _DISCOVER, _ACCESS, ("access",)),
     _stage("package", WORKSTATION, _INSTALL, "Building the deployment package", ("discover",)),
-    _stage("install", HOST, _INSTALL, "Installing engine 1 and the remaining hosts", ("package",)),
+    _stage("install", HOST, _INSTALL, "Installing Narwhal on each host", ("package",)),
     _stage("engine-inspect", ENGINE, _ENGINES, "Inspecting every engine host", ("install",)),
     _stage("engine-prepare", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-inspect",), ("launch",)),
     _stage("engine-check", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-prepare",)),

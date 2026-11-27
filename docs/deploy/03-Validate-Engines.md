@@ -4,17 +4,19 @@ description: Validate and start every vLLM, SGLang or TensorRT-LLM engine in a N
 
 # Validate and start engines
 
+The third gate checks each engine host, then prepares, checks, starts and probes each engine, captures its live cache layout, and groups the engines that share a fabric budget. Each engine stage runs once for each engine role, on its engine host, in the role's environment of the installed deployment directory. `cache-groups` runs once on the workstation.
+
+Each stage below gives the command it runs. To run one alone, run that command in the engine's [role shell](02-Install.md#opening-installed-role-shells), with paths of your own in place of the attempt directories.
+
 ## Inspecting every engine host
 
-In the installed engine-role shell on every engine host, inspect the host before you prepare its launch plan:
+`engine-inspect` runs after `install`:
 
 ```bash
-umask 077
-export INSPECTION_RUN="runs/host-inspection-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-narwhal-engine inspect-host --out "$INSPECTION_RUN"
+narwhal-engine inspect-host --out <attempt>/inspection
 ```
 
-For a native engine, add `--backend native`. The inspection reads the launch record that `NARWHAL_ENGINE_LAUNCH_CONFIG` selects and the role environment, and runs every check:
+Before it runs again, `run` stops this run's sidecar and engine container of that role, whose ports the inspection checks, each only while its recorded identity still matches. A native engine adds `--backend native` when you run the command alone; `narwhal deploy` starts container engines only. The inspection reads the launch record that `NARWHAL_ENGINE_LAUNCH_CONFIG` selects and the role environment, and runs every check:
 
 | Check | Passes when |
 | --- | --- |
@@ -29,17 +31,25 @@ For a native engine, add `--backend native`. The inspection reads the launch rec
 
 A device passes the permission check when the engine's user is root, or the device's mode grants read and write to that user: the owner bits when the user owns the device, otherwise the group bits when the user's group or one of its groups owns it, otherwise the other bits. The check reads the mode bits. It refuses a device that carries an access control list, because the list's mask replaces the group bits. On ROCm, this covers `/dev/kfd` and each selected `/dev/dri/renderD<minor>`. A ROCm container that runs as a non-root user passes only when its image gives that user the devices' group, such as `render` or `video` with the host's group ID, or the devices grant access to every user.
 
-The inspection writes `host-inspection.json` at mode 0600 with the launch record's allocation fields (`role`, `accelerator`, `gpu_ids`, `tensor_parallel_size`, `accelerator_devices`, `network_mode`, `transfer` and `environment`), each check's observations, the failures and `passed`. Commands it runs on the host log to `inspection.log`. On success it prints `engine-<n>: host inspection passed; evidence in <path>`. When a check fails, it still writes `host-inspection.json`, then exits 1 naming every failed check. A missing or malformed input, such as an unset `NARWHAL_FABRIC_INTERFACE` or an attestation URL without an HTTP port, exits 2 before any check runs. A failed check reads:
+The inspection writes `host-inspection.json` at mode 0600 with the launch record's allocation fields (`role`, `accelerator`, `gpu_ids`, `tensor_parallel_size`, `accelerator_devices`, `network_mode`, `transfer` and `environment`), each check's observations, the failures and `passed`. Commands it runs on the host log to `inspection.log`. Both come back to `stages/engine-inspect/engine-<n>/attempt-<k>/inspection/`. On success it prints `engine-<n>: host inspection passed; evidence in <path>`. When a check fails, it still writes `host-inspection.json`, then exits 1 naming every failed check, which fails the stage's gate. A missing or malformed input, such as an unset `NARWHAL_FABRIC_INTERFACE` or an attestation URL without an HTTP port, exits 2 before any check runs. A failed check reads:
 
 ```text
 narwhal-engine: inspect-host: ports: the engine port 8000 at 0.0.0.0 is unavailable: [Errno 98] Address already in use; inspect runs/host-inspection-<id>/host-inspection.json
 ```
 
-Free an unavailable port, restore a missing device or its permissions, or correct the launch record, then inspect again into a new `--out` directory.
+Free an unavailable port, restore a missing device or its permissions, or correct the input that set the launch record, then run again.
 
-When `NARWHAL_UCX_TCP_PORT_RANGE` lies inside the host's `net.ipv4.ip_local_port_range`, outgoing connections take ports of the range as their source ports. After an engine stops, those ports stay in TIME-WAIT for about a minute and cannot be bound. Reserve the range for listeners with `net.ipv4.ip_local_reserved_ports`, which needs root, or choose a range outside `ip_local_port_range`. When the provisioned checkpoint or a GPU changed, rerun discovery. `narwhal deploy package` has already checked the fleet's `hardware` fields against the launch records, as [Building the deployment package](02-Install.md#building-the-deployment-package) describes, so an inspection that passes on every host ties them to the hosts.
+When `NARWHAL_UCX_TCP_PORT_RANGE` lies inside the host's `net.ipv4.ip_local_port_range`, outgoing connections take ports of the range as their source ports. After an engine stops, those ports stay in TIME-WAIT for about a minute and cannot be bound. Reserve the range for listeners with `net.ipv4.ip_local_reserved_ports`, which needs root, or choose a range outside `ip_local_port_range`. `narwhal deploy package` has already checked the fleet's `hardware` fields against the launch records, as [Building the deployment package](02-Install.md#building-the-deployment-package) describes, so an inspection that passes on every host ties them to the hosts.
 
 ## Preparing, checking, and starting each engine
+
+`engine-prepare`, `engine-check` and `engine-start` run in turn for each engine, each after the one before it. `engine-prepare` writes the launch plan:
+
+```bash
+narwhal-engine prepare --out <attempt>/launch
+```
+
+The launch directory stays on the engine host, as `runs/deploy/<run-id>/stages/engine-prepare/engine-<n>/attempt-<k>/launch/` in the deployment directory, and `launch.json` comes back to the attempt on the workstation. Every later stage of the engine uses that directory. `container.env` in it holds the engine's environment, credentials included, at mode 0600; the run does not copy it back.
 
 The launcher builds one launch plan per engine with these properties:
 
@@ -55,46 +65,18 @@ The launcher builds one launch plan per engine with these properties:
 | Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](07-Serve-and-Measure.md#running-the-initial-capacity-trial), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans. `narwhal deploy run --trial` refuses to run the trial otherwise. To turn it off after launch:
+For the [capacity trial](07-Serve-and-Measure.md#running-the-initial-capacity-trial), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env`. `narwhal deploy run --trial` refuses to run the trial otherwise. The variable is a discovery input, so changing it on a running fleet repeats discovery and every stage after it.
 
-1. Prepare a fresh launch directory.
-2. Restart each engine.
-3. Capture the live cache layout, or measure the handoffs on SGLang, and derive the cache-equivalence groups again.
-4. Repeat the stages that [Rerunning after a change](../Deploy.md#rerunning-after-a-change) lists for an engine process restart and for a changed attested binding digest.
+For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env`.
 
-For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env` before discovery, or set `runtime.tokenizer` to `PATH` before preparing the launch plan.
-
-When the image, model, dtype, cache policy, TP allocation or model arguments change, capture the live cache layout on vLLM and TensorRT-LLM, or measure the handoffs on SGLang, and derive the groups again. When the workload assumptions change, recalculate the fabric budget.
-
-In every engine-role shell, prepare the launch plan:
-
-```bash
-umask 077
-mkdir -p runs
-export ENGINE_RUN="runs/engine-launch-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-narwhal-engine prepare --out "$ENGINE_RUN"
-python3 -m json.tool "$ENGINE_RUN/launch.json"
-```
-
-The launcher prints `Prepared <role>; review launch.json and run the image check.`
-
-Inspect `launch.json` for:
-
-- the immutable image
-- the complete serving command
-- the mounts and device mappings
-- the endpoint
-- the application revision
-- the source hashes
-
-Keep `container.env` private.
+`launch.json` holds the immutable image, the complete serving command, the mounts and device mappings, the endpoint, the application revision and the source hashes.
 
 For a GGUF model, `prepare` checks the file against `NARWHAL_MODEL_SHA256` and records its SHA-256 as `model_sha256` in `launch.json`. `check` and `start` refuse the file if it changes, becomes a symbolic link, or leaves `NARWHAL_MODEL_DIR`.
 
-Validate the image and plan:
+`engine-check` checks the image and the plan, and returns `checked.json` and `image-check.log`:
 
 ```bash
-narwhal-engine check --run "$ENGINE_RUN"
+narwhal-engine check --run <launch>
 ```
 
 A passing check confirms, for every backend:
@@ -122,55 +104,30 @@ The check uses the tokenizer at `runtime.tokenizer`, or the model directory when
 
 For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
-When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, build a new deployment package in [Install Narwhal on the hosts](02-Install.md).
+A rejected check fails the stage's gate. Fix the image or the input it names and run again.
 
-Start the engines:
-
-1. Recheck the planned ports with `ss -ltnp`.
-2. Start each engine and follow its log:
-
-    ```bash
-    narwhal-engine start --run "$ENGINE_RUN"
-    export ENGINE_CONTAINER="$(cat "$ENGINE_RUN/container.id")"
-    docker logs --follow "$ENGINE_CONTAINER"
-    ```
-
-3. Watch the log until the HTTP endpoints come up.
-4. Stop the log follower with Ctrl+C.
-
-When startup fails, inspect the container named by `container.id`:
+`engine-start` starts the engine and waits for its health endpoint, within the stage's time limit less 60 seconds:
 
 ```bash
-docker inspect "$ENGINE_CONTAINER"
-docker logs "$ENGINE_CONTAINER"
+narwhal-engine start --run <launch> --ready-seconds <seconds>
 ```
 
-Find the cause of the failure before creating another plan.
+It first removes the container of the engine's previous start, while that container still runs from its recorded start. It returns `container.id` and `container-start.json`, and records the container's ID and start time as the engine's identity, which every later `run` and `status` checks. A container that exits or does not answer is removed once its last 200 log lines are kept in the attempt's `engine.log`. The container has no restart policy, so an engine that stops stays down until the next `run`.
 
-When vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, recover in this order:
+A launch directory starts one engine. When `engine-start` reruns on a directory that already started one, it stops nothing: `engine-prepare` writes a fresh directory and the run continues from there.
 
-1. Retain the failed attempt's evidence.
-2. Rerun discovery with the corrected inputs into fresh outputs.
-3. Build a new deployment package.
-4. Install engine 1 into its new deployment directory.
-5. Validate engine 1 before updating the rest.
-6. Compare the old and new image IDs, model-config hashes, accelerator and TP allocations, runtime settings, and transport.
+When vLLM exits requesting `trust_remote_code=True` or `VLLM_SSM_CONV_STATE_LAYOUT=DS`, keep the failed attempt's evidence, correct the checkpoint or the discovery input, and run again. The changed discovery input repeats every stage from `discover`.
 
 ### Docker command deadlines
 
 Docker commands run within the stage budgets in [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery). Cleanup after a timeout or cancellation follows [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation).
 
-Before you reuse a failed deployment:
-
-1. Inspect the retained partial output.
-2. Follow the [stage recovery procedure](../Dev-Runtime.md#stage-deadlines-and-recovery).
-
 ## Proving the live HTTP process
 
-Once the engine answers `/health`, probe it from the same engine-role shell into a new directory:
+`engine-probe` runs once the engine answers `/health`, and returns its responses to `probe/` in the attempt:
 
 ```bash
-narwhal-engine probe --run "$ENGINE_RUN" --out "$ENGINE_RUN/probe"
+narwhal-engine probe --run <launch> --out <attempt>/probe
 ```
 
 The probe reads the engine's credential and served model name from the launch directory. It checks, in order, and stops at the first failure:
@@ -187,22 +144,21 @@ SGLang publishes no process start over HTTP, and serves a completion only with a
 
 Each response lands in `--out` at mode 0600 as it arrives: `health.txt`, `version.json`, `models.json`, `metrics.txt` on vLLM and `completion.json` on vLLM and TensorRT-LLM. `version.json` holds only `{"version": ...}`, because `/server_info` also returns the engine's API key. Once every check passes, the probe writes `probe.json` with the role, endpoint, plan hash, checked version, container ID or native process, model, the vLLM process start, and the SHA-256 of each response, then prints a line such as `engine-1: engine health, version, model, process start and completion passed.`
 
-A failed check exits 1 and keeps the responses that led to it, such as `version.json` with the version the engine reported. If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. The probe refuses an `--out` directory that already holds its files, so probe again into a new directory.
+A failed check exits 1, fails the stage's gate and keeps the responses that led to it, such as `version.json` with the version the engine reported. If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. The probe refuses an `--out` directory that already holds its files, so each attempt probes into its own.
 
-- Leave each serving container running through the workload trial.
-- Keep the engines idle during fabric qualification and profiling.
+Keep other traffic off the engines until the routers start: fabric qualification and profiling need them idle.
 
 ## Capturing the live cache layout
 
-For a vLLM or TensorRT-LLM engine, capture the cache layout in each engine-role shell:
+`cache-capture` runs after `engine-probe` for a vLLM or TensorRT-LLM engine, and writes `cache-layout.json`, with one record per TP rank, into the launch directory:
 
 ```bash
-narwhal-engine capture-cache --run "$ENGINE_RUN"
+narwhal-engine capture-cache --run <launch>
 ```
 
-`capture-cache` writes `cache-layout.json` with one record per TP rank.
+The file comes back to the attempt, and its SHA-256 is the engine's cache geometry: a change repeats `cache-groups` and the fabric stages of the engine's group, as the [rerun table](../Deploy.md#rerunning-after-a-change) lists.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Measuring KV handoffs](04-Qualify-Fabric.md#measuring-kv-handoffs) measures before the groups are derived.
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which `transfer-measure` measures, as [Measuring KV handoffs](04-Qualify-Fabric.md#measuring-kv-handoffs) describes.
 
 ## Deriving cache-equivalence groups
 
@@ -214,15 +170,17 @@ Engines in one cache-equivalence group share one fabric budget. Two engine roles
 
 The group's representative is its lowest-numbered role.
 
-Copy each engine's `cache-layout.json` to the management workstation. On SGLang, `narwhal deploy transfer-measure` has already written each engine's `transfer.json` there. Then, from the management shell with `config/deployment.env` loaded, pass one file for every engine role:
+`cache-groups` runs once on the workstation after every `cache-capture` or `transfer-measure`. It reads the launch records that discovery wrote, each role's discovery record from its `sources.runtime`, each role's packaged launch record, and each engine's `cache-layout.json` or `transfer.json` from its attempt, and writes `cache-groups.json` to its attempt.
+
+To run it alone, copy each engine's `cache-layout.json` to the workstation and, with `config/deployment.env` loaded, pass one file for every engine role and the package directory:
 
 ```bash
-narwhal deploy cache-groups --run "$PACKAGE_RUN" --out runs/cache-groups/first-deploy \
+narwhal deploy cache-groups --run runs/deployment-env/first-deploy --out runs/cache-groups/first-deploy \
   --cache-layout engine-1=runs/cache-layouts/engine-1.json \
   --cache-layout engine-2=runs/cache-layouts/engine-2.json
 ```
 
-On SGLang, pass `--transfer-record engine-<n>=<path>` instead, with the `transfer.json` that [`narwhal deploy transfer-measure`](04-Qualify-Fabric.md#measuring-kv-handoffs) wrote for the role, such as `runs/transfer-measure/first-deploy/engine-1/transfer.json`. `PACKAGE_RUN` is the directory that [`narwhal deploy package`](02-Install.md) wrote, such as `runs/deployment-env/first-deploy`. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG`, each role's discovery record from its `sources.runtime`, and each role's packaged launch record from `--run`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
+On SGLang, pass `--transfer-record engine-<n>=<path>` instead, with the `transfer.json` that [`narwhal deploy transfer-measure`](04-Qualify-Fabric.md#measuring-kv-handoffs) wrote for the role, such as `runs/transfer-measure/first-deploy/engine-1/transfer.json`. Alone, the command reads the launch records from `NARWHAL_LAUNCH_CONFIG`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
 
 It prints one line per group, such as:
 
