@@ -1,6 +1,7 @@
 """SSH access pins host keys, keeps passwords off argument lists and bounds every command."""
 
 import base64
+import contextlib
 import json
 import os
 import shlex
@@ -208,8 +209,8 @@ class SshTests(unittest.TestCase):
             self.assertEqual(shlex.split(args[-1])[:2], ["sh", "-c"])
             self.assertRegex(
                 shlex.split(args[-1])[2],
-                r"\ntimeout -k 5 1800.000s sh -c cat narwhal-[0-9a-f]{32} 0<&3 3<&- &\n"
-                r"(.|\n)*\ncase \"\$status\" in 124 \| 137\) kill -s KILL -- \"-\$pid\" ",
+                r"\ntimeout -k 5 1800.000s sh -c '(.|\n)*' narwhal-[0-9a-f]{32} cat\n"
+                r"status=\$\?\n(.|\n)*124 \| 137\)(.|\n)* kill -s KILL -- \"-\$pid\" ",
             )
         self.assertEqual(password.password, (PASSWORD + "\n").encode())
         self.assertEqual(password.kwargs["env"]["SSH_ASKPASS_REQUIRE"], "force")
@@ -372,16 +373,19 @@ class SshTests(unittest.TestCase):
         return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}", "HOME": str(home)})
 
     def interrupt_when(self, *paths):
-        """Send this process SIGINT once every path in `paths` exists."""
+        """Send this process SIGINT once every path in `paths` exists; return when it was sent."""
+        sent = []
 
         def interrupt():
             deadline = time.monotonic() + 10
             while not all(path.exists() for path in paths) and time.monotonic() < deadline:
                 time.sleep(0.02)
             time.sleep(0.2)
+            sent.append(time.monotonic())
             os.kill(os.getpid(), signal.SIGINT)
 
         threading.Thread(target=interrupt, daemon=True).start()
+        return sent
 
     def test_an_interrupted_command_is_stopped_on_the_host(self):
         # sshd sends no signal to a command without a terminal when its client dies, so the
@@ -420,6 +424,54 @@ class SshTests(unittest.TestCase):
             self.assertLess(time.monotonic() - began, 10)
             self.assert_stopped(first)
             self.assert_stopped(second)
+
+    def child_only_timeout(self):
+        """Put first on PATH a `timeout` that signals only its child, as uutils does."""
+        tools = self.root / "child-only-timeout"
+        tools.mkdir(exist_ok=True)
+        (tools / "timeout").write_text(CHILD_ONLY_TIMEOUT)
+        (tools / "timeout").chmod(0o700)
+        return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"})
+
+    def test_a_host_command_keeps_the_default_sigint_and_sigquit(self):
+        # A background job of a shell without job control ignores SIGINT and SIGQUIT, and a
+        # `timeout` that sets no handlers of its own passes that on to the script.
+        script = "awk '/^SigIgn:/ { print $2 }' /proc/$$/status"
+        for tools in ("host", "child-only"):
+            with (
+                self.subTest(timeout=tools),
+                self.child_only_timeout() if tools == "child-only" else contextlib.nullcontext(),
+                self.sshd_like(),
+            ):
+                ssh = SSH(self.env, self.root / "logs")
+                ignored = int(ssh.run(self.hosts[1], "access", "signals", script), 16)
+                self.assertEqual(ignored & (1 << (signal.SIGINT - 1)), 0, "SIGINT is ignored")
+                self.assertEqual(ignored & (1 << (signal.SIGQUIT - 1)), 0, "SIGQUIT is ignored")
+
+    def test_an_interrupt_stops_every_host_at_once(self):
+        # Each command outlives SIGTERM, so each host takes KILL_AFTER_S to stop.
+        first, second = self.root / "first", self.root / "second"
+        scripts = {
+            path: f"trap '' TERM; sleep 30 & echo $! > {shlex.quote(str(path))}; wait"
+            for path in (first, second)
+        }
+        with self.sshd_like(), patch("narwhal.deployment.hosts.KILL_AFTER_S", 3):
+            ssh = SSH(self.env, self.root / "logs")
+            sent = self.interrupt_when(first, second)
+            with self.assertRaises(KeyboardInterrupt):
+                for _ in hosts.parallel(
+                    ssh,
+                    lambda job: ssh.run(job[0], "access", "management access", scripts[job[1]]),
+                    zip(self.hosts, scripts, strict=True),
+                    2,
+                ):
+                    pass
+            stopped = time.monotonic() - sent[0]
+            self.assert_stopped(first)
+            self.assert_stopped(second)
+        # Stopping the hosts one after another would take twice KILL_AFTER_S.
+        self.assertGreater(stopped, 2.5)
+        self.assertLess(stopped, 5)
 
     def test_a_supervisor_input_reaches_standard_input_and_no_log_or_argument_list(self):
         secret = "engine-key-that-must-stay-private"

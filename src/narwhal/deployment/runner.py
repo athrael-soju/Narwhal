@@ -1084,6 +1084,27 @@ def stale_notice(stale: Mapping[str, Any]) -> str:
     )
 
 
+HELD_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
+def _install(handlers: Mapping[signal.Signals, Any]) -> BaseException | None:
+    """Install `handlers` completely, and return the first exception a pending signal raised.
+
+    Python may run a pending signal's handler between any two steps, including inside
+    `signal.signal` before it installs, so a raising handler could leave the other signal
+    half swapped. Installing a handler again is harmless, so every pass installs them all, until
+    one completes.
+    """
+    error: BaseException | None = None
+    while True:
+        try:
+            for held, handler in handlers.items():
+                signal.signal(held, handler)
+            return error
+        except BaseException as raised:
+            error = error or raised
+
+
 @contextlib.contextmanager
 def _held() -> Iterator[None]:
     """Hold SIGINT and SIGTERM until the record write completes; they arrive right after it.
@@ -1101,11 +1122,19 @@ def _held() -> Iterator[None]:
     def defer(signum: int, _frame: object) -> None:
         pending.append(signum)
 
-    previous = {held: signal.signal(held, defer) for held in (signal.SIGINT, signal.SIGTERM)}
+    previous = {
+        held: signal.SIG_DFL if handler is None else handler
+        for held, handler in ((held, signal.getsignal(held)) for held in HELD_SIGNALS)
+    }
+    if early := _install(dict.fromkeys(HELD_SIGNALS, defer)):
+        # A signal arrived before the hold began: put the handlers back and let it through.
+        _install(previous)
+        raise early
     try:
         yield
     finally:
-        for held, handler in previous.items():
-            signal.signal(held, signal.SIG_DFL if handler is None else handler)
+        late = _install(previous)
         for signum in dict.fromkeys(pending):
             signal.raise_signal(signum)
+        if late is not None:
+            raise late

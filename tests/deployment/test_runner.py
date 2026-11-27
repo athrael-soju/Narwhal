@@ -1024,6 +1024,45 @@ class HeldWriteTests(unittest.TestCase):
             self.assertIsNone(result.stale_lock)
 
 
+class HeldHandlerTests(unittest.TestCase):
+    """A signal that lands while `_held()` swaps handlers leaves both handlers restored."""
+
+    def setUp(self):
+        def interrupt(signum, frame):
+            raise KeyboardInterrupt(signal.Signals(signum).name)
+
+        self.handler = interrupt
+        for held in (signal.SIGINT, signal.SIGTERM):
+            self.addCleanup(signal.signal, held, signal.getsignal(held))
+            signal.signal(held, interrupt)
+
+    def held_with_a_signal_after(self, calls, signum):
+        real = signal.signal
+        made = []
+
+        def injecting(held, handler):
+            made.append(held)
+            previous = real(held, handler)
+            if len(made) == calls:
+                os.kill(os.getpid(), signum)
+            return previous
+
+        with (
+            patch.object(signal, "signal", injecting),
+            self.assertRaises(KeyboardInterrupt),
+            runner._held(),
+        ):
+            pass
+        for held in (signal.SIGINT, signal.SIGTERM):
+            self.assertIs(signal.getsignal(held), self.handler, signal.Signals(held).name)
+
+    def test_a_signal_while_the_handlers_are_put_back(self):
+        self.held_with_a_signal_after(3, signal.SIGINT)
+
+    def test_a_signal_while_the_hold_begins(self):
+        self.held_with_a_signal_after(1, signal.SIGTERM)
+
+
 class RunRecordTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

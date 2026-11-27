@@ -190,25 +190,27 @@ def bounded(script: str, limit: float, token: str) -> str:
     So after `timeout` reports a time limit with 124 or 137, the shell sends SIGKILL to the
     group itself, and exits with that status, which `ssh` passes back.
 
-    `timeout` runs as a job of the shell so that the shell can record its process ID under
-    `token` for `stop_script`. It reads the channel's standard input through descriptor 3,
-    since a job of a shell without job control would otherwise read /dev/null. The script's
-    `$0` names the token, which lets `stop_script` tell this `timeout` from a process that
-    reused its ID.
+    `timeout` runs in the foreground, so the script keeps the channel's standard input and the
+    default SIGINT and SIGQUIT, which a background job of a shell would lose. Before it starts
+    the script, `timeout`'s child records its parent, `timeout`, under `token` for the group
+    kill and for `stop_script`. `timeout`'s arguments name the token, which lets `stop_script`
+    tell this `timeout` from a process that reused its ID.
     """
     marker = _marker(token)
+    start = f"(umask 077 && printf '%s\\n' \"$PPID\" > {marker}) 2> /dev/null\n" + (
+        f'exec sh -c "$1" narwhal-{token}'
+    )
     return (
         "command -v timeout > /dev/null 2>&1 || "
         f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
         f'(umask 077 && mkdir -p "$HOME"/{COMMANDS_DIRECTORY}) 2> /dev/null\n'
-        "exec 3<&0\n"
-        f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)} narwhal-{token} "
-        "0<&3 3<&- &\n"
-        "pid=$!\n"
-        "exec 3<&-\n"
-        f"(umask 077 && printf '%s\\n' \"$pid\" > {marker}) 2> /dev/null\n"
-        'wait "$pid"; status=$?\n'
-        'case "$status" in 124 | 137) kill -s KILL -- "-$pid" 2> /dev/null ;; esac\n'
+        f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(start)} narwhal-{token} "
+        f"{shlex.quote(script)}\n"
+        "status=$?\n"
+        'case "$status" in\n'
+        f"  124 | 137) pid=$(cat {marker} 2> /dev/null) &&\n"
+        '    kill -s KILL -- "-$pid" 2> /dev/null ;;\n'
+        "esac\n"
         f"rm -f {marker}\n"
         'exit "$status"'
     )
@@ -488,8 +490,15 @@ class SSH:
         for _, _, _, process in running.values():
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-        for token, (host, stage, operation, _) in running.items():
-            self.stop(host, stage, operation, token)
+        # Each stop takes up to STOP_LIMIT_S, so the hosts are stopped at once.
+        stops = [
+            threading.Thread(target=self.stop, args=(host, stage, operation, token))
+            for token, (host, stage, operation, _) in running.items()
+        ]
+        for stop in stops:
+            stop.start()
+        for stop in stops:
+            stop.join()
 
     def shell(self, host: Host, script: str) -> None:
         """Run an interactive `script` on `host` in this terminal, with no time limit."""

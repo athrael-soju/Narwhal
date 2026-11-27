@@ -1094,9 +1094,10 @@ def _sample_name(sample: Sample) -> str:
 def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, Path] | None:
     """Return a retained sample and one of its evidence files that hold for `fingerprint`.
 
-    Only evidence that met its budget counts. A sample below its budget is measured again, since
-    what the operator fixes after it, such as MTU, flow control or cabling, is not in the link
-    record.
+    Only the newest verdict of the retained attempt counts: the sample it measured, or else the
+    sample it reused, with every verdict on it passed. A sample below a budget is measured
+    again, since what the operator fixes after it, such as MTU, flow control or cabling, is not
+    in the link record.
     """
     if folder is None:
         return None
@@ -1105,13 +1106,25 @@ def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, P
         if not sample.is_file():
             continue
         data = sample.read_bytes()
-        for evidence in sorted(root.glob("*.evidence.json")):
-            try:
-                record = json.loads(evidence.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            if record.get("passed") is True and retained_evidence(record, fingerprint, data):
-                return sample, evidence
+        verdicts = sorted(root.glob("*.evidence.json"))
+        if root != folder:
+            verdicts += sorted(folder.glob("*.comparison.json"))
+        try:
+            records = [json.loads(path.read_text()) for path in verdicts]
+        except (OSError, json.JSONDecodeError):
+            return None
+        evidence = [
+            (path, record)
+            for path, record in zip(verdicts, records, strict=True)
+            if path.name.endswith(".evidence.json")
+        ]
+        if (
+            evidence
+            and all(record.get("passed") is True for record in records)
+            and all(retained_evidence(record, fingerprint, data) for _, record in evidence)
+        ):
+            return sample, evidence[0][0]
+        return None
     return None
 
 
@@ -1163,7 +1176,11 @@ def qualify_edge(
                     folder / f"{role}.comparison.json",
                 )
             if not all(record["passed"] for record in records.values()):
-                # The retained rate falls short of a current budget: measure the link again.
+                # The retained rate falls short of a current budget: measure the link again,
+                # and keep only the new sample's verdicts in this attempt.
+                shutil.rmtree(kept)
+                for role in records:
+                    (folder / f"{role}.comparison.json").unlink()
                 found, records = None, {}
         if found is None:
             # A runner that starts a sample's server and client itself, as the Kubernetes

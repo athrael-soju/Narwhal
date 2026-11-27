@@ -303,8 +303,45 @@ class ReuseTests(FabricTestCase):
         self.assertEqual([edge["reused"] for edge in summary["edges"]], [False, False])
         self.assertEqual(len(self.clients(fleet)), clients + 2)
         folder = second / "fabric-edge/node-1-to-node-2/engine-1-to-engine-2"
-        self.assertFalse(json.loads((folder / "engine-1.comparison.json").read_text())["passed"])
+        self.assertFalse((folder / "engine-1.comparison.json").exists())
+        self.assertFalse((folder / "retained").exists())
         self.assertTrue(json.loads((folder / "engine-1.evidence.json").read_text())["passed"])
+
+    def test_only_the_newest_sample_of_a_retained_attempt_counts(self):
+        fleet = self.fleet([[1], [2]])
+        groups = [["engine-1", "engine-2"]]
+
+        def rate(value):
+            for host in ("node-1", "node-2"):
+                (fleet.ssh.home(host) / "rate").write_text(value)
+
+        rate("0.01")
+        first, _ = self.qualify(fleet, groups)
+        # A higher budget rejects the retained rate, and the new measurement falls short.
+        rate("0.001")
+        second = self.root / "second"
+        second.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(fabric.BelowBudget):
+            plan = self.load(fleet, groups, NARWHAL_FABRIC_HANDOFFS_PER_S="10")
+            fabric.qualify(plan, fleet.ssh, second, first)
+        # The budget is back where the old rate passed, but the newest sample fell short.
+        clients = len(self.clients(fleet))
+        rate("0.01")
+        _, summary = self.qualify(fleet, groups, retained=second)
+        self.assertEqual([edge["reused"] for edge in summary["edges"]], [False, False])
+        self.assertEqual(len(self.clients(fleet)), clients + 2)
+        # The rejected copy is gone, so the attempt holds only the sample it measured.
+        folder = second / "fabric-edge/node-1-to-node-2/engine-1-to-engine-2"
+        self.assertEqual(
+            sorted(path.name for path in folder.iterdir()),
+            [
+                "destination.json",
+                "engine-1.evidence.json",
+                "link.json",
+                "sample.json",
+                "source.json",
+            ],
+        )
 
     def test_a_changed_link_or_a_tampered_sample_is_measured_again(self):
         fleet = self.fleet([[1], [2]])
