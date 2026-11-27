@@ -21,10 +21,13 @@ ROUTER = "R"
 # handoffs are measured instead.
 CACHE_CAPTURE = "cache_capture"
 TRANSFER_MEASUREMENT = "transfer_measurement"
+# A fleet capability: a standby router, so the fleet has a shared lease and a load balancer.
+ROUTER_PAIR = "router_pair"
 # What each capability means where no installed backend names it.
 CAPABILITIES = {
     CACHE_CAPTURE: "backends that capture the live cache layout",
     TRANSFER_MEASUREMENT: "backends whose KV handoffs are measured",
+    ROUTER_PAIR: "fleets with a standby router",
 }
 
 _DISCOVER = "deploy/01-Discover.md"
@@ -158,7 +161,14 @@ STAGES = (
         ("calibrate",),
     ),
     _stage("preflight", ROUTER, _PROFILE, "Running preflight", ("fleet-limits",)),
-    _stage("lease-check", WORKSTATION, _SERVE, "Checking the shared lease path", ("install",)),
+    _stage(
+        "lease-check",
+        WORKSTATION,
+        _SERVE,
+        "Checking the shared lease path",
+        ("install",),
+        capability=ROUTER_PAIR,
+    ),
     _stage(
         "router-start",
         ROUTER,
@@ -174,6 +184,7 @@ STAGES = (
         "Starting the load balancer",
         ("router-start",),
         ("load_balancer_identity",),
+        capability=ROUTER_PAIR,
     ),
     _stage(
         "monitoring",

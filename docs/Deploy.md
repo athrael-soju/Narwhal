@@ -130,9 +130,9 @@ An engine whose container stopped or restarted also spends its launch directory,
 | `calibrate` | Once per run, on the management workstation | `profile` | [Calibrating the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) |
 | `fleet-limits` | Once per run, on the management workstation | `calibrate` | [Reusing or repeating the calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration) |
 | `preflight` | Once for each router host | `fleet-limits` | [Running preflight](deploy/06-Profile-and-Preflight.md#running-preflight) |
-| `lease-check` | Once per run, on the management workstation | `install` | [Checking the shared lease path](deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) |
+| `lease-check` | Once per run, on the management workstation, on fleets with a standby router | `install` | [Checking the shared lease path](deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) |
 | `router-start` | Once for each router host | `preflight`, `lease-check` | [Starting the router pair](deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
-| `load-balancer` | Once per run, on the management workstation | `router-start` | [Starting the load balancer](deploy/07-Serve-and-Measure.md#starting-the-load-balancer) |
+| `load-balancer` | Once per run, on the management workstation, on fleets with a standby router | `router-start` | [Starting the load balancer](deploy/07-Serve-and-Measure.md#starting-the-load-balancer) |
 | `monitoring` | Once per run, on the management workstation | `load-balancer` | [Starting the monitoring stack](deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack) |
 | `tunnel` | Once per run, on the management workstation | `monitoring` | [Tunnelling router, Prometheus, and Grafana to the workstation](deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) |
 | `trial` | Once per run, on the management workstation | `tunnel` | [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) |
@@ -149,7 +149,7 @@ An engine whose container stopped or restarted also spends its launch directory,
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `transfer-measure` on SGLang when the prompt tokens change, `fabric-budget`, `fabric-edge` |
 | Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
-| Router pair settings | Both routers' origins, the load balancer's origin, the lease path and the HAProxy image | `lease-check`, `router-start`, `load-balancer`, `monitoring`, `trial` |
+| Router pair settings | Both routers' origins, the load balancer's origin, the lease path and the HAProxy image | `lease-check` on fleets with a standby router, `router-start`, `load-balancer` on fleets with a standby router, `monitoring`, `trial` |
 | Monitoring settings | The Prometheus and Grafana listen addresses | `monitoring` |
 | Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
 | Launch directory whose engine has stopped | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check`, `engine-start` for that engine |
@@ -161,7 +161,7 @@ An engine whose container stopped or restarted also spends its launch directory,
 | Engine contract fields of an engine | The `EngineContract` fields of its attestation | `attest-capture` for every engine; `finalize-fleet`, `profile`, `calibrate`, `fleet-limits`, `preflight`, `router-start` |
 | Attestation sidecar restarted | The sidecar's recorded process identity, checked live on every run | `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet` |
 | Router restarted | The router's recorded process identity, checked live on every run | `router-start` for that router host |
-| Load balancer restarted | The HAProxy container ID and start time, checked live on every run | `load-balancer` |
+| Load balancer restarted | The HAProxy container ID and start time, checked live on every run | `load-balancer` on fleets with a standby router |
 | Monitoring container stopped or replaced | The container ID of each monitoring service, checked live on every run | `monitoring` |
 
 <!-- End of the generated stage tables. -->

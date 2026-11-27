@@ -49,6 +49,7 @@ from .deploy_graph import (
     GROUP,
     HOST,
     ROUTER,
+    ROUTER_PAIR,
     TRANSFER_MEASUREMENT,
 )
 from .hosts import (
@@ -277,6 +278,19 @@ def _origin(env: Mapping[str, str], name: str, what: str, problems: list[str]) -
     return address.netloc
 
 
+def paired(env: Mapping[str, str]) -> bool:
+    """Whether the fleet runs a router pair: a standby router on another host, a shared lease
+    and a load balancer. Without `NARWHAL_STANDBY_ROUTER_SSH` it runs one router, with no
+    router failover."""
+    return bool(env.get("NARWHAL_STANDBY_ROUTER_SSH"))
+
+
+SINGLE_ROUTER = (
+    "NARWHAL_STANDBY_ROUTER_SSH is unset, so the fleet runs one router with no standby, lease "
+    "or load balancer: it has no router failover"
+)
+
+
 def pair(env: Mapping[str, str]) -> Pair:
     """Read the router pair's settings, naming every missing or malformed variable."""
     problems: list[str] = []
@@ -323,7 +337,7 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
     Raises `InputError` naming every missing or malformed input, before any host is touched.
     """
     problems: list[str] = []
-    for reader in (settings, pair):
+    for reader in (settings, pair) if paired(env) else (settings,):
         try:
             reader(env)
         except InputError as error:
@@ -341,11 +355,6 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
             check(env)
         except ValueError as error:
             problems.append(str(error))
-    if hosts and not env.get("NARWHAL_STANDBY_ROUTER_SSH"):
-        problems.append(
-            "set NARWHAL_STANDBY_ROUTER_SSH to the standby router's host, another host than the "
-            "primary router's"
-        )
     for host in hosts:
         for role in host.roles:
             if not role.startswith("engine-"):
@@ -1495,14 +1504,17 @@ class Deployment:
         take it over. The stage never removes a lease. Each start ends with
         the router overhead measured on the router that controls the fleet.
         """
-        values, routers = settings(self.env), pair(self.env)
+        values = settings(self.env)
         host = self.host(context.instance)
         primary = self.router_role(host.id) == "router"
         url = self.router_url(host.id)
-        peer = self.router_url(self.owner("standby-router" if primary else "router").id)
         env, manifest, package = self.package_of(context)
         ssh = self.ssh(context, env)
         units = self.supervisor(ssh, host, context.stage, context.run_id)
+        if not paired(self.env):
+            return self._single_router(context, host, units, values, url)
+        routers = pair(self.env)
+        peer = self.router_url(self.owner("standby-router" if primary else "router").id)
         witness = self._check_mount(context, ssh, host, manifest["remote_dir"], routers)
         fleet = context.outputs("fleet-limits") / "fleet.json"
         engines = {role: context.product("engine_identity", role) for role in self.engines()}
@@ -1565,6 +1577,54 @@ class Deployment:
         )
         _private(context.directory / "router.json", {**state, "url": url, "lease": lease})
         self._measure(context, host, env, manifest["remote_dir"], (url, peer), values)
+        identity = {"host": host.id, **unit.record()}
+        return Outcome({"router_identity": identity}, ({"name": "router", **identity},))
+
+    def _single_router(
+        self,
+        context: StageContext,
+        host: Host,
+        units: supervision.SystemdUnits,
+        values: Settings,
+        url: str,
+    ) -> Outcome:
+        """Start a fleet's only router, with no lease and no standby, and measure it."""
+        env, manifest, package = self.package_of(context)
+        fleet = context.outputs("fleet-limits") / "fleet.json"
+        engines = {role: context.product("engine_identity", role) for role in self.engines()}
+        state = {"fleet_sha256": _digest(fleet), "engines": engines}
+        previous = context.previous
+        if previous is not None and previous["status"] == PASSED:
+            kept = self._readmit(context, host, units, previous, state, url)
+            if kept is not None:
+                self._measure(context, host, env, manifest["remote_dir"], (url,), values)
+                return kept
+        address = urlsplit(url)
+        argv = [
+            "{root}/.venv/bin/narwhal-serve",
+            "--fleet",
+            "{root}/" + self._limits(context),
+            "--host",
+            str(address.hostname),
+            "--port",
+            str(address.port),
+            "--journal",
+            "{root}/" + self.remote(context) + "/journal.jsonl",
+            "--router-id",
+            host.id,
+            "--deployment-status",
+            "{root}/" + deployment_status.HOST_PATH,
+        ]
+        unit = self._supervise(
+            context,
+            host,
+            "router",
+            argv,
+            self.role_env(package, "router"),
+            [(url + "/health", HEALTH_SECONDS)],
+        )
+        _private(context.directory / "router.json", {**state, "url": url, "lease": None})
+        self._measure(context, host, env, manifest["remote_dir"], (url,), values)
         identity = {"host": host.id, **unit.record()}
         return Outcome({"router_identity": identity}, ({"name": "router", **identity},))
 
@@ -1839,7 +1899,7 @@ class Deployment:
 
     def monitoring(self, context: StageContext) -> Outcome:
         """Start Prometheus and Grafana on the primary router's host, from the installed wheel."""
-        values, routers = settings(self.env), pair(self.env)
+        values = settings(self.env)
         host = self.host(self.primary())
         args = [
             ".venv/bin/python",
@@ -1847,11 +1907,13 @@ class Deployment:
             "narwhal.observability.stack.start.cli",
             "--router-url",
             values.router_url,
-            "--router-url",
-            routers.standby_url,
-            "--targets-url",
-            routers.balancer_url,
         ]
+        if paired(self.env):
+            routers = pair(self.env)
+            args += ["--router-url", routers.standby_url, "--targets-url", routers.balancer_url]
+        else:
+            # The only router is the one that controls the fleet.
+            args += ["--targets-url", values.router_url]
         _, _, package = self.package_of(context)
         for role in self.engines():
             sidecar = self.role_env(package, role).get(
@@ -2202,6 +2264,8 @@ class Topology:
             return cache_capture(backend) is not None
         if capability == TRANSFER_MEASUREMENT:
             return transfer_measurement(backend) is not None
+        if capability == ROUTER_PAIR:
+            return paired(self.deployment.env)
         raise ValueError(f"the deployment topology has no capability {capability}")
 
     def related(self, relation: str, instance: str) -> Sequence[str]:

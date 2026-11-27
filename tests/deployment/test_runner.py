@@ -46,7 +46,11 @@ TOPOLOGY = StaticTopology(
         "group_edges": {"engine-1": ("node-1-to-node-2",), "engine-2": ("node-2-to-node-1",)},
     },
     # engine-1's backend captures a cache layout; engine-2's handoffs are measured.
-    capabilities={"cache_capture": ("engine-1",), "transfer_measurement": ("engine-2",)},
+    capabilities={
+        "cache_capture": ("engine-1",),
+        "transfer_measurement": ("engine-2",),
+        "router_pair": ("",),
+    },
 )
 
 ORDER = (

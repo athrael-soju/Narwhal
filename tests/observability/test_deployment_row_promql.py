@@ -268,6 +268,39 @@ class DeploymentRowTests(unittest.TestCase):
         ]
         self.run_promtool(inputs, tests)
 
+    def test_a_fleet_with_one_router_raises_no_pair_alert(self):
+        # No standby: the only router is active and ready at lease epoch 0, and ejects an engine.
+        router = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
+        labels = {"job": "narwhal-router", "instance": "a:8000", "fleet": "fleet-a"}
+        inputs = [
+            *series("up", router, "1x40"),
+            *series("narwhal_router_role", router + ',role="active"', "1x40"),
+            *series("narwhal_router_role", router + ',role="standby"', "0x40"),
+            *series("narwhal_router_ready", router, "1x40"),
+            *series("narwhal_router_lease_epoch", router, "0x40"),
+            *series("narwhal_ejected_instances", router, "1x40"),
+        ]
+        tests = [
+            "    alert_rule_test:",
+            *self.alert_at(300, "NarwhalRouterDown", []),
+            *self.alert_at(300, "NarwhalStandbyRouterDown", []),
+            *self.alert_at(300, "NarwhalNoRouterReady", []),
+            *self.alert_at(300, "NarwhalMultipleRoutersReady", []),
+            *self.alert_at(300, "NarwhalEngineEjected", [labels], value="1"),
+        ]
+        self.run_promtool(inputs, tests)
+
+    def test_a_fleets_only_router_that_stops_pages_once(self):
+        router = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
+        down = {"job": "narwhal-router", "instance": "a:8000", "fleet": "fleet-a"}
+        tests = [
+            "    alert_rule_test:",
+            *self.alert_at(300, "NarwhalRouterDown", [down]),
+            *self.alert_at(300, "NarwhalStandbyRouterDown", []),
+            *self.alert_at(300, "NarwhalNoRouterReady", []),
+        ]
+        self.run_promtool(series("up", router, "0x40"), tests)
+
     def test_the_watchdog_fires_for_each_fleet_while_prometheus_runs(self):
         inputs = [
             *series("up", 'job="narwhal-router",instance="a:8000",fleet="fleet-a"', "0x40"),

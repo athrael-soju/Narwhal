@@ -6,6 +6,8 @@ description: Start the Narwhal router and validate fleet capacity through the pr
 
 `narwhal deploy run` starts a router pair after preflight: the primary router on the router host, its standby on the standby router host, HAProxy in front of both, and the monitoring stack. The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair).
 
+A fleet without `NARWHAL_STANDBY_ROUTER_SSH` runs one router instead, with no router failover. `lease-check` and `load-balancer` do not run. `router-start` starts the router at `NARWHAL_ROUTER_URL` without `--standby-of`, `--lease-path` or `--first-start-primary`, waits for it to control the fleet and measures its overhead as below. Monitoring scrapes that router and reads its targets from it.
+
 ## Checking the shared lease path
 
 Both routers hold one lease at `NARWHAL_LEASE_PATH`, so both router hosts must mount that file's directory at the same path, with POSIX `flock`, coherent reads and atomic rename. The `lease-check` stage proves this with the router's own lease code before either router starts. On a probe lease beside the pair's lease:

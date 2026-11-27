@@ -180,11 +180,13 @@ Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-chan
 
 ### Router pair
 
-`run` deploys a primary router, a standby router and an HAProxy load balancer, as in [Serve and measure](../deploy/07-Serve-and-Measure.md).
+With `NARWHAL_STANDBY_ROUTER_SSH` set, `run` deploys a primary router, a standby router and an HAProxy load balancer, as in [Serve and measure](../deploy/07-Serve-and-Measure.md), and needs every variable below.
+
+Without it, the fleet runs one router at `NARWHAL_ROUTER_URL` with no standby, no lease and no load balancer, so it has no router failover; `plan` and `run` say so. The `lease-check` and `load-balancer` stages do not run, clients use `NARWHAL_ROUTER_URL`, and the other variables below are not read. A fleet on one SSH host sets every `NARWHAL_NODE_<n>_SSH` to that host and leaves `NARWHAL_STANDBY_ROUTER_SSH` unset.
 
 | Variable | Value |
 | --- | --- |
-| `NARWHAL_STANDBY_ROUTER_SSH` | SSH destination of the standby router's host, another host than the primary router's |
+| `NARWHAL_STANDBY_ROUTER_SSH` | SSH destination of the standby router's host, another host than the primary router's. Unset for a fleet with one router |
 | `NARWHAL_LOAD_BALANCER_SSH` | Optional SSH destination of the load balancer's host. Without it, HAProxy runs on the primary router's host |
 | `NARWHAL_ROUTER_URL` | `http://HOST:PORT` the primary router binds. The standby and the load balancer reach it there, so HOST is not a loopback address |
 | `NARWHAL_STANDBY_ROUTER_URL` | `http://HOST:PORT` the standby router binds, reachable from the primary and the load balancer |

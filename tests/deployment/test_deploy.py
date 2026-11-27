@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment import deploy, run_record
+from narwhal.deployment import deploy, discovery, run_record
 from narwhal.dev import cli
 from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
 from tests.deployment.deploy_hosts import Fleet
@@ -501,6 +501,84 @@ class DeployTests(unittest.TestCase):
 SLO_RERUN = {"fleet-limits"} | {
     f"{stage}[{host}]" for stage in ("preflight", "router-start") for host in ROUTERS
 }
+
+
+PAIR_INPUTS = (
+    "NARWHAL_STANDBY_ROUTER_SSH",
+    "NARWHAL_STANDBY_ROUTER_URL",
+    "NARWHAL_LOAD_BALANCER_URL",
+    "NARWHAL_LEASE_PATH",
+    "NARWHAL_HAPROXY_IMAGE",
+)
+
+
+def one_host(env: dict[str, str]) -> dict[str, str]:
+    """`env` with both engines and the only router on node 1's host, and no standby."""
+    single = {name: value for name, value in env.items() if name not in PAIR_INPUTS}
+    return {**single, "NARWHAL_NODE_2_SSH": single["NARWHAL_NODE_1_SSH"]}
+
+
+class SingleRouterTests(unittest.TestCase):
+    """A fleet on one SSH host: its engines and one router, with no standby, lease or load
+    balancer."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.fleet = Fleet(self.root)
+        self.fleet.env = one_host(self.fleet.env)
+        self.run = self.fleet.run_directory
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.fleet.patched())
+        stack.enter_context(patch.dict(os.environ, self.fleet.env, clear=True))
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, cwd)
+
+    def deploy(self, action: str, *args: str) -> tuple[int, dict, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["deploy", action, "--run", str(self.run), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_inventory_puts_the_engines_and_the_router_on_one_host(self):
+        [host] = discovery.derive_hosts(self.fleet.env)
+        self.assertEqual(host.roles, ("engine-1", "engine-2", "router"))
+        self.assertIn("router", deploy.inputs(self.fleet.env))
+
+    def test_plan_says_once_that_the_fleet_has_no_router_failover(self):
+        code, out, _ = self.deploy("plan")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("no router failover"), 1, out)
+        self.assertNotIn("lease-check", out)
+        self.assertNotIn("load-balancer", out)
+        code, result = self.json("plan")
+        self.assertIn(deploy.SINGLE_ROUTER, result["data"]["notes"])
+
+    def test_run_starts_one_router_without_a_lease_and_monitors_it(self):
+        code, out, err = self.deploy("run")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.count("no router failover"), 1, out)
+        self.assertNotIn("lease-check", out)
+        self.assertNotIn("load-balancer", out)
+        self.assertIn("router-start[node-1]: passed", out)
+        self.assertEqual(self.fleet.calls["start router"], 1)
+        argv = self.fleet.argv["router"]
+        for flag in ("--lease-path", "--lease-witness", "--standby-of", "--first-start-primary"):
+            self.assertNotIn(flag, argv)
+        self.assertNotIn("load-balancer", self.fleet.containers)
+        command = self.fleet.monitoring_command
+        self.assertEqual(command.count("--router-url"), 1, command)
+        self.assertIn("--targets-url http://10.0.0.1:8000", command)
+        self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
+        # A rerun finds the router running and repeats nothing.
+        code, out, err = self.deploy("run")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0 stage instances ran", out)
+
+    def json(self, action: str) -> tuple[int, dict]:
+        code, out, _ = self.deploy(action, "--format", "json")
+        return code, json.loads(out)
 
 
 class InputTests(unittest.TestCase):

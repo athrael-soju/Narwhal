@@ -438,11 +438,10 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
     deployment = TARGETS[args.target].Deployment(directory, env, dry=True)
     result = deployment.runner().plan(inputs, until=_until(args))
     rows = _decisions(result.decisions)
-    for note in result.notes:
+    notes = [*_topology_notes(args, env), *result.notes]
+    for note in notes:
         print(f"Note: {note}")
-    results.set_data(
-        {"run": str(directory), "stages": rows, "hosts": problems, "notes": list(result.notes)}
-    )
+    results.set_data({"run": str(directory), "stages": rows, "hosts": problems, "notes": notes})
     if problems:
         for name, found in problems.items():
             for problem in found:
@@ -470,6 +469,13 @@ def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
     return "error", "operation_failed", 4
 
 
+def _topology_notes(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
+    """What the inventory leaves out that an operator should know before a run."""
+    if args.target == "ssh" and not stage_run.paired(env):
+        return [stage_run.SINGLE_ROUTER]
+    return []
+
+
 def _until(args: argparse.Namespace) -> str:
     """The last stage to plan or run: `--until`, else the target's last stage."""
     return str(args.until or TARGETS[args.target].LAST_STAGE)
@@ -493,6 +499,8 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     target = TARGETS[args.target]
     deployment = target.Deployment(directory, env)
     runner = deployment.runner()
+    for note in _topology_notes(args, env):
+        print(f"Note: {note}")
 
     def stale(found: Mapping[str, Any] | None) -> dict[str, Any]:
         """Print a stale lock the run found, and return the result data that carries it."""

@@ -147,6 +147,8 @@ class Fleet:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.env = environment(root)
+        # The argv of each unit's last start, by unit name.
+        self.argv: dict[str, list[str]] = {}
         self.calls: Counter[str] = Counter()
         # Each engine role's running container: (container ID, start time).
         self.containers: dict[str, tuple[str, str]] = {}
@@ -687,6 +689,7 @@ class _Units(Supervisor[SystemdUnit]):
         nonce, invocation = uuid.uuid4().hex, uuid.uuid4().hex
         self.fleet.units[unit] = (nonce, invocation, 0)
         self.fleet.calls[f"start {spec.name}"] += 1
+        self.fleet.argv[spec.name] = list(spec.argv)
         return self._identity(unit)
 
     def _identity(self, unit: str) -> SystemdUnit:
