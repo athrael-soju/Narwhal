@@ -17,7 +17,7 @@ from ..launch_engine.backend import engine_backend
 from ..launch_engine.plan import launch_headers
 from ..launch_engine.runtime import write_private
 from .capture import published_attempt
-from .document import engine_document
+from .document import attested
 from .evidence import checked_plan, live_container, live_native, read_json
 
 
@@ -42,6 +42,21 @@ def attestation_url(plan: dict) -> tuple[SplitResult, str, int]:
     return url, url.hostname, url.port
 
 
+def require_live_process_start(run: Path, plan: dict, process_start: float) -> None:
+    """Require the live engine to report the process start its captures attest; an engine
+    process can start again inside a container that keeps running."""
+    reader = engine_backend(plan.get("engine")).identity
+    live = asyncio.run(
+        fetch_engine_identity(plan["endpoint"], headers=launch_headers(run, plan), reader=reader)
+    )
+    if live.process_start_time_seconds != process_start:
+        raise ValueError(
+            f"The engine reports process start {live.process_start_time_seconds}, not the "
+            f"{process_start} its attestation captured; the engine process started again, "
+            "so prepare, check and start a fresh launch"
+        )
+
+
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
     backend = engine_backend(plan.get("engine"))
@@ -53,8 +68,11 @@ def serve(run: Path) -> int:
     attempt = published_attempt(run)
     destination = attempt / "engine-attestation.json"
     AttestationDocument.load(destination)
-    if read_json(destination) != engine_document(run, attempt):
+    document, process_start = attested(run, attempt)
+    if read_json(destination) != document:
         raise ValueError("Attestation document differs from current serving evidence")
+    if process_start is not None:
+        require_live_process_start(run, plan, process_start)
     arguments = [
         "--document",
         str(destination),

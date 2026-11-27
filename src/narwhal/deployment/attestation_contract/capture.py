@@ -3,8 +3,8 @@ own, and the published attempt that the sidecar serves."""
 
 from __future__ import annotations
 
-import functools
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -37,6 +37,8 @@ ATTEMPTS = "attestation"
 PUBLISHED = "published-attestation.json"
 # Written into an attempt when one of its captures fails.
 FAILURE = "capture-failure.json"
+# An attempt's name: its UTC creation time and a random suffix.
+ATTEMPT_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
 DOCKER_LOGS_SECONDS = 120
 
 
@@ -63,6 +65,15 @@ class CaptureFailed(ValueError):
         super().__init__(f"Capture {capture.name} ({capture.output}) failed: {reason}")
         self.capture = capture.name
         self.reason = reason
+
+
+class AlreadyPublished(ValueError):
+    def __init__(self, attempt: str) -> None:
+        super().__init__(
+            f"Attempt {attempt} already published this engine's attestation; capture again "
+            "only for a fresh launch"
+        )
+        self.attempt = attempt
 
 
 # Errors a capture raises for its evidence or the engine it reads; anything else is a defect.
@@ -99,20 +110,24 @@ def save_startup_log(run: Path, attempt: Path) -> Path:
     return destination
 
 
-def match_representative(engine: CacheRegistration, attempt: Path, expected: str) -> None:
-    actual = engine.registered_layout(attempt)
-    if actual != expected:
-        raise ValueError(f"Resolved layout {actual} differs from the representative's {expected}")
-
-
 def captures(run: Path, attempt: Path, representative_layout: str | None = None) -> list[Capture]:
     """The captures of the engine in `run` into `attempt`, in the order `capture` runs them."""
     plan, _, _ = checked_plan(run)
     engine = plan_launcher(plan)
     registration = engine if isinstance(engine, CacheRegistration) else None
-    if representative_layout is not None and registration is None:
-        label = engine_backend(plan.get("engine")).label
-        raise ValueError(f"{label} engines register no cache layout to match a representative's")
+    if representative_layout is not None:
+        if registration is None:
+            label = engine_backend(plan.get("engine")).label
+            raise ValueError(
+                f"{label} engines register no cache layout to match a representative's"
+            )
+        # The cache-registration capture registers the layout the live cache resolved.
+        layout = registration.cache_layout(run)
+        if layout != representative_layout:
+            raise ValueError(
+                f"Resolved layout {layout} differs from the representative's "
+                f"{representative_layout}"
+            )
     dimensions = (
         "model-dimensions.live.json"
         if isinstance(engine, LiveModelDimensions)
@@ -123,16 +138,6 @@ def captures(run: Path, attempt: Path, representative_layout: str | None = None)
         Capture("model-dimensions", dimensions, lambda: capture_model_dimensions(run, attempt)),
         *engine.attestation_captures(CaptureContext(run, attempt, plan)),
     ]
-    if representative_layout is not None and registration is not None:
-        steps.append(
-            Capture(
-                "representative-layout",
-                "cache-registration.json",
-                functools.partial(
-                    match_representative, registration, attempt, representative_layout
-                ),
-            )
-        )
     steps.append(Capture("document", "engine-attestation.json", lambda: generate(run, attempt)))
     return steps
 
@@ -143,7 +148,10 @@ def published_attempt(run: Path) -> Path:
     if not path.is_file():
         raise ValueError(f"{PUBLISHED} is missing; capture the engine's attestation first")
     record = read_json(path)
-    attempt = run / ATTEMPTS / record["attempt"]
+    name = record.get("attempt")
+    if not isinstance(name, str) or ATTEMPT_NAME.fullmatch(name) is None:
+        raise ValueError(f"{PUBLISHED} names no capture attempt")
+    attempt = run / ATTEMPTS / name
     document = attempt / "engine-attestation.json"
     if digest(document) != record["document_sha256"]:
         raise ValueError(f"{document} differs from the document {PUBLISHED} names")
@@ -160,15 +168,13 @@ def new_attempt(run: Path) -> Path:
 
 def refuse_published(run: Path) -> None:
     if (run / PUBLISHED).exists():
-        attempt = read_json(run / PUBLISHED).get("attempt")
-        raise ValueError(
-            f"Attempt {attempt} already published this engine's attestation; capture again only "
-            "for a fresh launch"
-        )
+        raise AlreadyPublished(str(read_json(run / PUBLISHED).get("attempt")))
 
 
 def publish(run: Path, attempt: Path) -> Path:
     """Name `attempt` in the launch directory, unless another attempt published first."""
+    if attempt.parent != run / ATTEMPTS or ATTEMPT_NAME.fullmatch(attempt.name) is None:
+        raise ValueError(f"{attempt} is not a capture attempt of {run}")
     destination = run / PUBLISHED
     record = {
         "attempt": attempt.name,
@@ -208,5 +214,18 @@ def capture(run: Path, representative_layout: str | None = None) -> Path:
                 {"capture": step.name, "output": step.output, "error": failed.reason},
             )
             raise failed from error
-    publish(run, attempt)
+    try:
+        publish(run, attempt)
+    except AlreadyPublished as error:
+        # Another attempt passed and published while this one ran.
+        write_private_json(
+            attempt / FAILURE,
+            {
+                "capture": "publish",
+                "output": PUBLISHED,
+                "error": "another attempt published first",
+                "published": error.attempt,
+            },
+        )
+        raise
     return attempt / "engine-attestation.json"

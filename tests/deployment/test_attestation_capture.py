@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.backends.vllm import attestation as vllm_attestation
-from narwhal.backends.vllm.launch import VllmLauncher
 from narwhal.deployment.attestation_contract import capture as capture_module
 from narwhal.deployment.attestation_contract import cli
 from narwhal.deployment.attestation_contract import sidecar as sidecar_module
@@ -25,10 +24,10 @@ from narwhal.deployment.attestation_contract.capture import (
     ATTEMPTS,
     FAILURE,
     PUBLISHED,
+    AlreadyPublished,
     Capture,
     CaptureFailed,
     capture,
-    match_representative,
     publish,
     published_attempt,
     save_startup_log,
@@ -37,6 +36,7 @@ from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine.check import read_checked
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from tests.backends.contract import (
+    ATTEMPT,
     LiveContainer,
     fixtures,
     started_container,
@@ -125,14 +125,52 @@ class CaptureRecoveryTests(StartedEngine):
 
     def test_the_first_published_attempt_wins(self):
         run, live = self.started("sglang")
+        first: list[Path] = []
+
+        def race(run: Path, attempt: Path) -> Path:
+            # Another capture of this launch directory passes and publishes first.
+            if not first:
+                first.append(Path(shutil.copytree(attempt, run / ATTEMPTS / ATTEMPT)))
+                publish(run, first[0])
+            return publish(run, attempt)
+
+        with (
+            live.serving(),
+            patch.object(capture_module, "publish", side_effect=race),
+            self.assertRaisesRegex(AlreadyPublished, f"^Attempt {ATTEMPT} already published"),
+        ):
+            capture(run)
+        self.assertEqual(published_attempt(run), first[0])
+        (lost,) = [path for path in (run / ATTEMPTS).iterdir() if path != first[0]]
+        self.assertTrue((lost / "engine-attestation.json").is_file())
+        self.assertEqual(
+            json.loads((lost / FAILURE).read_text()),
+            {
+                "capture": "publish",
+                "output": PUBLISHED,
+                "error": "another attempt published first",
+                "published": ATTEMPT,
+            },
+        )
+        self.assertFalse((first[0] / FAILURE).exists())
+        self.assertEqual(sorted(path.name for path in run.glob(PUBLISHED + "*")), [PUBLISHED])
+
+    def test_only_a_capture_attempt_is_published_or_read(self):
+        run, live = self.started("trtllm")
         with live.serving():
             document = capture(run)
-        later = run / ATTEMPTS / "later"
-        shutil.copytree(document.parent, later)
-        with self.assertRaisesRegex(ValueError, f"^Attempt {document.parent.name} already"):
-            publish(run, later)
-        self.assertEqual(published_attempt(run), document.parent)
-        self.assertEqual(sorted(path.name for path in run.glob(PUBLISHED + "*")), [PUBLISHED])
+        for outside in (run / "elsewhere", run / ATTEMPTS / "not-an-attempt"):
+            with (
+                self.subTest(attempt=outside),
+                self.assertRaisesRegex(ValueError, "is not a capture attempt of"),
+            ):
+                publish(run, outside)
+        record = json.loads((run / PUBLISHED).read_text())
+        for name in ("../../elsewhere", "/tmp", f"{document.parent.name}/..", "", 7):
+            with self.subTest(name=name):
+                (run / PUBLISHED).write_text(json.dumps({**record, "attempt": name}))
+                with self.assertRaisesRegex(ValueError, f"^{PUBLISHED} names no capture attempt$"):
+                    published_attempt(run)
 
     def test_a_published_document_must_match_its_record(self):
         run, live = self.started("trtllm")
@@ -167,6 +205,26 @@ class CaptureRecoveryTests(StartedEngine):
                 self.assertIn("Serving container started again", failed.exception.reason)
                 (attempt,) = (run / ATTEMPTS).iterdir()
                 self.assertEqual(sorted(path.name for path in attempt.iterdir()), [FAILURE])
+
+    def test_serve_requires_the_live_engine_process_its_captures_attest(self):
+        run, live = self.started("vllm")
+        route = {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"}
+        with (
+            live.serving(),
+            patch.dict(os.environ, route),
+            patch.object(sidecar_module, "attest_main", return_value=0) as sidecar,
+        ):
+            capture(run)
+            self.assertEqual(sidecar_module.serve(run), 0)
+            # The engine process starts again; its container keeps running.
+            live.answers.routes["/metrics"] = "process_start_time_seconds 1767229200.0\n"
+            with self.assertRaisesRegex(
+                ValueError,
+                "^The engine reports process start 1767229200.0, not the 1767225600.25 its "
+                "attestation captured",
+            ):
+                sidecar_module.serve(run)
+        sidecar.assert_called_once()
 
     def test_the_startup_log_holds_only_the_recorded_container_start(self):
         run, live = self.started("vllm")
@@ -217,17 +275,21 @@ class VllmCaptureTests(StartedEngine):
         self.assertEqual(transfer["transfer_mode"], "push")
         self.assertFalse((attempt / "handshake-policy.json").exists())
 
-    def test_a_representative_layout_must_match_the_registered_layout(self):
+    def test_a_representative_layout_must_match_before_any_capture(self):
         run, live = self.started("vllm")
-        with live.serving(), self.assertRaises(CaptureFailed) as failed:
+        with (
+            live.serving(),
+            self.assertRaisesRegex(
+                ValueError, "^Resolved layout NHD differs from the representative's LBNHC$"
+            ),
+        ):
             capture(run, "LBNHC")
-        self.assertEqual(failed.exception.capture, "representative-layout")
-        self.assertEqual(
-            failed.exception.reason, "Resolved layout NHD differs from the representative's LBNHC"
-        )
-        run, live = self.started("vllm")
+        self.assertEqual(live.calls, [])
+        self.assertEqual(list((run / ATTEMPTS).iterdir()), [])
         with live.serving():
-            capture(run, "NHD")
+            document = capture(run, "NHD")
+        registration = json.loads((document.parent / "cache-registration.json").read_text())
+        self.assertEqual(registration["kv_cache_layout"], "NHD")
 
     def test_only_vllm_takes_a_representative_layout(self):
         for name, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
@@ -295,7 +357,7 @@ def checked_run(root: Path, backend: str) -> Path:
     (run / "container-start.json").write_text(
         json.dumps({"container_id": CONTAINER, "started_at": "2026-01-01T00:00:00Z"})
     )
-    attempt = run / ATTEMPTS / "attempt"
+    attempt = run / ATTEMPTS / ATTEMPT
     attempt.mkdir(parents=True)
     return run
 
@@ -304,7 +366,7 @@ class StartupLogTests(unittest.TestCase):
     def test_a_failed_docker_logs_writes_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
             run = checked_run(Path(folder), "container")
-            attempt = run / ATTEMPTS / "attempt"
+            attempt = run / ATTEMPTS / ATTEMPT
             failed = subprocess.CompletedProcess([], 1, stdout=b"Error: No such container\n")
             with (
                 patch.object(capture_module, "live_identity", return_value=CONTAINER),
@@ -325,7 +387,7 @@ class StartupLogTests(unittest.TestCase):
     def test_a_native_engine_attests_a_copy_of_its_growing_log(self):
         with tempfile.TemporaryDirectory() as folder:
             run = checked_run(Path(folder), "native")
-            attempt = run / ATTEMPTS / "attempt"
+            attempt = run / ATTEMPTS / ATTEMPT
             (run / "startup.log").write_bytes(STARTUP_LOG.read_bytes())
             with (
                 patch.object(capture_module, "live_identity", return_value=PROCESS),
@@ -360,7 +422,7 @@ class TransferModeTests(unittest.TestCase):
                     tempfile.TemporaryDirectory() as folder,
                 ):
                     run = checked_run(Path(folder), backend)
-                    attempt = run / ATTEMPTS / "attempt"
+                    attempt = run / ATTEMPTS / ATTEMPT
                     log = self.check_log(run, (self.plan_hash(run), [name, name]))
                     original = log.read_bytes()
                     with patch.object(vllm_attestation, "live_identity", return_value=identity):
@@ -395,7 +457,7 @@ class TransferModeTests(unittest.TestCase):
         ):
             with self.subTest(classes=classes), tempfile.TemporaryDirectory() as folder:
                 run = checked_run(Path(folder), "container")
-                attempt = run / ATTEMPTS / "attempt"
+                attempt = run / ATTEMPTS / ATTEMPT
                 self.check_log(run, (self.plan_hash(run), classes))
                 with (
                     patch.object(vllm_attestation, "live_identity", return_value=CONTAINER),
@@ -407,7 +469,7 @@ class TransferModeTests(unittest.TestCase):
     def test_only_check_attempts_for_this_plan_count(self):
         with tempfile.TemporaryDirectory() as folder:
             run = checked_run(Path(folder), "container")
-            attempt = run / ATTEMPTS / "attempt"
+            attempt = run / ATTEMPTS / ATTEMPT
             self.check_log(
                 run, ("0" * 64, ["NixlPushConnector"]), (self.plan_hash(run), ["NixlPullConnector"])
             )
@@ -421,7 +483,7 @@ class TransferModeTests(unittest.TestCase):
                 patch.object(vllm_attestation, "live_identity", return_value=CONTAINER),
                 self.assertRaisesRegex(ValueError, "rerun the runtime check"),
             ):
-                vllm_attestation.capture_transfer_mode(run, run / ATTEMPTS / "attempt")
+                vllm_attestation.capture_transfer_mode(run, run / ATTEMPTS / ATTEMPT)
 
 
 class StartupConnectorTests(unittest.TestCase):
@@ -473,20 +535,6 @@ class StartupConnectorTests(unittest.TestCase):
                 vllm_attestation.check_startup_connector(attempt)
 
 
-class RepresentativeLayoutTests(unittest.TestCase):
-    def test_the_registered_layout_must_match_the_representative(self):
-        with tempfile.TemporaryDirectory() as folder:
-            attempt = Path(folder)
-            (attempt / "cache-registration.json").write_text(
-                json.dumps({"kv_cache_layout": "LBNHC"})
-            )
-            match_representative(VllmLauncher(), attempt, "LBNHC")
-            with self.assertRaisesRegex(
-                ValueError, "^Resolved layout LBNHC differs from the representative's BLHNC$"
-            ):
-                match_representative(VllmLauncher(), attempt, "BLHNC")
-
-
 class VerifyTests(unittest.TestCase):
     DOCUMENT = ROOT / "config/engine-attestation.example.json"
     ROUTE = "http://sidecar.invalid:8010/v1/attestation"
@@ -498,7 +546,7 @@ class VerifyTests(unittest.TestCase):
         (run / "launch.json").write_text(json.dumps(plan))
         key = {"vllm": "VLLM_API_KEY", "sglang": "NARWHAL_SGLANG_API_KEY"}[engine]
         (run / "container.env").write_text(f"{key}=synthetic-key\n")
-        attempt = run / ATTEMPTS / "attempt"
+        attempt = run / ATTEMPTS / ATTEMPT
         attempt.mkdir(parents=True)
         shutil.copy(self.DOCUMENT, attempt / "engine-attestation.json")
         publish(run, attempt)

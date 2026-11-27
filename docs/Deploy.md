@@ -107,9 +107,9 @@ A change reruns the stages its row lists and no others. A change that touches se
 | `fabric-budget` | Once for each cache-equivalence group | `cache-groups` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `fabric-edge` | Once for each directed edge between engine hosts | `fabric-budget` | [Binding each sample to a directed route](deploy/04-Qualify-Fabric.md#binding-each-sample-to-a-directed-route) |
 | `fleet-inventory` | Once for each router host | `install` | [Checking the router inventory](deploy/05-Attest.md#checking-the-router-inventory) |
-| `attest-capture` | Once for each engine role, on its engine host | `fabric-edge`, `fleet-inventory` | [Capturing the attestation inputs](deploy/05-Attest.md#capturing-the-attestation-inputs) |
+| `attest-capture` | Once for each engine role, on its engine host | `fabric-edge`, `fleet-inventory` | [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation) |
 | `sidecar-start` | Once for each engine role, on its engine host | `attest-capture` | [Starting the sidecar](deploy/05-Attest.md#starting-the-sidecar) |
-| `sidecar-verify` | Once for each engine role, on its engine host | `sidecar-start` | [Verifying the sidecar against the engine](deploy/05-Attest.md#verifying-the-sidecar-against-the-engine) |
+| `sidecar-verify` | Once for each engine role, on its engine host | `sidecar-start` | [Verifying the sidecar](deploy/05-Attest.md#verifying-the-sidecar) |
 | `finalize-fleet` | Once for each router host | `sidecar-verify` | [Finalizing the fleet contract](deploy/05-Attest.md#finalizing-the-fleet-contract) |
 | `profile` | Once for each router host | `finalize-fleet` | [Profiling idle engines](deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
 | `calibrate` | Once for each router host | `profile` | [Calibrating the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) |

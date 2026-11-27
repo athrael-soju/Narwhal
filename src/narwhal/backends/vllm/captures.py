@@ -56,6 +56,17 @@ def inspection_log(run: Path, out: Path, name: str) -> str:
     return str((out / name).relative_to(run))
 
 
+def resolved_layout(run: Path) -> str:
+    """The one KV cache layout that the live cache layout of `run` holds across TP ranks."""
+    source = run / "cache-layout.json"
+    if not source.is_file():
+        raise ValueError("the engine has captured no live KV cache layout in cache-layout.json")
+    names = {rank.get("kv_cache_layout") for rank in json.loads(source.read_bytes())["ranks"]}
+    if len(names) != 1 or None in names:
+        raise ValueError("cache-layout.json must hold one resolved KV cache layout across TP ranks")
+    return str(next(iter(names)))
+
+
 def registration_layout(run: Path, plan: dict, out: Path) -> None:
     """Write cache-registration.json into `out` from the live cache layout of `run`."""
     require_checked(run, plan)
@@ -65,8 +76,7 @@ def registration_layout(run: Path, plan: dict, out: Path) -> None:
             "cache registration capture exists; retain it and use a fresh inspection plan"
         )
     source = run / "cache-layout.json"
-    if not source.is_file():
-        raise ValueError("the engine has captured no live KV cache layout in cache-layout.json")
+    name = resolved_layout(run)
     data = source.read_bytes()
     record = json.loads(data)
     for field, expected in (
@@ -79,10 +89,6 @@ def registration_layout(run: Path, plan: dict, out: Path) -> None:
     tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
     if sorted(rank["rank"] for rank in record["ranks"]) != list(range(tp)):
         raise ValueError("cache layout record requires every TP rank exactly once")
-    names = {rank.get("kv_cache_layout") for rank in record["ranks"]}
-    if len(names) != 1 or None in names:
-        raise ValueError("cache-layout.json must hold one resolved KV cache layout across TP ranks")
-    name = next(iter(names))
     script = """import hashlib, inspect, json, sys
 from pathlib import Path
 from vllm.v1.kv_cache_layout import KVCacheLayout

@@ -89,6 +89,8 @@ def fixtures(backend: str) -> ContractFixtures:
 
 
 CONTAINER_ID = "c" * 64
+# A capture attempt's directory name, as `capture` names one.
+ATTEMPT = "20260101T000000Z-00000000"
 # The serving container's State.StartedAt, and the process start /metrics reports for it.
 CONTAINER_STARTED_AT = "2026-01-01T00:00:00.25Z"
 CONTAINER_STARTED_S = 1767225600.25
@@ -215,7 +217,7 @@ class Stages:
 
 def capture_attempt(run: Path) -> Path:
     """A capture attempt directory in the launch directory `run`."""
-    attempt = run / "attestation" / "fixture"
+    attempt = run / "attestation" / ATTEMPT
     attempt.mkdir(parents=True)
     return attempt
 
@@ -344,15 +346,20 @@ class LiveContainer:
 
     @contextlib.contextmanager
     def serving(self) -> Any:
-        client = httpx.Client
+        client, asynchronous = httpx.Client, httpx.AsyncClient
 
         def connect(**kwargs: Any) -> httpx.Client:
             return client(transport=httpx.MockTransport(self.route), **kwargs)
+
+        def connect_async(**kwargs: Any) -> httpx.AsyncClient:
+            kwargs["transport"] = httpx.MockTransport(self.route)
+            return asynchronous(**kwargs)
 
         with (
             patch("subprocess.run", side_effect=self.run),
             patch("narwhal.deployment.stages.run", side_effect=self.stage),
             patch("httpx.Client", connect),
+            patch("httpx.AsyncClient", connect_async),
         ):
             yield self
 

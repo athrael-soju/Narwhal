@@ -63,6 +63,8 @@ class AttestationEvidence:
     # The evidence file behind the engine version and each field in contract.
     sources: dict[str, Path]
     launch: dict = field(default_factory=dict)
+    # The serving process start the evidence attests, for an engine that reports one.
+    process_start: float | None = None
 
 
 def launch_args(args: list[str], per_launch: frozenset[str]) -> list[str]:
@@ -113,6 +115,12 @@ def bound_dimensions(
 
 def engine_document(run: Path, attempt: Path) -> dict:
     """The attestation document of the live engine of `run` from the captures in `attempt`."""
+    return attested(run, attempt)[0]
+
+
+def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
+    """The attestation document of the live engine of `run` from the captures in `attempt`,
+    and the serving process start the captures attest, for an engine that reports one."""
     plan, checked, plan_hash = checked_plan(run)
     engine = plan_launcher(plan)
     native = plan.get("backend") == "native"
@@ -174,7 +182,8 @@ def engine_document(run: Path, attempt: Path) -> dict:
     if cache_capture(engine) is not None:
         launch["cache_capture_code_sha256"] = plan["cache_capture_code_sha256"]
     launch.update(evidence.launch)
-    return versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
+    document = versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
+    return document, evidence.process_start
 
 
 def generate(run: Path, attempt: Path) -> Path:

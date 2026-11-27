@@ -143,8 +143,8 @@ class CacheRegistration(ABC):
     """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def registered_layout(self, attempt: Path) -> str:
-        """The layout name that the attestation capture in `attempt` registered."""
+    def cache_layout(self, run: Path) -> str:
+        """The KV cache layout that the live engine of `run` resolved across its ranks."""
 
 
 class LiveModelDimensions(ABC):

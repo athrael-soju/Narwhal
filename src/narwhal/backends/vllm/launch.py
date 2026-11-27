@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.attestation_contract.evidence import read_json
 from ...deployment.launch_engine.backend import (
     CacheCapture,
     CacheMeasurement,
@@ -119,8 +118,8 @@ class VllmLauncher(
     def model_dimensions(self, run: Path, plan: dict) -> None:
         captures.model_dimensions(run, plan)
 
-    def registered_layout(self, attempt: Path) -> str:
-        return read_json(attempt / "cache-registration.json")["kv_cache_layout"]
+    def cache_layout(self, run: Path) -> str:
+        return captures.resolved_layout(run)
 
     def capture_model_dimensions(self, run: Path, out: Path) -> Path:
         return attestation.capture_model_dimensions(run, out)

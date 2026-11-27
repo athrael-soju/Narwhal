@@ -31,6 +31,7 @@ from narwhal.deployment.attestation_contract.evidence import live_native, read_j
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from tests.backends.contract import ATTEMPT
 from tests.deployment.fixtures import model_file_fields
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -203,6 +204,11 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=EngineIdentity("0.29.0", 100.0),
                 ),
                 patch(
+                    "narwhal.deployment.attestation_contract.sidecar.fetch_engine_identity",
+                    new_callable=AsyncMock,
+                    return_value=EngineIdentity("0.29.0", 100.0),
+                ),
+                patch(
                     "narwhal.deployment.attestation_contract.sidecar.attest_main", return_value=0
                 ) as sidecar,
                 patch.dict(
@@ -295,7 +301,7 @@ class AttestationContractTests(unittest.TestCase):
         (run / "container.env").write_text("VLLM_API_KEY=test\n")
         # The process start the fixture's metrics report: 100 s after the epoch.
         save(run / "container-start.json", {"container_id": cid, "started_at": STARTED_AT})
-        attempt = run / "attestation" / "fixture"
+        attempt = run / "attestation" / ATTEMPT
         attempt.mkdir(parents=True)
         save(
             run / "model-dimensions.json",
@@ -856,6 +862,11 @@ class AttestationContractTests(unittest.TestCase):
                         return_value="b" * 64,
                     ),
                     patch(
+                        "narwhal.deployment.attestation_contract.sidecar.fetch_engine_identity",
+                        new_callable=AsyncMock,
+                        return_value=EngineIdentity("0.29.0", 100.0),
+                    ) as live,
+                    patch(
                         "narwhal.deployment.attestation_contract.sidecar.attest_main",
                         return_value=0,
                     ) as start,
@@ -867,6 +878,9 @@ class AttestationContractTests(unittest.TestCase):
                     generate(run, attempt)
                     publish(run, attempt)
                     self.assertEqual(serve(run), 0)
+                    self.assertEqual(
+                        live.await_args.args, (read_json(run / "launch.json")["endpoint"],)
+                    )
                     args = start.call_args.args[0]
                     self.assertEqual(args[args.index("--host") + 1], "192.0.2.11")
                     self.assertEqual(args[args.index("--port") + 1], "8010")

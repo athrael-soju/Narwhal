@@ -44,16 +44,15 @@ Each run of `capture` writes its captures to a new attempt directory, `ENGINE_RU
 | `startup-connector` | vLLM | The attempt's `startup.log` names the connector class in `transfer-mode.json` |
 | `handshake-policy` | vLLM | `handshake-policy.json` |
 | `server-info` | SGLang, TensorRT-LLM | `server-info.json` |
-| `representative-layout` | vLLM, with `--representative-layout` | The layout in `cache-registration.json` matches the representative's |
 | `document` | All | `engine-attestation.json` |
 
-When every capture passes, `capture` publishes the attempt: it writes `ENGINE_RUN/published-attestation.json` with the attempt's name and the SHA-256 of its `engine-attestation.json`, and prints `Generated private engine attestation in <attempt>/engine-attestation.json`. `serve` and `verify` read the published attempt. Once an attempt is published, `capture` refuses to run again for that launch directory.
+When every capture passes, `capture` publishes the attempt: it writes `ENGINE_RUN/published-attestation.json` with the attempt's name and the SHA-256 of its `engine-attestation.json`, and prints `Generated private engine attestation in <attempt>/engine-attestation.json`. `serve` and `verify` read the published attempt. Once an attempt is published, `capture` refuses to run again for that launch directory. When two captures run at once, the first to finish publishes, and the other exits with `Attempt <name> already published ...` and records the attempt that won in its `capture-failure.json`.
 
 A failure exits with status 1 and names the capture, its output and the cause, such as `Capture transfer-mode (transfer-mode.json) failed: ...`. The attempt directory stays as evidence, with the cause in `capture-failure.json`. Fix the cause and run `capture` again: the next attempt starts from the first capture.
 
 Every capture checks that the container in `container.id` still runs the checked image and that its `State.StartedAt` matches `container-start.json`. When the container has started again since `narwhal-engine` started it, the engine's earlier evidence, such as `cache-layout.json`, describes another process, so prepare, check and start the engine in a fresh launch directory. On vLLM, `http-identity` also requires the process start in `/metrics` to be within 2 seconds of the container start, or to equal the native start record.
 
-`--representative-layout` applies only to vLLM. For an SGLang or TensorRT-LLM engine, `capture` refuses it.
+`--representative-layout` applies only to vLLM, and `capture` checks it before the first capture: the layout must match the one layout in the engine's `cache-layout.json`, which `cache-registration` then registers. For an SGLang or TensorRT-LLM engine, `capture` refuses it.
 
 ### Model dimensions
 
@@ -114,7 +113,7 @@ Run the sidecar in the engine's role shell, as the user that started the engine.
 .venv/bin/python -m narwhal.deployment.attestation_contract.cli serve --run "$ENGINE_RUN"
 ```
 
-`serve` refuses to start when the published `engine-attestation.json` differs from the launch directory's current evidence, or the container has started again, and [`narwhal-attest`](../cli/Attest.md) exits when the engine's version differs from the document's. When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
+`serve` refuses to start when the published `engine-attestation.json` differs from the launch directory's current evidence or the container has started again. On vLLM, it also reads the live `/metrics` and refuses when the process start differs from the attempt's `metrics.txt`, which means the engine process started again inside its container. [`narwhal-attest`](../cli/Attest.md) exits when the engine's version differs from the document's. When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
 
 ### Verifying the sidecar
 

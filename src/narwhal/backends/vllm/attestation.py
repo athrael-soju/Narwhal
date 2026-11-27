@@ -408,7 +408,8 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
     if handshake.get("connector_config") != plan["connector"]:
         raise ValueError("Handshake policy uses another connector configuration")
     version = read_json(attempt / "version.json").get("version")
-    require_process_start(run, plan, parse_process_start((attempt / "metrics.txt").read_text()))
+    process_start = parse_process_start((attempt / "metrics.txt").read_text())
+    require_process_start(run, plan, process_start)
     ranks = cache.get("ranks", [])
     tp = int(option(plan["args"], "--tensor-parallel-size"))
     if sorted(rank.get("rank") for rank in ranks) != list(range(tp)):
@@ -458,7 +459,7 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         "ucx_version": checked.get("ucx_version") or "",
         "peer_release": checked.get("peer_release") is True,
     }
-    return AttestationEvidence(version, contract, sources, launch)
+    return AttestationEvidence(version, contract, sources, launch, process_start)
 
 
 # Flags whose values change per launch.
