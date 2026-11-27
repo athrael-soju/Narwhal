@@ -15,7 +15,7 @@ A production deployment divides the work between Narwhal and the site's componen
 | Load balancer | Polls `/ready`, routes to the router that returns HTTP 200, and retries requests through a takeover |
 | Narwhal | Admission, queueing, prefill and decode placement on the running fleet, retry, health ejection, role control, drain, readmission |
 | Engine supervisor | Engine and attestation sidecar starts and stops, resource limits, restart policy, log retention |
-| Shared storage | One lease domain shared by both router hosts |
+| Lease store | One lease both routers reach: a file on shared storage on SSH hosts, or a Kubernetes Lease |
 | Monitoring | Metric scraping, journal retention, and paging per site policy |
 
 ## Keeping one deployment set
@@ -107,6 +107,23 @@ narwhal-serve \
 
 Configure the supervisor to restart each router with `--standby-of` set to the other router's URL.
 
+### Electing the primary on Kubernetes
+
+On Kubernetes the routers elect the primary through a `coordination.k8s.io` Lease instead of a file, so no shared volume holds the lease. Start both routers with `--kubernetes-lease` set to the same Lease name in place of `--lease-path`. The [Helm chart](../deploy/Kubernetes.md#starting-the-router-pair) uses the Lease `narwhal-router`. The router's ServiceAccount needs `get` and `update` on that Lease, and `create` on Leases so the first router can create it. RBAC cannot limit `create` to one name, since the name is in the request body.
+
+Each router fences itself on its own monotonic clock. No decision compares one router's clock with the other's or with the API server's:
+
+- The holder controls the fleet until `--lease-ttl` less `--lease-safety-margin` after it sent its last renewal that the API server accepted: 4 seconds with the defaults. When the API server does not answer, the holder keeps serving until that deadline and then fences itself.
+- A standby takes the Lease only after it has seen one version of it, by `resourceVersion`, stay unchanged on its own clock for the longer of the Lease's `leaseDurationSeconds` and its own `--lease-ttl`, and only with an update that fails if the Lease changed since. Every renewal that lands is a new version, so the holder's deadline passes at least `--lease-safety-margin` seconds before the standby can take over.
+- A standby that saw the holder release the Lease claims it at once.
+- A router that creates the Lease, or claims a free Lease it never saw released, holds it at once and serves one lease duration later, so any holder it never saw has fenced by then. This happens on a fleet's first start and after someone deletes the Lease.
+
+A standby reads the Lease after every poll that reaches the primary, and on each takeover attempt once `--standby-takeover-after` polls have failed. With the defaults it therefore takes over 5 to about 7 seconds after the primary's last renewal, inside the 10 seconds HAProxy holds a request. A conflict or a write whose reply was lost never counts as a lost or won Lease: the router reads the Lease again and checks the holder, the epoch and the renewal time it wrote.
+
+While the API server is unreachable, no router can renew or claim the Lease. An outage shorter than the holder's deadline changes nothing. A longer one fences the primary, and no router serves until the API server answers and the standby claims the Lease. The standby receives no handoff while it cannot read the Lease, so after an outage longer than `--standby-max-handoff-age` it reports `no fresh handoff`; recover as in [State handoff is stale or incompatible](../troubleshoot/02-Router-Recovery.md#state-handoff-is-stale-or-incompatible).
+
+The Lease outlives the routers. A router that stops cleanly frees it, so the next first start claims it. Delete it with `kubectl delete lease narwhal-router` only while no router runs.
+
 Admission sequence:
 
 1. Wait for the active router's `/ready` to return HTTP 200.
@@ -117,7 +134,7 @@ Admission sequence:
 
 A router that holds a valid lease and admits traffic returns HTTP 200 from `/ready`. During a network partition, the active lease holder fences itself before its local lease deadline, and the standby claims the lease at expiry. When shared storage becomes unavailable, both routers withdraw readiness.
 
-A router takes the lease's coordination lock with non-blocking attempts every 10 ms, so a standby on a network file system claims the lease at expiry rather than when the file system next retries a blocked lock. A renewal that cannot take the lock before the holder's local lease deadline fences the holder. A claim waits one lease period at most, `--lease-ttl` less `--lease-safety-margin`, and reports the held lock as `lease unavailable`.
+With `--lease-path`, a router takes the lease's coordination lock with non-blocking attempts every 10 ms, so a standby on a network file system claims the lease at expiry rather than when the file system next retries a blocked lock. A renewal that cannot take the lock before the holder's local lease deadline fences the holder. A claim waits one lease period at most, `--lease-ttl` less `--lease-safety-margin`, and reports the held lock as `lease unavailable`.
 
 At shutdown, the `/ready` and fleet-state reads of the active lease holder return HTTP 503 with reason `shutting down`. Thus its load balancer checks and the probes of the standby fail. For `--shutdown-drain` seconds, 0.5 by default, it still accepts connections and serves every request, while the load balancer takes it out of rotation. Set `--shutdown-drain` longer than the load balancer's check interval. The shipped HAProxy configuration checks every 0.2 seconds. If the router stopped listening or closed its idle connections earlier, it would reset a connection that the load balancer just opened or reused. The client would then receive HTTP 502. After the drain, the router stops accepting connections and closes its idle ones. For 0.1 seconds, it still admits the requests that it already received. Then it writes its handoff, releases the lease and finishes the requests that it dispatched to prefill. A request that still needs a prefill placement, for example one waiting for an admission or prefill seat, then gets HTTP 503 `standby`. The standby takes over during that drain and counts the drained streams as offered but not served. A standby or fenced router retains its saved primary state handoff when it shuts down.
 

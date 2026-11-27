@@ -26,7 +26,7 @@ from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
 from ..profiling.membership import engine_set_problem, generation_problems
 from ..runtime import state as handoff_state
-from ..runtime.lease import FileLease, LeaseError
+from ..runtime.lease import FileLease, LeaseError, RouterLease
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
 from ..runtime.lifecycle.readmission import validate_readmission
 from ..runtime.lifecycle.records import LifecycleError, ValidationOutcome
@@ -78,11 +78,12 @@ def create_app(
     standby_transport: httpx.AsyncBaseTransport | None = None,
     lease_path: Path | str | None = None,
     lease_witness: Path | str | None = None,
+    kubernetes_lease: str | None = None,
     router_id: str = "router",
     lease_ttl_s: float = 5.0,
     lease_renew_interval_s: float = 1.0,
     lease_safety_margin_s: float = 1.0,
-    lease: FileLease | None = None,
+    lease: RouterLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
     deployment_status: Path | str | None = None,
     claim_first: bool = False,
@@ -92,12 +93,20 @@ def create_app(
     With `standby_of`, the router shadows that peer and takes over its lease. `claim_first`
     makes it try to claim the lease at start instead: it is the primary when the claim
     succeeds, and shadows the peer as any standby does when another router claimed first.
+    The lease is a file at `lease_path` on shared storage, or the Kubernetes Lease named
+    `kubernetes_lease` in the pod's namespace.
     """
     cfg = cfg or FleetConfig.from_env()
     if claim_first and not standby_of:
         raise ValueError("claim_first needs standby_of, the peer to shadow after a lost claim")
-    if standby_of and lease is None and lease_path is None:
-        raise ValueError("automatic standby takeover requires a shared lease_path")
+    if sum(option is not None for option in (lease, lease_path, kubernetes_lease)) > 1:
+        raise ValueError("give one of lease, lease_path and kubernetes_lease")
+    if lease_witness and lease_path is None:
+        raise ValueError("lease_witness needs lease_path")
+    if standby_of and lease is None and lease_path is None and kubernetes_lease is None:
+        raise ValueError(
+            "automatic standby takeover requires a shared lease_path or a kubernetes_lease"
+        )
     for name, value in (
         ("lease_ttl_s", lease_ttl_s),
         ("lease_renew_interval_s", lease_renew_interval_s),
@@ -119,17 +128,24 @@ def create_app(
         raise ValueError("standby_probe_interval_s must be positive")
     if standby_takeover_after is not None and standby_takeover_after < 1:
         raise ValueError("standby_takeover_after must be at least 1")
-    if lease is None and lease_path is not None:
-        holder = f"{router_id}:{uuid.uuid4().hex}"
-        lease = FileLease(
+    holder = f"{router_id}:{uuid.uuid4().hex}"
+    if kubernetes_lease is not None:
+        from ..runtime.kubernetes_lease import KubernetesLease
+
+        lease = KubernetesLease.in_cluster(
+            kubernetes_lease, holder, lease_ttl_s, safety_margin_s=lease_safety_margin_s
+        )
+    elif lease is None and lease_path is not None:
+        file_lease = FileLease(
             Path(lease_path),
             holder,
             lease_ttl_s,
             safety_margin_s=lease_safety_margin_s,
             witness=Path(lease_witness) if lease_witness else None,
         )
+        lease = file_lease
         try:
-            orphans = lease.remove_orphans()
+            orphans = file_lease.remove_orphans()
         except (OSError, LeaseError) as exc:
             log.warning("could not remove orphaned lease temporary files: %s", exc)
             orphans = []
@@ -219,6 +235,14 @@ def create_app(
                             "another router claimed the lease first; shadowing %s", standby_of
                         )
             lease_watch = asyncio.create_task(lease_renew_loop(router, lease_renew_interval_s))
+            if claimed and (delay := lease.serving_delay()):
+                # The lease may have had a holder this router never saw; its renewals go on.
+                log.warning(
+                    "claimed epoch %d; waiting %.1fs for any unseen holder's lease to lapse",
+                    lease.epoch,
+                    delay,
+                )
+                await asyncio.sleep(delay)
         if standby_of and not claimed:
             # A polled handoff is fresher than the local resume file.
             if lease is None:

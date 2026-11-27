@@ -7,10 +7,13 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from narwhal.cli import serve
+from narwhal.runtime import kubernetes_api as k
+from narwhal.runtime.kubernetes_lease import KubernetesLease
 from narwhal.runtime.lease import FileLease, LeaseRecord
+from tests.deployment.kubernetes_cluster import LEASE, ApiError, ObjectStore
 
 
 class FirstStartTests(unittest.TestCase):
@@ -85,6 +88,109 @@ class FirstStartTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()) as errors, self.assertRaises(SystemExit):
             self.start("--first-start-primary")
         self.assertIn("--first-start-primary requires --standby-of", errors.getvalue())
+
+
+class KubernetesFirstStartTests(unittest.TestCase):
+    """`--first-start-primary` on a Kubernetes Lease, read through the stub API server."""
+
+    def setUp(self):
+        self.store = ObjectStore()
+        self.store.create({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "fleet"}})
+        self.built: list[tuple] = []
+
+    def lease(self, name, holder, ttl_s, *, safety_margin_s):
+        self.built.append((name, holder, ttl_s, safety_margin_s))
+        client = k.ApiClient(
+            k.Connection("https://10.96.0.1:443", "fleet"),
+            field_manager="narwhal-router",
+            transport=self.store.transport(),
+        )
+        return KubernetesLease(client, name, holder, ttl_s, safety_margin_s=safety_margin_s)
+
+    def start(self, *extra: str, unreadable: bool = False):
+        argv = ["--fleet", "unused", "--port", "0", "--kubernetes-lease", "narwhal-router"]
+        argv += ["--standby-of", "http://peer:8000", "--first-start-primary", *extra]
+        factory = Mock(side_effect=k.InClusterConfigError("no token")) if unreadable else None
+        with (
+            patch(
+                "narwhal.cli.FleetConfig.load",
+                return_value=SimpleNamespace(graceful_timeout_s=1, max_connections=8, resume=False),
+            ),
+            patch(
+                "narwhal.runtime.kubernetes_lease.KubernetesLease.in_cluster",
+                factory or self.lease,
+            ),
+            patch("narwhal.cli.create_app") as app,
+            patch("narwhal.cli.YieldingServer"),
+        ):
+            self.assertEqual(serve(argv), 0)
+        kwargs = app.call_args.kwargs
+        self.assertEqual(kwargs["kubernetes_lease"], "narwhal-router")
+        self.assertIsNone(kwargs["lease_path"])
+        return "claim" if kwargs["claim_first"] else "shadow"
+
+    def holder(self, name: str) -> KubernetesLease:
+        lease = self.lease("narwhal-router", name, 5, safety_margin_s=1.0)
+        self.assertTrue(lease.claim())
+        return lease
+
+    def test_an_absent_lease_makes_it_the_primary(self):
+        self.assertEqual(self.start(), "claim")
+        self.assertEqual(self.built, [("narwhal-router", "first-start", 5.0, 1.0)])
+
+    def test_a_held_lease_makes_it_shadow_the_peer(self):
+        self.holder("peer:token")
+        self.assertEqual(self.start(), "shadow")
+
+    def test_a_released_lease_makes_it_the_primary(self):
+        self.holder("peer:token").release()
+        self.assertEqual(self.start(), "claim")
+
+    def test_a_lease_it_cannot_read_makes_it_shadow_the_peer(self):
+        self.assertEqual(self.start(unreadable=True), "shadow")
+
+    def test_the_first_start_check_writes_nothing(self):
+        self.start()
+        with self.assertRaises(ApiError):
+            self.store.get(LEASE, "fleet", "narwhal-router")
+
+
+class KubernetesLeaseOptionTests(unittest.TestCase):
+    def refused(self, *argv: str) -> str:
+        with (
+            patch(
+                "narwhal.cli.FleetConfig.load",
+                return_value=SimpleNamespace(graceful_timeout_s=1, max_connections=8, resume=False),
+            ),
+            patch("narwhal.cli.create_app") as app,
+            redirect_stderr(io.StringIO()) as errors,
+            self.assertRaises(SystemExit),
+        ):
+            serve(["--fleet", "unused", "--port", "0", *argv])
+        app.assert_not_called()
+        return errors.getvalue()
+
+    def test_one_router_takes_one_kind_of_lease(self):
+        errors = self.refused("--lease-path", "/l", "--kubernetes-lease", "narwhal-router")
+        self.assertIn("give --lease-path or --kubernetes-lease, not both", errors)
+
+    def test_a_standby_needs_a_lease_of_either_kind(self):
+        errors = self.refused("--standby-of", "http://peer:8000")
+        self.assertIn("--standby-of requires --lease-path or --kubernetes-lease", errors)
+
+    def test_a_kubernetes_lease_needs_whole_seconds_and_a_margin(self):
+        for extra, why in (
+            (("--lease-ttl", "5.5"), "whole positive number of seconds"),
+            (("--lease-safety-margin", "0"), "safety margin must be positive"),
+            (("--kubernetes-lease", "Not_A_Name"), "DNS subdomain"),
+        ):
+            with self.subTest(extra=extra):
+                argv = ("--kubernetes-lease", "narwhal-router", *extra)
+                self.assertIn(why, self.refused(*argv))
+
+    def test_a_witness_belongs_to_a_lease_file(self):
+        errors = self.refused("--kubernetes-lease", "narwhal-router", "--lease-witness", "/w")
+        self.assertIn("--lease-witness requires --lease-path", errors)
 
 
 if __name__ == "__main__":
