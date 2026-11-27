@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ .Values.engines.stateClaim }}
+  name: {{ include "narwhal.stateClaim" . }}
   labels:
     {{- include "narwhal.labels" (dict "root" . "component" "state") | nindent 4 }}
 spec:

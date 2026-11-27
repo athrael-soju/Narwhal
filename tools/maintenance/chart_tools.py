@@ -3,6 +3,7 @@
 `python tools/maintenance/chart_tools.py <directory>` downloads each tool's release archive for
 this machine, checks it against the SHA-256 pinned here, and writes the binary into the
 directory. A binary already there is kept only while its own SHA-256 equals the pinned one.
+With `--e2e` it also installs the kind and kubectl that `make chart-e2e` runs.
 """
 
 from __future__ import annotations
@@ -49,6 +50,28 @@ TOOLS = {
         },
     },
 }
+# The tools of `make chart-e2e`, released as plain binaries: the download is the binary.
+E2E_TOOLS = {
+    "kind": {
+        "version": "v0.33.0",
+        "url": "https://github.com/kubernetes-sigs/kind/releases/download/{version}/"
+        "kind-linux-{arch}",
+        "member": None,
+        "binary_sha256": {
+            "amd64": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d",
+            "arm64": "20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2",
+        },
+    },
+    "kubectl": {
+        "version": "v1.37.0",
+        "url": "https://dl.k8s.io/release/{version}/bin/linux/{arch}/kubectl",
+        "member": None,
+        "binary_sha256": {
+            "amd64": "6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f",
+            "arm64": "922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3",
+        },
+    },
+}
 ARCHES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
 
@@ -61,7 +84,7 @@ def installed(path: Path, pinned: str) -> bool:
     return path.is_file() and not path.is_symlink() and sha256(path.read_bytes()) == pinned
 
 
-def install(directory: Path) -> None:
+def install(directory: Path, e2e: bool = False) -> None:
     if sys.platform != "linux":
         raise SystemExit(
             "chart_tools installs Linux binaries; install helm and kubeconform yourself"
@@ -70,24 +93,28 @@ def install(directory: Path) -> None:
     if arch is None:
         raise SystemExit(f"no pinned chart tools for {platform.machine()}")
     directory.mkdir(parents=True, exist_ok=True)
-    for name, tool in TOOLS.items():
+    tools: dict[str, dict] = {**TOOLS, **(E2E_TOOLS if e2e else {})}
+    for name, tool in tools.items():
         target = directory / name
         if installed(target, tool["binary_sha256"][arch]):
             continue
         url = tool["url"].format(version=tool["version"], arch=arch)
         with urllib.request.urlopen(url, timeout=120) as response:
             data = response.read()
-        observed = sha256(data)
-        if observed != tool["sha256"][arch]:
-            raise SystemExit(f"{url} has SHA-256 {observed}, not the pinned one")
-        member = tool["member"].format(arch=arch)
-        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-            stream = archive.extractfile(member)
-            if stream is None:
-                raise SystemExit(f"{url} holds no {member}")
-            binary = stream.read()
+        if tool["member"] is None:
+            binary = data
+        else:
+            observed = sha256(data)
+            if observed != tool["sha256"][arch]:
+                raise SystemExit(f"{url} has SHA-256 {observed}, not the pinned one")
+            member = tool["member"].format(arch=arch)
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise SystemExit(f"{url} holds no {member}")
+                binary = stream.read()
         if sha256(binary) != tool["binary_sha256"][arch]:
-            raise SystemExit(f"{member} in {url} differs from the pinned binary")
+            raise SystemExit(f"{url} differs from the pinned binary")
         with tempfile.NamedTemporaryFile(dir=directory, delete=False) as pending:
             pending.write(binary)
         os.chmod(pending.name, 0o755)
@@ -100,7 +127,11 @@ def main() -> None:
     parser.add_argument(
         "directory", type=Path, help="directory for the helm and kubeconform binaries"
     )
-    install(parser.parse_args().directory)
+    parser.add_argument(
+        "--e2e", action="store_true", help="also install the kind and kubectl of make chart-e2e"
+    )
+    args = parser.parse_args()
+    install(args.directory, args.e2e)
 
 
 if __name__ == "__main__":

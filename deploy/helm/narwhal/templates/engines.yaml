@@ -1,4 +1,5 @@
 {{- include "narwhal.checks" . -}}
+{{- if .Values.engines }}
 {{- $e := .Values.engines }}
 {{- range $e.configMaps }}
 ---
@@ -49,3 +50,4 @@ spec:
         {{- include "narwhal.selector" (dict "root" . "component" "engine") | nindent 8 }}
     spec:
       {{- include "narwhal.enginePod" . | nindent 6 }}
+{{- end }}

@@ -13,6 +13,9 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 
 {{/* Refuse values that cannot make one fleet; the schema checks each value's form. */}}
 {{- define "narwhal.checks" -}}
+{{- if .Values.directEngines -}}
+{{- include "narwhal.directChecks" . -}}
+{{- else -}}
 {{- $e := .Values.engines -}}
 {{- if ne $e.namespace .Release.Namespace -}}
 {{- fail (printf "the engine URLs name namespace %s; install the release there, not in %s" $e.namespace .Release.Namespace) -}}
@@ -37,6 +40,30 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 {{- if and (hasPrefix "fabric-" .kind) (not $.Values.images.fabric) -}}
 {{- fail (printf "gate %s needs images.fabric, the image with ib_write_bw" .name) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Refuse direct engines that cannot make one fleet. */}}
+{{- define "narwhal.directChecks" -}}
+{{- $e := .Values.directEngines -}}
+{{- if ne $e.namespace .Release.Namespace -}}
+{{- fail (printf "the engine URLs name namespace %s; install the release there, not in %s" $e.namespace .Release.Namespace) -}}
+{{- end -}}
+{{- if eq $e.serviceName "routers" -}}
+{{- fail "the engines' headless Service may not be named routers, the router pair's Service" -}}
+{{- end -}}
+{{- if eq $e.sharedMount $e.modelMount -}}
+{{- fail "directEngines mounts the model and the shared directory at one path; give each its own" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The state volume's claim, which the engines' values name. */}}
+{{- define "narwhal.stateClaim" -}}
+{{- if .Values.directEngines -}}
+{{ .Values.directEngines.stateClaim }}
+{{- else -}}
+{{ .Values.engines.stateClaim }}
 {{- end -}}
 {{- end -}}
 

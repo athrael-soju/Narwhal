@@ -20,6 +20,9 @@ from unittest.mock import patch
 
 import yaml
 
+from narwhal.backends import load as load_backend
+from narwhal.deployment import direct_engine_set
+from narwhal.deployment.direct_start import DirectEngine
 from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.kubernetes import MANIFESTS
 from tests.deployment import chart_fixtures
@@ -261,18 +264,11 @@ class EngineSetTests(unittest.TestCase):
         self.assertEqual(chart["appVersion"], project["version"])
 
 
-@unittest.skipUnless(HELM, "helm is not installed")
-class ChartTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.folder = tempfile.TemporaryDirectory()
-        cls.root = Path(cls.folder.name)
-        cls.runs, cls.values = chart_fixtures.example(cls.root / "fleet")
-        cls.documents = cls.render(cls.values)
+class Rendering:
+    """Render the chart with helm, from values written to the class's scratch directory."""
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.folder.cleanup()
+    root: Path
+    documents: list[dict]
 
     @classmethod
     def helm(cls, values: dict, *, namespace: str = chart_fixtures.NAMESPACE):
@@ -298,6 +294,20 @@ class ChartTests(unittest.TestCase):
             d for d in self.documents if d["kind"] == kind and d["metadata"]["name"] == name
         ]
         return document
+
+
+@unittest.skipUnless(HELM, "helm is not installed")
+class ChartTests(Rendering, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.folder.name)
+        cls.runs, cls.values = chart_fixtures.example(cls.root / "fleet")
+        cls.documents = cls.render(cls.values)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.folder.cleanup()
 
     def pods(self) -> list[tuple[str, dict]]:
         return [
@@ -605,6 +615,160 @@ class ChartTests(unittest.TestCase):
                 values = copy.deepcopy(self.values)
                 values["routers"]["fleet"] = fleet
                 self.assertNotEqual(self.helm(values).returncode, 0)
+
+
+class DirectEngineSetTests(unittest.TestCase):
+    def test_the_command_is_the_backends_direct_start_in_the_pod(self):
+        engines = chart_fixtures.direct_engines(
+            resources={
+                "requests": {"cpu": "3", "memory": "1Gi"},
+                "limits": {"cpu": "3", "memory": "1Gi"},
+            }
+        )
+        expected = (
+            load_backend("llamacpp")
+            .direct_start()
+            .command(
+                Path("/app/llama-server"),
+                DirectEngine(
+                    model=Path(direct_engine_set.MODEL_MOUNT) / "model.gguf",
+                    served_name="example-model",
+                    host="$(NARWHAL_POD_IP)",
+                    port=direct_engine_set.PORT,
+                    runtime=chart_fixtures.LLAMACPP_RUNTIME,
+                    shared_dir=Path(direct_engine_set.SHARED_MOUNT),
+                    accelerated=False,
+                    threads=3,
+                ),
+            )
+        )
+        self.assertEqual(engines["command"], expected)
+        # The library path is the image's own, never the caller's.
+        with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/workstation/lib"}):
+            again = chart_fixtures.direct_engines()
+        self.assertEqual(again["env"], [{"name": "LD_LIBRARY_PATH", "value": "/app"}])
+
+    def test_values_the_kubelet_would_expand_are_escaped(self):
+        engines = chart_fixtures.direct_engines(served_name="price-$(HOME)")
+        self.assertIn("price-$$(HOME)", engines["command"])
+        self.assertIn("$(NARWHAL_POD_IP)", engines["command"])
+
+    def test_direct_values_refuse_what_cannot_serve(self):
+        for overrides, message in (
+            ({"count": 1}, "at least two engines"),
+            ({"backend": "vllm"}, "no direct engine start"),
+            (
+                {"resources": {"requests": {"cpu": "500m"}, "limits": {"cpu": "500m"}}},
+                "whole CPUs",
+            ),
+        ):
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                chart_fixtures.direct_engines(**overrides)
+
+    def test_the_fleet_names_each_pod_by_its_service(self):
+        engines = chart_fixtures.direct_engines(count=4)
+        fleet = direct_engine_set.fleet_engines(engines)
+        domain = f"engines.{chart_fixtures.NAMESPACE}.svc.cluster.local"
+        self.assertEqual(
+            [engine["url"] for engine in fleet],
+            [f"http://engine-{n}.{domain}:{direct_engine_set.PORT}" for n in range(1, 5)],
+        )
+        self.assertEqual([e["role"] for e in fleet], ["prefill", "prefill", "decode", "decode"])
+
+
+@unittest.skipUnless(HELM, "helm is not installed")
+class DirectChartTests(Rendering, unittest.TestCase):
+    """The chart with engines that start directly from their image."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.folder.name)
+        cls.values = chart_fixtures.direct_example()
+        cls.documents = cls.render(cls.values)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.folder.cleanup()
+
+    def test_each_engine_pod_runs_the_rendered_command_on_its_own_ip(self):
+        engines = self.find("StatefulSet", "engine")
+        self.assertEqual(engines["spec"]["replicas"], 2)
+        self.assertEqual(engines["spec"]["ordinals"], {"start": 1})
+        self.assertEqual(engines["spec"]["updateStrategy"], {"type": "OnDelete"})
+        spec = engines["spec"]["template"]["spec"]
+        [container] = spec["containers"]
+        direct = self.values["directEngines"]
+        self.assertEqual(container["command"], direct["command"])
+        self.assertEqual(container["image"], direct["image"])
+        self.assertEqual(container["resources"], direct["resources"])
+        self.assertEqual(
+            container["env"][0],
+            {"name": "NARWHAL_POD_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
+        )
+        self.assertNotIn("hostNetwork", spec)
+        self.assertNotIn("shareProcessNamespace", spec)
+        mounts = {m["name"]: m for m in container["volumeMounts"]}
+        self.assertEqual(mounts["model"]["mountPath"], direct["modelMount"])
+        self.assertTrue(mounts["model"]["readOnly"])
+        self.assertEqual(mounts["shared"]["mountPath"], direct["sharedMount"])
+        volumes = {v["name"]: v for v in spec["volumes"]}
+        self.assertEqual(
+            volumes["shared"]["persistentVolumeClaim"]["claimName"], "narwhal-engine-shared"
+        )
+        claim = self.find("PersistentVolumeClaim", "narwhal-engine-shared")
+        self.assertEqual(claim["spec"]["accessModes"], ["ReadWriteMany"])
+        service = self.find("Service", "engines")
+        self.assertEqual(service["spec"]["ports"][0]["port"], direct["port"])
+        self.assertEqual(
+            service["spec"]["selector"], engines["spec"]["template"]["metadata"]["labels"]
+        )
+
+    def test_nothing_writes_the_state_volume_and_no_engine_attests(self):
+        kinds = {d["kind"] for d in self.documents}
+        self.assertNotIn("Job", kinds)
+        self.assertNotIn("ServiceAccount", kinds)
+        for document in self.documents:
+            if document["kind"] not in ("StatefulSet", "Deployment"):
+                continue
+            spec = document["spec"]["template"]["spec"]
+            for volume in spec.get("volumes", []):
+                source = volume.get("persistentVolumeClaim", {})
+                if source.get("claimName") == self.values["directEngines"]["stateClaim"]:
+                    self.assertTrue(source.get("readOnly"), document["metadata"]["name"])
+        engine = self.find("StatefulSet", "engine")["spec"]["template"]["spec"]
+        claims = {v.get("persistentVolumeClaim", {}).get("claimName") for v in engine["volumes"]}
+        self.assertNotIn(self.values["directEngines"]["stateClaim"], claims)
+
+    def test_direct_values_are_refused_where_they_cannot_make_one_fleet(self):
+        attested = chart_fixtures.values({})
+        both = copy.deepcopy(self.values)
+        both["engines"] = {"count": 2}
+        gates = copy.deepcopy(self.values)
+        gates["gates"] = attested["gates"]
+        incomplete = copy.deepcopy(self.values)
+        del incomplete["directEngines"]["command"]
+        tagged = copy.deepcopy(self.values)
+        tagged["directEngines"]["image"] = "llama.cpp:server"
+        single = copy.deepcopy(self.values)
+        single["directEngines"]["count"] = 1
+        crossed = copy.deepcopy(self.values)
+        crossed["directEngines"]["sharedMount"] = crossed["directEngines"]["modelMount"]
+        cases = {
+            "at '/engines': maxProperties": both,
+            "at '/gates': maxItems": gates,
+            "missing property 'command'": incomplete,
+            "/directEngines/image": tagged,
+            "/directEngines/count": single,
+            "give each its own": crossed,
+        }
+        for message, values in cases.items():
+            with self.subTest(message):
+                result = self.helm(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        result = self.helm(self.values, namespace="other")
+        self.assertIn("install the release there", result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 """Synthetic Kubernetes engine launches and the chart values a fleet of them takes.
 
-`python -m tests.deployment.chart_fixtures <values.json>` writes the values `make chart-check`
-renders the chart with.
+`python -m tests.deployment.chart_fixtures <values.json> <direct-values.json>` writes the
+values `make chart-check` renders the chart with: a fleet of attested engines, and a fleet of
+engines that start directly.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 from narwhal.backends import load as load_backend
+from narwhal.deployment import direct_engine_set
 from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.backend import cache_capture
 from narwhal.deployment.launch_engine.plan import prepare
@@ -30,6 +32,9 @@ HAPROXY_IMAGE = "registry.example/haproxy@sha256:" + "b" * 64
 FABRIC_IMAGE = "registry.example/perftest@sha256:" + "c" * 64
 PROMETHEUS_IMAGE = "registry.example/prometheus@sha256:" + "e" * 64
 GRAFANA_IMAGE = "registry.example/grafana@sha256:" + "f" * 64
+LLAMACPP_IMAGE = "registry.example/llama.cpp@sha256:" + "d" * 64
+# The runtime section of a llama.cpp template, as `narwhal dev` reads it.
+LLAMACPP_RUNTIME = {"backend": "llamacpp", "context_tokens": 2048, "slots": 2, "extra_args": []}
 # Each engine role after the first listens 100 ports higher, as engines on one node must.
 PORT_STEP = 100
 
@@ -132,7 +137,35 @@ def example(root: Path, count: int = 2, backend: str = "vllm") -> tuple[list[Pat
     return runs, values(engine_set.chart_values(runs))
 
 
+def direct_engines(count: int = 2, **overrides: object) -> dict:
+    """The `directEngines` values of a llama.cpp fleet."""
+    arguments: dict = {
+        "backend": "llamacpp",
+        "runtime": LLAMACPP_RUNTIME,
+        "binary": "/app/llama-server",
+        "model_file": "model.gguf",
+        "served_name": "example-model",
+        "count": count,
+        "image": LLAMACPP_IMAGE,
+        "resources": {
+            "requests": {"cpu": "2", "memory": "2Gi"},
+            "limits": {"cpu": "2", "memory": "2Gi"},
+        },
+        "model_volume": {"persistentVolumeClaim": {"claimName": "models", "readOnly": True}},
+        "shared": {"storageClassName": "shared", "size": "1Gi"},
+        "namespace": NAMESPACE,
+    }
+    arguments.update(overrides)
+    return direct_engine_set.direct_values(**arguments)
+
+
+def direct_example(count: int = 2) -> dict:
+    """Complete chart values of a fleet of direct engines, which take no gate Jobs."""
+    return values({}, directEngines=direct_engines(count), gates=[], credentials={})
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as folder:
         _, document = example(Path(folder))
     Path(sys.argv[1]).write_text(json.dumps(document, indent=2) + "\n")
+    Path(sys.argv[2]).write_text(json.dumps(direct_example(), indent=2) + "\n")
