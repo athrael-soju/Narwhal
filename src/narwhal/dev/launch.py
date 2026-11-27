@@ -350,9 +350,7 @@ class _Launch:
         _free(url)
         lifecycle.write(context.directory / f"{name}.command.json", {"argv": argv})
         group = SUPERVISOR.start(
-            ProcessSpec(
-                name, tuple(argv), self.run, context.directory / f"{name}.log", dict(environment)
-            )
+            ProcessSpec(name, tuple(argv), self.run, self._log(context, name), dict(environment))
         )
         try:
             self._record(name, group)
@@ -382,7 +380,14 @@ class _Launch:
         except BaseException as error:
             self._abandon([name], error)
             raise
-        return Outcome(processes=({"name": name, **group.record()},))
+        return Outcome(
+            processes=({"name": name, **group.record()},), live=(self._log(context, name),)
+        )
+
+    @staticmethod
+    def _log(context: StageContext, name: str) -> Path:
+        """The log that the process `name` writes for as long as it runs."""
+        return context.directory / f"{name}.log"
 
     # Stages shared by both graphs.
 
@@ -433,7 +438,9 @@ class _Launch:
             url,
             checks,
         )
-        return Outcome({"router_identity": dict(outcome.processes[0])}, outcome.processes)
+        return Outcome(
+            {"router_identity": dict(outcome.processes[0])}, outcome.processes, outcome.live
+        )
 
     # Stages of launched engines.
 
@@ -586,7 +593,9 @@ class _Launch:
             url,
             [(url, HEALTH_SECONDS)],
         )
-        return Outcome({"sidecar_identity": dict(outcome.processes[0])}, outcome.processes)
+        return Outcome(
+            {"sidecar_identity": dict(outcome.processes[0])}, outcome.processes, outcome.live
+        )
 
     def finalize(self, context: StageContext) -> None:
         path = context.directory / "fleet.json"
@@ -637,6 +646,8 @@ class _Launch:
         return Outcome(
             {"engine_identity": {name: group.leader() for name, group in groups.items()}},
             tuple({"name": name, **group.record()} for name, group in groups.items()),
+            # The engines write their logs and the handed-over KV slots while they serve.
+            (*(self._log(context, name) for name in groups), shared),
         )
 
     def profile_direct(self, context: StageContext) -> None:

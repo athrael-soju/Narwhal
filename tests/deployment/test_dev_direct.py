@@ -359,6 +359,12 @@ class DirectLifecycleTests(DirectInstance):
         self.assertEqual(lifecycle.status(self.root)["status"], "degraded")
         with self.assertRaisesRegex(ValueError, "requires a launched instance"):
             lifecycle.verify(self.root)
+        # The engines keep logging and saving KV slots while the run waits; neither restarts them.
+        attempt = Path(state["run"]) / "launch/stages/engine-start/attempt-1"
+        for name in engines:
+            with (attempt / f"{name}.log").open("a") as log:
+                log.write("served a request\n")
+        (attempt / "slot-files" / "slot-0.bin").write_bytes(b"kv")
         with contextlib.redirect_stderr(io.StringIO()) as progress:
             launched = lifecycle.up(self.root)
         self.assertEqual(Path(launched["run"]), Path(state["run"]))

@@ -57,6 +57,7 @@ Each stage record:
 | `definition` | Digest of the stage's place in the graph and the rules that rerun it. A changed definition reruns the stage |
 | `input_digests` | Digest of each fact whose change reruns this stage, as the passed attempt saw it, keyed like `slo` or `engine_identity[engine-2]` |
 | `outputs` | Each regular file a passed attempt wrote: `path` relative to the run directory, `sha256`, `size` and `mode` |
+| `live_outputs` | Paths, relative to the run directory, of the files and directories in the attempt directory that the stage's processes keep writing, such as their logs. They have no digest, and their changes never rerun the stage |
 | `products` | Each value the stage produces for later stages, such as an engine's binding digest or a process identity. A running or failed attempt keeps the values of the last passed one |
 | `processes` | Identities of the long-lived processes the stage started. A running attempt keeps those of the attempt before it until it returns its own |
 | `command` | `null` for a stage that runs in the runner. For a command stage, `argv`, `cwd`, `exit_code` and `log`, with paths relative to the run directory |
