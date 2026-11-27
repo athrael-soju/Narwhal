@@ -17,7 +17,7 @@ class MonitoringArtifactTests(unittest.TestCase):
     def test_private_checkout_produces_readable_mounts_without_exposing_role_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = Path(temporary)
-            source = checkout / "tools" / "observability"
+            source = checkout / "stack"
             root = checkout / "runs" / "observability" / "mounts"
             contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
             previous_umask = os.umask(0o077)

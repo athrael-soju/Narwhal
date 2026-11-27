@@ -121,3 +121,10 @@ model volume the values name. */}}
       key: {{ .key }}
 {{- end }}
 {{- end -}}
+
+{{- /* A list of strings as indented JSON array items, as json.dump(indent=2) writes them. */}}
+{{- define "narwhal.jsonLines" -}}
+{{- $lines := list -}}
+{{- range . }}{{ $lines = append $lines (printf "      %s" (quote .)) }}{{ end -}}
+{{- join ",\n" $lines -}}
+{{- end }}

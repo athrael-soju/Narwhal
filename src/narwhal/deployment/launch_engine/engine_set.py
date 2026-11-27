@@ -29,6 +29,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .checkpoint import json_digest
 from .kubernetes import MANIFESTS, SIDECAR
@@ -209,8 +210,11 @@ def chart_values(runs: Sequence[Path]) -> dict:
     sources: dict[str, list[tuple[str, str, list[str]]]] = {name: [] for name in ROLE_VOLUMES}
     spec_sources: list[tuple[str, str, list[str]]] = []
     pins: dict[str, dict[str, str]] = {}
+    sidecars = []
     for role, plan, manifests in loaded:
         services.add(_service(role, plan))
+        # Prometheus scrapes each sidecar at its pod's name, for its restart counts.
+        sidecars.append(urlsplit(plan["attestation_url"]).netloc)
         maps = {item["metadata"]["name"]: item for item in manifests["configMaps"]}
         configs: dict[str, dict] = {}
         neutral, files, extracted = _neutral(role, manifests["podSpec"], configs)
@@ -293,6 +297,7 @@ def chart_values(runs: Sequence[Path]) -> dict:
         "serviceName": service,
         "namespace": namespace,
         "sidecarImage": plan["kubernetes"]["sidecar_image"],
+        "sidecars": sidecars,
         "configMaps": [config_maps[name] for name in sorted(config_maps)],
         "access": access,
         "podTemplate": template,

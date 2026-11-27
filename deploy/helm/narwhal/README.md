@@ -90,7 +90,7 @@ A fabric Job runs on the host network with one HCA from the RDMA device plugin a
 
 With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the files `make observe` stages: [`prometheus.yml`](../../../src/narwhal/observability/stack/prometheus.yml), [`prometheus-alerts.yml`](../../../src/narwhal/observability/stack/prometheus-alerts.yml) and the Grafana provisioning under [`src/narwhal/observability/stack/grafana`](../../../src/narwhal/observability/stack/grafana). The chart links them from `files/observability/`, so there is one copy, and a chart test fails when the mounted files differ from what `make observe` stages for the same routers.
 
-Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana lets anonymous users view dashboards, as under `make observe`, and runs without the image renderer.
+Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. Prometheus also scrapes each engine pod's attestation sidecar at the address `engines.sidecars` lists, for the kubelet restart counts of the pod's containers and the `NarwhalHostDown` alert, and gives every series the `fleet` label. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana lets anonymous users view dashboards, as under `make observe`, and runs without the image renderer.
 
 The dashboard needs rendering first, because its queries come from the installed engine backends:
 
@@ -105,6 +105,8 @@ helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
 | Value | Meaning |
 | --- | --- |
 | `monitoring.enabled` | Run Prometheus and Grafana, default `false` |
+| `monitoring.fleet` | The `fleet` label of every series, so one Prometheus and one dashboard can hold several fleets. Default: the release name |
+| `monitoring.alertmanagerUrl` | The Alertmanager that Prometheus sends alerts to, `http(s)://HOST:PORT` with an optional path. Without one, alerts show only on the Prometheus alerts page |
 | `monitoring.prometheus.image`, `monitoring.grafana.image` | The images by registry digest. Required with monitoring |
 | `monitoring.grafana.dashboard` | The rendered dashboard. Required with monitoring |
 | `monitoring.grafana.admin` | `{"secretName", "userKey", "passwordKey"}`: the Secret that holds the Grafana admin login. Required with monitoring |

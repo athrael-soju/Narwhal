@@ -43,7 +43,7 @@ HELM = (
 # What the engine image's own environment holds before the pod's variables.
 IMAGE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/root"}
 STEPS = ("checkpoint", "runtime-check", "engine")
-OBSERVABILITY = ROOT / "tools" / "observability"
+OBSERVABILITY = ROOT / "src" / "narwhal" / "observability" / "stack"
 SERVICES = f"{chart_fixtures.NAMESPACE}.svc.cluster.local"
 ROUTERS = [f"router-{n}.routers.{SERVICES}:8000" for n in (0, 1)]
 LOAD_BALANCER = f"haproxy.{SERVICES}:8000"
@@ -646,9 +646,14 @@ class ChartTests(Rendering, unittest.TestCase):
         return {item["path"]: data[item["key"]] for item in items}
 
     def test_monitoring_reads_the_files_make_observe_stages(self):
+        self.maxDiff = None
         staged = self.root / "observe"
         contract = load_contract(
-            [f"http://{router}" for router in ROUTERS], f"http://{LOAD_BALANCER}"
+            [f"http://{router}" for router in ROUTERS],
+            f"http://{LOAD_BALANCER}",
+            sidecars=[f"http://{sidecar}" for sidecar in self.values["engines"]["sidecars"]],
+            # The chart labels the series with the release name unless monitoring.fleet is set.
+            fleet="fleet",
         )
         stage_artifacts(contract, DEFAULT_CONSOLE_URL, root=staged)
         prometheus = staged / "prometheus"
@@ -688,6 +693,41 @@ class ChartTests(Rendering, unittest.TestCase):
         [rules] = config["rule_files"]
         alerts = (OBSERVABILITY / "prometheus-alerts.yml").read_text()
         self.assertEqual(files[rules.removeprefix("/etc/prometheus/")], alerts)
+
+    def test_prometheus_labels_the_fleet_scrapes_each_sidecar_and_sends_alerts(self):
+        files = self.mounted("prometheus", "config")
+        config = yaml.safe_load(files["prometheus.yml"])
+        for job in config["scrape_configs"]:
+            self.assertEqual(
+                job["relabel_configs"], [{"target_label": "fleet", "replacement": "fleet"}]
+            )
+        jobs = {job["job_name"]: job for job in config["scrape_configs"]}
+        [sidecars] = jobs["sidecars"]["file_sd_configs"]
+        [path] = sidecars["files"]
+        self.assertEqual(
+            json.loads(files[path.removeprefix("/etc/prometheus/")]),
+            [{"targets": self.values["engines"]["sidecars"]}],
+        )
+        # No Alertmanager by default: alerts show on the Prometheus alerts page only.
+        [manager] = config["alerting"]["alertmanagers"]
+        self.assertEqual(manager["static_configs"], [{"targets": []}])
+        values = copy.deepcopy(self.values)
+        values["monitoring"]["fleet"] = "fleet-b"
+        values["monitoring"]["alertmanagerUrl"] = "https://alertmanager.monitoring:9093/am"
+        [configs] = [
+            d
+            for d in self.render(values)
+            if d["kind"] == "ConfigMap" and "prometheus.yml" in d.get("data", {})
+        ]
+        config = yaml.safe_load(configs["data"]["prometheus.yml"])
+        [manager] = config["alerting"]["alertmanagers"]
+        self.assertEqual(
+            (manager["scheme"], manager["path_prefix"], manager["static_configs"]),
+            ("https", "/am", [{"targets": ["alertmanager.monitoring:9093"]}]),
+        )
+        self.assertEqual(
+            config["scrape_configs"][0]["relabel_configs"][0]["replacement"], "fleet-b"
+        )
 
     def test_monitoring_runs_as_make_observe_configures_it(self):
         compose = yaml.safe_load((OBSERVABILITY / "compose.yml").read_text())["services"]
