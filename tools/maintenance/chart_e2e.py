@@ -426,6 +426,16 @@ def narwhal_image() -> Iterator[str]:
         run(["docker", "image", "rm", "-f", tag], capture=True, check=False)
 
 
+def client_status(cluster: Cluster) -> str | None:
+    """`succeeded` or `failed` once the client Job ends, otherwise None."""
+    status = json.loads(cluster.kubectl("get", "job", "client", "-o", "json"))["status"]
+    if status.get("succeeded"):
+        return "succeeded"
+    if status.get("failed"):
+        return "failed"
+    return None
+
+
 def failover(cluster: Cluster, model: dict) -> dict:
     """Stream completions through HAProxy, delete the lease holder's pod, and judge the stream."""
     url = f"http://haproxy.{NAMESPACE}.svc.cluster.local:8000/v1/completions"
@@ -464,7 +474,18 @@ def failover(cluster: Cluster, model: dict) -> dict:
         ).strip(),
         120,
     )
+    wait_for(
+        "the client pod to run",
+        lambda: (
+            cluster.kubectl(
+                "get", "pod", pod, "-o", "jsonpath={.status.phase}", check=False
+            ).strip()
+            in ("Running", "Succeeded", "Failed")
+        ),
+        300,
+    )
     lines: list[dict] = []
+    # Followed only once the container runs; kubectl gives up on a container still waiting.
     log = subprocess.Popen(
         [
             str(cluster.tools / "kubectl"),
@@ -479,18 +500,11 @@ def failover(cluster: Cluster, model: dict) -> dict:
         stdout=subprocess.PIPE,
         text=True,
     )
-    wait_for(
-        "the client pod to run",
-        lambda: (
-            cluster.kubectl(
-                "get", "pod", pod, "-o", "jsonpath={.status.phase}", check=False
-            ).strip()
-            in ("Running", "Succeeded", "Failed")
-        ),
-        300,
-    )
     assert log.stdout is not None
-    first = json.loads(log.stdout.readline())
+    opening = log.stdout.readline()
+    if not opening:
+        raise Failure(f"the client log ended before its first line; kubectl exited {log.wait()}")
+    first = json.loads(opening)
     if not first.get("ready"):
         raise Failure(f"no completion through HAProxy: {first}")
     print(f"routed completion through HAProxy in {first['end'] - first['start']:.2f} s")
@@ -502,12 +516,25 @@ def failover(cluster: Cluster, model: dict) -> dict:
     deleted_at = time.time()
     cluster.kubectl("delete", "pod", holder, "--wait=false")
     print(f"deleted {holder}, the lease holder")
+    done = False
     for line in log.stdout:
         record = json.loads(line)
         if record.get("done"):
+            done = True
             break
         lines.append(record)
-    log.wait(timeout=60)
+    following = log.wait(timeout=60)
+    # A stream cut off early would be judged on part of its requests.
+    status = wait_for(
+        "the client Job to finish",
+        lambda: client_status(cluster),
+        120,
+    )
+    if not done or following != 0 or status != "succeeded":
+        raise Failure(
+            f"the client stream is incomplete: done line {'seen' if done else 'missing'}, "
+            f"kubectl logs exited {following}, client Job {status}"
+        )
     new_holder = wait_for("the standby to hold the lease", lambda: active_router(cluster), 60)
     if new_holder != standby:
         raise Failure(f"{new_holder} holds the lease after deleting {holder}, not {standby}")
