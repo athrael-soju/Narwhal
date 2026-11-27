@@ -18,16 +18,20 @@ from narwhal.observability.stack.artifacts import (
     console_url,
     narwhal_dashboard,
     render_dashboard,
+    scope_to_fleet,
 )
 
 SOURCE = BASE / "grafana-narwhal.json"
 
 
 def chart_dashboard(console: str | None = None, source: Path = SOURCE) -> str:
-    """The rendered dashboard, with the fleet control link and markers when `console` is set."""
+    """The rendered dashboard scoped to a fleet, with the fleet control link and markers when
+    `console` is set."""
     shipped = json.loads(source.read_text(encoding="utf-8"))
     dashboard = (
-        render_dashboard(shipped) if console is None else narwhal_dashboard(shipped, console)
+        scope_to_fleet(render_dashboard(shipped))
+        if console is None
+        else narwhal_dashboard(shipped, console)
     )
     return json.dumps(dashboard, indent=2) + "\n"
 

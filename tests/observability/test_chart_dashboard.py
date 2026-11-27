@@ -10,7 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.observability.stack import chart_dashboard
-from narwhal.observability.stack.artifacts import BASE, narwhal_dashboard, render_dashboard
+from narwhal.observability.stack.artifacts import (
+    BASE,
+    narwhal_dashboard,
+    render_dashboard,
+    scope_to_fleet,
+)
 
 
 class ChartDashboardTests(unittest.TestCase):
@@ -19,7 +24,8 @@ class ChartDashboardTests(unittest.TestCase):
 
     def test_the_dashboard_is_rendered_from_the_shipped_source(self):
         self.assertEqual(
-            json.loads(chart_dashboard.chart_dashboard()), render_dashboard(self.source)
+            json.loads(chart_dashboard.chart_dashboard()),
+            scope_to_fleet(render_dashboard(self.source)),
         )
         console = "https://console.example/console"
         self.assertEqual(
