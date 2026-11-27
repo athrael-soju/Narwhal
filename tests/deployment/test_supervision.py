@@ -221,20 +221,34 @@ class SystemdUnitTests(unittest.TestCase):
             any("secret" in argument for call in self.manager.calls for argument in call)
         )
 
-    def test_start_refuses_an_existing_environment_file_or_link(self):
+    def test_start_refuses_an_existing_environment_path(self):
         target = self.directory / "elsewhere"
-        for prepare in (
-            lambda: self.environment_file.write_text("KEEP=1\n"),
-            lambda: self.environment_file.symlink_to(target),
-        ):
-            with self.subTest(prepare=prepare):
+        folder = self.directory / "folder"
+        folder.mkdir()
+        cases = {
+            "file": (lambda: self.environment_file.write_text("KEEP=1\n"), Path.unlink),
+            "link to a missing file": (
+                lambda: self.environment_file.symlink_to(target),
+                Path.unlink,
+            ),
+            "link to a directory": (
+                lambda: self.environment_file.symlink_to(folder, target_is_directory=True),
+                Path.unlink,
+            ),
+            "directory": (lambda: self.environment_file.mkdir(), Path.rmdir),
+        }
+        for case, (prepare, remove) in cases.items():
+            with self.subTest(case=case):
                 prepare()
                 with self.assertRaisesRegex(SupervisionError, "could not create"):
                     self.supervisor.start(self.spec())
                 self.assertEqual(self.manager.commands(["systemd-run"]), [])
                 self.assertFalse(target.exists())
-                self.environment_file.unlink()
-        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), [])
+                self.assertEqual(list(folder.iterdir()), [])
+                if self.environment_file.is_dir() and not self.environment_file.is_symlink():
+                    self.assertEqual(list(self.environment_file.iterdir()), [])
+                remove(self.environment_file)
+                self.assertEqual([p.name for p in self.directory.iterdir()], ["folder"])
 
     def test_arguments_keep_a_literal_dollar_sign(self):
         self.supervisor.start(self.spec(argv=("/bin/a$b", "--name", "$HOME")))

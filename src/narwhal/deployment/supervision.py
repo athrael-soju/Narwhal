@@ -47,11 +47,13 @@ _UNIT_PROPERTIES = (
     "NRestarts",
 )
 # Writes standard input to a new file at $1, private to the user, refusing any existing
-# path, symbolic links included: mktemp creates the draft exclusively at mode 0600, and
-# ln fails when $1 exists.
+# path, symbolic links and directories included: mktemp creates the draft exclusively at
+# mode 0600, and `ln -T` fails when $1 exists instead of linking inside a directory. The
+# draft is removed on every exit, signals included.
 _CREATE_PRIVATE = (
     'draft=$(mktemp "$1.XXXXXXXX") || exit 1; '
-    'cat > "$draft" && ln "$draft" "$1"; status=$?; rm -f "$draft"; exit $status'
+    "trap 'rm -f \"$draft\"' EXIT; trap 'exit 1' HUP INT TERM; "
+    'cat > "$draft" && ln -T "$draft" "$1"'
 )
 
 State = Literal["running", "restarted", "pending", "stopped", "mismatch"]
@@ -531,6 +533,10 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         )
 
     def _terminate(self, recorded: SystemdUnit) -> None:
+        # `systemctl stop` takes a unit name, and systemd offers no stop conditional on an
+        # invocation or description. A unit that someone replaces under this name between
+        # `check` and this stop is stopped too. The name carries the run ID, so only a unit
+        # replaced by hand, or by a second runner on the same run, can land in that window.
         self._stop_unit(recorded.unit)
 
     def _release(self, recorded: SystemdUnit) -> None:
