@@ -17,7 +17,9 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
 from ..config import FleetConfig
+from ..observability import restarts
 from ..observability.journal import RunJournal
+from ..observability.metrics.deployment import read_status, render_deployment
 from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
@@ -81,6 +83,7 @@ def create_app(
     lease_safety_margin_s: float = 1.0,
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
+    deployment_status: Path | str | None = None,
 ) -> FastAPI:
     cfg = cfg or FleetConfig.from_env()
     if standby_of and lease is None and lease_path is None:
@@ -355,8 +358,14 @@ def create_app(
     async def handoff() -> dict[str, Any]:
         return handoff_state.snapshot(router)
 
+    status_path = Path(deployment_status) if deployment_status is not None else None
+    restart_count = restarts.supervisor("router")
+
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
     async def metrics() -> Response:
+        extra = render_deployment(read_status(status_path)) if status_path is not None else []
+        if restart_count is not None:
+            extra += restarts.render_restarts(await asyncio.to_thread(restart_count))
         return Response(
             content=render(
                 router.state(),
@@ -366,7 +375,8 @@ def create_app(
                 router.queue_wait,
                 router.monitor.requests_sent,
                 adopted=router.adopted,
-            ),
+            )
+            + "".join(line + "\n" for line in extra),
             media_type=CONTENT_TYPE,
         )
 

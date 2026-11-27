@@ -26,7 +26,16 @@ from narwhal import provenance
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 
 from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
-from . import balancer, cache_groups, discovery, fabric, install, remote, supervision
+from . import (
+    balancer,
+    cache_groups,
+    deployment_status,
+    discovery,
+    fabric,
+    install,
+    remote,
+    supervision,
+)
 from .attestation_contract.capture import PUBLISHED
 from .deploy_graph import (
     CACHE_CAPTURE,
@@ -890,6 +899,8 @@ class Deployment:
         results = fabric.qualify_edge(
             plan, self.ssh(context, env), edge, budgets, context.directory / "edge", retained
         )
+        # The routers export each edge's measured bandwidth against its budget from these.
+        _private(context.directory / deployment_status.EDGE_RESULTS, results)
         return Outcome({"link": {result["sample"]: result["link_sha256"] for result in results}})
 
     # Attestation.
@@ -1436,6 +1447,8 @@ class Deployment:
             host.id,
             "--standby-of",
             peer,
+            "--deployment-status",
+            "{root}/" + deployment_status.HOST_PATH,
         ]
         if primary:
             argv.append("--first-start-primary")
@@ -1840,6 +1853,64 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
 
         entry: dict[str, Any] = run_record.read(self.directory)["stages"][key(stage, instance)]
         return entry
+
+    # The deployment status the routers export.
+
+    def publish_status(self) -> list[str]:
+        """Write the run's status beside its record and upload it to every router host.
+
+        Best effort: returns a warning for each host that the upload missed, which keeps the
+        status of the run before. A run that has not installed the package uploads nothing.
+        """
+        from . import run_record
+
+        try:
+            record = run_record.read(self.directory)
+        except (OSError, ValueError):
+            return []
+        local = self.directory / deployment_status.LOCAL_NAME
+        try:
+            previous = _json(local) if local.is_file() else None
+            status = deployment_status.build(
+                record,
+                self.directory,
+                DEPLOY_GRAPH.order(),
+                LAST_STAGE,
+                self.env.get("NARWHAL_FLEET_NAME", ""),
+                "ssh",
+                previous,
+            )
+        except (OSError, ValueError, LookupError, TypeError) as error:
+            return [f"the deployment status could not be built: {error}"]
+        staged = local.with_name(local.name + ".tmp")
+        staged.unlink(missing_ok=True)
+        _private(staged, status)
+        staged.replace(local)
+        try:
+            _, manifest, _ = self.recorded_package()
+            install_passed = all(
+                record["stages"].get(key("install", host.id), {}).get("status") == PASSED
+                for host in self.hosts()
+            )
+        except (OSError, ValueError, KeyError):
+            return []
+        if not install_passed:
+            return []
+        warnings = []
+        ssh = self.live_ssh()
+        for router in Topology(self).instances(ROUTER):
+            host = self.host(router)
+            try:
+                remote.upload(
+                    ssh,
+                    host,
+                    "status",
+                    local,
+                    f"{manifest['remote_dir']}/{deployment_status.HOST_PATH}",
+                )
+            except (RemoteError, RemoteTimeout, OSError) as error:
+                warnings.append(f"{host.id}: the deployment status was not uploaded: {error}")
+        return warnings
 
     # `down`: stop what the run started.
 

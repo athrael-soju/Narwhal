@@ -141,6 +141,13 @@ def serve(argv: list[str] | None = None) -> int:
         "(default: %(default)s)",
     )
     ap.add_argument(
+        "--deployment-status",
+        default="",
+        metavar="PATH",
+        help="narwhal.deployment-status document whose stage states, times, fabric edges and "
+        "attested engines /metrics exports, read on every scrape",
+    )
+    ap.add_argument(
         "--resume",
         action="store_true",
         help="restore roles, breaker holds, and counters from the last state handoff",
@@ -222,6 +229,7 @@ def serve(argv: list[str] | None = None) -> int:
             lease_ttl_s=args.lease_ttl,
             lease_renew_interval_s=args.lease_renew_interval,
             lease_safety_margin_s=args.lease_safety_margin,
+            deployment_status=args.deployment_status or None,
         )
     except (OSError, ValueError) as exc:
         return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)

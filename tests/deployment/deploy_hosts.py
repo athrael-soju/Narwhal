@@ -265,7 +265,14 @@ class Fleet:
         self.calls[f"fabric-edge[{edge.name}]"] += 1
         directory.mkdir(mode=0o700, parents=True)
         write_private(directory / "evidence.json", b"{}")
-        return [{"sample": "a-to-b", "link_sha256": self.route(edge.name)}]
+        return [
+            {
+                "sample": "a-to-b",
+                "link_sha256": self.route(edge.name),
+                "measured_gbps": 90.0,
+                "roles": {"engine-1": {"required_gbps": 1.0, "passed": True}},
+            }
+        ]
 
     def route(self, edge: str) -> str:
         return self.routes.setdefault(edge, "route-1")

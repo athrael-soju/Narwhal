@@ -465,6 +465,14 @@ def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
     return "error", "operation_failed", 4
 
 
+def _publish(deployment: Any) -> None:
+    """Give the routers the run's status; a missed upload is a warning, not a failure. A target
+    without router hosts to copy it to publishes nothing."""
+    publish = getattr(deployment, "publish_status", None)
+    for warning in publish() if publish else ():
+        print(f"narwhal: deploy run: warning: {warning}", file=sys.stderr)
+
+
 def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     inputs = _inputs(args, env)
     if inputs is None:
@@ -473,7 +481,8 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     results.add_artifact("run_record", directory / "run.json")
     target = TARGETS[args.target]
-    runner = target.Deployment(directory, env).runner()
+    deployment = target.Deployment(directory, env)
+    runner = deployment.runner()
 
     def stale(found: Mapping[str, Any] | None) -> dict[str, Any]:
         """Print a stale lock the run found, and return the result data that carries it."""
@@ -504,6 +513,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         )
         print(f"Recovery: {recovery}", file=sys.stderr)
         print(f"Evidence: {directory / error.record['directory']}", file=sys.stderr)
+        _publish(deployment)
         return exit_code
     except RunCancelled as error:
         results.set_data(
@@ -513,6 +523,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         results.set_status("interrupted")
         print(f"narwhal: deploy run: {error}", file=sys.stderr)
         return 130
+    _publish(deployment)
     ran = [decision.key for decision in result.decisions if decision.ran]
     results.set_data(
         {"run": str(directory), "run_id": result.run_id, "ran": ran, **stale(result.stale_lock)}

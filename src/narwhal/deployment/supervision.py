@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar, Generic, Literal, Protocol, TypeVar
 
+from ..observability.restarts import UNIT_ENV
 from . import native_engine, stages
 
 # Names become part of a systemd unit name, so they stay within its safe characters.
@@ -418,9 +419,10 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         self._run(
             ["sh", "-c", _CREATE_PRIVATE, "sh", str(environment)],
             f"create {environment}",
+            # The process reads its unit's restart count through the unit's name.
             input="".join(
                 f'{key}="{value.translate(_ENVIRONMENT_ESCAPES)}"\n'
-                for key, value in sorted(spec.environment.items())
+                for key, value in sorted({**spec.environment, UNIT_ENV: unit}.items())
             ),
         )
         try:
