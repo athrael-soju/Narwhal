@@ -94,12 +94,39 @@ class OrchestratorDashboardTests(unittest.TestCase):
         )
         self.console = "http://127.0.0.1:18020/console"
 
+    def test_the_served_dashboard_selects_a_fleet_in_every_query(self):
+        marked = artifacts.narwhal_dashboard(self.shipped, self.console)
+        variables = [v["spec"]["name"] for v in marked["spec"]["variables"]]
+        self.assertEqual(variables[:2], ["DS_PROMETHEUS", "fleet"])
+        expressions = []
+
+        def collect(value, key=""):
+            if isinstance(value, str) and key in ("expr", "query"):
+                expressions.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for name, item in value.items():
+                    collect(item, name)
+
+        # The fleet variable lists every fleet; everything else reads the selected one.
+        collect({k: v for k, v in marked["spec"].items() if k != "variables"})
+        collect(marked["spec"]["variables"][2:])
+        self.assertTrue(expressions)
+        for expression in expressions:
+            for selector in re.findall(r"\b(?:narwhal_\w+|up|ALERTS)\{[^}]*\}", expression):
+                self.assertIn(artifacts.FLEET_MATCHER, selector)
+        fleet = next(v for v in marked["spec"]["variables"] if v["spec"]["name"] == "fleet")
+        self.assertNotIn("$fleet", fleet["spec"]["query"]["spec"]["query"])
+
     def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):
         marked = artifacts.narwhal_dashboard(self.shipped, self.console)
-        shipped = self.shipped["spec"]["annotations"]
+        scoped = artifacts.scope_to_fleet(self.shipped)
+        shipped = scoped["spec"]["annotations"]
         annotations = marked["spec"]["annotations"]
         self.assertEqual(annotations[: len(shipped)], shipped)
-        self.assertEqual(marked["spec"]["elements"], self.shipped["spec"]["elements"])
+        self.assertEqual(marked["spec"]["elements"], scoped["spec"]["elements"])
         names = {a["spec"]["name"]: a["spec"] for a in annotations}
         actions = names["Fleet control actions"]["query"]["spec"]
         self.assertEqual(actions["expr"], "narwhal_control_action_started_ms")

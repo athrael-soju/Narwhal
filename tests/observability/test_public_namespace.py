@@ -13,6 +13,8 @@ from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.fleet_control.engines import Availability, AvailableEngine
 from narwhal.fleet_control.signals import metrics as control_metrics
+from narwhal.observability.metrics.deployment import render_deployment
+from narwhal.observability.restarts import render_restarts
 from narwhal.observability.stack.artifacts import render_dashboard
 from narwhal.observability.stack.start import readiness as observe_readiness
 from narwhal.observability.tools import ToolActivity
@@ -412,7 +414,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(session=None, jobs=None, status=lambda: {"in_progress": None}),
             Availability((AvailableEngine("e1", "vllm", True, True),)),
         )
-        exposition = response.text + ToolActivity("preflight").render() + control
+        # A router with a deployment status exports its series, and a sidecar its restarts.
+        deployment = "\n".join([*render_deployment({}), *render_restarts({}, {})])
+        exposition = response.text + ToolActivity("preflight").render() + control + deployment
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":

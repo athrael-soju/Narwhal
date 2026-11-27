@@ -27,6 +27,7 @@ A command-line option takes precedence over the matching fleet configuration fie
 | `--port PORT` | `8000` | Uvicorn bind port, from 0 to 65535. |
 | `--log-level LEVEL` | `info` | Logging threshold: `critical`, `error`, `warning`, `info`, `debug`, or `trace`. |
 | `--journal PATH` | `journal.jsonl` beside `profiles.path` | Request journal, append mode. |
+| `--deployment-status PATH` | none | [Deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) that `/metrics` exports as the [deployment metrics](../telemetry/03-Metrics-and-Control.md#deployment-and-restart-metrics). It is read on each scrape. |
 | `--max-concurrent N` | Config `serving.max_connections` | Router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections` inclusive. |
 | `--graceful-timeout SECONDS` | Config `serving.graceful_timeout_s` | Uvicorn shutdown drain time, in whole seconds, zero or greater. |
 | `--shutdown-drain SECONDS` | `0.5` | Time a stopping lease holder keeps accepting connections and serving requests after its readiness fails, finite and zero or greater. Set it longer than the load balancer's health-check interval. See [Lease behavior](../operate/01-Start-Routers.md#lease-behavior). |

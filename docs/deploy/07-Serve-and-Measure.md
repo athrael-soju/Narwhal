@@ -53,10 +53,11 @@ The `monitoring` stage starts the [monitoring stack](../observability/01-Start-a
 ```bash
 .venv/bin/python -m narwhal.observability.stack.start.cli \
   --router-url "$NARWHAL_ROUTER_URL" --router-url "$NARWHAL_STANDBY_ROUTER_URL" \
-  --targets-url "$NARWHAL_LOAD_BALANCER_URL"
+  --targets-url "$NARWHAL_LOAD_BALANCER_URL" \
+  --sidecar-url http://<engine-1 sidecar host>:<port> --sidecar-url http://<engine-2 sidecar host>:<port>
 ```
 
-Prometheus scrapes both routers and reads the engine targets through the load balancer. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory.
+The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the listen addresses from the deployment inputs in its environment. Prometheus scrapes both routers and each engine's attestation sidecar, and reads the engine targets through the load balancer. Every series carries the `fleet` label. Prometheus sends alerts to the Alertmanager when `NARWHAL_ALERTMANAGER_URL` is set; without one, they show only on the Prometheus alerts page. After every run, the command uploads the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to both router hosts, and the dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows it. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory.
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 

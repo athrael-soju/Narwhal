@@ -66,3 +66,19 @@ Each stage record:
 | `failure` | `null` for a running, passed or invalidated stage. Otherwise `message`, `recovery`, the gate section that covers the stage, and `context`, such as the stage timeout and the cleanup of its helper processes |
 
 A stage is skipped when its record shows `passed`, its `definition` and `input_digests` match the current graph and inputs, every file in `outputs` still has its recorded SHA-256, size and mode, and every process or route the stage produced is still there. When an output changes, the runner marks every passed stage after it `invalidated` before it reruns anything, so those stages rerun even if the run stops first.
+
+## Deployment status
+
+After each `narwhal deploy run`, passed or failed, the command builds a summary of the run, `narwhal.deployment-status` version 1, and copies it to `runs/deployment/deployment-status.json` under the install root of each router host. The routers export it as [deployment metrics](03-Metrics-and-Control.md#deployment-and-restart-metrics). The copy is skipped until every host's `install` has passed, and a failed copy prints a warning without failing the run.
+
+| Field | Content |
+| --- | --- |
+| `schema`, `schema_version` | `narwhal.deployment-status` and `1` |
+| `fleet`, `target`, `run_id` | `NARWHAL_FLEET_NAME`, the deployment target such as `ssh`, and the run's ID |
+| `updated_at` | When a stage of the run last ended, Unix seconds |
+| `last_passed_at` | When the last run that passed every stage up to `monitoring` ended. A failed run keeps the previous value |
+| `qualified_at`, `profiled_at`, `calibrated_at` | When `preflight`, `profile` and `calibrate` last passed, or `null` |
+| `stages` | Each stage instance with `stage`, `instance` and `state`, the stage record's `status` |
+| `fabric` | Each `fabric-edge` instance with `edge`, `measured_gbps`, the lowest bandwidth measured, and `budget_gbps`, the highest that one of its KV handoffs needs |
+| `engines` | Each engine with `iid`, `generation`, the binding digest of its attestation, and `attested_at` |
+

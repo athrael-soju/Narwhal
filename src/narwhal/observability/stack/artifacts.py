@@ -226,9 +226,58 @@ def render_dashboard(source: Mapping[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], rendered)
 
 
+# A metric selector of a dashboard query or variable, which the fleet matcher joins.
+_SELECTOR = re.compile(r"\b((?:narwhal_[A-Za-z0-9_:]*)|up|ALERTS)\{")
+FLEET_MATCHER = 'fleet=~"$fleet"'
+FLEET_VARIABLE = {
+    "kind": "QueryVariable",
+    "spec": {
+        "name": "fleet",
+        "current": {"text": "All", "value": "$__all"},
+        "label": "Fleet",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": False,
+        "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+        "query": {
+            "kind": "prometheus",
+            "spec": {"query": 'label_values(up{job="narwhal-router"}, fleet)', "refId": "fleet"},
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "options": [],
+        "multi": False,
+        "includeAll": True,
+        "allValue": ".*",
+        "allowCustomValue": True,
+    },
+}
+
+
+def scope_to_fleet(dashboard: Any) -> Any:
+    """The dashboard with a fleet variable, and every selector of a query or variable scoped to
+    the selected fleet, so one Prometheus serves several fleets on one dashboard."""
+
+    def scoped(value: Any, key: str = "") -> Any:
+        if isinstance(value, str) and key in ("expr", "query"):
+            return _SELECTOR.sub(lambda match: f"{match[1]}{{{FLEET_MATCHER},", value)
+        if isinstance(value, list):
+            return [scoped(item) for item in value]
+        if isinstance(value, dict):
+            return {name: scoped(item, name) for name, item in value.items()}
+        return value
+
+    result = scoped(dashboard)
+    variables = result["spec"]["variables"]
+    # The fleet comes first after the data source, so the router and engine lists follow it.
+    variables.insert(1, copy.deepcopy(FLEET_VARIABLE))
+    return result
+
+
 def narwhal_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
-    """Return the shipped dashboard with the fleet control markers and a link to `console`."""
-    dashboard = render_dashboard(source)
+    """Return the shipped dashboard scoped to a fleet, with the fleet control markers and a link
+    to `console`."""
+    dashboard = scope_to_fleet(render_dashboard(source))
     spec = dashboard["spec"]
     spec["annotations"] = [*spec["annotations"], *map(_annotation, CONTROL_ANNOTATIONS)]
     spec["links"] = [*spec["links"], _console_link(console)]

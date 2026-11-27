@@ -14,3 +14,4 @@ Narwhal writes these artifacts and telemetry streams:
 | Live state | Router `/narwhal/state` | `narwhal.state` | [Metrics and role controller state](telemetry/03-Metrics-and-Control.md) |
 | Contract manifest | `narwhal-check --print-contract-versions` | `narwhal.contract-manifest` | [Interface versions and compatibility](telemetry/05-Compatibility.md) |
 | Deployment run record | `run.json` in a stage run's directory | `narwhal.deployment-run` | [Deployment run record](telemetry/06-Deployment-Runs.md) |
+| Deployment status | `runs/deployment/deployment-status.json` on each router host | `narwhal.deployment-status` | [Deployment status](telemetry/06-Deployment-Runs.md#deployment-status) |

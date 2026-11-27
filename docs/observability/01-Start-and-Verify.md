@@ -79,6 +79,9 @@ To pass options, run the start command directly:
 | --- | --- | --- |
 | `--router-url URL` | `NARWHAL_ROUTER_URL` | Router origin Prometheus scrapes, required when the variable is unset. Repeat it for each router of a pair |
 | `--targets-url URL` | `NARWHAL_TARGETS_URL`, else the router origin | Origin Prometheus reads the engine targets from, required for a router pair |
+| `--sidecar-url URL` | `NARWHAL_SIDECAR_URLS`, comma-separated | Attestation sidecar origin Prometheus scrapes for its restart counts and the `NarwhalHostDown` alert. Repeat it for each engine |
+| `--fleet-name NAME` | `NARWHAL_FLEET_NAME`, else `default` | The `fleet` label of every series. Give each fleet its own name when one Prometheus holds several |
+| `--alertmanager-url URL` | `NARWHAL_ALERTMANAGER_URL` | Alertmanager that Prometheus sends alerts to, `http(s)://HOST:PORT` with an optional path. Without one, alerts show only on the Prometheus alerts page at `/alerts` |
 | `--ready-timeout SECONDS` | `60` | Seconds each readiness wait allows |
 
 ### Readiness contract
