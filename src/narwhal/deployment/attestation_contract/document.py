@@ -119,6 +119,31 @@ def bound_dimensions(
     return dimensions, source
 
 
+def planned_launch(plan: dict, image: str) -> dict:
+    """The attested launch evidence a launch plan decides, before the live captures add theirs.
+
+    It leaves out what differs between two prepares of one launch record, so a fresh
+    launch directory of an unchanged record attests the same launch.
+    """
+    engine = plan_launcher(plan)
+    launch = {
+        "args": launch_args(plan["args"], engine.launch_varying_flags),
+        "image_id": image,
+        "expected_packages": plan["expected_packages"],
+        "model_config_sha256": plan["model_config_sha256"],
+        **({"model_sha256": plan["model_sha256"]} if "model_sha256" in plan else {}),
+        "model_tree_sha256": plan["model_tree_sha256"],
+        "model_revision": plan.get("model_revision", ""),
+        "launch_sha256": plan.get("launch_sha256", ""),
+        "launcher_code_sha256": plan["launcher_code_sha256"],
+    }
+    if "config_files" in plan:
+        launch["config_files"] = plan["config_files"]
+    if cache_capture(engine) is not None:
+        launch["cache_capture_code_sha256"] = plan["cache_capture_code_sha256"]
+    return launch
+
+
 def engine_document(run: Path, attempt: Path) -> dict:
     """The attestation document of the live engine of `run` from the captures in `attempt`."""
     return attested(run, attempt)[0]
@@ -178,21 +203,7 @@ def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
         for name in names
         if name in paths
     }
-    launch = {
-        "args": launch_args(plan["args"], engine.launch_varying_flags),
-        "image_id": image,
-        "expected_packages": plan["expected_packages"],
-        "model_config_sha256": plan["model_config_sha256"],
-        **({"model_sha256": plan["model_sha256"]} if "model_sha256" in plan else {}),
-        "model_tree_sha256": plan["model_tree_sha256"],
-        "model_revision": plan.get("model_revision", ""),
-        "launch_sha256": plan.get("launch_sha256", ""),
-        "launcher_code_sha256": plan["launcher_code_sha256"],
-    }
-    if "config_files" in plan:
-        launch["config_files"] = plan["config_files"]
-    if cache_capture(engine) is not None:
-        launch["cache_capture_code_sha256"] = plan["cache_capture_code_sha256"]
+    launch = planned_launch(plan, image)
     launch.update(evidence.launch)
     document = versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
     return document, evidence.process_start

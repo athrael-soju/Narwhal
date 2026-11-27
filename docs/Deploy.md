@@ -99,6 +99,8 @@ Each stage in the first table runs one section of a gate page. The stage runner 
 
 A change reruns the stages its row lists and no others. A change that touches several rows reruns all of them: an engine restart that changes the engine's attested binding digest reruns the engine process row and the binding digest row. A changed output file reruns its stage and every stage after it. When you repeat gates by hand, repeat the sections of the stages a change lists.
 
+An engine whose container stopped or restarted also spends its launch directory, which starts one engine. `engine-prepare` writes a fresh directory, then `engine-check` and `engine-start` run from it, and the engine process row follows. A fresh directory of an unchanged launch record attests the same planned launch, so the binding digest row adds its stages only when the live captures differ.
+
 <!-- Generated from src/narwhal/deployment/deploy_graph.py by tools/maintenance/stage_graph_doc.py. Edit the graph, then run the tool. -->
 
 | Stage | Runs | After | Gate section |

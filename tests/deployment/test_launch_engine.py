@@ -20,6 +20,7 @@ from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.backends.vllm.probe_reader import releases_peers
 from narwhal.deployment import native_engine
+from narwhal.deployment.attestation_contract.document import planned_launch
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine import start as launch_start
@@ -39,6 +40,7 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
+from narwhal.engines.attestation import launch_digest
 from tests.deployment.fixtures import (
     cuda_engine,
     engine_config_modules,
@@ -129,6 +131,24 @@ class EngineLauncherTests(unittest.TestCase):
             plan = load(root / "launch")
             self.assertEqual(plan["model_tree_sha256"], tree)
             self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_two_prepares_of_one_record_attest_one_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/model.safetensors").write_bytes(b"weights")
+            prepare(root / "first", env)
+            time.sleep(0.05)
+            prepare(root / "second", env)
+            first, second = load(root / "first"), load(root / "second")
+            # Each prepare names its own container and paths.
+            self.assertNotEqual(first, second)
+            contract = {"engine_version": "1.0.0"}
+            image = "sha256:" + "a" * 64
+            self.assertEqual(
+                launch_digest(contract, planned_launch(first, image)),
+                launch_digest(contract, planned_launch(second, image)),
+            )
 
     def test_check_refuses_a_status_change_that_keeps_the_content(self):
         for change in ("chmod", "hard link"):

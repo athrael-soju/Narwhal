@@ -1710,22 +1710,33 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
     def test_slo_gate_fits_the_deadline_longest_prefill_and_router_overhead_in_the_ttft(self):
         store = ProfileStore(self.cfg.profiles_path)
         self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
-        for spec in self.cfg.engines:
-            store.put(profile(spec.iid))
-        slowest = max(store.get(spec.iid).prefill_time(8192) for spec in self.cfg.engines)
+        first, second = (spec.iid for spec in self.cfg.engines)
+        # The first engine is the fastest; the budget must price the slowest, the second.
+        store.put(profile(first))
+        store.put(profile(second, ttft_c=0.5))
+        slow = store.get(second).prefill_time(8192)
+        fast = store.get(first).prefill_time(8192)
+        self.assertGreater(slow, fast + 0.4)
+        self.assertGreater(slow, store.get(second).prefill_time(256))
         calibration = CalibrationCheck("measured", longest_input_tokens=8192)
         self.cfg.first_token_timeout_s = 1.0
-        fitting = 1.0 + slowest + 0.25 + 0.001
-        for ttft, overhead, passes in ((fitting, 0.25, True), (fitting, 0.5, False)):
-            with self.subTest(overhead=overhead):
+        fits = 1.0 + slow + 0.25
+        cases = (
+            (fits + 0.001, 0.25, True),
+            (fits + 0.001, 0.5, False),
+            # Enough for the fastest engine's prefill, too little for the slowest one's.
+            (fits - 0.01, 0.25, False),
+        )
+        for ttft, overhead, passes in cases:
+            with self.subTest(ttft=ttft, overhead=overhead):
                 self.cfg.slo = replace(self.cfg.slo, ttft_s=ttft, router_overhead_s=overhead)
                 report = Report()
                 output = io.StringIO()
                 with redirect_stdout(output):
                     gate_slo(self.cfg, store, report, calibration)
                 budget = (
-                    f"first-token deadline 1.000s + e0 prefill of 8192 tokens {slowest:.3f}s + "
-                    f"router overhead {overhead:.3f}s"
+                    f"first-token deadline 1.000s + {second} prefill of 8192 tokens "
+                    f"{slow:.3f}s + router overhead {overhead:.3f}s"
                 )
                 if passes:
                     self.assertEqual(report.failed, [])

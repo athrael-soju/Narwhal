@@ -9,14 +9,22 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import ClassVar
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import uvicorn
 
 from narwhal.deployment import host_http, remote
 from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError
 from narwhal.deployment.role_env import write_environment
+from narwhal.runtime.lifecycle.records import ValidationOutcome
+from narwhal.serving import app as serving_app
+from tests.fixtures import fleet
 
 HOST = Host("node-1", "NARWHAL_NODE_1_SSH", None, ("engine-1",))
 
@@ -196,27 +204,125 @@ class HostHTTPTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(
             set(files),
-            {"health.json", "ready.json", "state.json", "metrics.txt", "completion.json"},
+            {
+                "health.json",
+                "ready.json",
+                "state.json",
+                "metrics.txt",
+                "lifecycle.json",
+                "completion.json",
+            },
         )
         self.assertIn("/ready answered HTTP 503", err)
         self.assertEqual(_Router.bodies, [("/v1/completions", {"prompt": "x"})])
 
-    def test_readmit_readmits_only_engines_that_are_not_active(self):
-        code, files, _ = self.call("readmit", self.base, "5", "n1", "n2")
-        self.assertEqual(code, 0)
-        self.assertEqual(_Router.readmitted, [["n2"]])
-        record = json.loads(files["readmission.json"])
-        self.assertEqual(record["lifecycle_after"]["engines"]["n2"]["state"], "active")
 
-    def test_readmit_fails_when_an_engine_stays_inactive(self):
-        _Router.states["n2"] = "blocked"
-        original = _Router.do_POST
-        _Router.do_POST = lambda self: self._send(409, {"error": "checks failed"})
-        self.addCleanup(setattr, _Router, "do_POST", original)
-        code, files, err = self.call("readmit", self.base, "0", "n2")
+class RealRouter:
+    """The router's FastAPI app on a loopback port, for readmission against its own lifecycle.
+
+    The engines are not real, so the readmission validation that probes them is replaced; the
+    lifecycle states, the readmit route's rules and the lifecycle document are the router's.
+    """
+
+    def __init__(self, test: unittest.TestCase) -> None:
+        folder = tempfile.TemporaryDirectory()
+        test.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        cfg = fleet(root)
+        cfg.state_path = root / "handoff.json"
+        app = serving_app.create_app(cfg)
+        self.router = app.state.router
+        self.server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=0, lifespan="off", log_level="error")
+        )
+        thread = threading.Thread(target=self.server.run, daemon=True)
+        thread.start()
+        test.addCleanup(thread.join, 10)
+        test.addCleanup(setattr, self.server, "should_exit", True)
+        deadline = time.monotonic() + 10
+        while not self.server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError("the router did not start")
+            time.sleep(0.05)
+        port = self.server.servers[0].sockets[0].getsockname()[1]
+        self.base = f"http://127.0.0.1:{port}"
+
+    def drain(self, engines):
+        with patch.object(
+            serving_app,
+            "capture_process_identities",
+            new=AsyncMock(return_value=(dict.fromkeys(engines, 100.0), {})),
+        ):
+            response = httpx.post(
+                self.base + "/narwhal/lifecycle/drain", json={"engines": engines}, timeout=10
+            )
+        assert response.status_code == 200, response.text
+
+
+class ReadmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.router = RealRouter(self)
+
+    def readmit(self, *engines, seconds="3", validation=None):
+        out, err = io.StringIO(), io.StringIO()
+        validate = AsyncMock(side_effect=validation or self.passing)
+        with (
+            patch.object(serving_app, "validate_readmission", validate),
+            redirect_stdout(out),
+            redirect_stderr(err),
+        ):
+            code = host_http.main(["readmit", self.router.base, seconds, *engines])
+        return code, remote.files(out.getvalue()), err.getvalue(), validate
+
+    @staticmethod
+    async def passing(router, engines, **kwargs):
+        return ValidationOutcome(starts=dict.fromkeys(engines, 101.0))
+
+    def test_a_held_engine_is_readmitted_alone_beside_one_recovery_returned(self):
+        # The router holds one engine at a time outside a wave; e3's restart was already
+        # validated by recovery, which records its new process start.
+        self.router.router.lifecycle.process_starts["e3"] = 101.0
+        self.router.drain(["e0"])
+        code, files, err, validate = self.readmit("e0=100.0", "e3=100.0")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([call.args[1] for call in validate.call_args_list], [["e0"]])
+        record = json.loads(files["readmission.json"])
+        self.assertEqual([r["status"] for r in record["requests"]], [200])
+        engines = record["lifecycle_after"]["engines"]
+        self.assertTrue(all(engines[iid]["state"] == "active" for iid in ("e0", "e3")))
+        self.assertEqual(self.router.router.lifecycle.process_starts, {"e0": 101.0, "e3": 101.0})
+
+    def test_a_refused_readmission_fails_with_the_routers_reason(self):
+        self.router.drain(["e0"])
+
+        async def failing(router, engines, **kwargs):
+            return ValidationOutcome(failures={"e0": ["fabric produce to e3 failed"]})
+
+        code, files, err, _ = self.readmit("e0=100.0", validation=failing)
         self.assertEqual(code, 1)
-        self.assertIn("engines n2 are not active after readmission", err)
-        self.assertEqual(json.loads(files["readmission.json"])["readmitted"]["status"], 409)
+        self.assertIn("the router refused to readmit e0 with HTTP 409", err)
+        self.assertIn("readmission validation failed; fabric produce to e3 failed", err)
+        self.assertEqual(json.loads(files["readmission.json"])["requests"][0]["status"], 409)
+
+    def test_an_engine_the_router_has_not_seen_restart_is_not_counted_back(self):
+        # Without a drain the router reports the engine active until its liveness sweep sees
+        # the new process, and then holds it out of placement until recovery validates it.
+        self.router.router.lifecycle.process_starts["e0"] = 100.0
+        code, _, err, validate = self.readmit("e0=100.0", seconds="1")
+        self.assertEqual(code, 1)
+        self.assertIn("e0: the router has not yet seen its restarted process", err)
+        self.router.router.scheduler.eject("e0", "process_identity")
+        self.router.router.lifecycle.process_starts["e0"] = 101.0
+        code, _, err, _ = self.readmit("e0=100.0", seconds="1")
+        self.assertEqual(code, 1)
+        self.assertIn("e0: active, out of placement", err)
+        validate.assert_not_awaited()
+
+    def test_an_engine_recovery_returned_on_its_new_process_is_back(self):
+        self.router.router.lifecycle.process_starts["e0"] = 101.0
+        code, _, err, validate = self.readmit("e0=100.0")
+        self.assertEqual(code, 0, err)
+        validate.assert_not_awaited()
 
 
 class DigestTests(unittest.TestCase):

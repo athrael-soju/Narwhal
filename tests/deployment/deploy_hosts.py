@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from narwhal.deployment import cli as deploy_cli
 from narwhal.deployment import deploy, remote, supervision
-from narwhal.deployment.hosts import Host, write_private
+from narwhal.deployment.hosts import Host, RemoteError, write_private
 from narwhal.deployment.role_env import write_environment
 from narwhal.deployment.supervision import Observation, Supervisor, SystemdUnit
 
@@ -140,10 +140,13 @@ class Fleet:
         self.verified: list[str] = []
         self.fail_stage: str | None = None
         self.fail_status = 1
+        self.fail_verify = False
         self.package_dir: Path | None = None
         self.run_directory = root / "run"
         # Each engine role's launch directory its running container started from.
         self.started_from: dict[str, str] = {}
+        # The container each launch directory started.
+        self.used: dict[str, str] = {}
         self.uploads: dict[str, bytes] = {}
 
     # Library functions of the standalone commands.
@@ -279,6 +282,7 @@ class Fleet:
             launch = re.search(r"start --run (\S+) --ready-seconds", step.command)
             assert launch is not None
             self.started_from[role] = launch.group(1)
+            self.used[launch.group(1)] = cid
             files["container.id"] = cid.encode()
             files["container-start.json"] = json.dumps(
                 {"container_id": cid, "started_at": started}
@@ -397,6 +401,15 @@ class _SSH:
             assert fleet.package_dir is not None
             data = (fleet.package_dir / host.id / "fleet.local.json").read_bytes()
             return f"{hashlib.sha256(data).hexdigest()}  runs/deployment/fleet.json"
+        if operation == "read the launch directory's container":
+            for role, launch in fleet.started_from.items():
+                if f"cat {launch}/container.id" in script:
+                    fleet.calls[f"spent {role}"] += 1
+                    return fleet.used.get(launch, "")
+            return ""
+        if operation == "remove the container an unrecorded start left":
+            fleet.calls["removed unrecorded"] += 1
+            return ""
         if operation == "home directory":
             return "/home/deploy"
         if operation == "read the engine container":
@@ -424,6 +437,8 @@ class _SSH:
             return "\n".join(_file(name, b"{}") for name in ("health.json", "ready.json"))
         if operation.startswith("verify the restarted"):
             fleet.verified.append(operation)
+            if fleet.fail_verify:
+                raise RemoteError(host.id, stage, operation, self.log(host), ": stubbed")
         return ""
 
     def _local(self, remote_path: str) -> Path:

@@ -14,6 +14,7 @@ import hashlib
 import re
 import shlex
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -190,21 +191,24 @@ class SSHRunner:
         self, argv: Sequence[str], *, input: str | None = None
     ) -> subprocess.CompletedProcess[str]:
         command = shlex.join(argv)
-        source = (
-            f"printf %s {shlex.quote(base64.b64encode(input.encode()).decode())} | base64 -d"
-            if input is not None
-            else "cat /dev/null"
-        )
+        # The input, such as a unit's environment with its credentials, reaches the command on
+        # standard input through ssh, so neither the host log nor an argument list holds it.
         script = f"""set -u
 out=$(mktemp) && err=$(mktemp) || exit 4
 trap 'rm -f "$out" "$err"' EXIT
-{source} | {command} > "$out" 2> "$err"
+{command} {"" if input is not None else "< /dev/null "}> "$out" 2> "$err"
 status=$?
 printf '{STATUS}%s\\n' "$status"
 printf '{FILE}stdout %s\\n' "$(base64 -w 0 < "$out")"
 printf '{FILE}stderr %s\\n' "$(base64 -w 0 < "$err")"
 """
-        output = self.ssh.run(self.host, self.stage, f"run {argv[0]}", script)
+        with tempfile.TemporaryDirectory(prefix="narwhal-input-") as folder:
+            payload = None
+            if input is not None:
+                payload = Path(folder) / "input"
+                payload.touch(mode=0o600)
+                payload.write_text(input)
+            output = self.ssh.run(self.host, self.stage, f"run {argv[0]}", script, payload=payload)
         streams = files(output)
         status = next(
             (int(line[len(STATUS) :]) for line in output.splitlines() if line.startswith(STATUS)),

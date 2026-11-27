@@ -167,7 +167,7 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 | `NARWHAL_PROFILE_DECODE_CONCURRENCY` | `profile` | Optional `--decode-concurrency`, comma-separated positive integers |
 | `NARWHAL_PROFILE_WARMUP_REQUESTS` | `profile` | `--warmup-requests`, an integer of at least 0 |
 | `NARWHAL_CALIBRATION_INPUT_TOKENS` | `calibrate` | `narwhal-check --input-tokens`, comma-separated positive integers |
-| `NARWHAL_CALIBRATION_SAMPLES` | `calibrate` | `--samples`, an integer of at least 1 |
+| `NARWHAL_CALIBRATION_SAMPLES` | `calibrate` | `--samples`, an integer of at least 100, the fewest that preflight accepts as calibration evidence |
 | `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | `calibrate` | `--observation-timeout-s`, positive seconds |
 | `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the router binds and that the router host checks |
 

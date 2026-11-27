@@ -59,6 +59,7 @@ __all__ = [
     "RunLocked",
     "RunResult",
     "Runner",
+    "Spent",
     "StageContext",
     "StageFailed",
     "StaticTopology",
@@ -123,9 +124,14 @@ class Refreshed:
     `value` is the process's new identity. The record keeps it in place of the old one, for the
     stage that started the process too, so that stage holds and only the stages after it that
     the fact reruns run again.
+
+    A probe in a pass that must not change the host, such as `plan`, returns `checked=False`
+    for a restart whose check it did not run. `plan` decides as if the check passes and says
+    so; `run` and `inspect` treat an unchecked restart as gone.
     """
 
     value: Any
+    checked: bool = True
 
 
 Action = Callable[["StageContext"], "Outcome | None"] | Command
@@ -197,6 +203,8 @@ class RunResult:
     run_id: str
     decisions: tuple[Decision, ...]
     stale_lock: Mapping[str, Any] | None
+    # What a dry pass assumed, such as a restart whose check only `run` performs.
+    notes: tuple[str, ...] = ()
 
 
 class StageFailed(RuntimeError):
@@ -223,6 +231,25 @@ class RunCancelled(KeyboardInterrupt):
         self.record = record
         self.stale_lock: Mapping[str, Any] | None = None
         super().__init__(f"{key} cancelled; inspect {record['directory']}")
+
+
+class Spent(RuntimeError):
+    """An action found that an earlier stage's live product it needs is used up.
+
+    A launch directory that has already started an engine is one: a new start needs a fresh
+    directory. The runner records the attempt as failed, invalidates the stage that produced
+    the fact, and decides the graph again from the start, once per fact instance, so the
+    producer runs before the stage that raised it runs again.
+    """
+
+    def __init__(self, fact: str, instance: str, reason: str) -> None:
+        self.fact = fact
+        self.instance = instance
+        super().__init__(f"{key(fact, instance)} is spent: {reason}")
+
+
+class _Restart(Exception):
+    """Decide the graph again, after a `Spent` fact invalidated its producer."""
 
 
 class HelpersSurvived(RuntimeError):
@@ -327,8 +354,11 @@ class Runner:
     def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
         """Decide every stage up to `until` as `run` would, without running or recording one.
 
-        Each live fact is checked again, read-only. Once a stage would run, every stage after
-        it is reported as running after it, and its instances are not looked up.
+        Each live fact is checked again, read-only. A stage that would run leaves its products
+        undecided, so every stage that a change of one would rerun is reported as running after
+        it, a process its rerun starts again included. A changed output marks the stages after
+        it as `run` would invalidate them. A stage whose instances only an earlier stage's
+        result names runs after that stage.
         """
         order = self._order(until)
         self._check_inputs(inputs)
@@ -362,6 +392,8 @@ class Runner:
                         continue
                     if current is None:
                         checks.append(LiveCheck(fact_key, name, "gone"))
+                    elif isinstance(current, Refreshed) and not current.checked:
+                        checks.append(LiveCheck(fact_key, name, "restarted, not checked"))
                     elif isinstance(current, Refreshed):
                         checks.append(LiveCheck(fact_key, name, "restarted and checked"))
                         if refresh:
@@ -398,9 +430,16 @@ class Runner:
 def _refresh(entry: dict[str, Any], fact_key: str, fact: str, value: Any) -> None:
     """Record a restarted process's checked identity in place of the identity its stage started."""
     value = json.loads(json.dumps(value))
+    old = entry["products"][fact]
     entry["products"][fact] = value
     if fact_key in entry["input_digests"]:
         entry["input_digests"][fact_key] = canonical_digest(value)
+    # The process record `down` stops follows the identity, as `Outcome.processes` holds it.
+    if not isinstance(old, Mapping) or not isinstance(value, Mapping):
+        return
+    for index, process in enumerate(entry["processes"]):
+        if {name: item for name, item in process.items() if name != "name"} == old:
+            entry["processes"][index] = {"name": process["name"], **value}
 
 
 class _Run:
@@ -422,6 +461,7 @@ class _Run:
         # stages that would run, whose values only that run decides.
         self.pending: dict[str, str] = {}
         self.unknown: list[str] = []
+        self.notes: list[str] = []
         self.graph = runner.graph
         self.directory = runner.directory
         self.inputs = inputs
@@ -443,8 +483,17 @@ class _Run:
         try:
             stale = self._open()
             self._recover(stale)
-            for name in self.order:
-                self._sweep(self.graph.stages[name])
+            spent: set[str] = set()
+            while True:
+                try:
+                    for name in self.order:
+                        self._sweep(self.graph.stages[name])
+                    break
+                except _Restart as restart:
+                    fact_key = str(restart)
+                    if fact_key in spent:
+                        raise RuntimeError(f"{fact_key} was spent twice in one run") from None
+                    spent.add(fact_key)
         except (StageFailed, RunCancelled, HelpersSurvived) as error:
             error.stale_lock = stale
             if stale is not None:
@@ -456,7 +505,12 @@ class _Run:
                 with _held():
                     self.record.update(lock=None, updated_at=time.time())
                     run_record.write(self.directory, self.record)
-        return RunResult(self.record["run_id"], tuple(self.decisions), stale)
+        # A restarted pass decides the stages again; each keeps the decision that ran it.
+        decided: dict[str, Decision] = {}
+        for decision in self.decisions:
+            if decision.ran or not decided.get(decision.key, decision).ran:
+                decided[decision.key] = decision
+        return RunResult(self.record["run_id"], tuple(decided.values()), stale)
 
     def _plan(self) -> RunResult:
         if (self.directory / run_record.RECORD).exists():
@@ -465,8 +519,8 @@ class _Run:
                 raise ValueError(f"{self.directory} holds a {self.record['target']} run")
         else:
             self.record = {"run_id": "0" * 32, "stages": {}}
-        # Stages whose changed outputs mark every stage after them invalidated.
-        changed: dict[str, str] = {}
+        # Stage instances whose changed outputs invalidate the stages after them.
+        changed: list[tuple[Stage, str]] = []
         for name in self.order:
             spec = self.graph.stages[name]
             pending = [stage for stage in self.pending if stage in self.graph.upstream(name)]
@@ -481,29 +535,44 @@ class _Run:
                     Decision(name, True, (f"runs after {self.pending[pending[-1]]}",))
                 )
                 continue
-            invalidated = next((changed[stage] for stage in changed if stage in pending), None)
             for instance in instances:
                 stage_key = key(spec.name, instance)
                 previous = self.record["stages"].get(stage_key)
                 self.unknown = []
                 reasons = self._reasons(spec, instance, previous)
+                invalidated = next(
+                    (
+                        key(source.name, at)
+                        for source, at in changed
+                        if source.name in self.graph.upstream(name)
+                        and (source.scope != spec.scope or at == instance)
+                    ),
+                    None,
+                )
                 if invalidated is not None and not reasons:
                     reasons = [f"runs after {invalidated}, whose output changed"]
                 elif self.unknown and not reasons:
-                    fact_key = self.unknown[0]
-                    producer = self.graph.producer(fact_key.split("[", 1)[0])
-                    reasons = [f"runs after {producer} if {fact_key} changes"]
+                    reasons = [self._after(self.unknown[0])]
                 self.decisions.append(Decision(stage_key, bool(reasons), tuple(reasons)))
                 if reasons:
                     self.pending.setdefault(name, stage_key)
                     if any(reason.startswith("output ") for reason in reasons):
-                        changed.setdefault(name, stage_key)
+                        changed.append((spec, instance))
+                    # Its run decides its products; a live one is a new process.
+                    for fact in spec.produces:
+                        self.values.pop(key(fact, instance), None)
                 else:
                     assert previous is not None
                     for fact in spec.produces:
                         if self.graph.facts[fact].kind != LIVE:
                             self.values[key(fact, instance)] = previous["products"][fact]
-        return RunResult(self.record["run_id"], tuple(self.decisions), None)
+        return RunResult(self.record["run_id"], tuple(self.decisions), None, tuple(self.notes))
+
+    def _after(self, fact_key: str) -> str:
+        """Why a stage runs after the stage that would produce `fact_key` again."""
+        name, _, rest = fact_key.partition("[")
+        producer = key(self.graph.producer(name), rest.removesuffix("]"))
+        return f"runs after {producer} if {fact_key} changes"
 
     def _open(self) -> dict[str, Any] | None:
         now = time.time()
@@ -663,6 +732,7 @@ class _Run:
         reasons = [f"output {path} changed" for path in changed]
         if previous["definition"] != self.graph.definition(spec.name):
             return [*reasons, "the stage definition changed"]
+        refreshed = {"input_digests": dict(previous["input_digests"])}
         for fact in spec.produces:
             if self.graph.facts[fact].kind == LIVE:
                 fact_key = key(fact, instance)
@@ -671,11 +741,23 @@ class _Run:
                 except Exception as error:
                     error.add_note(f"live check of {fact_key} for {key(spec.name, instance)}")
                     raise
+                if isinstance(current, Refreshed) and not current.checked:
+                    if self.dry:
+                        self.notes.append(
+                            f"{fact_key} restarted; run checks it first and reruns "
+                            f"{key(spec.name, instance)} if the check fails"
+                        )
+                    else:
+                        current = None
                 if isinstance(current, Refreshed):
                     # The process restarted and passed its check; the record keeps its new
                     # identity, and the stages after it that the fact names run again.
                     current = json.loads(json.dumps(current.value))
-                    if not self.dry:
+                    if self.dry:
+                        # As `run` would record it, without writing the record.
+                        if fact_key in refreshed["input_digests"]:
+                            refreshed["input_digests"][fact_key] = canonical_digest(current)
+                    else:
                         with _held():
                             entry = self.record["stages"][key(spec.name, instance)]
                             _refresh(entry, fact_key, fact, current)
@@ -684,7 +766,7 @@ class _Run:
                 if current is None:
                     reasons.append(f"{fact_key} is gone")
         current_digests = self._digests(spec, instance)
-        recorded = previous["input_digests"]
+        recorded = previous["input_digests"] if not self.dry else refreshed["input_digests"]
         reasons += [
             f"{name} changed"
             for name in sorted((set(current_digests) | set(recorded)) - set(self.unknown))
@@ -835,6 +917,10 @@ class _Run:
         except stages.StageTimeout as error:
             self._finish(spec, entry, TIMEOUT, error)
             raise StageFailed(name, entry) from error
+        except Spent as error:
+            self._finish(spec, entry, FAILED, error)
+            self._spend(error)
+            raise _Restart(key(error.fact, error.instance)) from error
         except Exception as error:
             self._finish(spec, entry, FAILED, error)
             raise StageFailed(name, entry) from error
@@ -922,6 +1008,16 @@ class _Run:
                     }
                 )
         return sorted(outputs, key=lambda output: output["path"])
+
+    def _spend(self, error: Spent) -> None:
+        """Invalidate the passed stage that produced a spent fact, so it runs again first."""
+        producer = key(self.graph.producer(error.fact), error.instance)
+        entry = self.record["stages"].get(producer)
+        if entry is None or entry["status"] != PASSED:
+            raise RuntimeError(f"{error}, and {producer} has not passed to replace it") from error
+        with _held():
+            entry.update(status=INVALIDATED, invalidation=str(error))
+            run_record.write(self.directory, self.record)
 
     def _finish(self, spec: Stage, entry: dict, status: str, error: BaseException) -> None:
         context = getattr(error, "context", {})

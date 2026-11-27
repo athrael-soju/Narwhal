@@ -401,9 +401,14 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
         if found := supervision.check_systemd_host(runner):
             problems[host.id] = found
     directory = args.run.resolve()
-    result = stage_run.Deployment(directory, env).runner().plan(inputs, until=args.until)
+    deployment = stage_run.Deployment(directory, env, dry=True)
+    result = deployment.runner().plan(inputs, until=args.until)
     rows = _decisions(result.decisions)
-    results.set_data({"run": str(directory), "stages": rows, "hosts": problems})
+    for note in result.notes:
+        print(f"Note: {note}")
+    results.set_data(
+        {"run": str(directory), "stages": rows, "hosts": problems, "notes": list(result.notes)}
+    )
     if problems:
         for name, found in problems.items():
             for problem in found:
@@ -466,11 +471,6 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         results.set_status("interrupted")
         print(f"narwhal: deploy run: {error}", file=sys.stderr)
         return 130
-    except (RunLocked, HelpersSurvived) as error:
-        results.record_error("operation_failed", str(error), stage="run")
-        results.set_status("error")
-        print(f"narwhal: deploy run: {error}", file=sys.stderr)
-        return 4
     ran = [decision.key for decision in result.decisions if decision.ran]
     results.set_data({"run": str(directory), "run_id": result.run_id, "ran": ran})
     print(f"Run {result.run_id} reached {args.until}; {len(ran)} stage instances ran.")
@@ -479,7 +479,16 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
 
 def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory = args.run.resolve()
-    record, checks = stage_run.Deployment(directory, env).runner().inspect(refresh=True)
+    locked = False
+    try:
+        record, checks = stage_run.Deployment(directory, env).runner().inspect(refresh=True)
+    except RunLocked as error:
+        # Another runner holds the run: read it, and check each process without its
+        # functional check, recording nothing.
+        locked = True
+        print(f"{error}; reporting without recording restarts", file=sys.stderr)
+        deployment = stage_run.Deployment(directory, env, dry=True)
+        record, checks = deployment.runner().inspect(refresh=False)
     rows = []
     for name, entry in record["stages"].items():
         row = {
@@ -499,7 +508,13 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
     for check in checks:
         print(f"{check.key}: {check.state}{': ' + check.detail if check.detail else ''}")
     results.set_data(
-        {"run": str(directory), "run_id": record["run_id"], "stages": rows, "live": live}
+        {
+            "run": str(directory),
+            "run_id": record["run_id"],
+            "locked": locked,
+            "stages": rows,
+            "live": live,
+        }
     )
     if any(check.state != "holds" and check.state != "restarted and checked" for check in checks):
         results.set_status("degraded")
@@ -520,7 +535,14 @@ def _down(args: argparse.Namespace, env: dict[str, str]) -> int:
 def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
     commands = {"plan": _plan, "run": _run, "status": _status, "down": _down}
     if args.action in commands:
-        return commands[args.action](args, env)
+        try:
+            return commands[args.action](args, env)
+        except (RunLocked, HelpersSurvived) as error:
+            # Another runner holds the run, or this run's helpers outlived it.
+            results.record_error("operation_failed", str(error), stage=args.action)
+            results.set_status("error")
+            print(f"narwhal: deploy {args.action}: {error}", file=sys.stderr)
+            return 4
     if args.action in ("shell", "tunnel") and results.json_mode():
         raise ValueError(f"deploy {args.action} is interactive; run it without --format json")
     if args.action == "discover":
@@ -553,7 +575,6 @@ def run(args: argparse.Namespace) -> int:
         fabric.FabricFailure,
         remote.StepFailed,
         supervision.SupervisionError,
-        RunLocked,
     ) as exc:
         if results.json_mode():
             raise

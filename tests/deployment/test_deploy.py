@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from narwhal.deployment import deploy, run_record
 from narwhal.dev import cli
+from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
 from tests.deployment.deploy_hosts import Fleet
 
 ENGINES = ("engine-1", "engine-2")
@@ -116,6 +117,29 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.fleet.calls["start router"], 1)
         self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
 
+    def test_an_engine_start_on_a_used_launch_directory_prepares_a_fresh_one_first(self):
+        self.deploy("run")
+        old = self.fleet.containers["engine-1"]
+        # A changed check output reruns engine-start while engine-prepare holds.
+        entry = run_record.read(self.run)["stages"]["engine-check[engine-1]"]
+        (self.run / entry["directory"] / "checked.json").write_text('{"plan": "changed"}')
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        ran = self.ran(result)
+        self.assertLessEqual(
+            {"engine-prepare[engine-1]", "engine-check[engine-1]", "engine-start[engine-1]"},
+            ran,
+        )
+        self.assertEqual(self.fleet.calls["engine-prepare[engine-1]"], 2)
+        self.assertEqual(self.fleet.calls["engine-start[engine-1]"], 2)
+        self.assertEqual(self.fleet.calls["removed unrecorded"], 0)
+        self.assertNotEqual(self.fleet.containers["engine-1"], old)
+        record = run_record.read(self.run)["stages"]
+        self.assertEqual(record["engine-start[engine-1]"]["attempt"], 3)
+        self.assertEqual(record["engine-prepare[engine-1]"]["attempt"], 2)
+        code, result = self.deploy("run")
+        self.assertEqual((code, self.ran(result)), (0, set()))
+
     def test_status_records_a_restarted_sidecar_once_its_verification_passes(self):
         self.deploy("run")
         self.fleet.restart_unit("sidecar-2")
@@ -131,6 +155,60 @@ class DeployTests(unittest.TestCase):
         code, result = self.deploy("run")
         self.assertEqual(self.ran(result), {"sidecar-verify[engine-2]", "finalize-fleet[node-1]"})
         self.assertEqual(self.fleet.calls["start sidecar-2"], 1)
+
+    def test_a_checked_restart_moves_the_process_record_down_stops(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        self.deploy("status")
+        entry = run_record.read(self.run)["stages"]["sidecar-start[engine-2]"]
+        (process,) = entry["processes"]
+        self.assertEqual(process, {"name": "sidecar-2", **entry["products"]["sidecar_identity"]})
+
+    def test_a_restart_that_fails_its_check_reruns_its_stage(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        self.fleet.fail_verify = True
+        code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["sidecar_identity[engine-2]"], "gone")
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("sidecar-start[engine-2]", self.ran(result))
+        self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
+
+    def test_plan_reads_a_restarted_unit_without_running_its_check(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        code, result = self.deploy("plan")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.fleet.verified, [])
+        self.assertEqual(
+            result["data"]["notes"],
+            [
+                "sidecar_identity[engine-2] restarted; run checks it first and reruns "
+                "sidecar-start[engine-2] if the check fails"
+            ],
+        )
+        planned = {row["stage"] for row in result["data"]["stages"] if row["runs"]}
+        self.assertEqual(planned, {"sidecar-verify[engine-2]", "finalize-fleet[node-1]"})
+
+    def test_every_run_subcommand_reports_a_held_run_alike(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        with run_record.locked(self.run):
+            for action in ("run", "down"):
+                with self.subTest(action=action):
+                    code, result = self.deploy(action)
+                    self.assertEqual((code, result["status"]), (4, "error"))
+                    self.assertEqual(result["errors"][0]["code"], "operation_failed")
+            code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        self.assertTrue(result["data"]["locked"])
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["sidecar_identity[engine-2]"], "restarted, not checked")
+        self.assertEqual(self.fleet.verified, [])
+        self.assertEqual(len(self.fleet.units), 3)
 
     def test_a_changed_slo_rewrites_the_limits_and_restarts_the_router(self):
         self.deploy("run")
@@ -274,7 +352,12 @@ class InputTests(unittest.TestCase):
         self.assertNotIn("secret-value", json.dumps({k: vars(v) for k, v in inputs.items()}))
 
     def test_every_malformed_input_is_named(self):
-        env = {**self.env, "NARWHAL_ROUTER_URL": "router:8000", "NARWHAL_FIRST_TOKEN_MARGIN_S": "0"}
+        env = {
+            **self.env,
+            "NARWHAL_ROUTER_URL": "router:8000",
+            "NARWHAL_FIRST_TOKEN_MARGIN_S": "0",
+            "NARWHAL_CALIBRATION_SAMPLES": "99",
+        }
         del env["NARWHAL_CALIBRATION_INPUT_TOKENS"]
         with self.assertRaises(deploy.InputError) as caught:
             deploy.inputs(env)
@@ -284,6 +367,8 @@ class InputTests(unittest.TestCase):
                 "set NARWHAL_FIRST_TOKEN_MARGIN_S to a positive number",
                 "set NARWHAL_CALIBRATION_INPUT_TOKENS to comma-separated positive integers",
                 "set NARWHAL_ROUTER_URL to the router's http://HOST:PORT",
+                f"set NARWHAL_CALIBRATION_SAMPLES to an integer of at least "
+                f"{MIN_SAMPLES_PER_GROUP}",
             },
         )
 

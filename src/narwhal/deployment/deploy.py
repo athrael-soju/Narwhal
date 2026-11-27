@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 from narwhal import provenance
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 
+from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
 from . import cache_groups, discovery, fabric, install, remote, supervision
 from .attestation_contract.capture import PUBLISHED
 from .deploy_graph import (
@@ -37,11 +38,11 @@ from .deploy_graph import (
     ROUTER,
     TRANSFER_MEASUREMENT,
 )
-from .hosts import SSH, Host, load_hosts, stage_limit, write_private
+from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts, stage_limit, write_private
 from .launch_engine.backend import cache_capture, launcher, transfer_measurement
 from .role_env import read_environment
 from .run_record import PASSED, key
-from .runner import Input, Outcome, Refreshed, Runner, StageContext
+from .runner import Input, Outcome, Refreshed, Runner, Spent, StageContext
 
 # `narwhal deploy run` ends at the router; the monitoring and trial stages come later.
 LAST_STAGE = "router-start"
@@ -167,7 +168,7 @@ def settings(env: Mapping[str, str]) -> Settings:
     concurrency = _lengths(env, PROFILE[2], problems, required=False)
     warmup = _integer(env, PROFILE[3], problems, 0)
     tokens = _lengths(env, CALIBRATION[0], problems, required=True)
-    samples = _integer(env, CALIBRATION[1], problems, 1)
+    samples = _integer(env, CALIBRATION[1], problems, MIN_SAMPLES_PER_GROUP)
     observation = _positive(env, CALIBRATION[2], problems)
     url = env.get("NARWHAL_ROUTER_URL", "")
     address = urlsplit(url)
@@ -316,9 +317,12 @@ def recovery_url(page: str) -> str:
 class Deployment:
     """The actions, live checks and topology of one SSH deployment in one run directory."""
 
-    def __init__(self, directory: Path, env: Mapping[str, str]) -> None:
+    def __init__(self, directory: Path, env: Mapping[str, str], *, dry: bool = False) -> None:
         self.directory = directory
         self.env = dict(env)
+        # A dry deployment's probes change nothing on a host: `plan`, and `status` while
+        # another runner holds the run.
+        self.dry = dry
         self._fabric: tuple[tuple[str, str], fabric.Fabric] | None = None
         self.announce: Callable[[str], None] = lambda line: print(line, flush=True)
 
@@ -587,20 +591,10 @@ class Deployment:
                 f"the engine-start stage limit leaves no time for readiness; raise it above "
                 f"{START_MARGIN_SECONDS} seconds"
             )
+        self._spent_launch(context, host, launch)
         self._stop_previous_engine(context, host)
         work = self.remote(context)
-        # A launch directory starts one engine once. An earlier start that this run did not
-        # record left its container; it is removed so the next run prepares a fresh directory.
-        command = f"""{{
-if test -e {launch}/container.id; then
-  cid=$(cat {launch}/container.id)
-  docker rm --force "$cid" > /dev/null 2>&1 || true
-  echo "an earlier start of this launch directory left container $cid, which was removed;" \\
-    "run narwhal deploy run again to start the engine from a fresh launch directory"
-  exit 4
-fi
-narwhal-engine start --run {launch} --ready-seconds {ready}
-}}"""
+        command = f"narwhal-engine start --run {launch} --ready-seconds {ready}"
         cleanup = (
             f"if test -e {launch}/container.id; then cid=$(cat {launch}/container.id); "
             f'docker logs --tail 200 "$cid" > {shlex.quote(work)}/engine.log 2>&1 || true; '
@@ -626,6 +620,32 @@ narwhal-engine start --run {launch} --ready-seconds {ready}
             "started_at": record["started_at"],
         }
         return Outcome({"engine_identity": identity}, ({"name": role, **identity},))
+
+    def _spent_launch(self, context: StageContext, host: Host, launch: str) -> None:
+        """Refuse a launch directory that already started an engine, before stopping any.
+
+        A launch directory starts one engine once, so `engine-prepare` writes a fresh one
+        first. A container that an unrecorded start left is removed; the recorded engine runs
+        on until the fresh directory's start replaces it.
+        """
+        cid = self.ssh(context).run(
+            host,
+            context.stage,
+            "read the launch directory's container",
+            f"cd {shlex.quote(self.package_of(context)[1]['remote_dir'])} && "
+            f"cat {launch}/container.id 2> /dev/null || true",
+        )
+        if not cid:
+            return
+        previous = (context.previous or {}).get("products", {}).get("engine_identity") or {}
+        if previous.get("container_id") != cid:
+            self.ssh(context).run(
+                host,
+                context.stage,
+                "remove the container an unrecorded start left",
+                f"docker rm --force {shlex.quote(cid)} > /dev/null 2>&1 || true",
+            )
+        raise Spent("launch", context.instance, f"it already started container {cid}")
 
     def _stop_previous_engine(self, context: StageContext, host: Host) -> None:
         """Remove the engine an earlier attempt of this stage started, while it still runs."""
@@ -1187,6 +1207,11 @@ narwhal-engine start --run {launch} --ready-seconds {ready}
         )
         env, manifest, _ = self.package_of(context)
         iids = [f"n{_node(role)}" for role in restarted]
+        # The process start the router accepted for each engine before it restarted, from
+        # the earlier attempt's lifecycle; the router serves the restart once it differs.
+        lifecycle = self.directory / previous["directory"] / "router" / "lifecycle.json"
+        starts = _json(lifecycle).get("process_starts", {}) if lifecycle.is_file() else {}
+        engines = [f"{iid}={starts[iid]!r}" if iid in starts else iid for iid in iids]
         self.announce(f"router-start: readmitting {', '.join(iids) or 'no engines'}")
         output = self.ssh(context, env).run(
             host,
@@ -1197,7 +1222,7 @@ narwhal-engine start --run {launch} --ready-seconds {ready}
                 "readmit",
                 values.router_url,
                 str(READMIT_SECONDS),
-                *iids,
+                *engines,
             ),
         )
         remote.write(context.directory, remote.files(output))
@@ -1284,9 +1309,19 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
         ssh = self.live_ssh()
         units = self.supervisor(ssh, host, stage, self.run_id())
         identity = supervision.identity_from_record(recorded)
+        if self.dry:
+            # The check writes evidence on the host, so a dry pass only reads the unit.
+            observation = units.check(identity)  # type: ignore[arg-type]
+            if observation.state == "running":
+                return dict(recorded)
+            if observation.state == "restarted" and observation.identity is not None:
+                return Refreshed({"host": host.id, **observation.identity.record()}, checked=False)
+            return None
         try:
             current = units.confirm(identity, lambda _: verify(ssh, host))  # type: ignore[arg-type]
-        except supervision.SupervisionError:
+        except (supervision.SupervisionError, RemoteError, RemoteTimeout, OSError) as error:
+            # A restart that fails its check is not this stage's process any more.
+            self.announce(f"{stage}: the restarted {recorded.get('unit', 'unit')} failed: {error}")
             return None
         if current == identity:
             return dict(recorded)
