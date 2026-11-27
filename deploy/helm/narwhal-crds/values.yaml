@@ -1,0 +1,2 @@
+# The chart has no values. tools/maintenance/crd_schema.py writes its one template from the
+# schema in src/narwhal/deployment/fleet_resource.py.

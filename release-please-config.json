@@ -12,7 +12,9 @@
       "extra-files": [
         {"type": "yaml", "path": "CITATION.cff", "jsonpath": "$.version"},
         {"type": "yaml", "path": "deploy/helm/narwhal/Chart.yaml", "jsonpath": "$.version"},
-        {"type": "yaml", "path": "deploy/helm/narwhal/Chart.yaml", "jsonpath": "$.appVersion"}
+        {"type": "yaml", "path": "deploy/helm/narwhal/Chart.yaml", "jsonpath": "$.appVersion"},
+        {"type": "yaml", "path": "deploy/helm/narwhal-crds/Chart.yaml", "jsonpath": "$.version"},
+        {"type": "yaml", "path": "deploy/helm/narwhal-crds/Chart.yaml", "jsonpath": "$.appVersion"}
       ],
       "changelog-sections": [
         {"type": "feat", "section": "Features"},
