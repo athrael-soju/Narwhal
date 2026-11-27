@@ -230,6 +230,12 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
 
+    async def test_hca_reading_without_a_counter_field_is_refused(self):
+        payload = {"device": "mlx5_0", "port": 1, "boot_id": "boot-a", "counter_error": "gone"}
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        with self.assertRaisesRegex(ValueError, "returned no HCA counters"):
+            await read_hca_counters("http://sidecar/v1/attestation", transport=transport)
+
     async def test_sidecar_serves_hca_counters_only_for_its_hca_port(self):
         start = 100
 

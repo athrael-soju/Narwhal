@@ -294,7 +294,8 @@ async def read_hca_counters(
         or not (
             (type(payload.get("port_xmit_data")) is int and payload["port_xmit_data"] >= 0)
             or (
-                payload.get("port_xmit_data") is None
+                "port_xmit_data" in payload
+                and payload["port_xmit_data"] is None
                 and isinstance(payload.get("counter_error"), str)
                 and payload["counter_error"]
             )
