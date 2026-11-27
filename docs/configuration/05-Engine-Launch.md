@@ -75,13 +75,15 @@ Each launch record holds these allocation and transport fields:
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                                                                                           |
 | `transfer.net_devices` | Ethernet interface names for `ucx_tcp`, or `HCA:port` names for `ucx_rdma`.                                                                                                                        |
 | `transfer.devices`     | Transport device paths mapped into the container, required for `ucx_rdma`.                                                                                                                         |
-| `transfer.gpu_tls`     | UCX GPU transport: `cuda`, the default, or `cuda_copy` on CUDA, and `rocm` on ROCm.                                                                                                                |
+| `transfer.gpu_tls`     | UCX GPU transport. On CUDA, `cuda`, the default, or `cuda_copy` for `ucx_tcp`, and `cuda_copy` for `ucx_rdma`. On ROCm, `rocm`. |
 | `shared_device`        | Optional allocation that shares one GPU with other engines, with the fields of the fleet's [`shared_device`](01-Fleet-Schema.md#shared-device-allocation). It requires one CUDA GPU and TP size 1. |
 | `sources`              | Allocation, device, transfer and runtime definitions that produced the record.                                                                                                                     |
 
 `deploy_hosts.py prepare` adds the record's `environment`, which sets the visible GPUs and `UCX_NET_DEVICES`. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
 
 On a host with several CUDA engines, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other dedicated-GPU engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. Under the container backend, an engine that can see another engine's GPUs and every `shared_device` engine run in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
+
+With `ucx_rdma`, the launcher sets `UCX_SHM_DEVICES=none` and the CUDA transport is `cuda_copy`, which leaves CUDA IPC out of `UCX_TLS`. Engines on one host then send KV to each other over their HCAs.
 
 On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`.
 
@@ -106,7 +108,7 @@ These `runtime` fields apply to every backend:
 | `environment`       | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with one of the backend's prefixes.                |
 | `extra_args`        | Engine options from the backend's allowlist.                                                                  |
 
-Variable names in `environment` must be uppercase, and values must fit on one line. The launcher sets the model path, served model name, bind address, HTTP port, TP size, KV transfer settings, GPU visibility, advertised addresses and ports, `UCX_TLS`, `UCX_TCP_PORT_RANGE` and the engine credential. [Engine environment](../cli/Engine.md#engine-environment) lists the variables it writes.
+Variable names in `environment` must be uppercase, and values must fit on one line. The launcher sets the model path, served model name, bind address, HTTP port, TP size, KV transfer settings, GPU visibility, advertised addresses and ports, `UCX_TLS`, `UCX_SHM_DEVICES` for `ucx_rdma`, `UCX_TCP_PORT_RANGE` and the engine credential. [Engine environment](../cli/Engine.md#engine-environment) lists the variables it writes.
 
 When the model's `config.json` or `tokenizer_config.json` contains an `auto_map`, discovery adds `--trust-remote-code` to the engine arguments, or `--trust_remote_code` on TensorRT-LLM.
 
@@ -133,7 +135,7 @@ Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-
 
 A vLLM record adds the optional `kv_lease_s`, the number of seconds a prefill engine keeps a request's KV blocks for the decode engine to fetch. It takes a whole number of at least 6 and defaults to `30`. The launcher passes it as `kv_lease_duration`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
-`expected_packages` must pin `vllm` and either `nixl` or `nixl-rocm`, and for a GGUF model `vllm-gguf-plugin`. The optional `gguf_plugin_python_sha256` and `gguf_plugin_extension_sha256` pin the GGUF plugin's Python sources and CUDA extension. Set both or neither, each as a SHA-256 digest. `narwhal-engine check` fails when the plugin in the image or the native runtime differs from them. `environment` accepts the prefixes `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
+`expected_packages` must pin `vllm` and either `nixl` or `nixl-rocm`, and for a GGUF model `vllm-gguf-plugin`. The optional `gguf_plugin_python_sha256` and `gguf_plugin_extension_sha256` pin the GGUF plugin's Python sources and CUDA extension. Set both or neither, each as a SHA-256 digest. `narwhal-engine check` fails when the plugin in the image or the native runtime differs from them. `environment` accepts the prefixes `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_SHM_DEVICES`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
 
 `extra_args` accepts these options, each with a value: `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--reasoning-parser`, `--attention-backend`, `--hf-config-path` and `--load-format`. It accepts these flags: `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager` and `--no-disable-hybrid-kv-cache-manager`. `deploy_hosts.py prepare` requires `runtime.max_sequences`.
 
@@ -150,7 +152,7 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 | `connector`                   | `mooncake`, from `NARWHAL_ENGINE_CONNECTOR`.                                                                                                |
 | `decode_cuda_graph_memory_gb` | Positive GB of CUDA graph memory that the engine reserves when it switches to decode, from `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`. Required. |
 
-`expected_packages` must pin `sglang` and the connector's transfer package, `mooncake-transfer-engine`, or one CUDA build of it such as `mooncake-transfer-engine-cuda13`. `environment` accepts the prefixes `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `SGLANG_HOST_IP`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT` and `NARWHAL_SGLANG_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
+`expected_packages` must pin `sglang` and the connector's transfer package, `mooncake-transfer-engine`, or one CUDA build of it such as `mooncake-transfer-engine-cuda13`. `environment` accepts the prefixes `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_SHM_DEVICES`, `UCX_TCP_PORT_RANGE`, `SGLANG_HOST_IP`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT` and `NARWHAL_SGLANG_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
 
 `extra_args` accepts these options, each with a value: `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy` and `--decode-attention-backend`. It accepts these flags: `--trust-remote-code`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`. Each option and flag may appear once.
 
@@ -178,7 +180,7 @@ A TensorRT-LLM record adds three optional fields:
 - `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
 - `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
-`expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`. `extra_args` accepts the options `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`, each with a value, and the flag `--trust_remote_code`.
+`expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_SHM_DEVICES`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`. `extra_args` accepts the options `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`, each with a value, and the flag `--trust_remote_code`.
 
 The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_serve_frontends 1`, and with `--max_num_tokens 8192` unless `extra_args` sets it. It writes `engine.json` into the launch's hook directory and passes it with `--config`. That file sets:
 
@@ -216,10 +218,15 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 | `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off                         |
 | `ucx_version`       | vLLM only: version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
 | `peer_release`      | vLLM only: `false` when this engine keeps a stopped CUDA IPC peer's GPU memory mapped                         |
-| `image_id`          | Local image ID, for the container backend                                                                     |
-| `backend`           | `native`, for the native backend                                                                              |
+| `image_id`          | Local image ID for the container backend, or `sha256:` and the digest of `NARWHAL_ENGINE_IMAGE` for the Kubernetes backend |
+| `backend`           | `native` or `kubernetes`, for those backends                                                                  |
 | `python_executable` | The launch plan's Python interpreter, for the native backend                                                  |
 | `expected_packages` | The launch plan's pinned package versions, for the native backend                                             |
+| `pod_uid`           | The engine pod's UID, for the Kubernetes backend                                                              |
+| `node`              | The node that ran the engine pod, for the Kubernetes backend                                                  |
+| `transfer_device`   | The HCA the RDMA device plugin allocated, for the Kubernetes backend: `verbs_device`, `hca`, `port` and `ucx_net_devices` |
+
+A Kubernetes plan's check runs in its engine pod, as [Kubernetes plans](../cli/Engine.md#kubernetes-plans) describes.
 
 When `peer_release` is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 

@@ -4,7 +4,7 @@ description: Prepare and run vLLM, SGLang and TensorRT-LLM engines from engine l
 
 # `narwhal-engine`
 
-`narwhal-engine` prepares and runs vLLM, SGLang and TensorRT-LLM engines from a `narwhal.engine-launch` record. The record's [`runtime.backend`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) selects the engine: `vllm` by default, `sglang` or `trtllm`. Each engine has a launch directory that `prepare` creates and the other actions read and write. The `container` launch backend runs engines in Docker. The `native` launch backend runs them on Linux or WSL2 under the Python interpreter that ran `prepare`.
+`narwhal-engine` prepares and runs vLLM, SGLang and TensorRT-LLM engines from a `narwhal.engine-launch` record. The record's [`runtime.backend`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) selects the engine: `vllm` by default, `sglang` or `trtllm`. Each engine has a launch directory that `prepare` creates and the other actions read and write. The `container` launch backend runs engines in Docker. The `kubernetes` launch backend renders each engine into a [Kubernetes engine pod](#kubernetes-plans) that the kubelet starts. The `native` launch backend runs engines on Linux or WSL2 under the Python interpreter that ran `prepare`.
 
 To start a container engine, run three actions and then poll the engine's `/health` route:
 
@@ -45,7 +45,7 @@ For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit 
 `prepare` writes these values to the engine's environment file:
 
 - the record's `runtime.environment` and `environment`
-- `UCX_TLS`
+- `UCX_TLS`, and for `ucx_rdma` also `UCX_SHM_DEVICES=none`
 - `UCX_TCP_PORT_RANGE`, from `NARWHAL_UCX_TCP_PORT_RANGE`
 - the KV side-channel address, and the side-channel port from `NARWHAL_KV_SIDE_CHANNEL_PORT`
 - the engine credential from `NARWHAL_ENGINE_API_KEY`, if you set it
@@ -60,8 +60,8 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
-| `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and on vLLM and TensorRT-LLM the cache-capture hook |
-| `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
+| `prepare` | container, Kubernetes, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, on vLLM and TensorRT-LLM the cache-capture hook, and for Kubernetes `kubernetes.json` |
+| `check` | container, Kubernetes, native | Prepared launch directory, and for Kubernetes the engine pod's records | `checked.json`, and `image-check.log`, `runtime-check.log` or the pod's records under `pods/` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
 | `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
@@ -72,14 +72,14 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `start-native` | native | One to eight checked plans, each on its own GPU | Running engines and one `native-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
 
-SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`. TensorRT-LLM plans reject all of them except `capture-cache`.
+SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`. TensorRT-LLM plans reject all of them except `capture-cache`. Kubernetes plans take only `prepare` and `check`.
 
 These actions check their inputs:
 
 | Action | Checks |
 | --- | --- |
 | `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For an engine on a shared GPU, it also checks that the engine uses a single NVIDIA GPU with `tensor_parallel_size` 1, and that the engine's memory flag (`--gpu-memory-utilization`, `--mem-fraction-static` or `--free_gpu_memory_fraction`) is set to `shared_device.gpu_memory_utilization`. |
-| `check` | For `container`, image identity. For `native`, the model path. For both, the model file status that `prepare` recorded, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
+| `check` | For `container`, image identity. For `native`, the model path. For `kubernetes`, the engine pod's records, as [Kubernetes plans](#kubernetes-plans) describes. For `container` and `native`, the model file status that `prepare` recorded. For every backend, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, which a Kubernetes plan checks at `prepare`, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `start-native` | One GPU for each plan, free memory, readiness and identity for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |
@@ -92,12 +92,82 @@ With text output, `prepare` exits 2 when it fails and 1 when its `--out` directo
 | --- | --- | --- |
 | `--version` | | Print the installed distribution version. |
 | `--format` | `text` | `text` or `json` for [versioned command results](../Command-Results.md). |
-| `--backend` | `container` | Launch backend for `prepare` and `start-shared`, either `container` or `native`. |
+| `--backend` | `container` | Launch backend: `container`, `kubernetes` or `native` for `prepare`, and `container` or `native` for `start-shared`. |
+| `--pod-evidence` | | Directory with an engine pod's `checkpoint.json` and `runtime-check.json`, read by `check`. Required for a Kubernetes plan and refused for the others. |
 | `--out` | required | New launch directory for `prepare`. |
 | `--run` | required | Launch directory for every action except `prepare`, given two to eight times for `start-shared` and one to eight times for `start-native`. |
 | `--ready-seconds` | 180 | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. |
 | `--startup-log` | optional | Serving log with one resolved KV layout, read by `cache-registration`. |
 | `--runtime-layout` | optional | Captured runtime cache-layout JSON, read by `cache-registration`. |
+
+## Kubernetes plans
+
+A Kubernetes plan runs its engine in a pod. `prepare` renders the pod, the pod's init containers run the checks, and `check` reads what they recorded:
+
+```bash
+narwhal-engine prepare --backend kubernetes --out runs/engine-1
+narwhal-engine check --run runs/engine-1 --pod-evidence runs/engine-1-pod
+```
+
+`prepare` takes the [Kubernetes inputs](../configuration/04-Deployment-Inputs.md#kubernetes-launch-inputs) besides the container inputs. `NARWHAL_ENGINE_IMAGE` must be a registry digest, `<repository>@sha256:<hex>`, and `NARWHAL_NODE_<n>_URL` names the engine pod, such as its DNS name under a headless Service. The record must transfer KV over `ucx_rdma` and must not set `shared_device`.
+
+The device plugins choose the pod's GPUs and HCA, so the plan differs from a container plan:
+
+- It requests as many GPUs as the record's `gpu_ids` lists, under `NARWHAL_KUBERNETES_GPU_RESOURCE`, and one HCA under `NARWHAL_KUBERNETES_RDMA_RESOURCE`. It ignores the record's device paths and the HCA name in `transfer.net_devices`.
+- It sets neither the GPU visibility variable nor `UCX_NET_DEVICES`. The pod sets `UCX_NET_DEVICES` from the HCA it receives.
+- Each variable that carries `NARWHAL_NODE_<n>_IP` on a host, such as `NIXL_HOST_IP` on vLLM, holds `$(NARWHAL_POD_IP)` instead. Kubernetes fills it with the pod's address, which is the node's address under host networking. Kubernetes passes every other value unchanged, because `kubernetes.json` writes each `$` as `$$`.
+- It records no model file status. The pod hashes the model files it serves.
+- `prepare` refuses a model with custom code when the record lacks the backend's remote-code flag, because it renders the runtime probe.
+
+### The engine pod
+
+`kubernetes.json` holds `plan_sha256`, two immutable ConfigMaps under `configMaps`, and the engine pod's specification under `podSpec`. The ConfigMap `<plan name>-hooks` holds the hook directory: `launch.json`, `launch_engine.py`, the cache-capture hook and the engine configuration files. The ConfigMap `narwhal-pod-<digest>` holds the pod steps, `pod.py` and `checkpoint.py`. Its name follows its content, so plans prepared by one Narwhal release share it.
+
+Every container runs in the unmodified engine image:
+
+| Container | Kind | Step |
+| --- | --- | --- |
+| `checkpoint` | Init | Hashes the files under `/model` and fails when their tree digest differs from `model_tree_sha256` in `launch.json` |
+| `runtime-check` | Init | Runs the runtime probe that `check` runs in Docker, with the engine's environment, devices and mounts |
+| `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan and this pod |
+
+Each container's command first runs a bootstrap under `python3 -I`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
+
+The specification sets:
+
+| Setting | Value |
+| --- | --- |
+| Network | `hostNetwork: true`, `dnsPolicy: ClusterFirstWithHostNet` and `enableServiceLinks: false`, so Kubernetes adds no variables to the engine's environment |
+| Devices | The GPU and HCA requests in `runtime-check` and `engine` |
+| Volumes | The model volume read-only at `/model`; the ConfigMaps read-only at `/narwhal-hooks` and `/narwhal-pod`; the state claim at `/narwhal-state`; empty directories at `/root/.cache`, in memory at `/dev/shm`, and at `/narwhal-kv-events` while the engine publishes cache events |
+| Ports | The engine port as `http` and the KV side-channel port as `kv-side-channel` |
+| Credential | The engine credential from the Secret that `NARWHAL_KUBERNETES_API_KEY_SECRET` names |
+| Seccomp | `Unconfined` on ROCm, as the container backend runs ROCm engines |
+
+The state claim mounts at the subdirectory `engines/<role>/<pod UID>`, writable for the init containers and read-only for `engine`.
+
+### Allocated HCA
+
+`runtime-check` and `engine` each read the one `/dev/infiniband/uverbs*` device the RDMA device plugin allocated, take its HCA from `/sys/class/infiniband_verbs/<device>/ibdev`, and set `UCX_NET_DEVICES` to `<hca>:1`. Either container fails when it holds no verbs device or more than one. `engine` also fails when its HCA differs from the one `runtime-check` recorded.
+
+### Pod records
+
+The init containers write `checkpoint.json` and `runtime-check.json` to `/narwhal-state`. Both hold `plan_sha256`, `pod_uid`, `node`, and under `files` the SHA-256 of every delivered file. `checkpoint.json` adds `model_tree_sha256`, `file_count` and `bytes_verified`. `runtime-check.json` adds the allocated HCA as `transfer_device`, and the probe's `returncode`, `stdout` and `stderr`. A step that fails records `error`. An init container that runs again in the same pod replaces its record.
+
+The runtime probe has `NARWHAL_STAGE_POD_RUNTIME_CHECK_TIMEOUT_SECONDS` to finish, or `NARWHAL_STAGE_TIMEOUT_SECONDS` when that is unset, 300 seconds by default. `prepare` reads them and pins the budget in the plan.
+
+### Checking the records
+
+Copy the pod's directory `engines/<role>/<pod UID>/` from the state volume, and pass the copy to `check` as `--pod-evidence`. `check` refuses records that:
+
+- name another plan, or come from two pods or two nodes
+- list delivered files other than the plan's
+- record an error, a model tree digest other than the plan's, or a probe that exited nonzero
+- name no allocated HCA
+
+It then checks the probe output as the Docker check does, and writes `checked.json` with `backend` set to `kubernetes`, `image_id`, `pod_uid`, `node` and `transfer_device`. `image_id` is `sha256:` and the digest of `NARWHAL_ENGINE_IMAGE`, the digest by which the kubelet pulls the image. `check` keeps each record it reads under `pods/<pod UID>/`, named by the record and its SHA-256.
+
+A launch directory holds the check of one pod. To check a replacement pod of the same plan, copy `launch.json`, `container.env`, `hook/` and `kubernetes.json` into a new directory and check the new pod there.
 
 ## Shared-GPU startup
 

@@ -22,6 +22,7 @@ from narwhal.deployment.launch_engine.plan import load, prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheEvent
 from tests.deployment.fixtures import launcher_inputs
+from tests.deployment.pod_fixtures import RDMA_TRANSFER, kubernetes_env
 from tools.measurement import simulated_engine as sim
 
 
@@ -116,7 +117,7 @@ def random_ids(value: Any) -> Any:
     return value
 
 
-def launch_record(runtime: dict, shared: dict | None) -> dict:
+def launch_record(runtime: dict, shared: dict | None, transfer: dict | None = None) -> dict:
     gpus = ["0"] if shared is not None else ["0", "1"]
     entry = {
         "accelerator": "synthetic-gpu",
@@ -125,7 +126,7 @@ def launch_record(runtime: dict, shared: dict | None) -> dict:
         "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
         "accelerator_devices": ["/dev/nvidiactl", *(f"/dev/nvidia{gpu}" for gpu in gpus)],
         "network_mode": "host",
-        "transfer": {"transport": "ucx_tcp", "net_devices": "fabric0", "devices": []},
+        "transfer": transfer or {"transport": "ucx_tcp", "net_devices": "fabric0", "devices": []},
         "sources": dict.fromkeys(
             ("allocation", "devices", "transfer"), "synthetic approved launch record"
         ),
@@ -145,10 +146,13 @@ def prepared(
     launcher: EngineLauncher,
     fixture: ContractFixtures,
     *,
-    native: bool,
+    backend: str = "container",
     **environment: str,
 ) -> tuple[Path, dict, str]:
-    """Prepare a two-GPU container launch, or a native launch on one shared GPU."""
+    """Prepare a two-GPU container or Kubernetes launch, or a native launch on a shared GPU.
+
+    The Kubernetes launch transfers KV over RDMA.
+    """
     _, env = launcher_inputs(root)
     config = root / "model" / "config.json"
     config.write_text(json.dumps(MODEL_CONFIG))
@@ -159,17 +163,22 @@ def prepared(
         env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = digest(capture.cache_hook)
     runtime = copy.deepcopy(fixture.launch_runtime)
     shared = None
-    if native:
+    transfer = None
+    if backend == "native":
         runtime["extra_args"] = [*runtime.get("extra_args", []), *fixture.memory_args]
         shared = {**SHARED_DEVICE, "gpu_memory_utilization": float(fixture.memory_fraction)}
         env.pop("NARWHAL_ENGINE_IMAGE")
         env["NARWHAL_MODEL_REVISION"] = "a" * 40
         env["NARWHAL_NODE_1_ATTESTATION_URL"] = "http://192.0.2.11:8010/v1/attestation"
+    elif backend == "kubernetes":
+        env = kubernetes_env(env)
+        transfer = dict(RDMA_TRANSFER)
     env.update(environment)
-    Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(launch_record(runtime, shared)))
+    record = launch_record(runtime, shared, transfer)
+    Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
     run = root / "launch"
     with contextlib.redirect_stdout(io.StringIO()) as printed:
-        prepare(run, env, backend="native" if native else "container")
+        prepare(run, env, backend=backend)
     return run, load(run), printed.getvalue()
 
 

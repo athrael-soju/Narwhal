@@ -285,10 +285,7 @@ The test measures one-way RDMA writes between host-memory buffers. On RDMA over 
 
 This matrix qualifies KV handoffs between engine hosts. [Preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
 
-Engines on one host do not send KV over the fabric, even when `transfer.transport` is `ucx_rdma`. The launcher starts them in the host IPC namespace, so UCX moves KV through shared memory or CUDA IPC. To send KV between engines of one host over their HCAs, set these values for each of those engines:
-
-- `transfer.gpu_tls` to `cuda_copy`.
-- `UCX_SHM_DEVICES` to `none` in `runtime.environment`.
+With `ucx_tcp`, engines on one host do not send KV over the fabric: the launcher starts them in the host IPC namespace, so UCX moves KV through shared memory or CUDA IPC. With `ucx_rdma`, the launcher sets `UCX_SHM_DEVICES=none` and uses `cuda_copy` as the CUDA transport, so engines on one host send KV to each other over their HCAs. Give each of those engines its own HCA in `transfer.net_devices`.
 
 While KV moves, read the HCA port counters, such as `/sys/class/infiniband/<hca>/ports/1/counters/port_xmit_data`. The counters increase only when KV crosses the HCA.
 

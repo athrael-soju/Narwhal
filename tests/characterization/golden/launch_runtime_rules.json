@@ -324,6 +324,7 @@
       "NIXL_HOST_IP",
       "ROCR_VISIBLE_DEVICES",
       "UCX_NET_DEVICES",
+      "UCX_SHM_DEVICES",
       "UCX_TCP_PORT_RANGE",
       "UCX_TLS",
       "VLLM_API_KEY",

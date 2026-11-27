@@ -260,6 +260,8 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
 | `deployment/launch_engine/backend.py`                                        | Launcher, cache capture and model dimension interfaces for backends      |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
+| `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
+| `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |

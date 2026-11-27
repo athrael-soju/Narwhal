@@ -31,11 +31,11 @@ CAPABILITIES = (
 
 
 class LaunchCapabilityTests(unittest.TestCase):
-    def prepared(self, name: str, *, native: bool = False, **environment: str):
+    def prepared(self, name: str, *, backend: str = "container", **environment: str):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         return prepared(
-            Path(folder.name), load(name).launcher(), fixtures(name), native=native, **environment
+            Path(folder.name), load(name).launcher(), fixtures(name), backend=backend, **environment
         )
 
     def test_the_interface_holds_no_optional_step(self):
@@ -104,12 +104,12 @@ class LaunchCapabilityTests(unittest.TestCase):
                 self.assertIn(f"TensorRT-LLM does not support {action}; it applies to vLLM", error)
 
     def test_only_tensorrt_llm_captures_a_native_launch(self):
-        run, _, _ = self.prepared("trtllm", native=True)
+        run, _, _ = self.prepared("trtllm", backend="native")
         code, error = self.run_cli("capture-cache", "--run", str(run))
         self.assertEqual(code, 1)
         self.assertNotIn("container-only", error)
         self.assertIn("checked", error)
-        run, _, _ = self.prepared("vllm", native=True)
+        run, _, _ = self.prepared("vllm", backend="native")
         code, error = self.run_cli("capture-cache", "--run", str(run))
         self.assertEqual(code, 1)
         self.assertIn("capture-cache is container-only", error)
@@ -119,7 +119,7 @@ class LaunchCapabilityTests(unittest.TestCase):
             tempfile.NamedTemporaryFile(suffix=".bin") as model,
             self.assertRaisesRegex(ValueError, "^SGLang launches take a model directory"),
         ):
-            self.prepared("sglang", native=True, NARWHAL_MODEL_PATH=model.name)
+            self.prepared("sglang", backend="native", NARWHAL_MODEL_PATH=model.name)
         for name, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
             with (
                 self.subTest(name),
