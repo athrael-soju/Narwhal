@@ -294,6 +294,33 @@ else:
 """
 
 
+class CreationClock:
+    """The stage clock, held at zero until the fake daemon holds the stalled container.
+
+    The stage budget then times out a client that stalled after creating its container,
+    however long the fake `docker` takes to start on a loaded machine.
+    """
+
+    def __init__(self, state: Path):
+        self.state = state
+        self.started: float | None = None
+
+    def monotonic(self) -> float:
+        now = time.monotonic()
+        if self.started is None:
+            try:
+                created = "a" * 64 in json.loads(self.state.read_text())
+            except (OSError, ValueError):
+                created = False
+            if not created:
+                return 0.0
+            self.started = now
+        return now - self.started
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 class DockerStageTests(unittest.TestCase):
     stage_budget = "0.3"
     setUp = StageTests.setUp
@@ -313,12 +340,17 @@ class DockerStageTests(unittest.TestCase):
             {
                 "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                 "FAKE_DOCKER_STATE": str(state),
-                "NARWHAL_DOCKER_RECONCILE_SECONDS": "1.5",
+                # Long enough for every fake `docker` call on a loaded machine; a reconciliation
+                # that completes ends as soon as it does.
+                "NARWHAL_DOCKER_RECONCILE_SECONDS": "60",
                 **extra,
             },
         )
         environment.start()
         self.addCleanup(environment.stop)
+        clock = patch.object(stages, "time", CreationClock(state))
+        clock.start()
+        self.addCleanup(clock.stop)
         return state
 
     def test_stalled_create_reconciles_label_and_preserves_unrelated_container(self):
