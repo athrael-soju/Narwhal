@@ -237,6 +237,12 @@ def _selected(run: Path, include_request_content: bool) -> list[Path]:
         "verify-*/*.log",
         "verify-*/*.stdout",
         "verify-*/*.stderr",
+        # A stage runner's record and each stage attempt's files, as `narwhal dev up` keeps them.
+        "launch/run.json",
+        "launch/stages/**/*.json",
+        "launch/stages/**/*.log",
+        "launch/stages/**/*.stdout",
+        "launch/stages/**/*.stderr",
     ):
         files.extend(sorted(run.glob(pattern)))
     if include_request_content:

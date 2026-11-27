@@ -1,7 +1,8 @@
 """The stage graph of a fleet deployment, from host access to the capacity trial.
 
 `docs/Deploy.md` renders its stage and rerun tables from `DEPLOY_GRAPH` through
-`tools/maintenance/stage_graph_doc.py`, and a unit test fails when the two differ.
+`tools/maintenance/stage_graph_doc.py`, and a unit test fails when the two differ. The
+`narwhal dev up` graphs in `dev_graph.py` take their shared stages' definitions from here.
 """
 
 from __future__ import annotations

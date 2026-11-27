@@ -250,6 +250,7 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
 | `deployment/graph.py`                                                        | Stage graphs: stages, facts and rerun rules                              |
 | `deployment/deploy_graph.py`                                                 | The fleet deployment stage graph                                         |
+| `deployment/dev_graph.py`                                                    | The `narwhal dev up` stage graphs                                        |
 | `deployment/run_record.py`                                                   | Run record contract and the run directory lock                           |
 | `deployment/runner.py`                                                       | Stage runner: skips, reruns, attempts and cancellation                   |
 | `deployment/hosts.py`                                                        | Host inventory, SSH with pinned host keys, and remote command time limits |
@@ -442,4 +443,4 @@ The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each 
 
 ## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`: after changing the graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The unit suite fails while the page and the graph differ. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
+Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`, and those in `docs/cli/Dev.md` from `src/narwhal/deployment/dev_graph.py`: after changing a graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The unit suite fails while a page and its graph differ. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.

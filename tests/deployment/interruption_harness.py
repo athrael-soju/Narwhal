@@ -14,7 +14,8 @@ import httpx
 
 from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.deployment import native_engine, stages
-from narwhal.dev import lifecycle
+from narwhal.deployment.runner import Outcome
+from narwhal.dev import launch, lifecycle
 
 MODULE = "tests.deployment.interruption_harness"
 
@@ -99,40 +100,73 @@ def controller(root: Path, selected: str) -> None:
         lifecycle.write(path / f"{log}.command.json", {"argv": command})
         stages.run(command, stage=log, log=path / f"{log}.log")
 
-    def launch(instance, run, config, spec, state):
-        lifecycle.write(run / "fleet.json", lifecycle.read(root / "fleet.json"))
-        record = lifecycle._spawn(
-            root, state, MODULE, ["service", str(registry)], "router", dict(os.environ)
-        )
-        wait_workers(registry, 2)
+    def fleet(context):
+        lifecycle.write(context.directory / "fleet.json", lifecycle.read(root / "fleet.json"))
+
+    def profile(self, context):
+        fleet(context)
+        if selected == "profiling":
+            launch._profiles(context.directory, lifecycle.read(root / "fleet.json"), self.spec)
+
+    def start_router(self, context):
+        # The router stage of a launched fleet, with a synthetic service as its router.
+        url = self.config["router_url"]
+        argv = [sys.executable, "-m", MODULE, "service", str(registry)]
         if selected == "readiness":
             with patch.object(
-                lifecycle.httpx, "Client", side_effect=lambda **kwargs: barrier(root, selected)
+                launch.httpx,
+                "Client",
+                side_effect=lambda **kwargs: (wait_workers(registry, 2), barrier(root, selected)),
             ):
-                lifecycle._wait(config["router_url"] + "/health", record["identity"])
-        elif selected == "exited-leader":
-            os.kill(record["identity"]["pid"], signal.SIGTERM)
+                outcome = self._serve(context, "router", argv, {}, url, [(url + "/health", 30)])
+        else:
+            outcome = self._serve(context, "router", argv, {}, url, [])
+        wait_workers(registry, 2)
+        if selected == "exited-leader":
+            identity = outcome.processes[0]
+            os.kill(identity["pid"], signal.SIGTERM)
             deadline = time.monotonic() + 2
-            while native_engine.owns_process(record["identity"]) and time.monotonic() < deadline:
+            while native_engine.owns_process(dict(identity)) and time.monotonic() < deadline:
                 time.sleep(0.01)
             barrier(root, selected)
-        elif selected == "profiling":
-            lifecycle._profiles(run, lifecycle.read(run / "fleet.json"), spec)
+        return Outcome({"router_identity": dict(outcome.processes[0])}, outcome.processes)
 
-    terminate = native_engine.terminate
-    with (
-        patch.object(lifecycle, "_launch", side_effect=launch),
-        patch.object(lifecycle, "_run", side_effect=run_stage),
-        patch.object(vllm_dev, "check_plugin"),
-        patch.object(lifecycle, "_check_free_ports"),
-        patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
-        patch.object(native_engine, "process_identity", side_effect=child_identity),
-        patch.object(
-            native_engine, "terminate", side_effect=lambda identity: terminate(identity, 0.05)
+    # The stages before the router's pass at once; the router and profiling run their helpers.
+    stubs = {
+        "package": lambda self, context: fleet(context),
+        "prepare_engine": lambda self, context: Outcome(
+            {"launch": {"directory": context.instance, "plan_sha256": "synthetic"}}
         ),
-        patch.object(lifecycle, "write", side_effect=write),
-        patch.object(Path, "replace", replace),
-    ):
+        "check_engine": lambda self, context: None,
+        "start_engines": lambda self, context: Outcome({"engine_identity": {}}),
+        "capture_attestation": lambda self, context: Outcome(
+            {"binding": "synthetic", "engine_contract": {}}
+        ),
+        "start_sidecar": lambda self, context: Outcome({"sidecar_identity": {}}),
+        "finalize": lambda self, context: fleet(context),
+        "profile": profile,
+        "start_router": start_router,
+    }
+    terminate = native_engine.terminate
+    with contextlib.ExitStack() as stack:
+        for name, stub in stubs.items():
+            stack.enter_context(patch.object(launch._Launch, name, stub))
+        for patched in (
+            patch.object(lifecycle, "_run", side_effect=run_stage),
+            patch.object(vllm_dev, "check_plugin"),
+            patch.object(lifecycle, "_check_free_ports"),
+            patch.object(launch, "_check_free_ports"),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(native_engine, "process_identity", side_effect=child_identity),
+            patch.object(
+                native_engine,
+                "terminate",
+                side_effect=lambda identity, grace=10.0: terminate(identity, 0.05),
+            ),
+            patch.object(lifecycle, "write", side_effect=write),
+            patch.object(Path, "replace", replace),
+        ):
+            stack.enter_context(patched)
         lifecycle.up(root)
         if selected == "verification":
             lifecycle.verify(root)
@@ -154,7 +188,9 @@ def inspect(root: Path, operation: str) -> None:
     with (
         patch.object(lifecycle.httpx, "Client", return_value=client),
         patch.object(
-            native_engine, "terminate", side_effect=lambda identity: terminate(identity, 0.05)
+            native_engine,
+            "terminate",
+            side_effect=lambda identity, grace=10.0: terminate(identity, 0.05),
         ),
     ):
         busy = lifecycle._busy(root)

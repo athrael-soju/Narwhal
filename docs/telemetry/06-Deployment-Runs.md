@@ -4,7 +4,7 @@ description: The run record a deployment stage run keeps, its run directory, its
 
 # Deployment run record
 
-The stage runner keeps one run record, `run.json`, in each run directory. It records every stage attempt, the digests that decide whether a stage still holds, and the files each attempt wrote. The [rerun rules](../Deploy.md#rerunning-after-a-change) read it to decide what a run repeats.
+The stage runner keeps one run record, `run.json`, in each run directory. It records every stage attempt, the digests that decide whether a stage still holds, and the files each attempt wrote. The [rerun rules](../Deploy.md#rerunning-after-a-change) read it to decide what a run repeats. `narwhal dev up` keeps its run directory as `launch` in each dev run directory, with the rules in [Resuming an interrupted `up`](../cli/Dev.md#resuming-an-interrupted-up).
 
 A run directory holds:
 

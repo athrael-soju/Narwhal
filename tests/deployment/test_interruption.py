@@ -54,6 +54,8 @@ class InterruptionTests(unittest.TestCase):
                 ],
             },
         )
+        # up records the digest of every instance file as a run input.
+        lifecycle.write(root / "engine-launch.json", {})
 
     def live(self, root):
         processes = stages._processes()
@@ -102,7 +104,9 @@ class InterruptionTests(unittest.TestCase):
                 )
             if selected in {"profiling", "verification"}:
                 evidence = list(root.glob("run-*/**/*.stage.json"))
-                if evidence and len(list((root / "registry").glob("pid-*.json"))) >= 5:
+                # The controller, the helper and its worker, and, once it runs, the router pair.
+                expected = 3 if selected == "profiling" else 5
+                if evidence and len(list((root / "registry").glob("pid-*.json"))) >= expected:
                     # Wait for the parent to observe the detached helper worker.
                     time.sleep(0.06)
                     return
@@ -129,13 +133,16 @@ class InterruptionTests(unittest.TestCase):
                 controller.send_signal(sig)
                 controller.wait(timeout=5)
                 self.assertNotEqual(controller.returncode, 0)
-                if sig == signal.SIGKILL or (sig == signal.SIGTERM and selected == "owned"):
+                if sig == signal.SIGKILL:
                     self.assertEqual(controller.returncode, -sig)
                 for path in root.glob("**/*.json"):
                     self.assertIsInstance(json.loads(path.read_text()), dict, str(path))
                 state = lifecycle.read(root / "lifecycle.json")
-                self.assertTrue(list(Path(state["run"]).glob("router.log")))
-                self.assertIn("retained service", (Path(state["run"]) / "router.log").read_text())
+                logs = list(Path(state["run"]).glob("launch/stages/router-start/*/router.log"))
+                # Profiling runs before the router starts.
+                self.assertEqual(len(logs), 0 if selected == "profiling" else 1)
+                if logs:
+                    self.assertIn("retained service", logs[0].read_text())
                 before = self.live(root)
                 status = self.inspect(root, "status")["result"]
                 self.assertIsNone(sibling.poll())

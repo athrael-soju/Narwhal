@@ -220,7 +220,7 @@ This output is from the measured CPU host, where the run took 91 seconds. On the
 narwhal dev down
 ```
 
-`down` stops the engines and the router. The instance directory keeps the downloaded files and the last run's `run-…` directory with `engine-N.log`, `router.log`, the request journal and the slot files. The next `up` removes the runs before it. `narwhal dev up` starts the fleet again. `narwhal dev down --remove` also deletes `runs/dev`.
+`down` stops the engines and the router. The instance directory keeps the downloaded files and the last run's `run-…` directory with the request journal and, under `launch/stages`, each stage's logs, such as `engine-N.log` and `router.log`, and the slot files. The next `up` removes the runs before it. `narwhal dev up` starts the fleet again. `narwhal dev down --remove` also deletes `runs/dev`.
 
 ## Troubleshooting
 
