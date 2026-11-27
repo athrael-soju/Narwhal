@@ -575,10 +575,16 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
     node = next(iter(nodes))
     if len(nodes) != 1 or not isinstance(node, str) or not node:
         raise ValueError(f"the records name more than one node; inspect {directory}")
-    if records[pod.CHECKPOINT_RECORD].get("model_tree_sha256") != plan["model_tree_sha256"]:
+    model = records[pod.CHECKPOINT_RECORD]
+    if model.get("model_tree_sha256") != plan["model_tree_sha256"]:
         raise ValueError(
             "the engine pod's model files differ from the launch plan; "
             f"inspect {kept[pod.CHECKPOINT_RECORD]}"
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", str(model.get("status_sha256"))):
+        raise ValueError(
+            "the checkpoint record holds no model file status; start the pod with this "
+            f"release's pod steps, and inspect {kept[pod.CHECKPOINT_RECORD]}"
         )
     runtime = records[pod.RUNTIME_RECORD]
     log = kept[pod.RUNTIME_RECORD].relative_to(run)
@@ -614,5 +620,8 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
         "pod_uid": uid,
         "node": node,
         "transfer_device": device,
+        # The status of the model files the checkpoint init container hashed, which the
+        # attestation sidecar compares with the files it serves.
+        "model_status_sha256": model["status_sha256"],
     }
     finish_check(context, judged, identity)
