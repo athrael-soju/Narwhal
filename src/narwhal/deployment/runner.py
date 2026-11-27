@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -86,10 +87,16 @@ class Input:
 
 @dataclass(frozen=True)
 class Outcome:
-    """What a passed stage returns: one value per fact it produces, and the processes it started."""
+    """What a passed stage returns: one value per fact it produces, and the processes it started.
+
+    `live` names the files and directories in the attempt directory that those processes keep
+    writing, such as their logs. The run record lists them without a digest, so their growth
+    never reruns the stage; the processes' own live checks decide whether it still holds.
+    """
 
     products: Mapping[str, Any] = field(default_factory=dict)
     processes: tuple[Mapping[str, Any], ...] = ()
+    live: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -623,6 +630,7 @@ class _Run:
             "definition": self.graph.definition(spec.name),
             "input_digests": {},
             "outputs": [],
+            "live_outputs": [],
             # Until this attempt returns, the record keeps the products and processes of the
             # earlier attempt, so an interruption loses neither.
             "products": dict(previous["products"]) if previous else {},
@@ -652,7 +660,8 @@ class _Run:
                     f"{spec.name} must return products {', '.join(spec.produces) or 'none'}"
                 )
             products = json.loads(json.dumps(dict(outcome.products)))
-            outputs = self._outputs(directory)
+            live = self._live(directory, outcome.live)
+            outputs = self._outputs(directory, live)
         except KeyboardInterrupt as error:
             self._finish(spec, entry, CANCELLED, error)
             raise RunCancelled(name, entry) from error
@@ -671,6 +680,9 @@ class _Run:
             entry.update(
                 status=PASSED,
                 outputs=outputs,
+                live_outputs=sorted(
+                    os.path.relpath(path, os.path.abspath(self.directory)) for path in live
+                ),
                 products=products,
                 input_digests=self._digests(spec, instance),
                 ended_at=time.time(),
@@ -705,11 +717,30 @@ class _Run:
             raise RuntimeError(f"{argv[0]} exited {result.returncode}; inspect {log}")
         return action.outcome(context) if action.outcome is not None else None
 
-    def _outputs(self, directory: Path) -> list[dict[str, Any]]:
+    @staticmethod
+    def _live(directory: Path, live: Sequence[Path]) -> set[Path]:
+        """The absolute paths of `live`, each inside the attempt directory."""
+        attempt = Path(os.path.abspath(directory))
+        paths = set()
+        for path in live:
+            absolute = Path(os.path.abspath(path))
+            if absolute == attempt or not absolute.is_relative_to(attempt):
+                raise ValueError(f"live output {path} is not inside the attempt directory")
+            paths.add(absolute)
+        return paths
+
+    def _outputs(
+        self, directory: Path, live: AbstractSet[Path] = frozenset()
+    ) -> list[dict[str, Any]]:
         outputs = []
         for root, directories, files in os.walk(directory):
+            # A live directory's files belong to the processes that write them.
+            here = Path(os.path.abspath(root))
+            directories[:] = [name for name in directories if here / name not in live]
             for name in sorted(directories + files):
                 path = Path(root) / name
+                if here / name in live:
+                    continue
                 info = path.lstat()
                 if stat.S_ISDIR(info.st_mode):
                     continue

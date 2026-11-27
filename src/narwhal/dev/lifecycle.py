@@ -14,7 +14,6 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -22,13 +21,8 @@ from narwhal.backends import DEFAULT_BACKEND
 from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.deployment import native_engine, stages
-from narwhal.deployment.attestation_contract.fleet import finalize_fleet
-from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine.backend import cache_capture, launcher
-from narwhal.deployment.launch_engine.plan import prepare
-from narwhal.deployment.launch_engine.runtime import digest
-from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
-from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
+from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.start import gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 from narwhal.engines import host_process
 
@@ -42,8 +36,8 @@ from .template import (
     starts_directly,
 )
 
-# Discarded requests each engine on its own GPU serves in each role before profiling.
-WARMUP_REQUESTS = 8
+# An `up` that failed, or that ended without recording its end, resumes in its run.
+RESUMABLE = ("failed", "starting")
 
 
 class LifecycleDocumentError(ValueError):
@@ -178,52 +172,6 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
         raise LifecycleOperationError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
 
 
-def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
-    return _spawn_command(root, state, [sys.executable, "-m", module, *args], name, env)
-
-
-def _spawn_command(root: Path, state: dict, command: list[str], name: str, env: dict) -> dict:
-    run = Path(state["run"])
-    write(run / f"{name}.command.json", {"argv": command})
-    with (run / f"{name}.log").open("w") as output:
-        child = subprocess.Popen(  # noqa: S603 - explicit argv from installed code
-            command,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            cwd=run,
-            env=env,
-        )
-    try:
-        identity = native_engine.process_identity(child.pid)
-    except BaseException as error:
-        try:
-            stages.cancel(child, stage=name, evidence=run / f"{name}-spawn.stage.json")
-        except (OSError, ValueError) as cleanup_error:
-            error.add_note(f"{name} cleanup: {cleanup_error}")
-        raise
-    record = {"name": name, "identity": identity}
-    state["processes"].append(record)
-    write(root / "lifecycle.json", state)
-    return record
-
-
-def _wait(url: str, identity: dict, seconds: int = 30) -> None:
-    deadline = time.monotonic() + seconds
-    with httpx.Client(timeout=2, trust_env=False) as client:
-        while time.monotonic() < deadline:
-            if not native_engine.owns_process(identity):
-                raise ValueError(f"process exited before {url} became healthy; inspect its log")
-            try:
-                if client.get(url).status_code == 200:
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(0.25)
-    raise ValueError(f"health deadline expired: {url}")
-
-
 @contextlib.contextmanager
 def memory_samples(run: Path, gpus: list[str], name: str) -> Iterator[None]:
     """Sample each GPU's memory every half second; with several GPUs each row names its GPU."""
@@ -251,47 +199,6 @@ def memory_samples(run: Path, gpus: list[str], name: str) -> Iterator[None]:
         thread.join(timeout=20)
 
 
-def _profiles(run: Path, fleet: dict, spec: dict) -> None:
-    count = len(fleet["engines"])
-    # Neighbour load follows the split's roles; without it, one split's profiles cover every split.
-    # Engines on their own GPUs have no neighbours.
-    shared = any("shared_device" in engine for engine in fleet["engines"])
-    colocated = shared and "neighbour_prefill_rps" in spec["profile"]
-    opening = sum(engine["role"] == "prefill" for engine in fleet["engines"])
-    sources = []
-    for prefill in range(1, count) if colocated else (opening,):
-        measured = json.loads(json.dumps(fleet))
-        for index, engine in enumerate(measured["engines"]):
-            engine["role"] = "prefill" if index < prefill else "decode"
-        profile = run / f"profiles-{prefill}p{count - prefill}d.json"
-        measured["profiles"]["path"] = str(profile)
-        fleet_path = run / f"profile-{prefill}p{count - prefill}d.fleet.json"
-        write(fleet_path, measured)
-        args = ["--fleet", str(fleet_path)]
-        if colocated:
-            args.append("--colocated")
-        if not shared:
-            # Without neighbour load, nothing else exercises an engine before its sweep.
-            args.extend(["--warmup-requests", str(WARMUP_REQUESTS)])
-        for key, value in spec["profile"].items():
-            if key.startswith("neighbour_") and not colocated:
-                continue
-            rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
-            args.extend(["--" + key.replace("_", "-"), rendered])
-        print(
-            f"profiling {prefill} prefill / {count - prefill} decode", file=sys.stderr, flush=True
-        )
-        _run(run, "narwhal.profiling.probe.cli", args, f"profile-{prefill}p{count - prefill}d")
-        sources.append(profile)
-    if len(sources) == 1:
-        (run / "profiles.json").write_bytes(sources[0].read_bytes())
-    else:
-        args = ["--fleet", str(run / "fleet.json"), "--out", str(run / "profiles.json")]
-        for source in sources:
-            args.extend(["--merge", str(source)])
-        _run(run, "narwhal.profiling.probe.cli", args, "profile-merge")
-
-
 def _helper_records(run: Path) -> list[tuple[Path, dict]]:
     records = []
     for path in sorted(run.rglob("*.stage.json")):
@@ -303,13 +210,30 @@ def _helper_records(run: Path) -> list[tuple[Path, dict]]:
     return records
 
 
+def _engine_records(run: Path, *, every_attempt: bool) -> list[dict]:
+    """The engines of a launched instance, as their launch directories record them.
+
+    The native launcher records each engine before its health checks, failures included. An
+    engine's newest launch directory names its current process; `every_attempt` adds the
+    processes of its earlier launch directories in the run.
+    """
+    from . import launch
+
+    records = []
+    for engine, directories in launch.launches(run).items():
+        for directory in directories if every_attempt else directories[-1:]:
+            path = directory / "native-process.json"
+            if path.exists():
+                records.append({"name": engine, "identity": _read_identity(path)})
+    return records
+
+
 def _stop(root: Path, state: dict) -> None:
+    from . import launch
+
     errors = []
-    # The native launcher persists ownership before health checks, including failures.
     run = Path(state["run"])
-    records = list(state.get("processes", []))
-    for path in sorted(run.glob("engine-*/native-process.json")):
-        records.insert(0, {"name": path.parent.name, "identity": _read_identity(path)})
+    records = _engine_records(run, every_attempt=True) + list(state.get("processes", []))
     stopped = []
     for path, helper in _helper_records(run):
         try:
@@ -323,13 +247,11 @@ def _stop(root: Path, state: dict) -> None:
         except (OSError, ValueError) as error:
             errors.append(f"{helper['stage']}: {error}")
     for record in reversed(records):
-        identity = record["identity"]
-        if native_engine.group_members(identity):
-            try:
-                native_engine.terminate(identity)
+        try:
+            if launch.SUPERVISOR.stop(launch.process_group(record["identity"])):
                 stopped.append(record["name"])
-            except (OSError, ValueError) as exc:
-                errors.append(f"{record['name']}: {exc}")
+        except (OSError, ValueError) as exc:
+            errors.append(f"{record['name']}: {exc}")
     state.update(phase="degraded" if errors else "stopped", stopped=stopped, errors=errors)
     if not errors:
         state.pop("verification_failure", None)
@@ -411,160 +333,85 @@ def up(root: Path, alongside: bool = False) -> dict:
             f"{others[0]}, or pass --alongside to start this fleet beside it"
         )
     _started_elsewhere(root, record=True)
-    if starts_directly(config):
-        from . import direct
+    from . import launch
 
-        return direct.up(root, config)
     with locked(root):
-        if (root / "lifecycle.json").exists():
-            previous = _read_state(root)
-            if previous.get("phase") != "stopped":
-                raise ValueError("the fleet is already up; run narwhal dev down to stop it")
+        # setup may have changed the instance since it was read.
+        config = instance(root)
+        previous = _read_state(root) if (root / "lifecycle.json").exists() else None
+        phase = previous["phase"] if previous is not None else "stopped"
+        resuming = phase in RESUMABLE
+        if not resuming and phase != "stopped":
+            raise ValueError("the fleet is already up; run narwhal dev down to stop it")
         spec = read(root / "template.json")
-        launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
-        for path, expected in model_files(spec["model"], Path(config["model_path"])).items():
-            if _sha256(path) != expected:
-                raise ValueError(f"model file {path.name} changed after dev init")
-        for name, expected in spec["model"].get("tokenizer_sha256", {}).items():
-            if _sha256(Path(config["model_dir"]) / name) != expected:
-                raise ValueError(f"tokenizer file {name} changed after dev init")
-        _, ports = _port_layout(spec, config["engine_count"])
-        _check_free_ports(ports, "127.0.0.1")
-        run = root / f"run-{uuid.uuid4().hex[:12]}"
-        run.mkdir(mode=0o700)
-        state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
+        ports = _launch_checks(root, config, spec)
+        if previous is not None and resuming:
+            run = Path(previous["run"])
+            state = previous
+            state.pop("failure", None)
+        else:
+            _check_free_ports(ports, "127.0.0.1")
+            if starts_directly(config):
+                _remove_earlier_runs(root, previous)
+            run = root / f"run-{uuid.uuid4().hex[:12]}"
+            run.mkdir(mode=0o700)
+            state = {"schema_version": 1, "run": str(run), "processes": []}
+        state["phase"] = "starting"
         write(root / "lifecycle.json", state)
+        samples = (
+            contextlib.nullcontext()
+            if starts_directly(config)
+            else memory_samples(run, instance_gpus(config), "up")
+        )
         try:
-            with memory_samples(run, instance_gpus(config), "up"):
-                _launch(root, run, config, spec, state)
+            with samples:
+                launch.run(root, run, config, spec, state, resuming)
         except BaseException as error:
+            # The stages that passed keep their processes, so the next up resumes here.
+            state["phase"] = "failed"
             state["failure"] = {
-                "message": str(error),
+                "message": str(error) or type(error).__name__,
                 "stage": getattr(error, "stage", "startup"),
                 "context": getattr(error, "context", {}),
             }
-            try:
-                _stop(root, state)
-            except (OSError, ValueError) as cleanup_error:
-                state["failure"]["cleanup_error"] = str(cleanup_error)
-                write(root / "lifecycle.json", state)
+            write(root / "lifecycle.json", state)
             raise
         state["phase"] = "launched"
         write(root / "lifecycle.json", state)
         return {"status": "launched", "run": str(run), "router": config["router_url"]}
 
 
-def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> None:
-    fleet = read(root / "fleet.json")
-    fleet.pop("engine_contract", None)
-    settings = fleet.setdefault("engine", {})
-    if not settings.get("engine_api_key_env") and os.environ.get("NARWHAL_ENGINE_API_KEY"):
-        settings["engine_api_key_env"] = "NARWHAL_ENGINE_API_KEY"
-    fleet["profiles"]["path"] = str(run / "profiles.json")
-    fleet["recovery"] = {"state_path": str(run / "router-state.json")}
-    write(run / "fleet.json", fleet)
-    engine_key = FleetConfig.load(run / "fleet.json").resolve_engine_key()
-    allocation = read(root / "engine-launch.json")
-    engine_launcher = launcher(spec["runtime"].get("backend"))
-    capture = cache_capture(engine_launcher)
-    hook = (
-        {}
-        if capture is None
-        else {
-            "NARWHAL_CACHE_CAPTURE_HOOK": str(capture.cache_hook),
-            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(capture.cache_hook),
-        }
-    )
-    runs = []
-    for index, engine in enumerate(fleet["engines"]):
-        number = index + 1
-        name = f"engine-{number}"
-        selected = run / f"{name}.selected.json"
-        write(selected, selected_launch(allocation, name, {}))
-        env = {
-            **os.environ,
-            "NARWHAL_ENGINE_LAUNCH_CONFIG": str(selected),
-            "NARWHAL_MODEL_DIR": config["model_dir"],
-            "NARWHAL_MODEL_PATH": config["model_path"],
-            "NARWHAL_MODEL_REVISION": config["model_revision"],
-            "NARWHAL_MODEL_CONFIG_SHA256": config["model_config_sha256"],
-            **hook,
-            "NARWHAL_ENGINE_PORT": str(config["ports"]["engine_first"] + index),
-            "NARWHAL_ATTEST_PORT": str(config["ports"]["attestation_first"] + index),
-            KV_SIDE_CHANNEL_PORT_ENV: str(config["ports"]["side_channel_first"] + index),
-            "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
-            f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
-            f"NARWHAL_NODE_{number}_URL": engine["url"],
-            f"NARWHAL_NODE_{number}_ATTESTATION_URL": engine["attestation_url"],
-            "NARWHAL_ENGINE_MODEL_NAME": fleet["model"],
-            "NARWHAL_ENGINE_API_KEY": engine_key or "",
-            "NARWHAL_DEPLOYMENT_REVISION": digest(root / "template.json"),
-        }
-        engine_run = run / name
-        with contextlib.redirect_stdout(sys.stderr):
-            prepare(engine_run, env, backend="native")
-        _run(run, "narwhal.deployment.launch_engine.cli", ["check", "--run", str(engine_run)], name)
-        runs.append(engine_run)
-    # An engine that compiles kernels on its first start needs a longer window.
-    ready = spec["runtime"].get("ready_seconds", READY_SECONDS)
-    # Engines on one GPU start as its shared group; engines on their own GPUs start one each.
-    start, stage = (
-        ("start-native", "native-start")
-        if "gpu_uuids" in config
-        else ("start-shared", "native-start-shared")
-    )
-    _run(
-        run,
-        "narwhal.deployment.launch_engine.cli",
-        [
-            start,
-            *(["--backend", "native"] if start == "start-shared" else []),
-            "--ready-seconds",
-            str(ready),
-            *[arg for path in runs for arg in ("--run", str(path))],
-        ],
-        stage,
-        default_timeout=ready * len(runs),
-    )
-    for index, engine_run in enumerate(runs):
-        _run(
-            run,
-            "narwhal.deployment.attestation_contract.cli",
-            ["capture", "--run", str(engine_run)],
-            f"attest-{index + 1}",
-        )
-        url = fleet["engines"][index]["attestation_url"]
-        record = _spawn(
-            root,
-            state,
-            "narwhal.deployment.attestation_contract.cli",
-            ["serve", "--run", str(engine_run)],
-            f"sidecar-{index + 1}",
-            {**os.environ, f"NARWHAL_NODE_{index + 1}_ATTESTATION_URL": url},
-        )
-        _wait(url, record["identity"])
-    finalize_fleet(run / "fleet.json")
-    fleet = read(run / "fleet.json")
-    _profiles(run, fleet, spec)
-    router = urlsplit(config["router_url"])
-    record = _spawn(
-        root,
-        state,
-        "narwhal.cli",
-        [
-            "--fleet",
-            str(run / "fleet.json"),
-            "--host",
-            str(router.hostname),
-            "--port",
-            str(router.port),
-            "--journal",
-            str(run / "journal.jsonl"),
-        ],
-        "router",
-        dict(os.environ),
-    )
-    _wait(config["router_url"] + "/health", record["identity"])
+def _launch_checks(root: Path, config: dict, spec: dict) -> set[int]:
+    """Check the engine runtime and the model files against the instance; return its ports."""
+    if starts_directly(config):
+        from . import direct
+
+        start = direct._direct_start(spec)
+        binary = direct._binary(Path(config["engine_binary"]))
+        if start.check(binary, direct._runtime(spec)) != config["engine_version"]:
+            raise ValueError("engine binary changed after dev init")
+        direct._model(spec, Path(config["model_path"]))
+        return direct._ports(spec, config["engine_count"])[1]
+    launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
+    for path, expected in model_files(spec["model"], Path(config["model_path"])).items():
+        if _sha256(path) != expected:
+            raise ValueError(f"model file {path.name} changed after dev init")
+    for name, expected in spec["model"].get("tokenizer_sha256", {}).items():
+        if _sha256(Path(config["model_dir"]) / name) != expected:
+            raise ValueError(f"tokenizer file {name} changed after dev init")
+    return _port_layout(spec, config["engine_count"])[1]
+
+
+def _remove_earlier_runs(root: Path, previous: dict | None) -> None:
+    """Keep the last run's logs for a look after a restart; earlier runs leave."""
+    kept = Path(previous["run"]).name if previous is not None else None
+    for earlier in root.glob("run-*"):
+        if earlier.name == kept:
+            continue
+        if earlier.is_symlink():
+            earlier.unlink()
+        elif earlier.is_dir():
+            shutil.rmtree(earlier)
 
 
 def verify(root: Path) -> dict:
@@ -674,11 +521,7 @@ def status(root: Path) -> dict:
     run = Path(state["run"])
     if state["phase"] == "starting" and _busy(root):
         return {"status": "starting", "run": str(run)}
-    records = list(state["processes"])
-    records.extend(
-        {"name": path.parent.name, "identity": _read_identity(path)}
-        for path in sorted(run.glob("engine-*/native-process.json"))
-    )
+    records = _engine_records(run, every_attempt=False) + list(state["processes"])
     live = [r["name"] for r in records if native_engine.owns_process(r["identity"])]
     survivors = {
         r["name"]: sorted(members)
@@ -690,7 +533,8 @@ def status(root: Path) -> dict:
         for path, record in _helper_records(run)
         if (members := stages.active(record))
     }
-    if state["phase"] == "stopped" and not live and not survivors and not helpers:
+    # A failed up whose stages left nothing running holds no fleet until it resumes.
+    if state["phase"] in ("stopped", "failed") and not live and not survivors and not helpers:
         return {"status": "stopped", "run": str(run)}
     problems = [r["name"] + " process identity expired" for r in records if r["name"] not in live]
     problems.extend(

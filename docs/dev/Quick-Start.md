@@ -220,7 +220,7 @@ This output is from the measured CPU host, where the run took 91 seconds. On the
 narwhal dev down
 ```
 
-`down` stops the engines and the router. The instance directory keeps the downloaded files and the last run's `run-…` directory with `engine-N.log`, `router.log`, the request journal and the slot files. The next `up` removes the runs before it. `narwhal dev up` starts the fleet again. `narwhal dev down --remove` also deletes `runs/dev`.
+`down` stops the engines and the router. The instance directory keeps the downloaded files and the last run's `run-…` directory with the request journal and, under `launch/stages`, each stage's logs, such as `engine-N.log` and `router.log`, and the slot files. The next `up` removes the runs before it. `narwhal dev up` starts the fleet again. `narwhal dev down --remove` also deletes `runs/dev`.
 
 ## Troubleshooting
 
@@ -230,7 +230,7 @@ narwhal dev down
 | `host memory check failed` | Repeat `setup` with `--engine-count 2`. A `Qwen3.5-0.8B` instance can instead be set up in a new `--instance` directory with the default model. |
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
-| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `launch/stages/engine-start/attempt-<n>/engine-N.log`, with the highest attempt number, in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
 | `a fleet is already up in …` during `up` | Stop that fleet with the `narwhal dev down --instance …` command the message names, then repeat `up`. |
 | `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
 | `no instance here; run narwhal dev up or narwhal dev init` | Run `narwhal dev up`, or change to the directory where you ran it. |

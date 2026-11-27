@@ -177,11 +177,12 @@ class StageGraph:
     def digest(self) -> str:
         return canonical_digest(self.document())
 
-    def markdown(self, capabilities: Mapping[str, str]) -> str:
-        """The stage table and the rerun table, as Markdown for the deployment guide.
+    def markdown(self, capabilities: Mapping[str, str], docs: str = "") -> str:
+        """The stage table and the rerun table, as Markdown for a documentation page.
 
         `capabilities` names, for each stage capability, where the stage runs, such as the
-        backends that have it.
+        backends that have it. `docs` is the page's relative path to `docs/`, which the gate
+        section links start from.
         """
         used = {stage.capability for stage in self.stages.values() if stage.capability}
         if missing := sorted(name for name in used if name not in capabilities):
@@ -193,7 +194,9 @@ class StageGraph:
         for stage in self.stages.values():
             after = ", ".join(f"`{name}`" for name in stage.after)
             runs = self.scopes[stage.scope].meaning + self._where(stage.name, ", ", capabilities)
-            lines.append(f"| `{stage.name}` | {runs} | {after} | [{stage.section}]({stage.page}) |")
+            lines.append(
+                f"| `{stage.name}` | {runs} | {after} | [{stage.section}]({docs}{stage.page}) |"
+            )
         lines += ["", "| Change | Recorded as | Reruns |", "| --- | --- | --- |"]
         for fact in self.facts.values():
             recorded = fact.digest + (", checked live on every run" if fact.kind == LIVE else "")

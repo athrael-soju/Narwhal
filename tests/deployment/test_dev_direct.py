@@ -1,5 +1,7 @@
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import random
@@ -239,7 +241,7 @@ class DirectLifecycleTests(DirectInstance):
         self.addCleanup(self.stop)
         self.assertEqual(launched["status"], "launched")
         run = Path(launched["run"])
-        store = ProfileStore(run / "profiles.json")
+        store = ProfileStore(Path(json.loads((run / "fleet.json").read_text())["profiles"]["path"]))
         profiles = [store.get(iid) for iid in ("n1", "n2")]
         self.assertTrue(all(profile.nominal for profile in profiles))
         self.assertEqual(
@@ -334,13 +336,48 @@ class DirectLifecycleTests(DirectInstance):
         ):
             lifecycle.up(self.root)
         state = json.loads((self.root / "lifecycle.json").read_text())
-        self.assertEqual(state["phase"], "stopped")
+        # The failed stage stopped the engine it started, so the run holds nothing to resume.
+        self.assertEqual(state["phase"], "failed")
         self.assertIn("became healthy", state["failure"]["message"])
-        self.assertEqual(state["stopped"], ["engine-1"])
-        survivor = state["processes"][0]["identity"]
-        self.assertFalse(native_engine.owns_process(survivor))
+        self.assertEqual(state["processes"], [])
         _check_free_ports({first}, "127.0.0.1")
         self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
+
+    def test_a_failed_up_resumes_at_the_stage_that_failed(self):
+        self.init()
+        with (
+            patch.object(direct, "_measure", side_effect=ValueError("measurement failed")),
+            self.assertRaisesRegex(ValueError, "measurement failed"),
+        ):
+            lifecycle.up(self.root)
+        self.addCleanup(self.stop)
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        self.assertEqual(state["phase"], "failed")
+        engines = {record["name"]: record["identity"] for record in state["processes"]}
+        self.assertEqual(sorted(engines), ["engine-1", "engine-2"])
+        self.assertTrue(all(map(native_engine.owns_process, engines.values())))
+        self.assertEqual(lifecycle.status(self.root)["status"], "degraded")
+        with self.assertRaisesRegex(ValueError, "requires a launched instance"):
+            lifecycle.verify(self.root)
+        # The engines keep logging and saving KV slots while the run waits; neither restarts them.
+        attempt = Path(state["run"]) / "launch/stages/engine-start/attempt-1"
+        for name in engines:
+            with (attempt / f"{name}.log").open("a") as log:
+                log.write("served a request\n")
+        (attempt / "slot-files" / "slot-0.bin").write_bytes(b"kv")
+        with contextlib.redirect_stderr(io.StringIO()) as progress:
+            launched = lifecycle.up(self.root)
+        self.assertEqual(Path(launched["run"]), Path(state["run"]))
+        resumed_at = [line for line in progress.getvalue().splitlines() if "resuming" in line]
+        self.assertEqual(resumed_at, [f"resuming {state['run']} at profile"])
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        self.assertEqual(state["phase"], "launched")
+        resumed = {record["name"]: record["identity"] for record in state["processes"]}
+        self.assertEqual({name: resumed[name] for name in engines}, engines)
+        self.assertEqual(lifecycle.status(self.root)["status"], "launched")
+        # A stopped run starts afresh.
+        lifecycle.down(self.root)
+        self.assertNotEqual(lifecycle.up(self.root)["run"], launched["run"])
 
     def test_a_failed_verification_and_a_dead_engine_degrade_the_instance(self):
         self.init()

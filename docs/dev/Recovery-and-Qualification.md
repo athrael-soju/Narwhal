@@ -37,17 +37,16 @@ For an `inspection_required` report result from a stalled daemon:
 
 ## Interrupted `narwhal dev` process
 
-After an interruption, run `narwhal dev down` from a fresh shell. What it does depends on where the interruption landed:
+After an interruption, run `narwhal dev up` from a fresh shell to [resume](../cli/Dev.md#resuming-an-interrupted-up), or `narwhal dev down` to stop the run. What `down` does depends on where the interruption landed:
 
 | Interruption point | Signal | Result |
 | --- | --- | --- |
 | Child created, before identity capture | SIGINT | `down` reports `stopped` |
 | Child created, before identity capture | SIGKILL | Recovery uses the last committed process set |
 | Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current |
-| Process record committed | SIGINT | Startup rolls back |
-| Process record committed | SIGTERM | `down` terminates the recorded group |
+| Process record committed | SIGINT or SIGTERM | The interrupted stage stops the process, and `down` reports `stopped` |
 | Service readiness wait | SIGKILL | `down` terminates the recorded group |
-| Profiling helper active | SIGINT or SIGTERM | Startup rolls back |
+| Profiling helper active | SIGINT or SIGTERM | The helper stops, and `down` stops the processes of the stages that passed |
 | Profiling helper active | SIGKILL | `down` recovers the helper and service records |
 | Verification helper active | SIGTERM | `down` terminates the retained services |
 | Verification helper active | SIGKILL | `down` terminates the helpers and services |
@@ -106,8 +105,7 @@ Prerequisites:
     ```
 
 7. Record the pre-expiry allocation, command duration, and worker exit.
-8. Compare the duration with the budget plus termination grace and rollback
-   time.
+8. Compare the duration with the budget plus termination grace.
 9. Record post-cleanup device memory and port release.
 10. Compare the device memory with the idle baseline.
 11. Retain `lifecycle.json` and the teardown, startup, memory, and stage

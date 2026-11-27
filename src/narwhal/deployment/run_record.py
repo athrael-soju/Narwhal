@@ -150,6 +150,7 @@ _STAGE = (
     "definition",
     "input_digests",
     "outputs",
+    "live_outputs",
     "products",
     "processes",
     "command",
@@ -231,6 +232,11 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
             and bool(_MODE.fullmatch(output["mode"])),
             f"{where}.outputs needs path, sha256, size and mode",
         )
+    live = stage["live_outputs"]
+    check(
+        isinstance(live, list) and all(isinstance(path, str) and _relative(path) for path in live),
+        f"{where}.live_outputs must be a list of relative paths",
+    )
     check(isinstance(stage["products"], dict), f"{where}.products must be an object")
     check(
         isinstance(stage["processes"], list)

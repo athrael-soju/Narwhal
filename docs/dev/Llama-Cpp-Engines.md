@@ -49,7 +49,7 @@ Narwhal installs two templates that start llama.cpp engines:
 | `--threads` | The CPUs the process may use less one, divided among the engines and rounded down, from 1 to 8. A container's CPU quota (cgroup v1 or v2) caps the CPUs, rounded up, so engines in a `docker run --cpus` container or a Kubernetes pod with a CPU limit do not oversubscribe it |
 | `--n-gpu-layers` | `all`, or `0` with `--no-accelerator` or the CPU build |
 | `--cache-ram` | `0`, which turns off the server's host prompt cache |
-| `--slot-save-path` | The run's `slot-files` directory, shared by every engine |
+| `--slot-save-path` | The `slot-files` directory in the run's `engine-start` attempt directory, shared by every engine |
 | `--metrics`, `--slots`, `--no-webui` | Set |
 
 The server's shared libraries load from the directory of the engine binary.

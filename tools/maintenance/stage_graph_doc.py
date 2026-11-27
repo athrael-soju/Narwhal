@@ -1,26 +1,50 @@
-"""Write the stage and rerun tables in docs/Deploy.md from the deployment stage graph.
+"""Write the stage and rerun tables in docs/Deploy.md and docs/cli/Dev.md from the stage graphs.
 
-Run it after changing `src/narwhal/deployment/deploy_graph.py`. With `--check` it changes
-nothing and exits 1 when the page differs from the graph; the unit suite runs that check.
+Run it after changing `src/narwhal/deployment/deploy_graph.py` or `dev_graph.py`. With `--check`
+it changes nothing and exits 1 when a page differs from its graphs; the unit suite runs that
+check.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from narwhal import backends
 from narwhal.deployment.deploy_graph import CAPABILITIES, DEPLOY_GRAPH
+from narwhal.deployment.dev_graph import DIRECT_GRAPH, LAUNCHED_GRAPH
+from narwhal.deployment.graph import StageGraph
 from narwhal.deployment.launch_engine import backend as launch_backend
 
 ROOT = Path(__file__).resolve().parents[2]
-PAGE = ROOT / "docs/Deploy.md"
-BEGIN = (
-    "<!-- Generated from src/narwhal/deployment/deploy_graph.py by "
-    "tools/maintenance/stage_graph_doc.py. Edit the graph, then run the tool. -->"
-)
 END = "<!-- End of the generated stage tables. -->"
+
+
+@dataclass(frozen=True)
+class Block:
+    """One generated block: the graph it renders and the page's path back to `docs/`."""
+
+    graph: StageGraph
+    source: str
+    docs: str = ""
+
+    @property
+    def begin(self) -> str:
+        return (
+            f"<!-- Generated from {self.source} by tools/maintenance/stage_graph_doc.py. "
+            "Edit the graph, then run the tool. -->"
+        )
+
+
+PAGES = {
+    ROOT / "docs/Deploy.md": (Block(DEPLOY_GRAPH, "src/narwhal/deployment/deploy_graph.py"),),
+    ROOT / "docs/cli/Dev.md": (
+        Block(LAUNCHED_GRAPH, "LAUNCHED_GRAPH in src/narwhal/deployment/dev_graph.py", "../"),
+        Block(DIRECT_GRAPH, "DIRECT_GRAPH in src/narwhal/deployment/dev_graph.py", "../"),
+    ),
+}
 
 
 def capabilities() -> dict[str, str]:
@@ -46,30 +70,36 @@ def capabilities() -> dict[str, str]:
     return labels
 
 
-def render(text: str) -> str:
-    """Return `text` with the generated block replaced by the current graph's tables."""
-    if text.count(BEGIN) != 1 or text.count(END) != 1 or text.index(BEGIN) > text.index(END):
-        raise ValueError(f"{PAGE} needs one generated block between its markers")
-    head, rest = text.split(BEGIN)
-    _, tail = rest.split(END)
-    return f"{head}{BEGIN}\n\n{DEPLOY_GRAPH.markdown(capabilities())}\n{END}{tail}"
+def render(page: Path, text: str) -> str:
+    """Return `text` with each of the page's generated blocks replaced by its graph's tables."""
+    for block in PAGES[page]:
+        if text.count(block.begin) != 1:
+            raise ValueError(f"{page} needs one block that begins {block.begin}")
+        head, rest = text.split(block.begin)
+        if END not in rest:
+            raise ValueError(f"{page}: the block for {block.source} has no end marker")
+        _, tail = rest.split(END, 1)
+        tables = block.graph.markdown(capabilities(), docs=block.docs)
+        text = f"{head}{block.begin}\n\n{tables}\n{END}{tail}"
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--check", action="store_true", help="exit 1 when the page differs from the graph"
+        "--check", action="store_true", help="exit 1 when a page differs from its graphs"
     )
     args = parser.parse_args(argv)
-    text = PAGE.read_text()
-    rendered = render(text)
-    if args.check:
-        if rendered != text:
-            print(f"{PAGE} differs from the deployment stage graph; run {__file__}")
-            return 1
-        return 0
-    PAGE.write_text(rendered)
-    return 0
+    status = 0
+    for page in PAGES:
+        text = page.read_text()
+        rendered = render(page, text)
+        if not args.check:
+            page.write_text(rendered)
+        elif rendered != text:
+            print(f"{page} differs from its stage graphs; run {__file__}")
+            status = 1
+    return status
 
 
 if __name__ == "__main__":

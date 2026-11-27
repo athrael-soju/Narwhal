@@ -636,6 +636,50 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(retired["failure"]["recovery"], "Deploy.md#rerunning-after-a-change")
 
 
+class LiveOutputTests(unittest.TestCase):
+    """Files that a stage's processes keep writing, such as their logs."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name) / "run"
+
+    @staticmethod
+    def serve(context):
+        (context.directory / "out.json").write_text("{}")
+        (context.directory / "process.log").write_text("started\n")
+        (context.directory / "slots").mkdir()
+        (context.directory / "slots" / "slot-0.bin").write_bytes(b"0")
+        return Outcome(live=(context.directory / "process.log", context.directory / "slots"))
+
+    def test_a_growing_live_output_leaves_its_stage_passed(self):
+        stub = runner_harness.runner(self.directory, first=self.serve)
+        stub.run(runner_harness.INPUTS)
+        entry = run_record.read(self.directory)["stages"]["first"]
+        self.assertEqual(
+            entry["live_outputs"],
+            ["stages/first/attempt-1/process.log", "stages/first/attempt-1/slots"],
+        )
+        self.assertEqual(
+            [output["path"] for output in entry["outputs"]], ["stages/first/attempt-1/out.json"]
+        )
+        attempt = self.directory / "stages/first/attempt-1"
+        with (attempt / "process.log").open("a") as log:
+            log.write("served a request\n")
+        (attempt / "slots" / "slot-0.bin").write_bytes(b"1")
+        self.assertEqual(ran(stub.run(runner_harness.INPUTS)), set())
+        (attempt / "out.json").write_text('{"changed": true}')
+        self.assertIn("first", ran(stub.run(runner_harness.INPUTS)))
+
+    def test_a_live_output_outside_the_attempt_directory_fails_the_stage(self):
+        def outside(context):
+            return Outcome(live=(context.directory.parent / "elsewhere.log",))
+
+        with self.assertRaises(StageFailed) as caught:
+            runner_harness.runner(self.directory, first=outside).run(runner_harness.INPUTS)
+        self.assertIn("is not inside the attempt directory", str(caught.exception.__cause__))
+
+
 class CommandStageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

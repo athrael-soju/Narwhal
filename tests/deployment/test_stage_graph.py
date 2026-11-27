@@ -26,13 +26,15 @@ def graph(stages, facts=(), relations=()):
 
 
 class StageGraphTests(unittest.TestCase):
-    def test_deployment_guide_tables_match_the_graph(self):
-        text = stage_graph_doc.PAGE.read_text()
-        self.assertEqual(
-            stage_graph_doc.render(text),
-            text,
-            "run tools/maintenance/stage_graph_doc.py after changing deploy_graph.py",
-        )
+    def test_each_page_holds_the_tables_of_its_graphs(self):
+        for page in stage_graph_doc.PAGES:
+            with self.subTest(page=page.name):
+                text = page.read_text()
+                self.assertEqual(
+                    stage_graph_doc.render(page, text),
+                    text,
+                    "run tools/maintenance/stage_graph_doc.py after changing a stage graph",
+                )
 
     def test_each_stage_names_a_heading_of_its_gate_page(self):
         for stage in DEPLOY_GRAPH.stages.values():

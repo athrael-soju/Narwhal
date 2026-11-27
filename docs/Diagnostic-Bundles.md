@@ -44,7 +44,7 @@ Each source adds these files to the bundle:
 | Source | Selected by | Included files |
 | --- | --- | --- |
 | Dev instance | `--instance` | The instance's `instance.json`, `lifecycle.json`, and `fleet.json`, plus the run named in its lifecycle state, inside the instance directory |
-| Run directory | `--run` | `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs, stage stdout/stderr files, and the JSON, log, and stage output files directly under `engine-*` and `verify-*` directories |
+| Run directory | `--run` | `fleet.json`, `profiles.json`, `teardown.json`, `router-state.json`, command and stage records, process logs, stage stdout/stderr files, the JSON, log, and stage output files directly under `engine-*` and `verify-*` directories, and the stage runner's `launch/run.json` with the JSON, log, and stage output files of every attempt under `launch/stages` |
 | Request content | `--include-request-content` | `journal.jsonl` and the completion artifacts |
 | Files kept elsewhere | `--artifact` | Regular files on symlink-free paths, such as supervisor status, ingress logs, or deployment evidence |
 
