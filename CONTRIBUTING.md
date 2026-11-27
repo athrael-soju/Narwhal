@@ -182,7 +182,7 @@ Each area of the Python package lives in one package or module:
 | Prometheus metrics and request journals                                             | `observability/`                                      |
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
 | Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
-| Engine launch plans, runtime checks, stage supervision, and attestation capture     | `deployment/`                                         |
+| Engine launch plans and checks, stage runs and supervision, and attestation capture | `deployment/`                                         |
 | Engine backend registry and backend implementations                                 | `backends/`, `backends/<name>/`                       |
 | Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
@@ -248,6 +248,10 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/exposition.py`                                        | Prometheus text lines and SLO-scaled histograms                          |
 | `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
+| `deployment/graph.py`                                                        | Stage graphs: stages, facts and rerun rules                              |
+| `deployment/deploy_graph.py`                                                 | The fleet deployment stage graph                                         |
+| `deployment/run_record.py`                                                   | Run record contract and the run directory lock                           |
+| `deployment/runner.py`                                                       | Stage runner: skips, reruns, attempts and cancellation                   |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
@@ -422,4 +426,4 @@ The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each 
 
 ## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
+Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`: after changing the graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The unit suite fails while the page and the graph differ. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.

@@ -198,26 +198,8 @@ def _spawn_command(root: Path, state: dict, command: list[str], name: str, env: 
     try:
         identity = native_engine.process_identity(child.pid)
     except BaseException as error:
-        owned: dict[int, int] = {}
         try:
-            with stages._reaper():
-                cleanup = stages._cleanup(
-                    child,
-                    owned,
-                    stages.seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
-                    stages.seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
-                )
-            write(
-                run / f"{name}-spawn.stage.json",
-                {
-                    "stage": name,
-                    "pid": child.pid,
-                    "processes": owned,
-                    "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                    "status": "cancelled",
-                    "cleanup": cleanup,
-                },
-            )
+            stages.cancel(child, stage=name, evidence=run / f"{name}-spawn.stage.json")
         except (OSError, ValueError) as cleanup_error:
             error.add_note(f"{name} cleanup: {cleanup_error}")
         raise

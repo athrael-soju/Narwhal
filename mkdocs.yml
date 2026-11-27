@@ -170,3 +170,4 @@ nav:
           - Metrics and role controller state: telemetry/03-Metrics-and-Control.md
           - Engine monitoring and failures: telemetry/04-Failures.md
           - Interface versions and compatibility: telemetry/05-Compatibility.md
+          - Deployment run record: telemetry/06-Deployment-Runs.md
