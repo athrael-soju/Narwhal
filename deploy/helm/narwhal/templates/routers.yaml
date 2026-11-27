@@ -36,6 +36,9 @@ spec:
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: router
           image: {{ .Values.images.narwhal }}

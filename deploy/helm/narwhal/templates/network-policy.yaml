@@ -18,7 +18,11 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        {{- range list "haproxy" "gate" "router" "prometheus" }}
+        {{- $peers := list "haproxy" "gate" "router" }}
+        {{- if .Values.monitoring.enabled }}
+        {{- $peers = append $peers "prometheus" }}
+        {{- end }}
+        {{- range $peers }}
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: narwhal

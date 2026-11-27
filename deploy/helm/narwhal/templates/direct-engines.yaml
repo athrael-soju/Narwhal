@@ -62,6 +62,9 @@ spec:
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: engine
           image: {{ .image }}

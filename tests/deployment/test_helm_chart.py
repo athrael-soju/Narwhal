@@ -439,6 +439,7 @@ class ChartTests(Rendering, unittest.TestCase):
             "modelCsiDrivers": ["csi.example.com"],
         }
         values.update(policy)
+        values["runtimeClassNames"] = ["nvidia"]
         values["state"]["claimName"] = "fleet-state"
         documents = self.render(values)
         [config] = [
@@ -452,6 +453,8 @@ class ChartTests(Rendering, unittest.TestCase):
                 "stateClaim": "fleet-state",
                 "engineServiceAccount": ENGINE_ACCOUNT,
                 **policy,
+                "runtimeClassNames": ["nvidia"],
+                "admissionPolicy": f"{chart_fixtures.NAMESPACE}-narwhal",
             },
         )
         self.assertEqual(
@@ -510,7 +513,7 @@ class ChartTests(Rendering, unittest.TestCase):
     def test_the_cluster_role_reads_nodes_and_the_fleet_crd_only(self):
         name = f"{chart_fixtures.NAMESPACE}-fleet-narwhal-nodes"
         role = self.find("ClusterRole", name)
-        self.assertEqual(rules(role), chart_live.CLUSTER_RULES)
+        self.assertEqual(rules(role), chart_live.cluster_rules(chart_fixtures.NAMESPACE))
         binding = self.find("ClusterRoleBinding", name)
         self.assertEqual(
             binding["roleRef"],
@@ -523,7 +526,7 @@ class ChartTests(Rendering, unittest.TestCase):
         # Two releases of one name in two namespaces get two cluster roles.
         other = {(d["kind"], d["metadata"]["name"]) for d in self.render_in("other")}
         self.assertIn(("ClusterRole", "other-fleet-narwhal-nodes"), other)
-        self.assertIn(("ValidatingAdmissionPolicy", "other-fleet-narwhal"), other)
+        self.assertIn(("ValidatingAdmissionPolicy", "other-narwhal"), other)
 
     def test_the_fleet_editor_role_is_its_own_grant(self):
         role = self.find("Role", "fleet-fleet-editor")
@@ -610,7 +613,7 @@ class ChartTests(Rendering, unittest.TestCase):
                 self.assertIn(message, result.stderr)
 
     def test_the_admission_policy_checks_the_namespaces_pods_and_workloads(self):
-        name = f"{chart_fixtures.NAMESPACE}-fleet-narwhal"
+        name = f"{chart_fixtures.NAMESPACE}-narwhal"
         policy = self.find("ValidatingAdmissionPolicy", name)["spec"]
         self.assertEqual(policy["failurePolicy"], "Fail")
         matched = {
@@ -628,8 +631,13 @@ class ChartTests(Rendering, unittest.TestCase):
                 ("batch", "jobs", operations),
                 ("apps", "statefulsets", operations),
                 ("apps", "deployments", operations),
+                ("apps", "replicasets", operations),
             },
         )
+        # helm uninstall keeps both, so the policy outlives the controller and what it made.
+        for kind in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"):
+            annotations = self.find(kind, name)["metadata"]["annotations"]
+            self.assertEqual(annotations, {"helm.sh/resource-policy": "keep"})
         binding = self.find("ValidatingAdmissionPolicyBinding", name)["spec"]
         self.assertEqual(binding["policyName"], name)
         self.assertEqual(binding["validationActions"], ["Deny"])
@@ -673,11 +681,57 @@ class ChartTests(Rendering, unittest.TestCase):
         self.assertIn(json.dumps(list(objects.HOST_NETWORK_KINDS)), variables["hostNetworkGate"])
         self.assertIn(f"'{fleet_resource.GATE_LABEL}'", variables["hostNetworkGate"])
         self.assertIn(f"v.name != '{objects.MODEL_VOLUME}'", validations)
+        self.assertEqual(json.loads(variables["runtimeClasses"]), [])
+        values["runtimeClassNames"] = ["nvidia"]
+        variables, _ = policy(values)
+        self.assertEqual(json.loads(variables["runtimeClasses"]), ["nvidia"])
         # Every case the live check sends is one a fleet's objects or a refusal covers.
         self.assertTrue(chart_live.refused("fleet"))
         for policy_values in chart_live.POLICIES:
             cases = chart_live.volume_cases(policy_values)
             self.assertEqual(len(cases), len(chart_live.MODEL_VOLUMES))
+
+    def test_the_policy_trusts_a_label_only_from_the_controller_or_the_pods_maker(self):
+        [document] = [d for d in self.documents if d["kind"] == "ValidatingAdmissionPolicy"]
+        variables = {v["name"]: v["expression"] for v in document["spec"]["variables"]}
+        # A workload is the controller's when its ServiceAccount sends it.
+        self.assertIn(
+            f"variables.requester == 'system:serviceaccount:{chart_fixtures.NAMESPACE}:"
+            f"{CONTROLLER}'",
+            variables["trusted"],
+        )
+        # A pod is a workload's when that workload's Kubernetes controller sends it.
+        self.assertIn("'system:serviceaccount:kube-system:'", variables["madeByOwner"])
+        for kind, maker in chart_live.MAKERS.items():
+            self.assertIn(f"'{kind}': '{maker}'", variables["makers"])
+        self.assertIn("variables.madeByOwner ? variables.owner", variables["trusted"])
+        self.assertEqual(variables["requester"], "request.userInfo.username")
+        # The exemptions and the NetworkPolicy's peer labels need a trusted sender.
+        self.assertIn("variables.controlled", variables["engine"])
+        self.assertIn("variables.controlled", variables["hostNetworkGate"])
+        self.assertIn(
+            "{'engine': ['StatefulSet'], 'router': ['StatefulSet'], 'gate': ['Job'],\n"
+            " 'haproxy': ['Deployment', 'ReplicaSet']}",
+            variables["kinds"],
+        )
+        peers = {
+            peer["podSelector"]["matchLabels"]["app.kubernetes.io/component"]
+            for peer in self.find("NetworkPolicy", "fleet-routers")["spec"]["ingress"][0]["from"]
+        }
+        # Every peer label but Prometheus's, which the chart's own Deployment carries.
+        self.assertEqual(peers - {"prometheus"}, {"gate", "haproxy", "router"})
+        kinds = variables["kinds"]
+        for component in peers - {"prometheus"}:
+            self.assertIn(f"'{component}':", kinds)
+
+    def test_every_pod_the_chart_runs_passes_the_policy_s_seccomp_rule(self):
+        for values in (self.values, chart_fixtures.direct_example()):
+            for workload, template in pod_templates(self.render(values)):
+                with self.subTest(workload):
+                    self.assertEqual(
+                        template["spec"]["securityContext"]["seccompProfile"],
+                        {"type": "RuntimeDefault"},
+                    )
 
     def test_the_routers_admit_only_haproxy_gates_each_other_and_monitoring(self):
         policy = self.find("NetworkPolicy", "fleet-routers")["spec"]
@@ -703,6 +757,15 @@ class ChartTests(Rendering, unittest.TestCase):
         values["networkPolicy"] = {"enabled": True, "monitoring": [cluster]}
         [rendered] = [d for d in self.render(values) if d["kind"] == "NetworkPolicy"]
         self.assertEqual(rendered["spec"]["ingress"][0]["from"][-1], cluster)
+        # Without the chart's Prometheus, no pod label it cannot reserve reaches the routers.
+        values["monitoring"] = {"enabled": False}
+        [rendered] = [d for d in self.render(values) if d["kind"] == "NetworkPolicy"]
+        components = [
+            peer["podSelector"]["matchLabels"]["app.kubernetes.io/component"]
+            for peer in rendered["spec"]["ingress"][0]["from"]
+            if "podSelector" in peer
+        ]
+        self.assertEqual(components, ["haproxy", "gate", "router"])
         values["networkPolicy"] = {"enabled": False}
         self.assertNotIn("NetworkPolicy", {d["kind"] for d in self.render(values)})
 

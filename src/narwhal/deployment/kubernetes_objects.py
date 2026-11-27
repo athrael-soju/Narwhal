@@ -144,6 +144,7 @@ KEEP = re.compile(r"deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+")
 FILE_NAME = re.compile(r"[-._A-Za-z0-9]+")
 
 BACKGROUND = "Background"
+RUNTIME_DEFAULT = "RuntimeDefault"
 # What prune may delete, in the order it deletes them: workloads before what they mount.
 PRUNED_KINDS = ("Deployment", "StatefulSet", "Job", "Service", "ConfigMap")
 
@@ -660,7 +661,12 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
         volumes.append({"name": INPUT_VOLUME, "configMap": {"name": gate.inputs}})
     if model:
         volumes.append({"name": MODEL_VOLUME, **copy.deepcopy(dict(model))})
-    spec: dict[str, Any] = {"restartPolicy": "Never", "enableServiceLinks": False}
+    spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "enableServiceLinks": False,
+        # The chart's admission policy refuses a pod outside the engines without a seccomp filter.
+        "securityContext": {"seccompProfile": {"type": RUNTIME_DEFAULT}},
+    }
     if gate.service_account:
         # Verifying a sidecar reads the engine pod through the API, as the sidecar does.
         spec["serviceAccountName"] = fleet.engine_account
@@ -779,6 +785,7 @@ def haproxy(fleet: Fleet) -> list[dict[str, Any]]:
                     "spec": {
                         "enableServiceLinks": False,
                         "automountServiceAccountToken": False,
+                        "securityContext": {"seccompProfile": {"type": RUNTIME_DEFAULT}},
                         "containers": [
                             {
                                 "name": HAPROXY,

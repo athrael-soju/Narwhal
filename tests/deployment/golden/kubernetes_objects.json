@@ -1,5 +1,5 @@
 {
- "about": "helm template of deploy/helm/narwhal at 1e74b88f: the engine, gate and HAProxy templates the controller's builders replace, with task 24's route allow-list in haproxy.cfg",
+ "about": "helm template of deploy/helm/narwhal at 1e74b88f: the engine, gate and HAProxy templates the controller's builders replace, with task 24's route allow-list in haproxy.cfg and the RuntimeDefault seccomp profile the admission policy requires of gate and HAProxy pods",
  "inputs": {
   "credentials": {
    "engineApiKey": {
@@ -1824,7 +1824,12 @@
         },
         "name": "config"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2596,7 +2601,12 @@
          "readOnly": true
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2696,7 +2706,12 @@
         },
         "name": "model"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2779,7 +2794,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2871,7 +2891,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2947,7 +2972,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3053,7 +3083,12 @@
          "readOnly": true
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3146,7 +3181,12 @@
         },
         "name": "narwhal-input"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3217,7 +3257,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3285,7 +3330,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3364,7 +3414,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3438,7 +3493,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3538,7 +3598,12 @@
         },
         "name": "model"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3614,7 +3679,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3693,7 +3763,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }

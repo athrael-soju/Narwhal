@@ -16,7 +16,7 @@ Install the [CRD chart](../narwhal-crds/README.md) first. The controller builds 
 
 ## Controller
 
-The controller runs as one pod with `strategy: Recreate`, as the non-root user `controller.runAsUser` (10001 by default) with a read-only root filesystem, no capabilities and the `RuntimeDefault` seccomp profile. The pod mounts no ServiceAccount token; the controller container alone mounts a projected token that lasts an hour, with the cluster's CA, at the usual ServiceAccount path. It mounts the state claim at `/narwhal-state` and reads the chart's settings from `/etc/narwhal/controller.json`: the state claim's name, the engines' ServiceAccount `<release>-engine` and the model volume allow-lists below.
+The controller runs as one pod with `strategy: Recreate`, as the non-root user `controller.runAsUser` (10001 by default) with a read-only root filesystem, no capabilities and the `RuntimeDefault` seccomp profile. The pod mounts no ServiceAccount token; the controller container alone mounts a projected token that lasts an hour, with the cluster's CA, at the usual ServiceAccount path. It mounts the state claim at `/narwhal-state` and reads the chart's settings from `/etc/narwhal/controller.json`: the state claim's name, the engines' ServiceAccount `<release>-engine`, the model volume and RuntimeClass allow-lists below, and the admission policy's name.
 
 Its Role in the namespace grants:
 
@@ -29,7 +29,7 @@ Its Role in the namespace grants:
 | `leases` | create; get and update on `controller.narwhal.example.com` only |
 | `events.k8s.io` events | create, patch |
 
-The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes and get on the CRD `narwhalfleets.narwhal.example.com` by name. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` reference into the pods that need the key and never reads the Secret.
+The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` reference into the pods that need the key and never reads the Secret.
 
 The engines' ServiceAccount `<release>-engine` may get the namespace's pods and nothing else. The attestation sidecars and the sidecar-verify Jobs run as it.
 
@@ -37,14 +37,24 @@ The engines' ServiceAccount `<release>-engine` may get the namespace's pods and 
 
 Writing the `NarwhalFleet` lets the controller start hostNetwork engine and fabric pods on the nodes the fleet names and give them the Secret that `apiKeySecret` names, so it amounts to read access to every Secret in the namespace. Grant it with the Role `<release>-fleet-editor`, which the chart creates without binding it. Kubernetes' `edit` and `admin` roles do not include it.
 
-The admission policy `<namespace>-<release>-narwhal` and its binding apply to every pod, Job, StatefulSet and Deployment the namespace creates or changes, and to ephemeral containers:
+The admission policy `<namespace>-narwhal` and its binding apply to every pod, Job, StatefulSet, Deployment and ReplicaSet the namespace creates or changes, and to ephemeral containers. They hold the rules of the Pod Security baseline level:
 
-- Only engine pods and the fabric and `transfer-measure` gate Jobs use the host network or add `IPC_LOCK`. No pod adds another capability.
-- No pod is privileged or shares the host's process or IPC namespace. Only an engine pod runs without a seccomp filter, as the ROCm launch does.
+- Only the controller's engine StatefulSet and its fabric and `transfer-measure` gate Jobs, and their pods, use the host network or add `IPC_LOCK`. No pod adds another capability.
+- No pod is privileged, shares the host's process or IPC namespace, binds a host port, unmasks `/proc`, runs a Windows host process, or sets an SELinux user, role or a type outside the container types, an unconfined AppArmor profile, a sysctl outside the baseline's safe list, or a RuntimeClass outside `runtimeClassNames`.
+- Every pod but an engine pod runs the `RuntimeDefault` or a `Localhost` seccomp profile. An engine pod may run unconfined, as the ROCm launch does.
 - Every image is named by registry digest.
 - The volume named `model` follows the allow-lists below, as the controller's own check does, and every container mounts it read-only. Every other volume is a ConfigMap, Secret, emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a host path.
 
-The policy recognises engine and gate pods by their `app.kubernetes.io/name: narwhal` and `app.kubernetes.io/component` labels and the `narwhal.example.com/gate` label, so anyone who can create pods in the namespace can label one as an engine. That is one more reason to keep the namespace to the fleet.
+The policy trusts the engine, router, gate and HAProxy labels only on an object whose sender it trusts: a workload the controller's ServiceAccount sends, a ReplicaSet the Deployment controller makes, and a pod the Job, StatefulSet or ReplicaSet controller makes for its owner. Anyone else who sends a pod or workload with those labels is refused, and nobody can add them to an existing pod. A pod's spec cannot change after it is created, so an update to a pod is checked only for its images and ephemeral containers.
+
+Two kinds of access still reach past the policy, so keep `edit` and `admin` in the fleet's namespace to the people who install the chart:
+
+- The `edit` role may impersonate the namespace's ServiceAccounts and request their tokens, so its holders can act as the controller and send what the controller may send.
+- The routers' NetworkPolicy also admits pods labelled as Prometheus. The chart runs Prometheus, so the policy cannot tie that label to one sender, and anyone who can create pods in the namespace can give a pod it. With `monitoring.enabled` off, the NetworkPolicy leaves that label out; scrape with a cluster Prometheus through `networkPolicy.monitoring` instead to close it.
+
+The namespace runs with the Pod Security `privileged` level: the `baseline` level refuses the engine pods' host network and `IPC_LOCK`, and Pod Security cannot exempt single pods. If the cluster enforces `baseline` by default, label the namespace `pod-security.kubernetes.io/enforce=privileged`. The admission policy then enforces the baseline's rules on every other pod.
+
+Helm creates the policy after the controller, and `helm uninstall` keeps the policy and its binding, so they outlive the controller and the workloads a fleet leaves behind. The controller may get both by name, to wait for them before it creates anything. Delete them by hand once the namespace no longer runs a fleet.
 
 `modelVolumeSources` allows only `persistentVolumeClaim` by default. A hostPath also needs a directory in `modelHostPathPrefixes`, an NFS export a server in `modelNfsServers`, and a CSI volume a driver in `modelCsiDrivers`. Each list is empty by default, which keeps that source off.
 
@@ -78,6 +88,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | `haproxy.clusterDomain` | The cluster's DNS domain, default `cluster.local` |
 | `credentials.engineApiKey` | `{"env", "secretName", "key"}`: the Secret key the routers read into the variable the fleet file's `engine.engine_api_key_env` names |
 | `modelVolumeSources`, `modelHostPathPrefixes`, `modelNfsServers`, `modelCsiDrivers` | The model volume allow-lists, under [Who may write the fleet](#who-may-write-the-fleet) |
+| `runtimeClassNames` | The RuntimeClasses a pod in the namespace may name, such as `["nvidia"]`. Empty by default, which allows only the default runtime |
 | `networkPolicy.enabled` | Admit connections to the routers only from HAProxy, the gate Jobs, the other router and Prometheus, default `true` |
 | `networkPolicy.monitoring` | More NetworkPolicy peers that may reach the routers, such as a cluster Prometheus's namespace |
 | `monitoring` | Prometheus and Grafana, under [Monitoring](#monitoring) |
@@ -105,7 +116,7 @@ When both routers stop and start again, each is a standby of the other, and the 
 
 The routers elect the primary through the Lease `narwhal-router`, as [Electing the primary on Kubernetes](../../../docs/operate/01-Start-Routers.md#electing-the-primary-on-kubernetes) describes. The chart makes their ServiceAccount, Role and RoleBinding `narwhal-router`, because the controller holds no RBAC verbs. The Role grants `get` and `update` on that Lease and `create` on Leases, since RBAC cannot limit a create to one name. Only the router container mounts the ServiceAccount's token. Each router runs as UID 10001 on a read-only root filesystem and writes only its own claim at `/narwhal-router` and a `/tmp` scratch directory.
 
-The controller runs HAProxy in front of the routers. It forwards only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets`, and answers 404 to every other route. The NetworkPolicy `<release>-routers` admits connections to the routers' port 8000 only from HAProxy, the gate Jobs, the other router, the chart's Prometheus and the peers in `networkPolicy.monitoring`, so the control routes are reachable only from those. A NetworkPolicy needs a network plugin that enforces it.
+The controller runs HAProxy in front of the routers. It forwards only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets`, and answers 404 to every other route. The NetworkPolicy `<release>-routers` admits connections to the routers' port 8000 only from HAProxy, the gate Jobs, the other router, the chart's Prometheus and the peers in `networkPolicy.monitoring`, so the control routes are reachable only from those. A NetworkPolicy matches pods by label and cannot check who made a pod; [Who may write the fleet](#who-may-write-the-fleet) states which labels the admission policy reserves. A NetworkPolicy needs a network plugin that enforces it.
 
 ## Monitoring
 

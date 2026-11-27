@@ -686,6 +686,16 @@
         "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
       }
     },
+    "runtimeClassNames": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "The RuntimeClasses a pod in the namespace may name; empty allows only the default runtime",
+      "items": {
+        "type": "string",
+        "maxLength": 253,
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+      }
+    },
     "fleet": {
       "type": "object",
       "description": "The NarwhalFleet the chart installs, as its spec; leave it out to apply the fleet another way",

@@ -70,6 +70,9 @@ modelHostPathPrefixes: []
 modelNfsServers: []
 # With csi listed above, the CSI drivers the volume may use. Empty turns csi off.
 modelCsiDrivers: []
+# The RuntimeClasses a pod in the namespace may name, such as ["nvidia"] for nodes whose
+# default container runtime exposes no GPUs. Empty allows only the default runtime.
+runtimeClassNames: []
 
 # The NetworkPolicy that admits connections to the routers only from HAProxy, the gate Jobs,
 # the other router and monitoring. HAProxy forwards only the serving routes, so only those

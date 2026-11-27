@@ -453,6 +453,14 @@ class GateTests(unittest.TestCase):
         }
         self.assertLessEqual(on_host, set(objects.HOST_NETWORK_KINDS))
 
+    def test_gate_and_haproxy_pods_run_the_runtime_default_seccomp_profile(self):
+        # The chart's admission policy refuses a pod outside the engines without one.
+        pods = [*self.jobs().values(), template(objects.haproxy(fleet())[1])]
+        for spec in pods:
+            self.assertEqual(
+                spec["securityContext"], {"seccompProfile": {"type": "RuntimeDefault"}}
+            )
+
     def test_only_a_sidecar_verify_job_gets_a_token(self):
         for name, spec in self.jobs().items():
             with self.subTest(name):

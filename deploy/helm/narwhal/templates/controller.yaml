@@ -14,6 +14,8 @@ itself; the controller container alone mounts a projected one.
   "modelHostPathPrefixes" .Values.modelHostPathPrefixes
   "modelNfsServers" .Values.modelNfsServers
   "modelCsiDrivers" .Values.modelCsiDrivers
+  "runtimeClassNames" .Values.runtimeClassNames
+  "admissionPolicy" (printf "%s-narwhal" .Release.Namespace)
 }}
 {{- $config := toPrettyJson $settings }}
 apiVersion: v1
@@ -31,8 +33,8 @@ metadata:
   labels:
     {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
 data:
-  # The chart's settings: its state claim, the engines' ServiceAccount and the cluster admin's
-  # model volume allow-lists.
+  # The chart's settings: its state claim, the engines' ServiceAccount, the cluster admin's
+  # model volume and RuntimeClass allow-lists, and the admission policy that bounds the fleet.
   controller.json: {{ $config | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -109,6 +111,11 @@ rules:
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
     resourceNames: [{{ include "narwhal.fleet.crdName" . | quote }}]
+    verbs: [get]
+  # The controller creates nothing while the namespace's admission policy is missing.
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    resourceNames: [{{ printf "%s-narwhal" .Release.Namespace | quote }}]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
