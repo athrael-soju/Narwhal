@@ -3,8 +3,10 @@
 `FakeCluster` stands in for `kubernetes_target.Cluster`. A release upgrade checks its values
 against the chart's schema, then creates the engine pods, the router pods and one finished Job
 per gate entry, with the log its command would print. A router check fails when no router pod
-runs, and a pod patch is refused as the API server refuses it: node affinity only on a pod
-held at a scheduling gate, a failed `test` operation leaves the pod as it was.
+runs. While the chart's values configure an engine API key, a Job that calls an engine fails
+when the chart gives it no key or its role file names none. A pod patch is refused as the API
+server refuses it: node affinity only on a pod held at a scheduling gate, and a failed `test`
+operation leaves the pod as it was.
 
 `Rig` holds the cluster's state across runs and patches the library functions the SSH tests
 also stub: record building, chart values, cache groups, the fabric and the attestation
@@ -19,6 +21,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import tarfile
 import uuid
 from collections import Counter
@@ -41,6 +44,15 @@ NARWHAL_IMAGE = "registry.example/narwhal@sha256:" + "a" * 64
 FABRIC_IMAGE = "registry.example/fabric@sha256:" + "b" * 64
 TREE = "f" * 64
 SECRET = "engine-key-value"
+GATES = Path(__file__).resolve().parents[2] / "deploy/helm/narwhal/templates/gates.yaml"
+# The gate kinds whose commands call an engine's API.
+ENGINE_CALLERS = {"transfer-measure", "finalize-fleet", "profile", "calibrate", "preflight"}
+
+
+def keyed_kinds() -> set[str]:
+    """The gate kinds the chart gives the engine API key, as its gate template lists them."""
+    [names] = re.findall(r"has \.kind \(list ([^)]*)\)", GATES.read_text())
+    return set(re.findall(r'"([^"]+)"', names))
 
 
 def environment(root: Path) -> dict[str, str]:
@@ -166,6 +178,10 @@ class Rig:
         # Engine pods a scheduler places off their node, once.
         self.misplace: dict[str, str] = {}
         self.server = "v1.31.0"
+        self.current_context = "fleet-admin@cluster-a"
+        # Helm refuses the next upgrade that changes the engines, once.
+        self.refuse_engines = False
+        self.api_server = "https://cluster-a.example:6443"
         # The (verb, resource) pairs the identity may not use.
         self.denied: set[tuple[str, str]] = set()
         # Pods whose scheduling gate removal the connection drops once, after their affinity.
@@ -348,6 +364,12 @@ class FakeCluster:
         self.context = env.get(kubernetes_target.CONTEXT, "")
         self.logs_dir = logs
 
+    def current_context(self) -> str:
+        return self.context or self.rig.current_context
+
+    def api_server(self) -> str:
+        return self.rig.api_server
+
     def _refused(self, verb: str, cause: str) -> kubernetes_target.ClusterError:
         return kubernetes_target.ClusterError(["kubectl", verb], 1, cause, self.logs_dir)
 
@@ -365,6 +387,10 @@ class FakeCluster:
         return json.loads(json.dumps(self.rig.release()))
 
     def kubectl(self, *args: str, data: str | None = None, timeout: float = 120) -> str:
+        if args[:2] == ("config", "current-context"):
+            return self.rig.current_context + "\n"
+        if args[:2] == ("config", "view"):
+            return self.rig.api_server
         if args[:2] == ("get", "namespace"):
             return f"namespace/{NAMESPACE}\n"
         if args[:2] == ("get", "node"):
@@ -460,6 +486,9 @@ class FakeCluster:
     def upgrade(self, chart: Path, values: Mapping[str, Any]) -> None:
         chart_schema.check(values)
         rig = self.rig
+        if rig.refuse_engines and values.get("engines") != rig.release().get("engines"):
+            rig.refuse_engines = False
+            raise self._refused("upgrade", "UPGRADE FAILED: an immutable field changed")
         rig.releases.append(json.loads(json.dumps(values)))
         engines = values.get("engines") or {}
         for n in range(1, int(engines.get("count", 0)) + 1):
@@ -476,6 +505,7 @@ class FakeCluster:
             for name in kubernetes_target.ROUTERS:
                 rig.pods.pop(name, None)
         routers = all(name in rig.pods for name in kubernetes_target.ROUTERS)
+        keyed = keyed_kinds() if (values.get("credentials") or {}).get("engineApiKey") else None
         for entry in values["gates"]:
             if entry["name"] in rig.jobs:
                 continue
@@ -483,7 +513,8 @@ class FakeCluster:
             if "inputs" in entry:
                 rig.inputs[entry["name"]] = rig.config_maps[entry["inputs"]]
             unreachable = entry["kind"] == "router-check" and not routers
-            failed = entry["kind"] == rig.fail_kind or unreachable
+            unauthorized = keyed is not None and not self._keyed(entry, keyed)
+            failed = entry["kind"] == rig.fail_kind or unreachable or unauthorized
             status = rig.fail_status if failed else 0
             pod = {
                 "metadata": {"name": entry["name"] + "-pod", "uid": str(uuid.uuid4())},
@@ -503,12 +534,34 @@ class FakeCluster:
                 "pod": pod,
                 "entry": dict(entry),
             }
-            if unreachable:
+            if unauthorized:
+                rig.logs[entry["name"]] = "narwhal: the engine answered 401 Unauthorized\n"
+            elif unreachable:
                 rig.logs[entry["name"]] = "narwhal-host: no router answered at haproxy:8000\n"
             elif failed:
                 rig.logs[entry["name"]] = "narwhal-gate: the check rejected the engine\n"
             else:
                 rig.logs[entry["name"]] = rig.log(entry)
+
+    def _keyed(self, entry: Mapping[str, Any], keyed: set[str]) -> bool:
+        """Whether a Job that needs the engine API key has it: from the chart, and through
+        its role file to the variable the engine tools read."""
+        config_map = self.rig.config_maps[entry["inputs"]] if "inputs" in entry else {}
+        data = config_map.get("binaryData", {})
+        if kubernetes_gate.INPUTS in data:
+            files = unpack(config_map)
+        else:
+            files = {name: base64.b64decode(value) for name, value in data.items()}
+        role_files = [data for name, data in files.items() if Path(name).name.startswith(".env")]
+        needs = entry["kind"] in ENGINE_CALLERS or any(
+            b"${NARWHAL_ENGINE_KEY:?" in data for data in role_files
+        )
+        if not needs:
+            return True
+        exported = all(
+            b'NARWHAL_ENGINE_API_KEY="${NARWHAL_ENGINE_KEY:?' in data for data in role_files
+        )
+        return entry["kind"] in keyed and exported
 
 
 def _write_records(self: kubernetes_target.KubernetesDeployment, context, observations) -> None:

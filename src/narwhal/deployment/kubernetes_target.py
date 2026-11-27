@@ -60,6 +60,8 @@ from .run_record import PASSED, key
 from .runner import Input, Outcome, Runner, StageContext, Unobserved, check_directory
 
 TARGET = "kubernetes"
+# What this run's last passed access and install gave the cluster, in the run directory.
+OWNED = "kubernetes"
 LAST_STAGE = "router-start"
 
 NAMESPACE = "NARWHAL_KUBERNETES_NAMESPACE"
@@ -221,6 +223,15 @@ class Cluster:
             data=json.dumps(values),
         )
 
+    def current_context(self) -> str:
+        """The kubeconfig context kubectl uses: the one the environment names, or the current."""
+        return self.context or self.kubectl("config", "current-context").strip()
+
+    def api_server(self) -> str:
+        """The API server URL of that context."""
+        jsonpath = "jsonpath={.clusters[0].cluster.server}"
+        return self.kubectl("config", "view", "--minify", "--output", jsonpath).strip()
+
     def release_values(self) -> dict:
         """The values the release runs now, or {} before the first install."""
         try:
@@ -311,12 +322,17 @@ _RELEASE_KINDS = (
     "roles.rbac.authorization.k8s.io",
     "rolebindings.rbac.authorization.k8s.io",
 )
+# Helm keeps each release revision in a Secret: it reads and lists them, creates the new one,
+# updates the one it supersedes and deletes those past its history limit.
+HELM_STORAGE = tuple((verb, "secrets") for verb in ("get", "list", "create", "update", "delete"))
 # Every verb and resource a run needs, as `kubectl auth can-i` takes them.
 PERMISSIONS = (
+    *HELM_STORAGE,
     *(
         (verb, kind)
         for kind in _RELEASE_KINDS
         for verb in ("get", "list", "create", "patch", "delete")
+        if (verb, kind) not in HELM_STORAGE
     ),
     ("get", "pods"),
     ("list", "pods"),
@@ -822,9 +838,9 @@ class KubernetesDeployment:
         # runs monitoring only with the routers.
         if monitoring.get("enabled"):
             grafana = monitoring.setdefault("grafana", {})
-            shown = ((current.get("monitoring") or {}).get("grafana") or {}).get("dashboard")
+            # The dashboard of the installed Narwhal, unless the values file sets one.
             if not grafana.get("dashboard"):
-                grafana["dashboard"] = shown or self._dashboard()
+                grafana["dashboard"] = self._dashboard()
         return values
 
     @staticmethod
@@ -1035,6 +1051,7 @@ class KubernetesDeployment:
             raise GateFailed(
                 "cluster", "access", 1, "; ".join(problems), context.directory / "access.json"
             )
+        self._own("cluster.json", _json(context.directory / "access.json")["cluster"])
 
     # discover
 
@@ -1337,6 +1354,8 @@ class KubernetesDeployment:
             values["engines"]["configMaps"] = [*values["engines"]["configMaps"], *retained]
         _private(context.directory / "values.json", _redacted(values))
         cluster.upgrade(chart_path(self.env), values)
+        names = sorted(item["metadata"]["name"] for item in values["engines"]["configMaps"])
+        self._own("installed.json", {"configMaps": names})
         statefulset = cluster.get("statefulset", engine_set.STATEFULSET) or {}
         _private(context.directory / "statefulset.json", statefulset.get("status", {}))
 
@@ -1557,7 +1576,7 @@ fi
         node = engine.host.id
         files = {
             f"runs/deployment/.env.{role}": self.job_env(
-                read_environment(package / node / f".env.{role}"), credential=False
+                read_environment(package / node / f".env.{role}"), credential=True
             ),
             f"config/engine-launch.{role}.json": (
                 package / node / f"engine-launch.{role}.json"
@@ -2044,10 +2063,12 @@ fi
     def down(self) -> list[dict[str, Any]]:
         """Remove the routers, engines and gate Jobs this run installed, keeping the volumes.
 
-        Only a release this run installed is changed: the record must be a Kubernetes run of
-        the same context, namespace and release, and the release must still run the engines
-        and fleet this run gave it. Reports each process the run recorded, and whether it ran
-        until now.
+        Only a release this run installed is changed: the record must be a Kubernetes run, the
+        environment must reach the context, API server, namespace and release the run's last
+        passed access recorded, and the release must run only the engines the run's last
+        passed install gave it and this run's fleet. Later failed or invalidated attempts of
+        access or install change neither. Reports each process the run recorded, and whether
+        it ran until now.
         """
         check_directory(self.directory)
         stopped = []
@@ -2055,16 +2076,18 @@ fi
             record = run_record.read(self.directory)
             if record["target"] != TARGET:
                 raise ValueError(f"{self.directory} holds a {record['target']} run")
-            try:
-                access = _json(self.recorded("access") / "access.json")
-            except ValueError:
+            owned = self.directory / OWNED
+            if not (owned / "cluster.json").is_file():
+                # access never passed, so no stage of this run reached the cluster's release.
+                self.announce(f"{self.directory}: access never passed; this run changed no release")
                 return []
-            recorded_cluster = access.get("cluster", {})
+            recorded_cluster = _json(owned / "cluster.json")
             here = self.identity()
             if differing := sorted(k for k in here if recorded_cluster.get(k) != here[k]):
                 raise ValueError(
-                    f"the run deployed to another {', '.join(differing)} than the environment "
-                    f"names: {recorded_cluster}; load the environment the run used"
+                    f"down changed nothing: the run deployed to another {', '.join(differing)} "
+                    f"than the environment reaches ({recorded_cluster}); load the environment "
+                    "the run used"
                 )
             cluster = self.cluster()
             current = cluster.release_values()
@@ -2083,35 +2106,42 @@ fi
                 cluster.upgrade(chart_path(self.env), values)
         return stopped
 
+    def _own(self, name: str, document: Any) -> None:
+        """Record what a passed stage gave the cluster, which later attempts keep until they
+        pass themselves."""
+        owned = self.directory / OWNED
+        owned.mkdir(mode=0o700, exist_ok=True)
+        _private(owned / f".{name}.new", document)
+        (owned / f".{name}.new").replace(owned / name)
+
     def identity(self) -> dict[str, str]:
-        """The cluster, namespace and release the environment names."""
+        """The context, API server, namespace and release kubectl and helm reach now."""
         cluster = self.cluster()
         return {
-            "context": cluster.context,
+            "context": cluster.current_context(),
+            "server": cluster.api_server(),
             "namespace": cluster.namespace,
             "release": cluster.release,
         }
 
     def _owned(self, record: Mapping[str, Any], current: Mapping[str, Any]) -> None:
         """Refuse a release that runs engines or a fleet another run gave it."""
-        try:
-            installed = _json(self.recorded("install") / "values.json")["engines"]
-        except ValueError:
-            installed = {}
-        names = {item["metadata"]["name"] for item in installed.get("configMaps", [])}
+        installed = self.directory / OWNED / "installed.json"
+        names = set(_json(installed)["configMaps"]) if installed.is_file() else set()
         engines = current.get("engines") or {}
         live = {item["metadata"]["name"] for item in engines.get("configMaps", [])}
         if not live <= names:
             raise ValueError(
-                "the release runs engines another run installed; down leaves them to that run"
+                "down changed nothing: the release runs engines this run did not install; down "
+                "leaves them to the run that did"
             )
         routers = current.get("routers") or {}
         if routers.get("enabled") and not str(routers.get("fleet", "")).startswith(
             f"deploy/{record['run_id']}/"
         ):
             raise ValueError(
-                f"the release's routers serve {routers.get('fleet')}, another run's fleet; down "
-                "leaves them to that run"
+                f"down changed nothing: the release's routers serve {routers.get('fleet')}, "
+                "another run's fleet; down leaves them to that run"
             )
 
 

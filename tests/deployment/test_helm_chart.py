@@ -490,7 +490,10 @@ class ChartTests(Rendering, unittest.TestCase):
 
     def test_only_the_gates_that_call_engines_get_the_key_and_fabric_jobs_are_confined(self):
         values = copy.deepcopy(self.values)
-        values["gates"].append({**values["gates"][2], "name": "prepare", "kind": "prepare"})
+        for kind in ("prepare", "transfer-measure"):
+            values["gates"].append(
+                {**values["gates"][2], "name": kind, "kind": kind, "node": "node-a"}
+            )
         jobs = {
             d["metadata"]["name"]: d["spec"]["template"]["spec"]
             for d in self.render(values)
@@ -500,7 +503,7 @@ class ChartTests(Rendering, unittest.TestCase):
         def env(job: str) -> dict:
             return {e["name"]: e for e in jobs[job]["containers"][0]["env"]}
 
-        for job in ("preflight", "prepare"):
+        for job in ("preflight", "prepare", "transfer-measure"):
             self.assertEqual(
                 env(job)["NARWHAL_ENGINE_API_KEY"]["valueFrom"]["secretKeyRef"],
                 {"name": "engine-credential", "key": "api-key"},

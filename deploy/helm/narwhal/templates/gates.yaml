@@ -15,7 +15,7 @@ checks read the key from, get the key.
 {{- $fabric := hasPrefix "fabric-" .kind }}
 {{- /* A probe reads the host's interfaces and routes; a sample opens the RDMA device. */}}
 {{- $rdma := and $fabric (ne .kind "fabric-probe") }}
-{{- $credentials := and $.Values.credentials.engineApiKey (has .kind (list "prepare" "finalize-fleet" "profile" "calibrate" "preflight")) }}
+{{- $credentials := and $.Values.credentials.engineApiKey (has .kind (list "prepare" "transfer-measure" "finalize-fleet" "profile" "calibrate" "preflight")) }}
 {{- /* Discovery reads the engines' model volume unless its entry names one. */}}
 {{- $model := .modelVolume }}
 {{- if and (not $model) (eq .kind "discovery") $.Values.engines }}

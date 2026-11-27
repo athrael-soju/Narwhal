@@ -247,8 +247,11 @@ class KubernetesDeployTests(unittest.TestCase):
             )
             self.assertIn(f"runs/deployment/.env.{role}", files)
             self.assertIn(f"config/engine-launch.{role}.json", files)
-            # The measurement calls no engine, so its Job neither gets nor asks for the key.
-            self.assertNotIn(b"API_KEY", files[f"runs/deployment/.env.{role}"])
+            # The measurement calls the engines with the key from the Job's own variable.
+            role_file = files[f"runs/deployment/.env.{role}"]
+            self.assertNotIn(SECRET.encode(), role_file)
+            self.assertIn(b'NARWHAL_ENGINE_API_KEY="${NARWHAL_ENGINE_KEY:?', role_file)
+        self.assertEqual(self.rig.kinds.count("transfer-measure"), 2)
         [profile] = [entry for entry in jobs if entry["kind"] == "profile"]
         self.assertIn("--no-router", profile["command"][-1])
         record = json.loads((self.run / "run.json").read_text())
@@ -503,6 +506,98 @@ class KubernetesDeployTests(unittest.TestCase):
         self.assertIn("holds a ssh run", result["errors"][0]["message"])
         self.assertEqual(len(self.rig.releases), releases)
         self.assertIn("router-0", self.rig.pods)
+
+    def assert_down_stopped_everything(self) -> None:
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0, result)
+        stopped = {process["name"]: process["stopped"] for process in result["data"]["processes"]}
+        self.assertTrue(stopped["engine-1"] and stopped["router-0"], stopped)
+        final = self.rig.releases[-1]
+        self.assertEqual((final["engines"], final["routers"]["enabled"]), ({}, False))
+        self.assertEqual(sorted(self.rig.pods), [])
+
+    def test_down_stops_this_runs_workloads_after_a_later_access_failed(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        # Another kubectl runs access again, and the identity lost a permission since.
+        self.rig.denied = {("patch", "pods")}
+        with patch.dict(os.environ, {kubernetes_target.KUBECTL: "/opt/kubectl"}):
+            code, result = self.deploy("run")
+            self.assertEqual(code, 1, result)
+            self.assertEqual(result["errors"][0]["stage"], "access")
+            self.assert_down_stopped_everything()
+
+    def test_down_stops_this_runs_workloads_after_a_later_install_failed(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        record = json.loads((self.run / "run.json").read_text())
+        attempt = self.run / record["stages"]["engine-prepare[engine-1]"]["directory"]
+        (attempt / "launch" / "launch.json").write_text('{"entry": "changed"}')
+        self.rig.refuse_engines = True
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["data"]["failed_stage"], "install")
+        # The release still runs the engines of the install that passed.
+        self.assert_down_stopped_everything()
+
+    def test_down_checks_the_context_and_api_server_access_resolved(self):
+        self.assertNotIn("NARWHAL_KUBERNETES_CONTEXT", os.environ)
+        self.assertEqual(self.deploy("run")[0], 0)
+        releases = len(self.rig.releases)
+        access = json.loads(
+            next((self.run / "stages" / "access").glob("attempt-*/access.json")).read_text()
+        )
+        self.assertEqual(
+            access["cluster"],
+            {
+                "context": "fleet-admin@cluster-a",
+                "server": "https://cluster-a.example:6443",
+                "namespace": "fleet",
+                "release": "narwhal",
+            },
+        )
+        for name, value in (
+            ("current_context", "fleet-admin@cluster-b"),
+            ("api_server", "https://cluster-b.example:6443"),
+        ):
+            original = getattr(self.rig, name)
+            setattr(self.rig, name, value)
+            code, result = self.deploy("down")
+            self.assertEqual(code, 2, result)
+            self.assertIn("down changed nothing", result["errors"][0]["message"])
+            setattr(self.rig, name, original)
+        self.assertEqual(len(self.rig.releases), releases)
+        self.assert_down_stopped_everything()
+
+    def test_access_asks_for_every_verb_helm_uses_on_its_release_secrets(self):
+        for verb in ("get", "list", "create", "update", "delete"):
+            self.assertIn((verb, "secrets"), kubernetes_target.PERMISSIONS)
+        self.rig.denied = {("update", "secrets")}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        self.assertIn("update secrets", result["errors"][0]["message"])
+
+    def test_each_upgrade_renders_the_dashboard_of_the_installed_narwhal(self):
+        self.monitored()
+        self.assertEqual(self.deploy("run")[0], 0)
+        newer = patch.object(
+            kubernetes_target.KubernetesDeployment,
+            "_dashboard",
+            staticmethod(lambda: "newer dashboard"),
+        )
+        releases = len(self.rig.releases)
+        with newer:
+            self.rig.routes["gpu-a-to-gpu-b"] = "route-2"
+            self.assertEqual(self.deploy("run")[0], 0)
+        dashboards = {r["monitoring"]["grafana"]["dashboard"] for r in self.rig.releases[releases:]}
+        self.assertEqual(dashboards, {"newer dashboard"})
+        # A dashboard the values file sets stays.
+        values = json.loads(Path(self.rig.env["NARWHAL_KUBERNETES_VALUES"]).read_text())
+        values["monitoring"]["grafana"]["dashboard"] = "operator dashboard"
+        Path(self.rig.env["NARWHAL_KUBERNETES_VALUES"]).write_text(json.dumps(values))
+        releases = len(self.rig.releases)
+        self.rig.routes["gpu-a-to-gpu-b"] = "route-3"
+        self.assertEqual(self.deploy("run")[0], 0)
+        dashboards = {r["monitoring"]["grafana"]["dashboard"] for r in self.rig.releases[releases:]}
+        self.assertEqual(dashboards, {"operator dashboard"})
 
     def test_status_and_down_refuse_a_run_directory_other_users_may_write(self):
         self.assertEqual(self.deploy("run")[0], 0)
