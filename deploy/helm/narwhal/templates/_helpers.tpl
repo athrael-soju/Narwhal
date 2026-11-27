@@ -55,17 +55,6 @@ as, and its Role. */}}
 {{ .Release.Namespace }}-{{ .Release.Name }}-narwhal
 {{- end -}}
 
-{{/* The engines' API credential, for the containers that call engines. */}}
-{{- define "narwhal.credentials" -}}
-{{- with .Values.credentials.engineApiKey }}
-- name: {{ .env }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ .secretName }}
-      key: {{ .key }}
-{{- end }}
-{{- end -}}
-
 {{- /* A list of strings as indented JSON array items, as json.dump(indent=2) writes them. */}}
 {{- define "narwhal.jsonLines" -}}
 {{- $lines := list -}}

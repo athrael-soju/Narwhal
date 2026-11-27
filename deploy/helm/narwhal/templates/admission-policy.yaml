@@ -10,7 +10,9 @@ IPC_LOCK:
   the pods the StatefulSet and Job controllers make for them, use the host network or add
   IPC_LOCK. The policy trusts a label only on an object whose requester it trusts: the
   controller's ServiceAccount for a workload, and the Kubernetes controller that owns a pod.
-  No pod adds another capability.
+  The init container named checkpoint in those engine pods may add CHOWN and FOWNER, to hand
+  the pod's evidence directory to the attestation sidecar's user. No container adds another
+  capability.
 - Only the controller's workloads carry the engine, router, gate and HAProxy labels; the
   routers' NetworkPolicy admits the last three.
 - No pod is privileged, shares the host's process or IPC namespace, binds a host port, or sets
@@ -19,9 +21,6 @@ IPC_LOCK:
   runs the RuntimeDefault or a Localhost seccomp profile; an engine pod may run unconfined, as
   the ROCm launch does.
 - Every image is named by registry digest.
-- The policy does not set a pod's user, so an engine pod's attestation sidecar runs as
-  sidecarUser, and its checkpoint step runs as root with the runtime's default capabilities to
-  hand the evidence directory to the sidecar. Only adding a capability is refused.
 - The model volume follows the cluster admin's allow-lists, as the controller's
   check_model_volume does, and is mounted read-only. Every other volume is a ConfigMap, Secret,
   emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a
@@ -139,6 +138,13 @@ spec:
           && variables.labels['{{ include "narwhal.fleet.gateLabel" . }}'] in {{ include "narwhal.fleet.hostNetworkGates" . }}
     - name: hostNetworkAllowed
       expression: variables.engine || variables.hostNetworkGate
+    # The engine pod's checkpoint step, which hands the pod's evidence directory to the
+    # attestation sidecar's user. Container names are unique across a pod's init, regular and
+    # ephemeral containers, so the container of that name is the init container.
+    - name: checkpoint
+      expression: |-
+        variables.engine && has(variables.spec.initContainers)
+          && variables.spec.initContainers.exists(c, c.name == 'checkpoint')
     # The containers a request can change: every container of a new object, and the
     # ephemeral containers of an existing pod.
     - name: allContainers
@@ -204,8 +210,9 @@ spec:
         variables.containers.all(c, !has(c.securityContext)
           || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add)
           || c.securityContext.capabilities.add.all(a,
-               a == 'IPC_LOCK' && variables.hostNetworkAllowed))
-      message: only the controller's engine pods and fabric and transfer-measure gate Jobs add a capability, and only IPC_LOCK
+               (a == 'IPC_LOCK' && variables.hostNetworkAllowed)
+               || (a in ['CHOWN', 'FOWNER'] && c.name == 'checkpoint' && variables.checkpoint)))
+      message: only the controller's engine pods and fabric and transfer-measure gate Jobs add a capability, and only IPC_LOCK, apart from CHOWN and FOWNER for an engine pod's checkpoint step
       reason: Forbidden
     - expression: |-
         variables.engine || variables.containers.all(c,

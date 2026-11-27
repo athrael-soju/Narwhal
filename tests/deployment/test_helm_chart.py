@@ -9,9 +9,9 @@ The tests that render the chart need helm: HELM naming it, `helm` on PATH, or th
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import tomllib
 import unittest
@@ -729,6 +729,39 @@ class ChartTests(Rendering, unittest.TestCase):
         for component in peers - {"prometheus"}:
             self.assertIn(f"'{component}':", kinds)
 
+    def test_helm_applies_no_workload_whose_label_the_policy_reserves(self):
+        # Helm applies the chart's workloads as the installing user, whom the policy does not
+        # trust, so a chart workload with a reserved label would fail every install and upgrade.
+        [document] = [d for d in self.documents if d["kind"] == "ValidatingAdmissionPolicy"]
+        variables = {v["name"]: v["expression"] for v in document["spec"]["variables"]}
+        reserved = set(re.findall(r"'([a-z-]+)': \[", variables["kinds"]))
+        self.assertEqual(reserved, {"engine", "router", "gate", "haproxy"})
+        for values in (self.values, chart_fixtures.direct_example()):
+            rendered = self.render(values)
+            for workload, template in pod_templates(rendered):
+                with self.subTest(workload):
+                    labels = template["metadata"]["labels"]
+                    self.assertNotIn(labels["app.kubernetes.io/component"], reserved)
+            # The controller runs the routers, and their lease is a Kubernetes Lease.
+            kinds = {(d["kind"], d["metadata"]["name"]) for d in rendered}
+            self.assertNotIn(("StatefulSet", "router"), kinds)
+            self.assertNotIn(("PersistentVolumeClaim", "narwhal-lease"), kinds)
+
+    def test_only_an_engine_pods_checkpoint_step_adds_chown_and_fowner(self):
+        [document] = [d for d in self.documents if d["kind"] == "ValidatingAdmissionPolicy"]
+        variables = {v["name"]: v["expression"] for v in document["spec"]["variables"]}
+        self.assertIn("variables.engine &&", variables["checkpoint"])
+        self.assertIn("initContainers.exists(c, c.name == 'checkpoint')", variables["checkpoint"])
+        [rule] = [
+            v["expression"]
+            for v in document["spec"]["validations"]
+            if "capabilities.add.all" in v["expression"]
+        ]
+        self.assertIn(
+            "(a in ['CHOWN', 'FOWNER'] && c.name == 'checkpoint' && variables.checkpoint)", rule
+        )
+        self.assertIn("(a == 'IPC_LOCK' && variables.hostNetworkAllowed)", rule)
+
     def test_every_pod_the_chart_runs_passes_the_policy_s_seccomp_rule(self):
         for values in (self.values, chart_fixtures.direct_example()):
             for workload, template in pod_templates(self.render(values)):
@@ -751,8 +784,6 @@ class ChartTests(Rendering, unittest.TestCase):
             p["podSelector"]["matchLabels"]["app.kubernetes.io/component"] for p in rule["from"]
         ]
         self.assertEqual(peers, ["haproxy", "gate", "router", "prometheus"])
-        router = self.find("StatefulSet", "router")["spec"]["template"]["metadata"]["labels"]
-        self.assertLessEqual(policy["podSelector"]["matchLabels"].items(), router.items())
         prometheus = self.find("Deployment", "prometheus")["spec"]["template"]["metadata"]
         self.assertLessEqual(
             rule["from"][3]["podSelector"]["matchLabels"].items(), prometheus["labels"].items()
@@ -791,59 +822,6 @@ class ChartTests(Rendering, unittest.TestCase):
                 if mount["name"] in state and not mount.get("readOnly")
             ]
         self.assertEqual(writers, [f"Deployment {CONTROLLER}"])
-        router = self.find("StatefulSet", "router")["spec"]["template"]["spec"]
-        [volume] = [v for v in router["volumes"] if v["name"] == "narwhal-state"]
-        self.assertTrue(volume["persistentVolumeClaim"]["readOnly"])
-
-    def test_router_0_starts_primary_until_it_holds_a_handoff(self):
-        router = self.find("StatefulSet", "router")
-        self.assertEqual(router["spec"]["replicas"], 2)
-        spec = router["spec"]["template"]["spec"]
-        [container] = spec["containers"]
-        self.assertEqual(container["workingDir"], "/narwhal-router")
-        variables = defined(container, "router-0")
-        variables["NARWHAL_POD_IP"] = POD_IP
-        argv = [expand(part, variables) for part in container["command"]]
-        self.assertEqual(argv[argv.index("--fleet") + 1], "/narwhal-state/fleet.json")
-        folder = Path(tempfile.mkdtemp(dir=self.root))
-        handoff = folder / "router-state.json"
-        fleet = folder / "fleet.json"
-        fleet.write_text(json.dumps({"recovery": {"state_path": str(handoff)}}))
-        argv[argv.index("--fleet") + 1] = str(fleet)
-        lease = folder / "router.lease"
-        argv[argv.index("--lease-path") + 1] = str(lease)
-        domain = "routers.example.svc.cluster.local:8000"
-        first, second = f"http://router-1.{domain}", f"http://router-0.{domain}"
-        # Each case: the router, the files that exist, and the standby options it starts with.
-        cases = (
-            ("router-0", (), []),
-            ("router-1", (), ["--standby-of", second]),
-            ("router-0", (lease,), ["--standby-of", first]),
-            ("router-0", (handoff,), ["--standby-of", first]),
-            ("router-1", (handoff, lease), ["--standby-of", second]),
-        )
-        for name, present, standby in cases:
-            with self.subTest(name=name, present=[path.name for path in present]):
-                for path in (handoff, lease):
-                    path.unlink(missing_ok=True)
-                for path in present:
-                    path.write_text("{}")
-                executed: list[list[str]] = []
-                environment = {**variables, "NARWHAL_POD_NAME": name}
-                with (
-                    patch.dict(os.environ, environment),
-                    patch.object(sys, "argv", ["-c", *argv[4:]]),
-                    patch.object(sys, "executable", "python3"),
-                    patch("os.execv", lambda path, args, found=executed: found.append(args)),
-                ):
-                    exec(argv[3], {"__name__": "__main__"})
-                [args] = executed
-                self.assertEqual(args[:5], ["python3", "-I", "-m", "narwhal.cli", "--fleet"])
-                tail = ["--router-id", name, *standby]
-                self.assertEqual(args[-len(tail) :], tail)
-                self.assertEqual(args.count("--standby-of"), len(standby) // 2)
-                self.assertIn("--lease-path", args)
-                self.assertEqual(args[args.index("--host") + 1], POD_IP)
 
     def test_incomplete_values_are_refused(self):
         def without(path: str) -> dict:
@@ -858,7 +836,6 @@ class ChartTests(Rendering, unittest.TestCase):
         cases = {
             "narwhal": without("images.narwhal"),
             "size": without("state.size"),
-            "fleet": without("routers.fleet"),
             "modelVolume": without("fleet.engines.modelVolume"),
         }
         cases["/images/narwhal"] = {**self.values, "images": {"narwhal": "narwhal:0.13.0"}}
@@ -1066,13 +1043,6 @@ class ChartTests(Rendering, unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
 
-    def test_the_fleet_path_must_be_a_name_on_the_state_volume(self):
-        for fleet in ("../fleet.json", "/fleet.json", "a/../../fleet.json", "fleet.json\nx"):
-            with self.subTest(fleet):
-                values = copy.deepcopy(self.values)
-                values["routers"]["fleet"] = fleet
-                self.assertNotEqual(self.helm(values).returncode, 0)
-
 
 class DirectEngineSetTests(unittest.TestCase):
     def test_the_command_is_the_backends_direct_start_in_the_pod(self):
@@ -1198,6 +1168,17 @@ class DirectChartTests(Rendering, unittest.TestCase):
         engine = self.find("StatefulSet", "engine")["spec"]["template"]["spec"]
         claims = {v.get("persistentVolumeClaim", {}).get("claimName") for v in engine["volumes"]}
         self.assertNotIn(self.values["directEngines"]["stateClaim"], claims)
+
+    def test_direct_engines_need_no_exemption_from_the_admission_policy(self):
+        # Helm applies them as the installing user, so the policy trusts nothing about them.
+        engine = self.find("StatefulSet", "engine")
+        labels = engine["spec"]["template"]["metadata"]["labels"]
+        self.assertEqual(labels["app.kubernetes.io/component"], "direct-engine")
+        spec = engine["spec"]["template"]["spec"]
+        self.assertNotIn("hostNetwork", spec)
+        self.assertEqual(spec["securityContext"], {"seccompProfile": {"type": "RuntimeDefault"}})
+        for container in spec["containers"]:
+            self.assertNotIn("capabilities", container.get("securityContext", {}))
 
     def test_direct_values_are_refused_where_they_cannot_make_one_fleet(self):
         incomplete = copy.deepcopy(self.values)

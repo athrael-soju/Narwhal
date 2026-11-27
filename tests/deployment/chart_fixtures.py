@@ -103,9 +103,6 @@ def values(**overrides: object) -> dict:
         "images": {"narwhal": spec["images"]["narwhal"]},
         "fleet": spec,
         "state": {"claimName": "narwhal-state", "storageClassName": "shared", "size": "10Gi"},
-        "lease": {"storageClassName": "shared", "size": "1Gi"},
-        "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
-        "credentials": CREDENTIALS,
         "monitoring": {
             "enabled": True,
             "prometheus": {
@@ -152,7 +149,7 @@ def direct_engines(count: int = 2, **overrides: object) -> dict:
 
 def direct_example(count: int = 2) -> dict:
     """Complete chart values of direct engines, with no fleet resource."""
-    document = values(directEngines=direct_engines(count), credentials={})
+    document = values(directEngines=direct_engines(count))
     del document["fleet"]
     return document
 

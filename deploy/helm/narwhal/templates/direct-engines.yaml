@@ -12,13 +12,13 @@ kind: Service
 metadata:
   name: {{ .serviceName }}
   labels:
-    {{- include "narwhal.labels" (dict "root" $ "component" "engine") | nindent 4 }}
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
 spec:
   clusterIP: None
   # The routers reach an engine by its pod name before the engine is ready.
   publishNotReadyAddresses: true
   selector:
-    {{- include "narwhal.selector" (dict "root" $ "component" "engine") | nindent 4 }}
+    {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 4 }}
   ports:
     - name: http
       port: {{ .port }}
@@ -28,7 +28,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: narwhal-engine-shared
   labels:
-    {{- include "narwhal.labels" (dict "root" $ "component" "engine") | nindent 4 }}
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: {{ .shared.storageClassName }}
@@ -42,7 +42,7 @@ metadata:
   # The pods are engine-1 onwards, the names of the engine roles.
   name: engine
   labels:
-    {{- include "narwhal.labels" (dict "root" $ "component" "engine") | nindent 4 }}
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
 spec:
   serviceName: {{ .serviceName }}
   replicas: {{ .count }}
@@ -54,11 +54,11 @@ spec:
     type: OnDelete
   selector:
     matchLabels:
-      {{- include "narwhal.selector" (dict "root" $ "component" "engine") | nindent 6 }}
+      {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "narwhal.selector" (dict "root" $ "component" "engine") | nindent 8 }}
+        {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 8 }}
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false

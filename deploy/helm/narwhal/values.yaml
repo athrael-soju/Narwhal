@@ -2,8 +2,7 @@
 # that leaves one out. Keep a filled values file in the ignored config/helm/ directory.
 
 images:
-  # The Narwhal image by registry digest, <repository>@sha256:<hex>. The controller and the
-  # routers run it.
+  # The Narwhal image by registry digest, <repository>@sha256:<hex>, which the controller runs.
   narwhal: ""
 
 # The fleet controller, which runs the stage graph for the namespace's NarwhalFleet and owns
@@ -31,37 +30,16 @@ sidecarUser: 10002
 directEngines: {}
 
 # The state volume: the controller's run directories, the fleet file, profiles, calibration and
-# every stage's evidence. The engine pods, the routers and the gate Jobs on different nodes share
-# it. helm uninstall keeps the claim.
+# every stage's evidence. The controller's engine pods, routers and gate Jobs on different nodes
+# share it. helm uninstall keeps the claim.
 state:
   claimName: narwhal-state
   storageClassName: ""
   size: ""
 
-# The router pair's lease volume. It must support flock, coherent reads and atomic rename
-# across nodes.
-lease:
-  storageClassName: ""
-  size: ""
-
-routers:
-  # Run the router pair.
-  enabled: true
-  # The fleet file's path on the state volume.
-  fleet: ""
-  # Each router's own volume, for its journal and state handoff.
-  storageClassName: ""
-  size: ""
-  # More narwhal-serve options, such as ["--lease-ttl", "6"].
-  args: []
-
 haproxy:
-  # The cluster's DNS domain, in the routers' and Prometheus's addresses.
+  # The cluster's DNS domain, in the addresses Prometheus scrapes.
   clusterDomain: cluster.local
-
-# The engines' API credential, which the routers read from a Secret:
-# {"env": <variable>, "secretName": <name>, "key": <key>}.
-credentials: {}
 
 # The cluster admin's allow-lists for a fleet's model volume. The controller refuses a fleet
 # whose model volume uses a source this list leaves out, and the admission policy refuses a pod

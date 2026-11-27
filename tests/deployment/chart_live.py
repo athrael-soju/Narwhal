@@ -20,8 +20,13 @@ Each object is sent with `kubectl create --dry-run=server`, which runs admission
 nothing. `check` binds `edit` to the user `FORGER` and creates the RuntimeClass `UNLISTED` for
 its cases, and removes both when it ends.
 
+`check_lifecycle` uninstalls an installed release and installs, upgrades, uninstalls and
+installs it again with the admission policy present, and checks that every workload the chart
+applies makes its pods each time.
+
 `python -m tests.deployment.chart_live --kubeconfig PATH --namespace NS --release NAME [--policy
-JSON]` runs the checks against an installed release whose model volume values are `--policy`.
+JSON] [--lifecycle CHART VALUES --upgrade-set KEY=VALUE]` runs the checks against an installed
+release whose model volume values are `--policy`, after the lifecycle when it is given.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import copy
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -128,6 +134,8 @@ CLAIM = {"persistentVolumeClaim": {"claimName": "models", "readOnly": True}}
 RUNTIME_DEFAULT = {"seccompProfile": {"type": "RuntimeDefault"}}
 # A user with the namespace's edit role, and a RuntimeClass the chart's values do not list.
 FORGER = "chart-live-forger"
+# What an engine pod's checkpoint step adds, to hand the evidence directory to the sidecar.
+CHECKPOINT_CAPABILITIES = ("CHOWN", "FOWNER")
 # The router pods' component label, which the routers' NetworkPolicy admits.
 ROUTER = "router"
 UNLISTED = "chart-live-unlisted"
@@ -157,9 +165,9 @@ def controller(namespace: str, release: str) -> str:
 def made_by(document: Mapping[str, Any], owner: str, name: str = "owner") -> Case:
     """`document` with a controlling owner of kind `owner`, sent by the controller that makes
     objects for that kind."""
-    document = copy.deepcopy(dict(document))
+    made = copy.deepcopy(dict(document))
     api = {"Job": "batch/v1"}.get(owner, "apps/v1")
-    document["metadata"]["ownerReferences"] = [
+    made["metadata"]["ownerReferences"] = [
         {
             "apiVersion": api,
             "kind": owner,
@@ -168,7 +176,7 @@ def made_by(document: Mapping[str, Any], owner: str, name: str = "owner") -> Cas
             "controller": True,
         }
     ]
-    return Case(document, user=f"system:serviceaccount:kube-system:{MAKERS[owner]}")
+    return Case(made, user=f"system:serviceaccount:kube-system:{MAKERS[owner]}")
 
 
 def _pod(name: str, component: str | None, spec: Mapping[str, Any], **labels: str) -> dict:
@@ -224,9 +232,9 @@ def replica_set(deployment: Mapping[str, Any]) -> dict:
 
 
 def _in(namespace: str, document: Mapping[str, Any]) -> dict:
-    document = copy.deepcopy(dict(document))
-    document["metadata"]["namespace"] = namespace
-    return document
+    found = copy.deepcopy(dict(document))
+    found["metadata"]["namespace"] = namespace
+    return found
 
 
 def _gate(kind: str, **fields: Any) -> objects.GateJob:
@@ -349,10 +357,10 @@ def admitted(
 
 def hardened(pod: Mapping[str, Any], sidecar_user: int = 10002) -> dict:
     """An engine pod whose attestation sidecar runs as `sidecar_user`, whose engine steps keep
-    only IPC_LOCK, and whose checkpoint step runs as root with the runtime's default
-    capabilities, to hand the pod's evidence directory to the sidecar."""
-    pod = copy.deepcopy(dict(pod))
-    spec = pod["spec"]
+    only IPC_LOCK, and whose checkpoint step keeps only CHOWN and FOWNER, to hand the pod's
+    evidence directory to the sidecar."""
+    found = copy.deepcopy(dict(pod))
+    spec = found["spec"]
     for container in [*spec["initContainers"], *spec["containers"]]:
         if container["name"] == "attestation":
             container["securityContext"] = {
@@ -364,14 +372,18 @@ def hardened(pod: Mapping[str, Any], sidecar_user: int = 10002) -> dict:
                 **RUNTIME_DEFAULT,
             }
         elif container["name"] == "checkpoint":
-            container["securityContext"] = {"allowPrivilegeEscalation": False, **RUNTIME_DEFAULT}
+            container["securityContext"] = {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": list(CHECKPOINT_CAPABILITIES)},
+                **RUNTIME_DEFAULT,
+            }
         else:
             container["securityContext"] = {
                 "allowPrivilegeEscalation": False,
                 "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
                 **RUNTIME_DEFAULT,
             }
-    return pod
+    return found
 
 
 def _set_container(**fields: Any) -> Callable[[dict], object]:
@@ -469,6 +481,36 @@ def refused(release: str) -> dict[str, Case]:
             CAPABILITY,
         ),
         "NET_RAW, fabric gate": Case(fabric_pod.document, CAPABILITY, fabric_pod.user),
+        "SYS_ADMIN, an engine's checkpoint step": engine(
+            lambda s: s.update(
+                initContainers=[
+                    _container(
+                        name="checkpoint",
+                        securityContext={"capabilities": {"add": ["CHOWN", "SYS_ADMIN"]}},
+                    )
+                ]
+            ),
+            CAPABILITY,
+        ),
+        "CHOWN, an engine's serving container": engine(
+            _set_container(securityContext={"capabilities": {"add": ["CHOWN"]}}), CAPABILITY
+        ),
+        "CHOWN, a regular container named checkpoint": engine(
+            lambda s: s["containers"].append(
+                _container(name="checkpoint", securityContext={"capabilities": {"add": ["CHOWN"]}})
+            ),
+            CAPABILITY,
+        ),
+        "CHOWN, a checkpoint step outside an engine pod": pod(
+            _plain(
+                initContainers=[
+                    _container(
+                        name="checkpoint", securityContext={"capabilities": {"add": ["CHOWN"]}}
+                    )
+                ]
+            ),
+            CAPABILITY,
+        ),
         "privileged engine": engine(
             _set_container(securityContext={"privileged": True}), "privileged"
         ),
@@ -554,6 +596,23 @@ def forged(release: str) -> dict[str, Case]:
             _workload("StatefulSet", "engine-x", engine, _plain(hostNetwork=True)), HOST
         ),
         "a pod with the gate label": Case(_pod("gate", objects.GATE, _plain()), reserved),
+        "a checkpoint step with CHOWN and FOWNER": Case(
+            _pod(
+                "checkpoint",
+                None,
+                _plain(
+                    initContainers=[
+                        _container(
+                            name="checkpoint",
+                            securityContext={
+                                "capabilities": {"add": list(CHECKPOINT_CAPABILITIES)}
+                            },
+                        )
+                    ]
+                ),
+            ),
+            CAPABILITY,
+        ),
         "a pod with the router label": Case(_pod("router-x", ROUTER, _plain()), reserved),
         "a router StatefulSet": Case(
             _workload("StatefulSet", "router-x", objects.labels(ROUTER), _plain()),
@@ -666,9 +725,13 @@ def _can(run: Run, account: str, rule: tuple[str, str, str, str], namespace: str
 
 def check_rbac(run: Run, namespace: str, release: str) -> list[str]:
     account = f"system:serviceaccount:{namespace}:{release}-controller"
-    grants = [(rule, namespace) for rule in sorted(CONTROLLER_RULES)]
+    grants: list[tuple[tuple[str, str, str, str], str | None]] = [
+        (rule, namespace) for rule in sorted(CONTROLLER_RULES)
+    ]
     grants += [(rule, None) for rule in sorted(cluster_rules(namespace))]
-    denials = [(rule, namespace) for rule in FORBIDDEN]
+    denials: list[tuple[tuple[str, str, str, str], str | None]] = [
+        (rule, namespace) for rule in FORBIDDEN
+    ]
     denials += [(rule, None) for rule in CLUSTER_FORBIDDEN]
     return [
         f"the controller cannot {rule} in {where or 'the cluster'}"
@@ -785,6 +848,80 @@ def check(
         ]
 
 
+def _workloads_created(run: Run, namespace: str, release: str) -> str:
+    """'' once every Deployment and StatefulSet of `release` has made all its pods, else what
+    is missing, with the events of any pod the API server refused."""
+    selector = f"app.kubernetes.io/instance={release}"
+    result = run(
+        ["get", "deployments,statefulsets", "-n", namespace, "-l", selector, "-o", "json"], None
+    )
+    if result.returncode:
+        return result.stderr.strip()
+    missing = [
+        f"{item['kind']} {item['metadata']['name']}"
+        for item in json.loads(result.stdout)["items"]
+        if item["status"].get("replicas", 0) < item["spec"].get("replicas", 1)
+        or item["status"].get("observedGeneration", 0) < item["metadata"]["generation"]
+    ]
+    if not missing:
+        return ""
+    events = run(
+        [
+            "get",
+            "events",
+            "-n",
+            namespace,
+            "--field-selector",
+            "reason=FailedCreate",
+            "-o",
+            'jsonpath={range .items[*]}{.message}{"\\n"}{end}',
+        ],
+        None,
+    ).stdout.strip()
+    return f"{', '.join(missing)} not created: {events or 'no FailedCreate event'}"
+
+
+def check_lifecycle(
+    helm: Sequence[str],
+    run: Run,
+    namespace: str,
+    release: str,
+    install: Sequence[str],
+    upgrade: Sequence[str],
+    wait: float = 90.0,
+) -> list[str]:
+    """Uninstall the installed `release`, then install it, upgrade it, uninstall it and install
+    it again, every step with the namespace's admission policy present. `install` is the chart
+    and values arguments of each install, and `upgrade` those of the upgrade, which should
+    change the workloads' pod templates. After each install and upgrade, every workload of the
+    release must make its pods."""
+    policy = f"{namespace}-narwhal"
+    steps = (
+        ("uninstall", ["uninstall", release, "-n", namespace]),
+        ("install", ["install", release, *install, "-n", namespace]),
+        ("upgrade", ["upgrade", release, *upgrade, "-n", namespace]),
+        ("uninstall", ["uninstall", release, "-n", namespace]),
+        ("install again", ["install", release, *install, "-n", namespace]),
+    )
+    for name, args in steps:
+        present = run(["get", "validatingadmissionpolicy", policy, "-o", "name"], None)
+        if present.returncode:
+            return [f"the admission policy {policy} is missing before {name}"]
+        result = subprocess.run([*helm, *args], capture_output=True, text=True, check=False)
+        if result.returncode:
+            return [f"helm {name} failed: {result.stderr.strip()}"]
+        if name == "uninstall":
+            continue
+        deadline = time.monotonic() + wait
+        while (problem := _workloads_created(run, namespace, release)) and (
+            time.monotonic() < deadline
+        ):
+            time.sleep(2)
+        if problem:
+            return [f"after helm {name}: {problem}"]
+    return []
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--kubectl", default="kubectl")
@@ -793,13 +930,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--release", required=True)
     parser.add_argument("--policy", type=json.loads, default=POLICIES[0])
     parser.add_argument("--engines", help="a JSON file of engine values to admit")
+    parser.add_argument("--helm", default="helm")
+    parser.add_argument(
+        "--lifecycle",
+        nargs=2,
+        metavar=("CHART", "VALUES"),
+        help="first uninstall and reinstall the release from CHART and VALUES, as check_lifecycle",
+    )
+    parser.add_argument(
+        "--upgrade-set",
+        action="append",
+        default=[],
+        help="a --set for the lifecycle's upgrade, which should change a pod template",
+    )
     args = parser.parse_args(argv)
+    kubectl = [args.kubectl, "--kubeconfig", args.kubeconfig]
+    if args.lifecycle:
+        chart, values = args.lifecycle
+        install = [chart, "-f", values]
+        upgrade = [*install, *(f"--set={item}" for item in args.upgrade_set)]
+        problems = check_lifecycle(
+            [args.helm, "--kubeconfig", args.kubeconfig],
+            _runner(kubectl),
+            args.namespace,
+            args.release,
+            install,
+            upgrade,
+        )
+        if problems:
+            print(*problems, sep="\n")
+            return 1
     engines = None
     if args.engines:
         with open(args.engines) as stream:
             engines = json.load(stream)
     problems = check(
-        [args.kubectl, "--kubeconfig", args.kubeconfig],
+        kubectl,
         args.namespace,
         args.release,
         args.policy,
