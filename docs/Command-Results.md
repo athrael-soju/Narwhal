@@ -4,7 +4,7 @@ description: Machine-readable JSON results and exit codes for automating Narwhal
 
 # Command results for automation
 
-`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package`, `install` and `cache-groups` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
+`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package`, `install`, `cache-groups` and `fabric` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
 
 With `--format json`, stdout carries one `narwhal.command-result` version 1 object for every outcome. stderr carries live progress and diagnostics, subprocess stdout and stderr replayed at completion, and the help text for `--format json --help`.
 
@@ -52,6 +52,7 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | `narwhal deploy access` | `logs`, the log directory, and `hosts`, each with its `id` and `roles` |
 | `narwhal deploy package`, `narwhal deploy install` | `run`, the package directory, and `hosts`, the packaged or installed host IDs |
 | `narwhal deploy cache-groups` | `out`, the evidence directory, and `groups`, each with its `id`, `representative` and `roles` |
+| `narwhal deploy fabric` | `out`, the evidence directory, and on success the contents of its `fabric.json`: `inputs`, `transfers`, `budgets` and `edges` |
 | `narwhal config` actions | The `narwhal.effective-config` document |
 | `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and the `sources` count |
 | `narwhal-engine` actions | `runs`, the launch directories |

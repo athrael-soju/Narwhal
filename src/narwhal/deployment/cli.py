@@ -6,13 +6,14 @@ import argparse
 import ipaddress
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
-from . import cache_groups, discovery, install
+from . import cache_groups, discovery, fabric, install
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 
 DESCRIPTIONS = {
@@ -28,6 +29,9 @@ DESCRIPTIONS = {
     "cache-groups": "Group the engine roles of the launch records into cache-equivalence "
     "groups by image, model, allocation, runtime and transport, and by each engine's captured "
     "cache layout or measured KV handoff, and write cache-groups.json.",
+    "fabric": "Size each cache group's KV budget and qualify every directed edge between "
+    "engine hosts against it with iperf3 or ib_write_bw, reusing a retained sample whose link "
+    "record is unchanged.",
     "shell": "Open an interactive shell on a role's host, in its deployment directory with the "
     "role environment loaded when --run names a package.",
     "tunnel": "Forward workstation loopback ports to a role's host until interrupted.",
@@ -52,6 +56,22 @@ def role_file(value: str) -> tuple[str, Path]:
     return role, Path(path)
 
 
+def engine_run(value: str) -> tuple[str, str]:
+    """Parse ROLE=DIRECTORY into an engine role and its launch directory on its host."""
+    role, equals, directory = value.partition("=")
+    if not equals or not re.fullmatch(r"engine-[1-9][0-9]*", role) or not directory:
+        raise argparse.ArgumentTypeError("Use engine-<n>=DIRECTORY")
+    return role, directory
+
+
+def cache_group(value: str) -> tuple[str, ...]:
+    """Parse ROLE[,ROLE...] into a cache group, its representative first."""
+    roles = tuple(value.split(","))
+    if not all(re.fullmatch(r"engine-[1-9][0-9]*", role) for role in roles):
+        raise argparse.ArgumentTypeError("Use engine-<n>[,engine-<n>...]")
+    return roles
+
+
 def add_commands(commands: Any) -> None:
     """Register `deploy` beneath the installed root command."""
     deploy = commands.add_parser(
@@ -60,8 +80,9 @@ def add_commands(commands: Any) -> None:
         description="Discover, package and install a fleet on SSH hosts. discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
         "writes the wheel and role files, install copies and installs them, cache-groups "
-        "groups the engines that share a fabric budget, shell opens a role shell and tunnel "
-        "forwards router ports to the workstation.",
+        "groups the engines that share a fabric budget, fabric qualifies every directed edge "
+        "between engine hosts, shell opens a role shell and tunnel forwards router ports to "
+        "the workstation.",
         epilog="Documentation: https://athrael-soju.github.io/Narwhal/cli/Deploy/",
     )
     actions = deploy.add_subparsers(dest="action", required=True)
@@ -75,7 +96,7 @@ def add_commands(commands: Any) -> None:
                 type=Path,
                 help="host inventory (default: NARWHAL_HOSTS, else config/hosts.local.json)",
             )
-        if name in ("discover", "package"):
+        if name in ("discover", "package", "fabric"):
             action.add_argument(
                 "--out", type=Path, required=True, help="fresh private output directory"
             )
@@ -109,6 +130,32 @@ def add_commands(commands: Any) -> None:
                 metavar="ROLE=PATH",
                 help="an engine role's measured transfer.json; repeat for every engine whose "
                 "KV handoffs are measured",
+            )
+        if name == "fabric":
+            action.add_argument(
+                "--run", type=Path, required=True, help="installed package directory"
+            )
+            action.add_argument(
+                "--group",
+                type=cache_group,
+                action="append",
+                required=True,
+                metavar="ROLE[,ROLE...]",
+                help="one cache-equivalence group, its representative first; repeatable",
+            )
+            action.add_argument(
+                "--engine-run",
+                type=engine_run,
+                action="append",
+                default=[],
+                metavar="ROLE=DIRECTORY",
+                help="launch directory, on its host, of a representative whose backend "
+                "captures the cache layout; repeatable",
+            )
+            action.add_argument(
+                "--retained",
+                type=Path,
+                help="earlier fabric output whose samples to reuse while their links hold",
             )
         if name == "install":
             action.add_argument(
@@ -246,6 +293,31 @@ def _install(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) -
     return 0
 
 
+def _fabric(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) -> int:
+    manifest = install.load_run(args.run, hosts, env)
+    runs = dict(args.engine_run)
+    if len(runs) != len(args.engine_run):
+        raise ValueError("Give each role one --engine-run")
+    if args.retained is not None and not (args.retained / "fabric.json").is_file():
+        raise ValueError(f"--retained {args.retained} holds no fabric.json; name an earlier --out")
+    plan = fabric.load(hosts, manifest, args.run, env, args.group, runs)
+    args.out.mkdir(mode=0o700, parents=True)
+    results.add_artifact("fabric", args.out / "fabric.json")
+    ssh = _ssh(env, args.out / "logs")
+    try:
+        summary = fabric.qualify(plan, ssh, args.out, args.retained)
+    except fabric.BelowBudget as exc:
+        results.set_data({"out": str(args.out)})
+        results.set_status("failed_gate")
+        results.record_error("gate_failed", str(exc), stage=exc.stage, context=exc.context)
+        if not results.json_mode():
+            print(f"narwhal: deploy fabric: {exc}", file=sys.stderr)
+        return 1
+    results.set_data({"out": str(args.out), **summary})
+    print(f"Qualified {len(summary['edges'])} directed samples; evidence in {args.out}")
+    return 0
+
+
 def _shell(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) -> int:
     host = _role_host(hosts, args.role)
     if args.run:
@@ -285,7 +357,13 @@ def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
     hosts = _hosts(args, env)
     if args.action == "access":
         return _access(hosts, env)
-    actions = {"package": _package, "install": _install, "shell": _shell, "tunnel": _tunnel}
+    actions = {
+        "package": _package,
+        "install": _install,
+        "fabric": _fabric,
+        "shell": _shell,
+        "tunnel": _tunnel,
+    }
     return actions[args.action](args, hosts, env)
 
 
@@ -295,7 +373,7 @@ def run(args: argparse.Namespace) -> int:
     context = f"deploy {args.action}"
     try:
         return _dispatch(args, dict(os.environ))
-    except (RemoteError, RemoteTimeout) as exc:
+    except (RemoteError, RemoteTimeout, fabric.FabricFailure) as exc:
         if results.json_mode():
             raise
         return failure("narwhal", context, exc, 1)

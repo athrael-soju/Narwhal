@@ -51,7 +51,7 @@ The package holds these files at mode 0600:
 | `<host-id>/engine-launch.engine-<n>.json` | The selected launch record for each engine role |
 | `<host-id>/fleet.local.json` | The fleet configuration from discovery, on the router host |
 | `<host-id>/profiling-limits.json` | Profiling limits from each engine's sequence limit, on the router host |
-| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`, `transfer_measure.py` | Helper snapshots for engine hosts |
+| `<host-id>/cache_capture_hook.py`, `transfer_measure.py` | Helper snapshots for engine hosts of a backend that uses them |
 | `manifest.json` | The private manifest |
 
 The manifest records:
@@ -64,15 +64,14 @@ The manifest records:
 
 Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to the wheel's SHA-256, so every launch plan and attestation records the wheel that the host runs.
 
-Engine hosts receive these helper snapshots under `runs/deployment-tools/`. Each engine's role environment holds the path and the SHA-256 of every snapshot:
+Engine hosts of a backend that captures its cache layout or measures its handoffs receive a helper snapshot under `runs/deployment-tools/`. Each engine's role environment holds the path and the SHA-256 of every snapshot:
 
 | Helper snapshot | Delivered for | Path variable | SHA-256 variable |
 | --- | --- | --- | --- |
-| `fabric_budget.py`, from `narwhal.deployment` | Every fleet | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256` |
 | `cache_capture_hook.py`, from `narwhal.backends.<backend>` | vLLM, the default, and TensorRT-LLM | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 | `transfer_measure.py`, from `narwhal.backends.sglang` | SGLang | `NARWHAL_TRANSFER_MEASURE_TOOL` | `NARWHAL_TRANSFER_MEASURE_SHA256` |
 
-`package` takes the snapshots from the wheel, so engine hosts run the helpers of the release they install. The snapshots run with the engine host's `python3` and the standard library only. Check a snapshot's SHA-256 before running it, as [Qualify the transfer fabric](04-Qualify-Fabric.md) does.
+`package` takes the snapshots from the wheel, so engine hosts run the helpers of the release they install. The snapshots run with the engine host's `python3` and the standard library only. `narwhal-engine prepare` and `narwhal deploy fabric` check a snapshot against its SHA-256 before they use it.
 
 ## Installing engine 1 and the remaining hosts
 

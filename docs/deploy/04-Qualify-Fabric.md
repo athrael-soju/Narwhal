@@ -1,113 +1,37 @@
 ---
-description: Measure UCX TCP and RDMA bandwidth on each directed host edge of a Narwhal fleet against its KV cache budget.
+description: Measure each directed host edge of a Narwhal fleet against its KV cache budget with narwhal deploy fabric.
 ---
 
 # Qualify the transfer fabric
 
-Measure each directed host edge against its source cache group's budget while the fleet is idle.
+`narwhal deploy fabric` sizes each cache group's KV budget and measures every directed edge between engine hosts against it, while the fleet is idle. It runs from the workstation and needs no shell on a host.
 
-## Building the source budget
+## Running the qualification
 
-The `calculate` command sizes the budget from one cache source and these initial trial parameters:
+Before you run it:
 
-| Parameter                     | Value | `calculate` flag        |
-| ----------------------------- | :---: | ----------------------- |
-| Remote KV handoffs per second | 1     | `--handoffs-per-s 1`    |
-| Prompt tokens per handoff     | 1,024 | `--prompt-tokens 1024`  |
-| Burst size                    | 1     | `--burst 1`             |
-| Transfer budget               | 1 s   | `--transfer-budget-s 1` |
-| Bandwidth headroom            | 25%   | `--headroom 1.25`       |
+- Set the [fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) in `.env`: the budget workload, the test port and, for `ucx_rdma`, each engine's GID index and RoCE mode.
+- Install `iperf3` for `ucx_tcp`, or `perftest` for `ucx_rdma`, and `iproute2` and `util-linux`, on every engine host.
+- Open `NARWHAL_FABRIC_TEST_PORT` between the fabric addresses. Opening a firewall needs root, so the command never does it.
+- Keep the engines from [Validate the engines](03-Validate-Engines.md) running and idle, and have the cache-equivalence groups and each representative's launch directory at hand.
 
-On vLLM and TensorRT-LLM, the cache source is `--runtime-layout` with the engine's captured `cache-layout.json`. On SGLang, it is `--transfer-record` with the `transfer.json` that the packaged transfer measurement tool writes. [Calculating the workload budget](../configuration/06-Fabric-and-Operations.md#calculating-the-workload-budget) lists every `calculate` and transfer measurement option.
-
-In each engine-role shell, check the packaged helpers against the SHA-256 values in the role environment before you run them:
+Pass each cache group with `--group`, its representative first. On vLLM and TensorRT-LLM, pass each representative's launch directory with `--engine-run`, as a path in its host's deployment directory:
 
 ```bash
-echo "$NARWHAL_FABRIC_BUDGET_SHA256  $NARWHAL_FABRIC_BUDGET_TOOL" | sha256sum -c
+narwhal deploy fabric --run runs/deployment-env/first-deploy \
+  --group engine-1,engine-2 --engine-run engine-1=runs/engine-launch-20260101T000000Z-4242 \
+  --out runs/fabric/first-deploy
 ```
 
-Each outgoing directed edge from the cache group's roles carries the full handoff rate.
+The command runs three stages in order, and stops at the first that fails, naming the edge or role and the cause:
 
-1. In the representative's engine-role shell, calculate the budget. On vLLM and TensorRT-LLM, calculate it from the captured cache layout:
+1. `transfer-measure`, on SGLang: the representative of each group measures eight handoffs to the group's second engine.
+2. `fabric-budget`: each group's budget from its representative.
+3. `fabric-edge`: every directed host edge, one at a time.
 
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
-      --model-config "$NARWHAL_MODEL_DIR/config.json" \
-      --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --runtime-layout "$ENGINE_RUN/cache-layout.json" \
-      --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
-      --transfer-budget-s 1 --headroom 1.25 \
-      --out "$FABRIC_RUN/budget.json"
-    ```
+`n` engine hosts have `n * (n - 1)` directed edges. A fleet on one host has none, and [preflight](06-Profile-and-Preflight.md#running-preflight) qualifies its transfers. [`narwhal deploy`](../cli/Deploy.md#fabric-qualification) lists the options, outputs and exit codes, and [Fabric workload qualification](../configuration/06-Fabric-and-Operations.md#fabric-workload-qualification) the evidence files.
 
-    On SGLang, calculate it from the representative's own [handoff measurement](03-Validate-Engines.md#measuring-kv-handoffs-without-a-cache-layout):
-
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
-      --model-config "$NARWHAL_MODEL_DIR/config.json" \
-      --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --transfer-record "$ENGINE_RUN/transfer/transfer.json" \
-      --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
-      --transfer-budget-s 1 --headroom 1.25 \
-      --out "$FABRIC_RUN/budget.json"
-    ```
-
-2. On vLLM, verify that every tensor parallel (TP) rank shares one cache layout:
-
-    ```bash
-    python3 - <<'PY_REPRESENTATIVE_BUDGET'
-    import json
-    import os
-    from pathlib import Path
-
-    run = Path(os.environ["FABRIC_RUN"])
-    budget = json.loads((run / "budget.json").read_text())
-    layout = json.loads((Path(os.environ["ENGINE_RUN"]) / "cache-layout.json").read_text())
-    names = {rank["kv_cache_layout"] for rank in layout["ranks"]}
-    if len(names) != 1:
-        raise SystemExit("Inspect the differing TP cache layouts before using one group budget.")
-    print(f"required_gbps={budget['required_gbps']}; kv_cache_layout={names.pop()}")
-    PY_REPRESENTATIVE_BUDGET
-    sha256sum "$FABRIC_RUN/budget.json"
-    ```
-
-3. For each representative, retain:
-
-    - `FABRIC_RUN`
-    - `ENGINE_RUN`
-    - The budget digest
-    - `required_gbps`
-    - The resolved layout, on vLLM
-    - The cache-group ID that `cache-groups` printed
-
-4. For each role that uses another host's representative budget, create a local comparison budget from the representative's `required_gbps` and budget digest:
-
-    ```bash
-    umask 077
-    mkdir -p runs
-    export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
-    export REQUIRED_GBPS='<required_gbps from representative budget.json>'
-    export REPRESENTATIVE_BUDGET_SHA256='<SHA-256 of representative budget.json>'
-    python3 - <<'PY_EDGE_BUDGET'
-    import json
-    import os
-    from pathlib import Path
-
-    required = float(os.environ["REQUIRED_GBPS"])
-    if not 0 < required < float("inf"):
-        raise SystemExit("Use the positive finite rate from the representative budget.")
-    digest = os.environ["REPRESENTATIVE_BUDGET_SHA256"]
-    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-        raise SystemExit("Use the representative budget's SHA-256 digest.")
-    path = Path(os.environ["FABRIC_RUN"]) / "budget.json"
-    with path.open("x") as stream:
-        json.dump({"required_gbps": required, "representative_budget_sha256": digest}, stream)
-        stream.write("\n")
-    path.chmod(0o600)
-    PY_EDGE_BUDGET
-    ```
-
-5. Create a new `FABRIC_RUN` for each repeat comparison.
+## Building the source budget
 
 The required link rate, in decimal Gbit/s, is:
 
@@ -117,219 +41,51 @@ max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) *
 headroom / 1e9
 ```
 
-`payload_bytes` is `payload_bytes_per_handoff` in `budget.json`.
+These initial trial values suit a first qualification:
+
+| Input                              | Value |
+| ---------------------------------- | :---: |
+| `NARWHAL_FABRIC_HANDOFFS_PER_S`    | 1     |
+| `NARWHAL_FABRIC_PROMPT_TOKENS`     | 1024  |
+| `NARWHAL_FABRIC_BURST`             | 1     |
+| `NARWHAL_FABRIC_TRANSFER_BUDGET_S` | 1     |
+| `NARWHAL_FABRIC_HEADROOM`          | 1.25  |
+
+`payload_bytes` comes from the representative. On vLLM and TensorRT-LLM, it is the padded cache pages of a prompt in the captured `cache-layout.json`, summed over every TP rank. On SGLang, it is the mean of the measured handoffs. An SGLang group of one engine has no peer to measure against, so the command stops before it reaches a host. Every directed edge leaving a group's hosts carries the full handoff rate.
 
 ## Binding each sample to a directed route
 
-Record routes with `ip route get`, `ip -4 route get`, or `ip -6 route get`.
+Engine roles that share a host, a fabric address and, on `ucx_rdma`, an HCA port send KV through one endpoint, so they share one sample per directed host pair. Engines with their own HCAs on one host get one sample for each pair of HCA ports. Each sample is recorded against the budget of every source role behind it.
 
-1. In both engine-role shells, run the edge variable setup and `TEST_PORT` listener check:
+For each sample, the command checks both hosts before it measures:
 
-    ```bash
-    export SOURCE_NODE=1 DEST_NODE=2 TEST_PORT=5201
-    source_var="NARWHAL_NODE_${SOURCE_NODE}_IP"
-    dest_var="NARWHAL_NODE_${DEST_NODE}_IP"
-    export SOURCE_IP="${!source_var:?missing source fabric address}"
-    export DEST_IP="${!dest_var:?missing destination fabric address}"
-    ss -ltnp "sport = :$TEST_PORT"
-    ```
+- `ip`, `ss` and `setsid`, and `iperf3` or `ib_write_bw`, are installed. A missing tool names the package.
+- The route to the other host, from `ip -json route get`, leaves through `NARWHAL_FABRIC_INTERFACE` from the engine's fabric address, and that address belongs to the interface.
+- On `ucx_tcp`, the engine's `transfer.net_devices` is `NARWHAL_FABRIC_INTERFACE`.
+- On `ucx_rdma`, the HCA port from `transfer.net_devices` is active and its GID table entry at the configured index matches the RoCE mode: `RoCE v2` or `IB/RoCE v1` on an Ethernet link layer, bound to `NARWHAL_FABRIC_INTERFACE` and the engine's fabric address, or a set `IB/RoCE v1` GID on an InfiniBand link layer.
+- Both ends of the sample use one transport.
+- No process listens on the test port on either host.
 
-2. When `ss` shows a listener on either host, pick another `TEST_PORT`.
-3. Allow `TEST_PORT` traffic between the two fabric addresses for the test.
-4. Record the route on the source:
+The destination then runs the server, bound to its fabric address. `iperf3` serves one test and exits. The source runs the client from its fabric address, with one TCP stream per TP rank for 10 seconds after 3 seconds of warm-up, or `ib_write_bw` RDMA writes of 1 MiB for 10 seconds. The server stops on its own, or the command stops it by its recorded process identity. A sample whose `iperf3` streams ran between other addresses, or whose report names another protocol, HCA, link type or GID index, stops the stage. No sample falls back to another transport.
 
-    ```bash
-    export EDGE_PREFIX="$FABRIC_RUN/engine-${SOURCE_NODE}-to-engine-${DEST_NODE}"
-    ip route get "$DEST_IP" from "$SOURCE_IP" | tee "$EDGE_PREFIX.source-route.txt"
-    ```
+## Reusing a retained sample
 
-5. Check the reverse route on the destination:
+A retained sample stays valid while its link record is unchanged: both hosts, addresses and interfaces, both routes, the transport, both tool versions and the test parameters. Pass the output of an earlier run with `--retained`. For each sample whose link record and retained sample still match the retained evidence, the command compares the retained rate with the current budgets instead of measuring again. Any change, including a retained sample whose SHA-256 differs from its evidence, measures that edge again.
 
-    ```bash
-    ip route get "$SOURCE_IP" from "$DEST_IP"
-    ```
+When the workload or the cache layout changes, run the command again with `--retained`: the budgets are recalculated, and unchanged links keep their samples.
 
-6. Copy the destination's exact one-line reverse route into `$EDGE_PREFIX.destination-route.txt` on the source.
-7. Confirm that each route selects `NARWHAL_FABRIC_INTERFACE` and the discovered source address.
-
-## Measuring `ucx_tcp`
-
-1. Install `iperf3` on each host that is missing it:
-
-    ```bash
-    sudo apt-get install iperf3
-    ```
-
-2. Record `iperf3 --version` on both hosts.
-3. On the destination, start the server:
-
-    ```bash
-    iperf3 --server --bind "$DEST_IP" --port "$TEST_PORT"
-    ```
-
-4. On the source, run the client with one TCP stream per TP rank:
-
-    ```bash
-    export FABRIC_STREAMS="$(python3 -c 'import json,os; print(json.load(open(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]))["tensor_parallel_size"])')"
-    export EDGE_SAMPLE="$EDGE_PREFIX.json"
-    (set -o noclobber; iperf3 --client "$DEST_IP" --bind "$SOURCE_IP" \
-      --port "$TEST_PORT" --parallel "$FABRIC_STREAMS" --omit 3 --time 10 \
-      --json > "$EDGE_SAMPLE")
-    ```
-
-5. On the source, run the link fingerprint and budget check:
-
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
-      --source-role "engine-$SOURCE_NODE" --destination-role "engine-$DEST_NODE" \
-      --source-address "$SOURCE_IP" --destination-address "$DEST_IP" \
-      --source-interface "$NARWHAL_FABRIC_INTERFACE" \
-      --destination-interface "$NARWHAL_FABRIC_INTERFACE" \
-      --source-route "$EDGE_PREFIX.source-route.txt" \
-      --destination-route "$EDGE_PREFIX.destination-route.txt" \
-      --transport ucx_tcp --tool-version "$(iperf3 --version | head -n 1)" \
-      --test-parameters "{\"parallel\":$FABRIC_STREAMS,\"omit_s\":3,\"duration_s\":10,\"port\":$TEST_PORT}" \
-      --out "$EDGE_PREFIX.link.json"
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
-      --link "$EDGE_PREFIX.link.json" --sample "$EDGE_SAMPLE" \
-      --budget "$FABRIC_RUN/budget.json" --out "$EDGE_PREFIX.evidence.json"
-    ```
-
-6. Stop the temporary `iperf3` server.
-7. Measure the reverse edge against the new source's budget.
-
-`record-edge` takes the measured `ucx_tcp` rate from `end.sum_received.bits_per_second`.
-
-| `record-edge` exit code | Meaning                                                      |
-| :---------------------: | ------------------------------------------------------------ |
-| 0                       | The measured rate meets the budget.                          |
-| 1                       | The measured rate is below the budget.                       |
-| 2                       | An input file is invalid, or the output file already exists. |
-
-## Measuring `ucx_rdma`
-
-The test measures one-way RDMA writes between host-memory buffers. On RDMA over Converged Ethernet (RoCE), steps 4 to 7 select a global identifier (GID) index. On native InfiniBand, use the site's active port and GID selection.
-
-1. Install `perftest` on each host that is missing it:
-
-    ```bash
-    sudo apt-get install perftest
-    ```
-
-2. Record `ib_write_bw --version`.
-3. On each host, set `HCA` and `HCA_PORT` from `transfer.net_devices`, such as `HCA=mlx5_0` and `HCA_PORT=1` for `mlx5_0:1`.
-4. For RoCE, inspect:
-
-    ```text
-    /sys/class/infiniband/$HCA/ports/$HCA_PORT/gid_attrs/ndevs/
-    /sys/class/infiniband/$HCA/ports/$HCA_PORT/gid_attrs/types/
-    /sys/class/infiniband/$HCA/ports/$HCA_PORT/gids/
-    ```
-
-5. Set `GID_INDEX` to the index matching the configured fabric interface, address, and RoCE mode.
-6. Retain each host's GID mapping.
-7. In the source shell, set `DEST_HCA`, `DEST_HCA_PORT`, and `DEST_GID_INDEX` from the destination's inspected mapping.
-8. Select the address-family flags:
-
-    ```bash
-    rdma_addr_args=()
-    case "$DEST_IP" in
-      *:*) rdma_addr_args=(--ipv6-addr --ipv6) ;;
-    esac
-    ```
-
-9. On the destination, start the server:
-
-    ```bash
-    ib_write_bw -d "$HCA" -i "$HCA_PORT" -x "$GID_INDEX" \
-      -p "$TEST_PORT" -s 1048576 -D 10 --report_gbits \
-      "${rdma_addr_args[@]}" --bind_source_ip "$DEST_IP"
-    ```
-
-10. On the source, run the client:
-
-    ```bash
-    export EDGE_SAMPLE="$EDGE_PREFIX.txt"
-    (set -o noclobber; ib_write_bw -d "$HCA" -i "$HCA_PORT" -x "$GID_INDEX" \
-      -p "$TEST_PORT" -s 1048576 -D 10 --report_gbits \
-      "${rdma_addr_args[@]}" --bind_source_ip "$SOURCE_IP" "$DEST_IP" > "$EDGE_SAMPLE")
-    cat "$EDGE_SAMPLE"
-    ```
-
-11. Set `MEASURED_GBPS` to the report's `BW average[Gb/sec]` value.
-12. Run the link fingerprint and budget check:
-
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" link \
-      --source-role "engine-$SOURCE_NODE" --destination-role "engine-$DEST_NODE" \
-      --source-address "$SOURCE_IP" --destination-address "$DEST_IP" \
-      --source-interface "$NARWHAL_FABRIC_INTERFACE" \
-      --destination-interface "$NARWHAL_FABRIC_INTERFACE" \
-      --source-route "$EDGE_PREFIX.source-route.txt" \
-      --destination-route "$EDGE_PREFIX.destination-route.txt" \
-      --transport ucx_rdma --tool-version "$(ib_write_bw --version | head -n 1)" \
-      --test-parameters "{\"source_hca\":\"$HCA\",\"source_port\":$HCA_PORT,\"source_gid\":$GID_INDEX,\"destination_hca\":\"$DEST_HCA\",\"destination_port\":$DEST_HCA_PORT,\"destination_gid\":$DEST_GID_INDEX,\"message_bytes\":1048576,\"duration_s\":10,\"port\":$TEST_PORT}" \
-      --out "$EDGE_PREFIX.link.json"
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" record-edge \
-      --link "$EDGE_PREFIX.link.json" --sample "$EDGE_SAMPLE" \
-      --gbps "$MEASURED_GBPS" --budget "$FABRIC_RUN/budget.json" \
-      --out "$EDGE_PREFIX.evidence.json"
-    ```
-
-13. Measure the reverse edge against the new source's budget.
-14. For multi-rail deployments, test every selected HCA port.
-15. Retain every report.
-
-## Completing the matrix and matching retained evidence
-
-This matrix qualifies KV handoffs between engine hosts. [Preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
+## Transfers between engines of one host
 
 With `ucx_tcp`, engines on one host do not send KV over the fabric: the launcher starts them in the host IPC namespace, so UCX moves KV through shared memory or CUDA IPC. With `ucx_rdma`, the launcher sets `UCX_SHM_DEVICES=none` and uses the GPU copy transport, `cuda_copy` or `rocm_copy`, without GPU IPC, so engines on one host send KV to each other over their HCAs. Give each of those engines its own HCA in `transfer.net_devices`.
 
-While KV moves, read the HCA port counters, such as `/sys/class/infiniband/<hca>/ports/1/counters/port_xmit_data`. The counters increase only when KV crosses the HCA.
-
-For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs. For every edge, retain:
-
-- The source and destination roles.
-- The SHA-256 of the installed wheel.
-- The source and reverse routes.
-- The transport and utility version.
-- The exact command.
-- The budget digest.
-- The sample path and exit status.
-
-A retained sample stays valid while the link record is unchanged: the source and destination roles, addresses and interfaces, both routes, the transport, the utility version and the measurement parameters. When any of these changes, collect a new directed sample. When all are identical, compare the retained sample with the current budget:
-
-1. Set `CURRENT_EDGE_PREFIX` to the current link record prefix.
-2. Set `RETAINED_EDGE_PREFIX` to the retained evidence prefix.
-3. Recreate the current link fingerprint with `link`.
-4. Compare the retained sample with the budget:
-
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
-      --link "$CURRENT_EDGE_PREFIX.link.json" \
-      --evidence "$RETAINED_EDGE_PREFIX.evidence.json" \
-      --sample "$RETAINED_EDGE_PREFIX.json" \
-      --budget "$FABRIC_RUN/budget.json" \
-      --out "$CURRENT_EDGE_PREFIX.comparison.json"
-    ```
-
-For `ucx_tcp`, `--sample` takes the retained `iperf3` JSON. For `ucx_rdma`, it takes the retained `.txt` report.
-
-| `reuse-edge` exit code | Meaning                                                                                 |
-| :--------------------: | --------------------------------------------------------------------------------------- |
-| 0                      | The retained sample meets the budget.                                                   |
-| 1                      | The retained sample is below the budget.                                                |
-| 2                      | The current link fingerprint or the retained sample differs from the recorded evidence. |
-
-When the runtime layout changes, recalculate the budget before the comparison: from the new `cache-layout.json` on vLLM and TensorRT-LLM, or from new measured handoffs on SGLang.
+[Preflight](06-Profile-and-Preflight.md#running-preflight) then checks each such transfer through the transmitting HCA's counters.
 
 ## Troubleshooting an edge below its budget
 
-When `record-edge` or `reuse-edge` exits 1:
+When the command reports an edge below its budget:
 
 1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
 2. Fix the cause.
-3. Resample the directed edge under a new `EDGE_PREFIX` until `record-edge` exits 0.
+3. Run the command again with a new `--out`.
 
 [Attest live engines](05-Attest.md)

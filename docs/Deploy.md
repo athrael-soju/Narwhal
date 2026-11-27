@@ -131,7 +131,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `fabric-budget`, `fabric-edge` |
-| Fabric test settings | The test port, test durations, and each host's RDMA device, port, GID index and RoCE mode | `fabric-edge` |
+| Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
 | Router settings | The bind address, port, lease path, standby options and load balancer | `router-start`, `monitoring`, `trial` |
 | Monitoring origins | The router and load balancer origins and the listen addresses | `monitoring` |
 | Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
@@ -155,7 +155,7 @@ Record these inputs and artifacts in the private deployment record:
 | Discovery and access | `.env`, installed image and model, the checkpoint tree digest, GPU inspection utilities, launch policy, SSH route and key, the known-hosts file | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
 | Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
-| Fabric | Peer addresses, transport, representative process, live cache layout, workload budget | `budget.json`, `cache-layout.json`, and the `<edge>.*` files of every directed edge |
+| Fabric | Idle engines, fabric routes, test port, transport and RDMA GID entries, representative cache layouts or handoffs, workload budget | The `narwhal deploy fabric` output: `fabric.json`, each group's `budget.json` and its sources, and the route, link, sample and evidence files of every directed sample |
 | Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | In each `ENGINE_RUN` directory, the `attestation/` attempt directories [`capture`](deploy/05-Attest.md#capturing-the-attestation) writes, `published-attestation.json` and the `attestation-check-*` directory from `verify`; `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |
 | Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
 | Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |

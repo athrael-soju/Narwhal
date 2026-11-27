@@ -200,7 +200,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Building the source budget](04-Qualify-Fabric.md#building-the-source-budget) measures.
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Measuring KV handoffs without a cache layout](#measuring-kv-handoffs-without-a-cache-layout) measures.
 
 ## Measuring KV handoffs without a cache layout
 
@@ -248,14 +248,5 @@ It prints one line per group, such as:
 ```
 
 and writes `cache-groups.json` at mode 0600 with each group's ID, its static-input `signature`, representative, roles and geometry, and each role's inputs and the SHA-256 of the files it read.
-
-In each engine-role shell, create the fabric run directory and check the budget tool:
-
-```bash
-umask 077
-mkdir -p runs
-export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
-test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
-```
 
 [Qualify the transfer fabric](04-Qualify-Fabric.md)

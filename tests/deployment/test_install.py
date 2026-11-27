@@ -315,7 +315,7 @@ class PackageTests(unittest.TestCase):
     def test_engine_hosts_receive_the_helpers_of_the_packaged_wheel(self):
         wheel = Path(self.env["NARWHAL_WHEEL"])
         with zipfile.ZipFile(wheel, "w") as archive:
-            archive.writestr("narwhal/deployment/fabric_budget.py", "released helper\n")
+            archive.writestr("narwhal/__init__.py", "released package\n")
         self.env["NARWHAL_WHEEL_SHA256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with self.assertRaisesRegex(
             ValueError, "^NARWHAL_WHEEL lacks narwhal/backends/vllm/cache_capture_hook.py; "
@@ -326,7 +326,6 @@ class PackageTests(unittest.TestCase):
             archive.writestr("narwhal/backends/vllm/cache_capture_hook.py", "released hook\n")
         self.env["NARWHAL_WHEEL_SHA256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
         run, _ = self.package_run()
-        self.assertEqual((run / "node-2/fabric_budget.py").read_text(), "released helper\n")
         self.assertEqual((run / "node-2/cache_capture_hook.py").read_text(), "released hook\n")
 
     def test_the_package_records_the_wheel_as_every_role_revision(self):
@@ -354,10 +353,10 @@ class PackageTests(unittest.TestCase):
     def test_each_backend_delivers_its_helper_snapshots_with_their_sha256(self):
         self.assertEqual(
             [helper.name for helper in helpers(launcher("sglang"))],
-            ["fabric_budget.py", "transfer_measure.py"],
+            ["transfer_measure.py"],
         )
         run, manifest = self.package_run()
-        names = ["fabric_budget.py", "cache_capture_hook.py"]
+        names = ["cache_capture_hook.py"]
         self.assertEqual(manifest["helpers"], names)
         self.assertEqual([helper.name for helper in helpers(launcher(None))], names)
         environment = (run / "node-2/.env.engine-2").read_text()
@@ -477,13 +476,13 @@ class PackageTests(unittest.TestCase):
         install(self.hosts[:1], manifest, run, LocalSSH(self.root))
         self.assertFalse(lock.exists())
 
-    def test_engine_shell_runs_the_packaged_helper_from_the_deployment_directory(self):
+    def test_engine_role_environment_names_the_installed_helper_and_its_sha256(self):
         run, manifest = self.package_run()
         transport = LocalSSH(self.root)
         install(self.hosts[:1], manifest, run, transport)
         deployment = self.root / "node-1" / manifest["remote_dir"]
-        tool = deployment / "runs/deployment-tools/fabric_budget.py"
-        self.assertEqual(tool.read_bytes(), (run / "node-1/fabric_budget.py").read_bytes())
+        tool = deployment / "runs/deployment-tools/cache_capture_hook.py"
+        self.assertEqual(tool.read_bytes(), (run / "node-1/cache_capture_hook.py").read_bytes())
         self.assertEqual(tool.stat().st_mode & 0o777, 0o600)
         result = subprocess.run(
             [
@@ -491,10 +490,8 @@ class PackageTests(unittest.TestCase):
                 "-c",
                 """set -eu
 . ./runs/deployment/.env.engine-1
-check() { test "$(sha256sum "$1" | cut -d' ' -f1)" = "$2"; }
-check "$NARWHAL_FABRIC_BUDGET_TOOL" "$NARWHAL_FABRIC_BUDGET_SHA256"
-check "$NARWHAL_CACHE_CAPTURE_HOOK" "$NARWHAL_CACHE_CAPTURE_HOOK_SHA256"
-python3 -I "$NARWHAL_FABRIC_BUDGET_TOOL" --help
+test "$(sha256sum "$NARWHAL_CACHE_CAPTURE_HOOK" | cut -d' ' -f1)" = \\
+  "$NARWHAL_CACHE_CAPTURE_HOOK_SHA256"
 """,
             ],
             cwd=deployment,
@@ -502,9 +499,8 @@ python3 -I "$NARWHAL_FABRIC_BUDGET_TOOL" --help
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("calculate", result.stdout)
-        self.assertEqual(transport.uploads.count(("node-1", "fabric_budget.py")), 1)
-        (run / "node-1/fabric_budget.py").write_text("changed after packaging")
+        self.assertEqual(transport.uploads.count(("node-1", "cache_capture_hook.py")), 1)
+        (run / "node-1/cache_capture_hook.py").write_text("changed after packaging")
         with self.assertRaisesRegex(ValueError, "Packaged input changed"):
             load_run(run, self.hosts, self.env)
 

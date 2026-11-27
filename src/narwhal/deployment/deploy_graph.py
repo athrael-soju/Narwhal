@@ -276,7 +276,7 @@ FACTS = (
         INPUT,
         WORKSTATION,
         "Fabric test settings",
-        "The test port, test durations, and each host's RDMA device, port, GID index and RoCE mode",
+        "The test port, and each engine's RDMA GID index and RoCE mode",
         _reruns("fabric-edge"),
     ),
     Fact(

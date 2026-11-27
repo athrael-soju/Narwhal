@@ -258,7 +258,8 @@ Import each name from the subpackage module that defines it.
 | `deployment/role_env.py`                                                     | Role environments and the helper snapshots of each backend               |
 | `deployment/install.py`                                                      | Deployment packages and their installation on SSH hosts                  |
 | `deployment/cache_groups.py`                                                 | Cache-equivalence groups of the engine roles                             |
-| `deployment/fabric_budget.py`                                                | Fabric workload budget and directed link records, run on engine hosts    |
+| `deployment/fabric_budget.py`                                                | Fabric workload budgets, link records and edge evidence                  |
+| `deployment/fabric.py`                                                       | Fabric qualification: transfer measurement, budgets and directed edges   |
 | `deployment/cli.py`                                                          | `narwhal deploy`                                                         |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
