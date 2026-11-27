@@ -50,4 +50,10 @@ spec:
         {{- include "narwhal.selector" (dict "root" . "component" "engine") | nindent 8 }}
     spec:
       {{- include "narwhal.enginePod" . | nindent 6 }}
+      {{- if .Values.placement }}
+      # narwhal deploy pins each pod to the node discovery measured its engine on, then
+      # removes this gate. A pod the controller replaces waits here for the next run.
+      schedulingGates:
+        - name: narwhal.io/placement
+      {{- end }}
 {{- end }}

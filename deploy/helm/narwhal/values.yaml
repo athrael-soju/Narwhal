@@ -32,6 +32,9 @@ lease:
   size: ""
 
 routers:
+  # Run the router pair and HAProxy. narwhal deploy --target kubernetes leaves them off until
+  # its router-start stage, so the engines and gate Jobs run first.
+  enabled: true
   # The fleet file's path on the state volume.
   fleet: ""
   # Each router's own volume, for its journal and state handoff.
@@ -50,6 +53,10 @@ credentials: {}
 
 # The gate Jobs of the current deployment stage. narwhal deploy --target kubernetes sets them.
 gates: []
+
+# The node each engine role's pod runs on, {"engine-1": "<node>"}. narwhal deploy sets it
+# with engines: the chart holds each engine pod at a scheduling gate until the run pins it there.
+placement: {}
 
 # Prometheus and Grafana, from the configuration files `make observe` uses. Prometheus scrapes
 # both routers and finds the engines through the load balancer's /narwhal/targets.

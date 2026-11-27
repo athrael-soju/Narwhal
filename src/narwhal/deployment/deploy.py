@@ -42,7 +42,7 @@ from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts, stage_limi
 from .launch_engine.backend import cache_capture, launcher, transfer_measurement
 from .role_env import read_environment
 from .run_record import PASSED, key
-from .runner import Input, Outcome, Refreshed, Runner, Spent, StageContext
+from .runner import Input, Outcome, Refreshed, Runner, Spent, StageContext, check_directory
 
 # `narwhal deploy run` ends at the router; the monitoring and trial stages come later.
 LAST_STAGE = "router-start"
@@ -1404,8 +1404,11 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
         from . import run_record
 
         stopped = []
+        check_directory(self.directory)
         with run_record.locked(self.directory):
             record = run_record.read(self.directory)
+            if record["target"] != "ssh":
+                raise ValueError(f"{self.directory} holds a {record['target']} run")
             entries = record["stages"]
             ssh = self.live_ssh()
             for stage in ("router-start", "sidecar-start"):

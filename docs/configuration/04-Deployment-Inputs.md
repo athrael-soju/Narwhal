@@ -135,6 +135,8 @@ Export fails when:
 
 A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod. `NARWHAL_NODE_<n>_ATTESTATION_URL` must name the pod's sidecar route, `http://<pod>:<NARWHAL_ATTEST_PORT>/v1/attestation`, which the plan pins.
 
+`narwhal deploy --target kubernetes` reads these as well, with the cluster inputs that [Deploying on Kubernetes](../deploy/Kubernetes.md#inputs) lists.
+
 ### Fabric qualification inputs
 
 [`narwhal deploy fabric`](../cli/Deploy.md#fabric-qualification) reads these variables from the workstation environment. It refuses to start, before it reaches any host, when one it needs is unset or invalid.

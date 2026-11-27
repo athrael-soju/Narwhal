@@ -13,15 +13,27 @@ from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
-from . import cache_groups, discovery, fabric, install, remote, run_record, supervision
+from . import (
+    cache_groups,
+    discovery,
+    fabric,
+    install,
+    kubernetes_target,
+    remote,
+    run_record,
+    supervision,
+)
 from . import deploy as stage_run
 from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 from .launch_engine.evidence import CheckFailed
 from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed
 
-# The stages `narwhal deploy run --until` can stop after.
+# The stages `narwhal deploy run --until` can stop after. Every Kubernetes stage is named as
+# the SSH stage it corresponds to.
 RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.LAST_STAGE) + 1]
+# Each target's inputs, deployment and recovery pages.
+TARGETS: dict[str, Any] = {"ssh": stage_run, "kubernetes": kubernetes_target}
 
 DESCRIPTIONS = {
     "plan": "Check every deployment input and each host's systemd user manager, then print "
@@ -99,6 +111,13 @@ def add_commands(commands: Any) -> None:
                 type=Path,
                 required=True,
                 help="run directory that holds the run record; run creates it",
+            )
+            action.add_argument(
+                "--target",
+                choices=tuple(TARGETS),
+                default="ssh",
+                help="where the fleet runs: SSH hosts, or a Kubernetes cluster through helm "
+                "and kubectl (default: %(default)s)",
             )
             if name in ("plan", "run"):
                 action.add_argument(
@@ -365,10 +384,11 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
     return 0
 
 
-def _inputs(env: dict[str, str]) -> dict[str, Any] | None:
+def _inputs(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any] | None:
     """The run's inputs, or None after reporting every missing or malformed one."""
     try:
-        return stage_run.inputs(env)
+        inputs: dict[str, Any] = TARGETS[args.target].inputs(env)
+        return inputs
     except stage_run.InputError as error:
         for problem in error.problems:
             results.record_error("invalid_input", problem, stage="inputs")
@@ -380,28 +400,34 @@ def _inputs(env: dict[str, str]) -> dict[str, Any] | None:
 def _decisions(decisions: Any) -> list[dict[str, Any]]:
     rows = []
     for decision in decisions:
-        rows.append(
-            {"stage": decision.key, "runs": decision.ran, "reasons": list(decision.reasons)}
-        )
+        row = {"stage": decision.key, "runs": decision.ran, "reasons": list(decision.reasons)}
+        if decision.unobserved:
+            row["unobserved"] = list(decision.unobserved)
+        rows.append(row)
         if decision.ran:
             print(f"{decision.key}: runs; {'; '.join(decision.reasons)}")
+        elif decision.unobserved:
+            facts = ", ".join(decision.unobserved)
+            print(f"{decision.key}: skipped unless run finds a change; {facts} not observed")
         else:
             print(f"{decision.key}: skipped; its recorded result holds")
     return rows
 
 
 def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
-    inputs = _inputs(env)
+    inputs = _inputs(args, env)
     if inputs is None:
         return 2
-    ssh = SSH(env, _access_logs())
     problems = {}
-    for host in discovery.derive_hosts(env):
-        runner = remote.SSHRunner(ssh, host, "access")
-        if found := supervision.check_systemd_host(runner):
-            problems[host.id] = found
+    # A cluster runs no systemd units; access checks the cluster when `run` starts.
+    if args.target == "ssh":
+        ssh = SSH(env, _access_logs())
+        for host in discovery.derive_hosts(env):
+            runner = remote.SSHRunner(ssh, host, "access")
+            if found := supervision.check_systemd_host(runner):
+                problems[host.id] = found
     directory = args.run.resolve()
-    deployment = stage_run.Deployment(directory, env, dry=True)
+    deployment = TARGETS[args.target].Deployment(directory, env, dry=True)
     result = deployment.runner().plan(inputs, until=args.until)
     rows = _decisions(result.decisions)
     for note in result.notes:
@@ -437,18 +463,19 @@ def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
 
 
 def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
-    inputs = _inputs(env)
+    inputs = _inputs(args, env)
     if inputs is None:
         return 2
     directory = args.run.resolve()
     directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     results.add_artifact("run_record", directory / "run.json")
-    runner = stage_run.Deployment(directory, env).runner()
+    target = TARGETS[args.target]
+    runner = target.Deployment(directory, env).runner()
     try:
         result = runner.run(inputs, until=args.until)
     except StageFailed as error:
         failure = error.record["failure"]
-        recovery = stage_run.recovery_url(failure["recovery"])
+        recovery = target.recovery_url(failure["recovery"])
         status, code, exit_code = _stage_failure(error)
         results.set_data({"run": str(directory), "failed_stage": error.key})
         results.record_error(
@@ -480,14 +507,15 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
 def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory = args.run.resolve()
     locked = False
+    target = TARGETS[args.target]
     try:
-        record, checks = stage_run.Deployment(directory, env).runner().inspect(refresh=True)
+        record, checks = target.Deployment(directory, env).runner().inspect(refresh=True)
     except RunLocked as error:
         # Another runner holds the run: read it, and check each process without its
         # functional check, recording nothing.
         locked = True
         print(f"{error}; reporting without recording restarts", file=sys.stderr)
-        deployment = stage_run.Deployment(directory, env, dry=True)
+        deployment = target.Deployment(directory, env, dry=True)
         record, checks = deployment.runner().inspect(refresh=False)
     rows = []
     for name, entry in record["stages"].items():
@@ -500,7 +528,7 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
         line = f"{name}: {entry['status']}, attempt {entry['attempt']}, {row['evidence']}"
         if entry["failure"]:
             row["failure"] = entry["failure"]["message"]
-            row["recovery"] = stage_run.recovery_url(entry["failure"]["recovery"])
+            row["recovery"] = target.recovery_url(entry["failure"]["recovery"])
             line += f"\n  {row['failure']}\n  Recovery: {row['recovery']}"
         print(line)
         rows.append(row)
@@ -524,7 +552,7 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
 
 def _down(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory = args.run.resolve()
-    stopped = stage_run.Deployment(directory, env).down()
+    stopped = TARGETS[args.target].Deployment(directory, env).down()
     for process in stopped:
         state = "stopped" if process["stopped"] else "not running"
         print(f"{process['name']} on {process['host']}: {state}")
@@ -572,6 +600,7 @@ def run(args: argparse.Namespace) -> int:
     except (
         RemoteError,
         RemoteTimeout,
+        kubernetes_target.ClusterError,
         fabric.FabricFailure,
         remote.StepFailed,
         supervision.SupervisionError,

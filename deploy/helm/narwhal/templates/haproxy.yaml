@@ -1,3 +1,4 @@
+{{- if .Values.routers.enabled }}
 {{- $domain := printf "routers.%s.svc.%s" .Release.Namespace .Values.haproxy.clusterDomain }}
 {{- $config := .Files.Get "files/haproxy.cfg" }}
 {{- range $server, $pod := dict "a" "router-0" "b" "router-1" }}
@@ -79,3 +80,4 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+{{- end }}

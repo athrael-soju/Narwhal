@@ -17,7 +17,7 @@ A run directory holds:
 
 Each attempt writes into a new directory, so a rerun never meets a file an earlier attempt left. The runner replaces `run.json` by writing a temporary file, flushing it to disk and renaming it over the record, so a crash leaves either the old record or the new one. The next runner removes a temporary file a crash left.
 
-The run directory must belong to the user who runs it and give no access to other users. The runner creates it at mode 0700 and refuses an existing directory with wider permissions.
+The run directory must belong to the user who runs it and give no access to other users. The runner creates it at mode 0700 and refuses an existing directory with wider permissions. `status` and `down` refuse the same directories, and a `run.json` that is not a regular file the user owns, before they act on the record.
 
 ## Locking
 

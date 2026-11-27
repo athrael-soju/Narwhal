@@ -332,6 +332,11 @@
           "type": "string",
           "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
           "description": "Requested size of the state volume, such as 10Gi"
+        },
+        "claimName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "description": "The state claim's name; the engines' plans name it once they exist"
         }
       },
       "required": [
@@ -383,6 +388,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the router pair and HAProxy"
         }
       },
       "required": [
@@ -457,13 +466,19 @@
           "kind": {
             "enum": [
               "discovery",
+              "prepare",
               "engine-check",
+              "state",
+              "fabric-probe",
+              "transfer-measure",
               "fabric-server",
               "fabric-client",
+              "sidecar-verify",
               "finalize-fleet",
               "profile",
               "calibrate",
-              "preflight"
+              "preflight",
+              "router-check"
             ]
           },
           "command": {
@@ -500,13 +515,46 @@
             "propertyNames": {
               "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
             }
+          },
+          "image": {
+            "type": "string",
+            "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+            "description": "Image by registry digest; default images.narwhal, or images.fabric for a fabric gate"
+          },
+          "runtimeClassName": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "hostNetwork": {
+            "type": "boolean"
+          },
+          "inputs": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "description": "ConfigMap mounted read-only at /narwhal-input"
+          },
+          "modelVolume": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1,
+            "description": "Volume source mounted read-only at /model"
+          },
+          "serviceAccount": {
+            "type": "boolean",
+            "description": "Run as the engines' service account, which may get their pods"
+          },
+          "keep": {
+            "type": "string",
+            "pattern": "^deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+$",
+            "description": "State volume directory mounted writable at /narwhal-keep"
           }
         },
         "required": [
           "name",
           "kind",
           "command",
-          "deadlineSeconds"
+          "deadlineSeconds",
+          "keep"
         ],
         "allOf": [
           {
@@ -515,8 +563,10 @@
                 "kind": {
                   "enum": [
                     "discovery",
+                    "fabric-probe",
                     "fabric-server",
-                    "fabric-client"
+                    "fabric-client",
+                    "transfer-measure"
                   ]
                 }
               }
@@ -759,6 +809,17 @@
           }
         }
       }
+    },
+    "placement": {
+      "type": "object",
+      "description": "The node each engine role's pod runs on",
+      "propertyNames": {
+        "pattern": "^engine-[1-9][0-9]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+      }
     }
   },
   "required": [
@@ -791,10 +852,27 @@
     }
   },
   "else": {
-    "properties": {
-      "engines": {
-        "minProperties": 1,
-        "description": "The engines, from chart_values, or directEngines"
+    "if": {
+      "properties": {
+        "routers": {
+          "properties": {
+            "enabled": {
+              "const": false
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        }
+      }
+    },
+    "then": {},
+    "else": {
+      "properties": {
+        "engines": {
+          "minProperties": 1,
+          "description": "The engines, from chart_values, or directEngines"
+        }
       }
     }
   }
