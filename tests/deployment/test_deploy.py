@@ -140,6 +140,15 @@ class DeployTests(unittest.TestCase):
         code, result = self.deploy("run")
         self.assertEqual((code, self.ran(result)), (0, set()))
 
+    def test_a_discovery_change_frees_the_engine_ports_before_inspecting_again(self):
+        self.deploy("run")
+        os.environ["NARWHAL_MODEL_DIR"] = "/models/other"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), every_stage() - {"access[node-1]", "access[node-2]"})
+        self.assertEqual(len(self.fleet.units), 3)
+        self.assertEqual(set(self.fleet.containers), {"engine-1", "engine-2"})
+
     def test_status_records_a_restarted_sidecar_once_its_verification_passes(self):
         self.deploy("run")
         self.fleet.restart_unit("sidecar-2")

@@ -535,6 +535,7 @@ class Deployment:
     def engine_inspect(self, context: StageContext) -> None:
         role = context.instance
         work = self.remote(context)
+        self._release_role(context, role)
         self.step(
             context,
             self.owner(role),
@@ -543,6 +544,32 @@ class Deployment:
             f"narwhal-engine inspect-host --out {shlex.quote(work + '/inspection')}",
             returns={"inspection/": f"{work}/inspection"},
         )
+
+    def _release_role(self, context: StageContext, role: str) -> None:
+        """Stop this run's sidecar and engine of `role`, which hold the ports inspection checks.
+
+        A rerun of `engine-inspect` reruns the engine's start too, which would replace both.
+        Each is stopped only while its recorded identity still matches.
+        """
+        from . import run_record
+
+        stages = run_record.read(self.directory)["stages"]
+        host = self.owner(role)
+        ssh = self.ssh(context)
+        for process in (stages.get(key("sidecar-start", role)) or {}).get("processes", []):
+            units = self.supervisor(ssh, host, context.stage, context.run_id)
+            with contextlib.suppress(supervision.IdentityMismatch):
+                if units.stop(supervision.identity_from_record(process)):  # type: ignore[arg-type]
+                    self.announce(f"{role}: stopped this run's sidecar for the inspection")
+        for process in (stages.get(key("engine-start", role)) or {}).get("processes", []):
+            if self._container_state(ssh, host, context.stage, process) is not None:
+                ssh.run(
+                    host,
+                    context.stage,
+                    f"remove this run's {role} container",
+                    f"docker rm --force {shlex.quote(process['container_id'])} > /dev/null",
+                )
+                self.announce(f"{role}: removed this run's engine container for the inspection")
 
     def engine_prepare(self, context: StageContext) -> Outcome:
         role = context.instance

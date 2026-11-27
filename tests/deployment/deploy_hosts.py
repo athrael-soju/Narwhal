@@ -269,6 +269,12 @@ class Fleet:
             )
         files: dict[str, bytes] = {}
         if stage == "engine-inspect":
+            assert role is not None
+            sidecar = f"-sidecar-{role.split('-')[1]}.service"
+            if role in self.containers or any(u.endswith(sidecar) for u in self.units):
+                raise remote.StepFailed(
+                    step.host.id, step.operation, 1, "ports: the engine port is in use", directory
+                )
             files["inspection/host-inspection.json"] = b'{"passed": true}'
         elif stage == "engine-prepare":
             files["launch.json"] = json.dumps({"role": role, "nonce": uuid.uuid4().hex}).encode()
@@ -409,6 +415,11 @@ class _SSH:
             return ""
         if operation == "remove the container an unrecorded start left":
             fleet.calls["removed unrecorded"] += 1
+            return ""
+        if operation.startswith("remove ") and operation.endswith(" container"):
+            for role, (cid, _) in list(fleet.containers.items()):
+                if cid in script:
+                    del fleet.containers[role]
             return ""
         if operation == "home directory":
             return "/home/deploy"
