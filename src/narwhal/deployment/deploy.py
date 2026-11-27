@@ -1383,9 +1383,10 @@ class Deployment:
             run(
                 primary,
                 "hold the lease lock",
-                f"mkdir -p {shlex.quote(work)} && nohup {cli} hold {quoted} 4 {marker} "
-                f"> /dev/null 2>&1 < /dev/null & for _ in $(seq 100); do test -e {marker} && "
-                f"break; sleep 0.1; done; test -e {marker}",
+                # Only the hold runs in the background; the wait runs in the remote directory.
+                f"mkdir -p {shlex.quote(work)} && {{ nohup {cli} hold {quoted} 4 {marker} "
+                f"> /dev/null 2>&1 < /dev/null & }} && for _ in $(seq 100); do "
+                f"test -e {marker} && break; sleep 0.1; done && test -e {marker}",
             )
             expect(
                 standby,

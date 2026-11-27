@@ -275,7 +275,7 @@ class DeployTests(unittest.TestCase):
         self.deploy("run")
         os.environ["NARWHAL_TTFT_S"] = "5"
         code, result = self.deploy("run")
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, result)
         self.assertEqual(self.ran(result), SLO_RERUN)
         self.assertEqual(self.fleet.calls["start router"], 4)
         self.assertEqual(len(self.fleet.units), UNITS)

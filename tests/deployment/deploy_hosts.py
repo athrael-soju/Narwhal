@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import functools
 import hashlib
 import io
 import json
+import os
 import re
 import shlex
+import subprocess
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -547,19 +551,49 @@ class ProbeLease:
     def clock(self) -> float:
         return self.now
 
+    def local(self, path: str) -> str:
+        """The local stand-in of a probe lease path on the shared mount."""
+        self.directory.mkdir(exist_ok=True)
+        return str(self.directory / Path(path).name)
+
+    def hold(self, script: str) -> None:
+        """Run the hold command as the host's shell would, from the SSH login directory, with
+        the lease helper on this interpreter, so the shell's grouping is what the test checks."""
+        home = self.directory.parent / "home"
+        remote = re.match(r"cd (\S+) && ", script)
+        assert remote is not None, script
+        (home / remote[1]).mkdir(parents=True, exist_ok=True)
+        probe = shlex.split(script.split(" hold ", 1)[1])[0]
+        # The stand-in holds the lock for a fraction of the host's 4 seconds.
+        held = f"{shlex.quote(probe)} 4 "
+        assert held in script, script
+        script = script.replace(".venv/bin/python", shlex.quote(sys.executable)).replace(
+            held, f"{shlex.quote(self.local(probe))} 0.2 "
+        )
+        environment = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+        done = subprocess.run(
+            ["sh", "-c", script], cwd=home, env=environment, check=False, timeout=30
+        )
+        if done.returncode:
+            raise RemoteError("node-1", "lease-check", "hold the lease lock", home, ": exit 1")
+
     def sleep(self, seconds: float) -> None:
         self.now += seconds
 
     def run(self, operation: str, script: str) -> str:
         self.now += self.STEP_S
         if operation == "hold the lease lock":
-            # The primary's host holds the lock for 4 seconds in the background.
+            self.hold(script)
             return ""
         if operation == "probe the held lock":
             return "blocked"
         argv = shlex.split(script.split("narwhal.deployment.lease_check", 1)[1])
-        self.directory.mkdir(exist_ok=True)
-        argv[1] = str(self.directory / Path(argv[1]).name)
+        argv[1] = self.local(argv[1])
+        if operation == "claim the expired lease":
+            # On the fake clock the claim cannot wait out the real hold, so wait for it here.
+            with open(argv[1] + ".lock", "a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lease = functools.partial(
             FileLease, wall_clock=self.clock, monotonic_clock=self.clock, sleep=self.sleep
         )
@@ -569,8 +603,9 @@ class ProbeLease:
             patch.object(lease_check, "FileLease", lease),
             patch.object(lease_check, "time", clock),
             contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(output),
         ):
-            assert lease_check.main(argv) == 0
+            assert lease_check.main(argv) == 0, (argv, output.getvalue())
         return output.getvalue().strip()
 
 
