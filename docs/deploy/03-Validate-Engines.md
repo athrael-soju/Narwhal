@@ -171,18 +171,19 @@ Once the engine answers `/health`, probe it from the same engine-role shell into
 narwhal-engine probe --run "$ENGINE_RUN" --out "$ENGINE_RUN/probe"
 ```
 
-The probe reads the engine's credential from the launch directory and the served model name from `NARWHAL_ENGINE_MODEL_NAME`. It checks, in order, and stops at the first failure:
+The probe reads the engine's credential and served model name from the launch directory. It checks, in order, and stops at the first failure:
 
 1. The plan hash in `checked.json` matches `launch.json`.
-2. `/health` answers with a 2xx status.
-3. The engine version equals the checked `engine_version`. vLLM and TensorRT-LLM report it at `/version`, and SGLang at `/server_info`.
-4. `/v1/models` lists `NARWHAL_ENGINE_MODEL_NAME`.
-5. On vLLM, `/metrics` publishes `process_start_time_seconds`.
-6. On vLLM and TensorRT-LLM, one completion of `The sea is` with `max_tokens` 32 and `temperature` 0 returns text.
+2. The engine that `start` recorded is still serving: the container in `container.id` runs the checked image and has not started again since `container-start.json`, or the native process in `native-process.json` is the same process. An endpoint answers for whichever process holds its port, so this keeps an engine left from another launch from passing.
+3. `/health` answers with a 2xx status.
+4. The engine version equals the checked `engine_version`. vLLM and TensorRT-LLM report it at `/version`, and SGLang at `/server_info`.
+5. `/v1/models` lists the plan's `served_model_name`.
+6. On vLLM, `/metrics` publishes a `process_start_time_seconds` within 2 seconds of the recorded container start, or equal to the native launch record's.
+7. On vLLM and TensorRT-LLM, one completion of `The sea is` with `max_tokens` 32 and `temperature` 0 returns text.
 
 SGLang publishes no process start over HTTP, and serves a completion only with a peer engine for the other leg. [Attestation](05-Attest.md) reads the SGLang process start on the host, and [preflight](06-Profile-and-Preflight.md) sends paired completions.
 
-Each response lands in `--out` at mode 0600 as it arrives: `health.txt`, `version.json`, `models.json`, `metrics.txt` on vLLM and `completion.json` on vLLM and TensorRT-LLM. `version.json` holds only `{"version": ...}`, because `/server_info` also returns the engine's API key. Once every check passes, the probe writes `probe.json` with the role, endpoint, plan hash, checked version, model, the vLLM process start, and the SHA-256 of each response, then prints a line such as `engine-1: engine health, version, model, process start and completion passed.`
+Each response lands in `--out` at mode 0600 as it arrives: `health.txt`, `version.json`, `models.json`, `metrics.txt` on vLLM and `completion.json` on vLLM and TensorRT-LLM. `version.json` holds only `{"version": ...}`, because `/server_info` also returns the engine's API key. Once every check passes, the probe writes `probe.json` with the role, endpoint, plan hash, checked version, container ID or native process, model, the vLLM process start, and the SHA-256 of each response, then prints a line such as `engine-1: engine health, version, model, process start and completion passed.`
 
 A failed check exits 1 and keeps the responses that led to it, such as `version.json` with the version the engine reported. If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. The probe refuses an `--out` directory that already holds its files, so probe again into a new directory.
 
@@ -201,6 +202,25 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 `narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Building the source budget](04-Qualify-Fabric.md#building-the-source-budget) measures.
 
+## Measuring KV handoffs without a cache layout
+
+SGLang publishes no cache layout, so on SGLang each engine's handoff size comes from measured handoffs, and a group's engines must match in them. Measure before you derive the groups.
+
+In each engine-role shell, check the packaged measurement tool, then measure eight handoffs with this engine as the prefill engine. Set `DECODE_URL` to the base URL of another idle engine with the same image, model and launch settings:
+
+```bash
+echo "$NARWHAL_TRANSFER_MEASURE_SHA256  $NARWHAL_TRANSFER_MEASURE_TOOL" | sha256sum -c
+export PREFILL_IP='<this engine fabric address>'
+export DECODE_URL='http://<decode engine address>:<decode engine port>'
+python3 "$NARWHAL_TRANSFER_MEASURE_TOOL" \
+  --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
+  --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
+  --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
+  --prompt-tokens 1024 --out-dir "$ENGINE_RUN/transfer"
+```
+
+The measurement writes `$ENGINE_RUN/transfer/transfer.json`, which the groups and the [source budget](04-Qualify-Fabric.md#building-the-source-budget) read.
+
 ## Deriving cache-equivalence groups
 
 Engines in one cache-equivalence group share one fabric budget. Two engine roles share a group when they match in:
@@ -214,12 +234,12 @@ The group's representative is its lowest-numbered role.
 Copy each engine's `cache-layout.json`, or on SGLang its `transfer.json`, to the management workstation. Then, from the management shell with `config/deployment.env` loaded, pass one file for every engine role:
 
 ```bash
-narwhal deploy cache-groups --out runs/cache-groups/first-deploy \
+narwhal deploy cache-groups --run "$PACKAGE_RUN" --out runs/cache-groups/first-deploy \
   --cache-layout engine-1=runs/cache-layouts/engine-1.json \
   --cache-layout engine-2=runs/cache-layouts/engine-2.json
 ```
 
-On SGLang, pass `--transfer-record engine-<n>=<path>` instead. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG` and each role's discovery record from its `sources.runtime`. It refuses a role without the file its engine needs, a file for a role that has none, a cache layout that lacks a TP rank or belongs to another model configuration, and an `--out` directory that already holds `cache-groups.json`.
+On SGLang, pass `--transfer-record engine-<n>=<path>` instead. `PACKAGE_RUN` is the directory that [`narwhal deploy package`](02-Install.md) wrote, such as `runs/deployment-env/first-deploy`. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG`, each role's discovery record from its `sources.runtime`, and each role's packaged launch record from `--run`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
 
 It prints one line per group, such as:
 

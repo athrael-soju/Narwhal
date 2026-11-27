@@ -102,7 +102,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | `engine-start` | Once for each engine role, on its engine host | `engine-check` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
 | `engine-probe` | Once for each engine role, on its engine host | `engine-start` | [Proving the live HTTP process](deploy/03-Validate-Engines.md#proving-the-live-http-process) |
 | `cache-capture` | Once for each engine role, on its engine host, on TensorRT-LLM or vLLM | `engine-probe` | [Capturing the live cache layout](deploy/03-Validate-Engines.md#capturing-the-live-cache-layout) |
-| `transfer-measure` | Once for each engine role, on its engine host, on SGLang | `engine-probe` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
+| `transfer-measure` | Once for each engine role, on its engine host, on SGLang | `engine-probe` | [Measuring KV handoffs without a cache layout](deploy/03-Validate-Engines.md#measuring-kv-handoffs-without-a-cache-layout) |
 | `cache-groups` | Once per run, on the management workstation | `discover`, `cache-capture`, `transfer-measure` | [Deriving cache-equivalence groups](deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) |
 | `fabric-budget` | Once for each cache-equivalence group | `cache-groups` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `fabric-edge` | Once for each directed edge between engine hosts | `fabric-budget` | [Binding each sample to a directed route](deploy/04-Qualify-Fabric.md#binding-each-sample-to-a-directed-route) |

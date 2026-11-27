@@ -134,6 +134,8 @@ def send_handoffs(args: argparse.Namespace, call: Call) -> dict:
         "schema": SCHEMA,
         "schema_version": 1,
         "series": SERIES,
+        # The packaged launch record of the prefill engine, which binds the record to its role.
+        "launch_config_sha256": hashlib.sha256(args.launch_config.read_bytes()).hexdigest(),
         "prompt_tokens": args.prompt_tokens,
         "payload_bytes_per_handoff": payload,
         "handoffs": handoffs,

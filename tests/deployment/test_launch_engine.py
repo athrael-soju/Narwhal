@@ -609,7 +609,7 @@ class EngineLauncherTests(unittest.TestCase):
 
         for change, message in (
             (unpinned, "set NARWHAL_MODEL_SHA256"),
-            (mismatched, "model file differs from its supplied hash"),
+            (mismatched, "differs from NARWHAL_MODEL_SHA256"),
             (outside, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
             (linked, "not a symbolic link"),
             (missing, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),

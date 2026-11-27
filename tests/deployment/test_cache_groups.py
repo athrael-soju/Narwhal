@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import tempfile
@@ -12,6 +13,7 @@ from narwhal.dev.cli import main
 from tests.deployment.fixtures import launch_document, runtime
 
 MODEL = "c" * 64
+IMAGE = "sha256:" + "a" * 64
 
 
 def layout(tp=2, page_bytes=4096, layout_name="HND"):
@@ -61,9 +63,17 @@ class CacheGroupTests(unittest.TestCase):
         return path
 
     def launch_config(self):
+        self.package = self.root / "package"
+        self.launch_sha256 = {}
         for role, engine in self.engines.items():
-            observed = {"image_id": "sha256:" + "a" * 64, "model_sha256": MODEL}
+            observed = {"image_id": IMAGE, "model_sha256": MODEL}
             engine["sources"]["runtime"] = str(self.write(f"{role}-discovery.json", observed))
+            # The per-role record that package writes, on the role's own host.
+            host = self.package / f"node-{role.removeprefix('engine-')}"
+            host.mkdir(parents=True)
+            data = json.dumps(engine, indent=2).encode() + b"\n"
+            (host / f"engine-launch.{role}.json").write_bytes(data)
+            self.launch_sha256[role] = hashlib.sha256(data).hexdigest()
         return self.write(
             "launch.json",
             {"schema": "narwhal.engine-launch", "schema_version": 1, "engines": self.engines},
@@ -73,13 +83,23 @@ class CacheGroupTests(unittest.TestCase):
         # Each call writes its own files, so a later call leaves earlier layouts as they were.
         self.calls = getattr(self, "calls", 0) + 1
         return {
-            role: self.write(f"{role}-layout-{self.calls}.json", overrides.get(role, layout()))
+            role: self.write(
+                f"{role}-layout-{self.calls}.json", self.bound(role, overrides, layout)
+            )
             for role in self.engines
         }
 
+    def bound(self, role, overrides, default):
+        """The role's evidence, bound to its image and packaged launch unless overridden."""
+        document = overrides.get(role) or default()
+        binding = {"launch_config_sha256": self.launch_sha256[role]}
+        if "sizing" in document:
+            binding["image"] = IMAGE
+        return {**binding, **document}
+
     def test_matching_engines_share_one_group_led_by_the_lowest_numbered_role(self):
         launches = self.launch_config()
-        document = derive(launches, self.layouts(), {}, self.root / "groups")
+        document = derive(launches, self.layouts(), {}, self.package, self.root / "groups")
         self.assertEqual(json.loads((self.root / "groups" / EVIDENCE).read_text()), document)
         self.assertEqual(document["schema"], "narwhal.cache-groups")
         [group] = document["groups"]
@@ -106,7 +126,7 @@ class CacheGroupTests(unittest.TestCase):
                 "engine-10": layout(layout_name="NHD"),
             }
         )
-        document = derive(launches, layouts, {}, self.root / "groups")
+        document = derive(launches, layouts, {}, self.package, self.root / "groups")
         self.assertEqual(
             [group["roles"] for group in document["groups"]],
             [["engine-1"], ["engine-2"], ["engine-3"], ["engine-10"]],
@@ -120,10 +140,13 @@ class CacheGroupTests(unittest.TestCase):
             engine["runtime"] = {"backend": "sglang", "extra_args": []}
         launches = self.launch_config()
         transfers = {
-            role: self.write(f"{role}-transfer.json", transfer(2 if role == "engine-3" else 1))
+            role: self.write(
+                f"{role}-transfer.json",
+                self.bound(role, {role: transfer(2 if role == "engine-3" else 1)}, transfer),
+            )
             for role in self.engines
         }
-        document = derive(launches, {}, transfers, self.root / "groups")
+        document = derive(launches, {}, transfers, self.package, self.root / "groups")
         self.assertEqual(
             [group["roles"] for group in document["groups"]],
             [["engine-1", "engine-2", "engine-10"], ["engine-3"]],
@@ -160,12 +183,50 @@ class CacheGroupTests(unittest.TestCase):
                 {},
                 "engine-3: read .*missing.json",
             ),
+            (
+                self.layouts(**{"engine-2": {**layout(), "image": "sha256:" + "b" * 64}}),
+                {},
+                "engine-2: the cache layout was captured from another image",
+            ),
+            (
+                self.layouts(**{"engine-2": {**layout(), "launch_config_sha256": "0" * 64}}),
+                {},
+                "engine-2: the cache layout was captured from another launch record",
+            ),
         )
         for index, (layouts, transfers, message) in enumerate(cases):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
-                    derive(launches, layouts, transfers, self.root / f"groups-{index}")
+                    derive(
+                        launches, layouts, transfers, self.package, self.root / f"groups-{index}"
+                    )
                 self.assertFalse((self.root / f"groups-{index}" / EVIDENCE).exists())
+
+    def test_measured_handoffs_from_another_launch_record_are_refused(self):
+        for engine in self.engines.values():
+            engine["runtime"] = {"backend": "sglang", "extra_args": []}
+        launches = self.launch_config()
+        transfers = {
+            role: self.write(f"{role}-transfer.json", self.bound(role, {}, transfer))
+            for role in self.engines
+        }
+        stale = {**transfer(), "launch_config_sha256": "0" * 64}
+        transfers["engine-2"] = self.write("engine-2-stale.json", stale)
+        with self.assertRaisesRegex(ValueError, "engine-2: the transfer record was measured from"):
+            derive(launches, {}, transfers, self.package, self.root / "groups")
+
+    def test_a_package_that_differs_from_the_launch_records_is_refused(self):
+        launches = self.launch_config()
+        layouts = self.layouts()
+        packaged = self.package / "node-3" / "engine-launch.engine-3.json"
+        record = json.loads(packaged.read_text())
+        record["tensor_parallel_size"] = 1
+        packaged.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, "engine-3: the package's launch record differs"):
+            derive(launches, layouts, {}, self.package, self.root / "groups")
+        packaged.unlink()
+        with self.assertRaisesRegex(ValueError, "engine-3: the package .* holds 0 launch records"):
+            derive(launches, layouts, {}, self.package, self.root / "groups-2")
 
     def test_derive_refuses_earlier_groups(self):
         launches = self.launch_config()
@@ -173,13 +234,14 @@ class CacheGroupTests(unittest.TestCase):
         out.mkdir()
         (out / EVIDENCE).write_text("earlier")
         with self.assertRaises(FileExistsError):
-            derive(launches, self.layouts(), {}, out)
+            derive(launches, self.layouts(), {}, self.package, out)
         self.assertEqual((out / EVIDENCE).read_text(), "earlier")
 
     def test_deploy_command_prints_each_group_and_returns_a_result(self):
         launches = self.launch_config()
         layouts = self.layouts(**{"engine-2": layout(page_bytes=8192)})
         arguments = ["deploy", "cache-groups", "--out", str(self.root / "groups")]
+        arguments += ["--run", str(self.package)]
         for role, path in layouts.items():
             arguments += ["--cache-layout", f"{role}={path}"]
         with (

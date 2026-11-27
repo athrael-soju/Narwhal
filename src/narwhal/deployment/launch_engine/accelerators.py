@@ -9,7 +9,8 @@ def gpu_inventory(
 
     `command` runs an argument list and returns its stdout, raising when it fails. A ROCm GPU
     is a `rocminfo` agent, numbered in agent order and matched to its render device through
-    the KFD topology. A CUDA GPU is an `nvidia-smi` row with its index and UUID.
+    the KFD topology. A CUDA GPU is an `nvidia-smi` row with its index and UUID, and its device
+    node carries the minor number that the driver reports for its PCI bus ID.
 
     Discovery runs this function's source on engine hosts with the host's Python, so it imports
     only the standard library, inside the function.
@@ -50,12 +51,29 @@ def gpu_inventory(
     else:
         runtime = "cuda"
         rows = command(
-            ["nvidia-smi", "--query-gpu=index,name,uuid", "--format=csv,noheader"]
+            ["nvidia-smi", "--query-gpu=index,name,uuid,pci.bus_id", "--format=csv,noheader"]
         ).splitlines()
         for row in rows:
-            ordinal, product, uuid = (part.strip() for part in row.split(","))
+            parts = [part.strip() for part in row.split(",")]
+            if len(parts) < 4:
+                raise RuntimeError("nvidia-smi returned a GPU row without its PCI bus ID")
+            ordinal, product, uuid, bus = parts[0], ",".join(parts[1:-2]), parts[-2], parts[-1]
+            # The device node carries the driver's minor number, which differs from the index
+            # on a host that exposes only some of a machine's GPUs.
+            domain, _, slot = bus.partition(":")
+            folder = f"{int(domain, 16):04x}:{slot.lower()}"
+            information = Path("/proc/driver/nvidia/gpus", folder, "information")
+            try:
+                text = information.read_text()
+            except OSError:
+                raise RuntimeError(
+                    f"GPU {ordinal}: {information} is missing, so its device minor is unknown"
+                ) from None
+            found = re.search(r"(?m)^Device Minor:\s*(\d+)\s*$", text)
+            if not found:
+                raise RuntimeError(f"GPU {ordinal}: {information} names no Device Minor")
             gpus.append(
-                {"id": ordinal, "name": product, "uuid": uuid, "device": "/dev/nvidia" + ordinal}
+                {"id": ordinal, "name": product, "uuid": uuid, "device": "/dev/nvidia" + found[1]}
             )
         common_devices = [
             str(p) for p in (Path("/dev/nvidiactl"), Path("/dev/nvidia-uvm")) if p.exists()

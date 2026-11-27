@@ -67,7 +67,7 @@ With `--format json`, `discover`, `access`, `package`, `install` and `cache-grou
 
 ## Options
 
-`--format` applies to `discover`, `access`, `package`, `install` and `cache-groups`, and `--hosts` to every subcommand except `discover` and `cache-groups`. `--out` applies to `discover`, `package` and `cache-groups`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--run` to `install` and `shell`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
+`--format` applies to `discover`, `access`, `package`, `install` and `cache-groups`, and `--hosts` to every subcommand except `discover` and `cache-groups`. `--out` applies to `discover`, `package` and `cache-groups`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--run` to `install`, `shell` and `cache-groups`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -76,7 +76,7 @@ With `--format json`, `discover`, `access`, `package`, `install` and `cache-grou
 | `--out` | Required | For `discover` and `package`, a new directory for the discovery output or the package, created at mode 0700. For `cache-groups`, the directory for `cache-groups.json`, created at mode 0700 when absent. | For `discover` and `package`, a path that does not exist. For `cache-groups`, a directory without `cache-groups.json` |
 | `--cache-layout` | None | `ROLE=PATH`: the `cache-layout.json` that `narwhal-engine capture-cache` wrote for the role. Repeatable, once for each engine that captures its cache layout. | An `engine-<n>` role of the launch records |
 | `--transfer-record` | None | `ROLE=PATH`: the `transfer.json` of the role's measured KV handoffs. Repeatable, once for each engine whose handoffs are measured. | An `engine-<n>` role of the launch records |
-| `--run` | Required for `install`, none for `shell` | Package directory that `package` wrote. | |
+| `--run` | Required for `install` and `cache-groups`, none for `shell` | Package directory that `package` wrote. | |
 | `--host` | Every inventory host | Host to install, by inventory ID. Repeatable. Excludes `--role`. | An inventory host ID |
 | `--role` | Every inventory host for `install`, required for `shell`, `router` for `tunnel` | For `install`, the role whose host to install, with its colocated roles. Repeatable. Excludes `--host`. For `shell` and `tunnel`, the role whose host to open. | `router` or `engine-<n>` from the inventory |
 | `--forward` | Required | `LOCAL_PORT:REMOTE_PORT`. Forwards workstation `127.0.0.1:LOCAL_PORT` to `REMOTE_PORT` on `--remote-address` at the host. Repeatable. | Ports 1 to 65535, a distinct local port per forward |

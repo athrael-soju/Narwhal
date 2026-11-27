@@ -1,8 +1,10 @@
 """`narwhal-engine probe`: prove that a checked plan's engine serves over HTTP.
 
-The probe reads the engine's health, its version, which must equal the checked version, and its
-model list, which must name the served model. Then, as the backend's `LiveProbe` declares, it
-reads the process start from /metrics and sends one completion. Each response lands in the
+The probe first requires the engine that `start` recorded to be running unchanged: the same
+container, still on its first start, or the same native process. It then reads the engine's health,
+its version, which must equal the checked version, and its model list, which must name the plan's
+served model. As the backend's `LiveProbe` declares, it reads the process start from /metrics,
+which must be the recorded engine's start, and sends one completion. Each response lands in the
 output directory as it arrives, so a failed probe keeps the responses that led to its failure.
 """
 
@@ -10,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from ..attestation_contract.evidence import live_identity, require_process_start
 from .backend import LiveProbe, engine_backend
 from .check import read_checked, require_checked
 from .evidence import CheckFailed, evidence_directory, write_bytes, write_json
@@ -44,7 +48,6 @@ def probe(
     run: Path,
     plan: dict,
     out: Path,
-    model: str,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict:
@@ -56,13 +59,20 @@ def probe(
         raise ValueError("probe does not apply to a Kubernetes plan; the kubelet starts its pod")
     require_checked(run, plan)
     checked = read_checked(run)
+    # An endpoint answers for whichever process holds its port. Binding the probe to the started
+    # engine keeps a stale engine from passing for a run whose own start failed.
+    try:
+        engine = live_identity(run, plan, checked)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise CheckFailed(f"the engine that start recorded is not serving: {error}") from None
+    model = plan["served_model_name"]
     backend = engine_backend(plan.get("engine"))
     live = backend.engine_launcher().live_probe
     names = responses(live)
     out = evidence_directory(out, (*names, RECORD))
     headers = launch_headers(run, plan) or {}
     observed = asyncio.run(
-        _requests(plan, checked, backend.identity, live, out, model, headers, transport)
+        _requests(run, plan, checked, backend.identity, live, out, model, headers, transport)
     )
     record = {
         "schema": SCHEMA,
@@ -71,6 +81,7 @@ def probe(
         "endpoint": plan["endpoint"],
         "plan_sha256": checked["plan_sha256"],
         "engine_version": checked["engine_version"],
+        **({"process": engine} if isinstance(engine, dict) else {"container_id": engine}),
         "model": model,
         **observed,
         "responses": {name: digest(out / name) for name in names},
@@ -93,6 +104,7 @@ def _json(response: httpx.Response) -> Any:
 
 
 async def _requests(
+    run: Path,
     plan: dict,
     checked: Mapping[str, Any],
     identity: Any,
@@ -137,9 +149,11 @@ async def _requests(
             metrics = _ok(await client.get(f"{base}/metrics"))
             write_bytes(out / "metrics.txt", metrics.content)
             try:
-                observed["process_start_time_seconds"] = live.process_start(metrics.text)
-            except ValueError as error:
+                start = live.process_start(metrics.text)
+                require_process_start(run, plan, start)
+            except (OSError, ValueError) as error:
                 raise CheckFailed(str(error)) from None
+            observed["process_start_time_seconds"] = start
         if live.completion:
             completion = _ok(
                 await client.post(f"{base}/v1/completions", json={"model": model, **COMPLETION})

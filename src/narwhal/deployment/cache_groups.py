@@ -4,6 +4,10 @@ Two roles belong to one group when they run the same image, model configuration,
 tensor parallel size, GPU visibility variable, runtime settings and transport, and their live
 cache geometry matches: the captured cache layout of every TP rank, or the measured KV handoff.
 The group's representative is its lowest-numbered role.
+
+Each layout or handoff record names the SHA-256 of the launch record its engine was prepared
+from. That is the per-role record `package` wrote, so the grouping reads it from the package
+and refuses a record captured from another launch or image.
 """
 
 from __future__ import annotations
@@ -59,14 +63,38 @@ def signature(inputs: Mapping[str, Any]) -> str:
     return _hash(dict(inputs))[:16]
 
 
-def layout_geometry(role: str, document: Any, inputs: Mapping[str, Any]) -> dict:
+def packaged_launch(role: str, package: Path, launch: Mapping[str, Any]) -> Path:
+    """The launch record that `package` wrote for `role`, checked against the launch records."""
+    found = sorted(package.glob(f"*/engine-launch.{role}.json"))
+    if len(found) != 1:
+        raise ValueError(f"{role}: the package {package} holds {len(found)} launch records for it")
+    try:
+        packaged = json.loads(found[0].read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{role}: read {found[0]}: {error}") from None
+    fields = ("accelerator", "tensor_parallel_size", "gpu_visibility_env", "runtime", "gpu_ids")
+    if (
+        any(packaged.get(name) != launch.get(name) for name in fields)
+        or packaged.get("transfer", {}).get("transport") != launch["transfer"]["transport"]
+    ):
+        raise ValueError(f"{role}: the package's launch record differs from the launch records")
+    return found[0]
+
+
+def layout_geometry(
+    role: str, document: Any, inputs: Mapping[str, Any], launch_sha256: str
+) -> dict:
     """Every TP rank's cache geometry from a `cache-layout.json`, without its rank numbers."""
     if not isinstance(document, dict) or document.get("schema_version") != 1:
         raise ValueError(f"{role}: the cache layout is not a version 1 cache-layout.json")
     if document.get("sizing") != LAYOUT_SIZING:
         raise ValueError(f"{role}: the cache layout records no {LAYOUT_SIZING} sizing")
+    if document.get("image") != inputs["image_id"]:
+        raise ValueError(f"{role}: the cache layout was captured from another image")
     if document.get("model_config_sha256") != inputs["model_config_sha256"]:
         raise ValueError(f"{role}: the cache layout belongs to another model configuration")
+    if document.get("launch_config_sha256") != launch_sha256:
+        raise ValueError(f"{role}: the cache layout was captured from another launch record")
     ranks = document.get("ranks")
     tp = inputs["tensor_parallel_size"]
     if not isinstance(ranks, list):
@@ -85,7 +113,7 @@ def layout_geometry(role: str, document: Any, inputs: Mapping[str, Any]) -> dict
     return {"kind": CACHE_LAYOUT, "ranks": geometry}
 
 
-def transfer_geometry(role: str, document: Any) -> dict:
+def transfer_geometry(role: str, document: Any, launch_sha256: str) -> dict:
     """The measured handoff size from a `transfer.json`."""
     if (
         not isinstance(document, dict)
@@ -93,6 +121,8 @@ def transfer_geometry(role: str, document: Any) -> dict:
         or document.get("schema_version") != 1
     ):
         raise ValueError(f"{role}: the transfer record is not a version 1 {TRANSFER_SCHEMA}")
+    if document.get("launch_config_sha256") != launch_sha256:
+        raise ValueError(f"{role}: the transfer record was measured from another launch record")
     fields = ("series", "prompt_tokens", "payload_bytes_per_handoff")
     if not isinstance(document.get("series"), str) or any(
         type(document.get(name)) is not int or document[name] < 1 for name in fields[1:]
@@ -105,12 +135,14 @@ def derive(
     launch_config: Path,
     layouts: Mapping[str, Path],
     transfers: Mapping[str, Path],
+    package: Path,
     out: Path,
 ) -> dict:
     """Group the roles of `launch_config` and write `cache-groups.json` into `out`.
 
     Every role whose engine captures its cache layout needs one in `layouts`, and every role
-    whose engine measures its handoffs needs one in `transfers`.
+    whose engine measures its handoffs needs one in `transfers`. `package` is the directory
+    that `package` wrote from `launch_config`.
     """
     out = evidence_directory(out, (EVIDENCE,))
     document = json.loads(launch_config.read_text())
@@ -124,12 +156,15 @@ def derive(
         launch = launches[role]
         engine = launcher(launch["runtime"].get("backend"))
         inputs, source = static_inputs(role, launch)
-        geometry, path = _geometry(role, engine, inputs, layouts, transfers)
+        packaged = packaged_launch(role, package, launch)
+        geometry, path = _geometry(role, engine, inputs, layouts, transfers, digest(packaged))
         engines[role] = {
             "signature": signature(inputs),
             "inputs": inputs,
             "runtime_source": str(source),
             "runtime_source_sha256": digest(source),
+            "launch": str(packaged),
+            "launch_sha256": digest(packaged),
             **(
                 {"geometry_source": str(path), "geometry_source_sha256": digest(path)}
                 if path is not None
@@ -159,6 +194,7 @@ def derive(
         "schema_version": 1,
         "launch_config": str(launch_config),
         "launch_config_sha256": digest(launch_config),
+        "package": str(package),
         "groups": groups,
         "engines": engines,
     }
@@ -172,6 +208,7 @@ def _geometry(
     inputs: Mapping[str, Any],
     layouts: Mapping[str, Path],
     transfers: Mapping[str, Path],
+    launch_sha256: str,
 ) -> tuple[dict | None, Path | None]:
     captures = cache_capture(engine) is not None
     measures = transfer_measurement(engine) is not None
@@ -189,5 +226,5 @@ def _geometry(
     except (OSError, ValueError) as error:
         raise ValueError(f"{role}: read {path}: {error}") from None
     if role in layouts:
-        return layout_geometry(role, evidence, inputs), path
-    return transfer_geometry(role, evidence), path
+        return layout_geometry(role, evidence, inputs, launch_sha256), path
+    return transfer_geometry(role, evidence, launch_sha256), path

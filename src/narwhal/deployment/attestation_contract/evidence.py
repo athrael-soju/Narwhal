@@ -87,6 +87,26 @@ def container_start(run: Path) -> dict:
     return record
 
 
+# The serving process is the container's first process, so the process start in /metrics and
+# the container's State.StartedAt name one moment. /metrics derives the start from the kernel's
+# boot time, which has one-second resolution.
+CONTAINER_START_TOLERANCE_S = 2.0
+
+
+def require_process_start(run: Path, plan: dict, process_start: float) -> None:
+    """Require an engine's reported process start to be the start of the recorded process."""
+    if plan.get("backend") == "native":
+        if process_start != read_native_start(run)["process_start_time_seconds"]:
+            raise ValueError("HTTP process start differs from the native launch record")
+        return
+    started = started_at_seconds(container_start(run)["started_at"])
+    if abs(process_start - started) > CONTAINER_START_TOLERANCE_S:
+        raise ValueError(
+            f"HTTP process start {process_start} is not the container start {started}; "
+            "the endpoint serves another process"
+        )
+
+
 def live_native(run: Path, plan: dict, checked: dict) -> dict:
     process = read_json(run / "native-process.json")
     try:

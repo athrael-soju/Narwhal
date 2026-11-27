@@ -131,10 +131,10 @@ class PackageTests(unittest.TestCase):
         path.write_text(json.dumps({"hosts": entries}))
         return path
 
-    def package_run(self, backend=None):
+    def package_run(self, backend=None, hardware=SYNTHETIC_HARDWARE):
         fleet = self.root / "fleet.json"
         document = {
-            "hardware": SYNTHETIC_HARDWARE,
+            "hardware": hardware,
             "engines": [
                 {"iid": "n1", "url": "http://one.invalid"},
                 {"iid": "n2", "url": "http://two.invalid"},
@@ -216,6 +216,11 @@ class PackageTests(unittest.TestCase):
                     check_hardware(fleet, {"engine-1": launch})
         with self.assertRaisesRegex(ValueError, "hardware.accelerator is None"):
             check_hardware({}, {"engine-1": launch})
+
+    def test_package_writes_nothing_for_fleet_hardware_that_differs_from_a_launch_record(self):
+        with self.assertRaisesRegex(ValueError, r"engine-1: the fleet's hardware\.accelerator is"):
+            self.package_run(hardware={**SYNTHETIC_HARDWARE, "accelerator": "other-gpu"})
+        self.assertFalse((self.root / "packaged").exists())
 
     def test_profiling_limits_read_each_backend_sequence_limit(self):
         fleet = {"engines": [{"iid": "n1"}, {"iid": "n2"}]}

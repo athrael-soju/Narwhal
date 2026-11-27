@@ -30,6 +30,8 @@ ROCM_GPUS = [
     {"id": "1", "name": "synthetic-gpu", "device": "/dev/dri/renderD129"},
 ]
 CUDA_GPUS = [{"id": "0", "name": "synthetic-gpu", "uuid": "GPU-zero", "device": "/dev/nvidia0"}]
+# /proc/self/uid_map and gid_map of a process in the initial user namespace.
+IDENTITY = "         0          0 4294967295\n"
 
 
 def device(mode: int = 0o660, uid: int = 0, gid: int = 44, kind: int = stat.S_IFCHR):
@@ -44,7 +46,7 @@ class Host:
     def __init__(self, gpus=ROCM_GPUS, runtime="rocm"):
         self.inventory = (runtime, gpus, ["/dev/kfd"] if runtime == "rocm" else [])
         self.image = {"Id": IMAGE, "RepoDigests": [], "Config": {"User": ""}}
-        self.credentials = {"uid": 0, "gid": 0, "groups": []}
+        self.credentials = {"uid": 0, "gid": 0, "groups": [], **self.maps()}
         self.interface = [
             {
                 "ifname": "fabric0",
@@ -54,15 +56,21 @@ class Host:
             }
         ]
         self.devices: dict[str, object] = {}
+        # Device nodes that carry an access control list.
+        self.acls: set[str] = set()
         self.busy: set[int] = set()
         self.docker_calls: list[list[str]] = []
+
+    @staticmethod
+    def maps(uid_map: str = IDENTITY, gid_map: str = IDENTITY) -> dict:
+        return {"uid_map": uid_map, "gid_map": gid_map}
 
     def docker(self, command, run, log):
         self.docker_calls.append(command)
         if command[:2] == ["image", "inspect"]:
             return json.dumps([self.image])
         if command[0] == "run":
-            return json.dumps(self.credentials)
+            return json.dumps(self.credentials) if self.credentials else ""
         raise AssertionError(command)
 
     def run(self, command, **kwargs):
@@ -91,6 +99,7 @@ class Host:
             patch.object(inspection, "check_http_bind", side_effect=self.bind),
             patch("narwhal.runtime.listeners.check_engine_bind", side_effect=self.bind),
             patch.object(inspection.os, "stat", side_effect=self.stat),
+            patch.object(inspection, "has_acl", side_effect=lambda path: path in self.acls),
         ):
             yield
 
@@ -139,7 +148,8 @@ class HostInspectionTests(unittest.TestCase):
         self.assertEqual(saved["accelerators"]["selected"], ["0", "1"])
         self.assertEqual(saved["image"]["id"], IMAGE)
         self.assertEqual(
-            saved["engine_user"], {"source": "image", "uid": 0, "gid": 0, "groups": []}
+            saved["engine_user"],
+            {"source": "image", "uid": 0, "gid": 0, "groups": [], **Host.maps()},
         )
         listeners = {row["name"]: (row["host"], row["port"]) for row in saved["ports"]["listeners"]}
         self.assertEqual(
@@ -283,7 +293,7 @@ class HostInspectionTests(unittest.TestCase):
         self.assertEqual(engine["host"], "192.0.2.11")
 
     def test_device_refusals(self):
-        self.host.credentials = {"uid": 1000, "gid": 1000, "groups": [44]}
+        self.host.credentials = {"uid": 1000, "gid": 1000, "groups": [44], **Host.maps()}
         self.host.devices["/dev/kfd"] = device(0o600)
         self.host.devices["/dev/dri/renderD128"] = device(kind=stat.S_IFREG)
         del self.host.devices["/dev/dri/renderD129"]
@@ -297,8 +307,47 @@ class HostInspectionTests(unittest.TestCase):
         self.assertIn("/dev/dri/renderD128 is not a character device", problems)
         self.assertIn("/dev/dri/renderD129 is missing", problems)
 
+    def test_a_device_with_an_access_control_list_is_refused(self):
+        self.host.acls = {"/dev/dri/renderD128"}
+        problems = next(f for f in self.failures() if f.startswith("devices: "))
+        self.assertIn("/dev/dri/renderD128 carries an access control list", problems)
+
+    def test_an_engine_user_in_a_user_namespace_is_refused(self):
+        # Under rootless Docker or userns-remap, root in the image is an unprivileged host user.
+        remapped = "         0     100000      65536\n"
+        self.host.credentials = {"uid": 0, "gid": 0, "groups": [], **Host.maps(remapped)}
+        failures = self.failures()
+        self.assertTrue(
+            any(
+                f.startswith("engine_user: the engine user runs in a user namespace (uid_map")
+                for f in failures
+            ),
+            failures,
+        )
+        self.assertIn(
+            "devices: the engine user is unknown, so no device permission was checked", failures
+        )
+
+    def test_an_image_that_prints_no_credentials_fails_and_keeps_the_evidence(self):
+        self.host.credentials = {}
+        self.assertTrue(
+            any(
+                f.startswith("engine_user: the image's python3 printed no") for f in self.failures()
+            )
+        )
+
+    def test_a_symbolically_linked_model_file_inside_the_directory_passes(self):
+        # Hugging Face downloads may link files to blobs inside the model directory; prepare
+        # follows such links, so the inspection does too.
+        model = Path(self.env["NARWHAL_MODEL_DIR"])
+        (model / "blobs").mkdir()
+        (model / "config.json").rename(model / "blobs" / "cfg")
+        (model / "config.json").symlink_to("blobs/cfg")
+        self.env.pop("NARWHAL_MODEL_TREE_SHA256", None)
+        self.assertTrue(self.inspect()["passed"])
+
     def test_a_group_member_of_the_image_reads_and_writes_rocm_devices(self):
-        self.host.credentials = {"uid": 1000, "gid": 1000, "groups": [44]}
+        self.host.credentials = {"uid": 1000, "gid": 1000, "groups": [44], **Host.maps()}
         self.assertTrue(self.inspect()["passed"])
 
     def test_the_permission_criterion_follows_the_owner_group_and_other_bits(self):
@@ -358,8 +407,18 @@ class HostInspectionTests(unittest.TestCase):
             self.assertRaises(SystemExit) as exit_status,
         ):
             main(["inspect-host", "--out", str(self.root / "fresh")])
-        self.assertEqual(exit_status.exception.code, 1)
-        self.assertIn("fabric_interface: NARWHAL_FABRIC_INTERFACE is unset", stderr.getvalue())
+        self.assertEqual(exit_status.exception.code, 2)
+        self.assertIn("invalid input: NARWHAL_FABRIC_INTERFACE is unset", stderr.getvalue())
+        env = {**self.env, "NARWHAL_NODE_1_ATTESTATION_URL": "https://192.0.2.11/v1"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            self.host.patched(),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+            self.assertRaises(SystemExit) as exit_status,
+        ):
+            main(["inspect-host", "--out", str(self.root / "fresh-2")])
+        self.assertEqual(exit_status.exception.code, 2)
+        self.assertIn("ATTESTATION_URL 'https://192.0.2.11/v1' names no HTTP", stderr.getvalue())
         env["NARWHAL_ENGINE_LAUNCH_CONFIG"] = str(self.root / "missing.json")
         with (
             patch.dict("os.environ", env, clear=True),
@@ -380,16 +439,38 @@ class HostInspectionTests(unittest.TestCase):
         self.assertIn("invalid input: NARWHAL_ENGINE_LAUNCH_CONFIG is unset", stderr.getvalue())
 
 
+def nvidia_information(minors: dict[str, int]):
+    """A Path.read_text that serves the driver's information file for each PCI bus ID."""
+    real = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        parts = Path(path).parts
+        if parts[:5] == ("/", "proc", "driver", "nvidia", "gpus"):
+            if parts[5] not in minors:
+                raise FileNotFoundError(path)
+            return f"Model:\t\t synthetic-gpu\nDevice Minor:\t {minors[parts[5]]}\n"
+        return real(path, *args, **kwargs)
+
+    return read_text
+
+
 class GpuInventoryTests(unittest.TestCase):
     def test_cuda_rows_name_their_index_uuid_and_device(self):
-        rows = "0, synthetic-gpu, GPU-zero\n1, synthetic-gpu, GPU-one\n"
+        rows = (
+            "0, synthetic-gpu, GPU-zero, 00000000:0A:00.0\n"
+            "1, synthetic-gpu, GPU-one, 00000000:0B:00.0\n"
+        )
         calls = []
 
         def command(args):
             calls.append(args)
             return rows
 
-        with patch.object(Path, "exists", lambda p: str(p) != "/dev/kfd"):
+        minors = {"0000:0a:00.0": 0, "0000:0b:00.0": 1}
+        with (
+            patch.object(Path, "exists", lambda p: str(p) != "/dev/kfd"),
+            patch.object(Path, "read_text", nvidia_information(minors)),
+        ):
             runtime, gpus, common = gpu_inventory(command)
         self.assertEqual(calls[0][0], "nvidia-smi")
         self.assertEqual(runtime, "cuda")
@@ -399,6 +480,30 @@ class GpuInventoryTests(unittest.TestCase):
         )
         self.assertEqual(common, ["/dev/nvidiactl", "/dev/nvidia-uvm"])
 
+    def test_the_device_node_carries_the_driver_minor_not_the_index(self):
+        # A host that exposes the second half of a machine's GPUs numbers them from 0, while
+        # their device nodes keep the driver's minor numbers.
+        rows = "".join(
+            f"{i}, synthetic-gpu, GPU-{i}, 00000000:0{'abcd'[i]}:00.0\n" for i in range(4)
+        )
+        minors = {f"0000:0{'abcd'[i]}:00.0": 4 + i for i in range(4)}
+        with (
+            patch.object(Path, "exists", lambda p: str(p) != "/dev/kfd"),
+            patch.object(Path, "read_text", nvidia_information(minors)),
+        ):
+            _, gpus, _ = gpu_inventory(lambda args: rows)
+        self.assertEqual([g["id"] for g in gpus], ["0", "1", "2", "3"])
+        self.assertEqual(
+            [g["device"] for g in gpus],
+            ["/dev/nvidia4", "/dev/nvidia5", "/dev/nvidia6", "/dev/nvidia7"],
+        )
+        with (
+            patch.object(Path, "exists", lambda p: str(p) != "/dev/kfd"),
+            patch.object(Path, "read_text", nvidia_information({})),
+            self.assertRaisesRegex(RuntimeError, "GPU 0: .*information is missing"),
+        ):
+            gpu_inventory(lambda args: rows)
+
     def test_an_empty_or_unavailable_allocation_fails(self):
         with (
             patch.object(Path, "exists", lambda p: False),
@@ -407,9 +512,10 @@ class GpuInventoryTests(unittest.TestCase):
             gpu_inventory(lambda args: "")
         with (
             patch.object(Path, "exists", lambda p: str(p) == "/dev/nvidiactl"),
+            patch.object(Path, "read_text", nvidia_information({"0000:0a:00.0": 0})),
             self.assertRaisesRegex(RuntimeError, "A detected GPU device is unavailable"),
         ):
-            gpu_inventory(lambda args: "0, synthetic-gpu, GPU-zero\n")
+            gpu_inventory(lambda args: "0, synthetic-gpu, GPU-zero, 00000000:0A:00.0\n")
 
 
 if __name__ == "__main__":

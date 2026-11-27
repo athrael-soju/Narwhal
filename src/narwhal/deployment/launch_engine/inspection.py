@@ -7,6 +7,7 @@ that check only.
 
 from __future__ import annotations
 
+import errno
 import ipaddress
 import json
 import os
@@ -23,12 +24,14 @@ from .accelerators import gpu_inventory
 from .backend import engine_backend, plan_launcher
 from .docker import docker
 from .evidence import CheckFailed, evidence_directory, write_json
-from .plan import build
-from .runtime import digest, regular_file_digest
+from .plan import build, verify_model
+from .runtime import digest
 
 SCHEMA = "narwhal.host-inspection"
 EVIDENCE = "host-inspection.json"
 LOG = "inspection.log"
+# Holds the label of the containers the inspection runs, so a timed-out run can be removed.
+OWNER = "docker-owner.json"
 # The launch record fields that fix the engine's allocation and launch policy.
 ALLOCATION = (
     "role",
@@ -40,12 +43,18 @@ ALLOCATION = (
     "transfer",
     "environment",
 )
-# Prints the credentials of a process that the engine image starts. The serving container
-# runs as the image's user with the image's groups, because its launch sets neither.
+# Prints the credentials of a process that the engine image starts, with its user namespace
+# mappings. The serving container runs as the image's user with the image's groups, because
+# its launch sets neither.
 CREDENTIALS = (
     "import json, os; print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), "
-    "'groups': sorted(set(os.getgroups()))}))"
+    "'groups': sorted(set(os.getgroups())), "
+    "'uid_map': open('/proc/self/uid_map').read(), "
+    "'gid_map': open('/proc/self/gid_map').read()}))"
 )
+# The mapping of a process in the initial user namespace, whose IDs are the host's IDs.
+IDENTITY_MAP = [["0", "0", "4294967295"]]
+ACL = "system.posix_acl_access"
 
 
 class Inputs(NamedTuple):
@@ -74,7 +83,28 @@ def load_inputs(env: Mapping[str, str], backend: str, out: Path) -> Inputs:
     if not isinstance(record, dict):
         raise ValueError(f"{source}: expected a JSON object")
     plan, values = build(record, dict(env), out, backend=backend)
-    return Inputs(source, record, plan, values, env, backend)
+    inputs = Inputs(source, record, plan, values, env, backend)
+    # The checks read these inputs; a missing or malformed one is an input error, not a failed
+    # check, so it stops the inspection before any check runs.
+    for name in ("NARWHAL_FABRIC_INTERFACE", f"NARWHAL_NODE_{inputs.node}_IP", "NARWHAL_RUN_DIR"):
+        if not env.get(name):
+            raise KeyError(name)
+    ipaddress.ip_address(env[f"NARWHAL_NODE_{inputs.node}_IP"])
+    attestation_address(env, inputs.node)
+    return inputs
+
+
+def attestation_address(env: Mapping[str, str], node: str) -> tuple[str, int]:
+    """The host and port of the engine's attestation URL."""
+    name = f"NARWHAL_NODE_{node}_ATTESTATION_URL"
+    url = env.get(name)
+    if not url:
+        raise KeyError(name)
+    attestation = urlsplit(url)
+    host, port = attestation.hostname, attestation.port
+    if attestation.scheme != "http" or host is None or port is None:
+        raise ValueError(f"{name} {url!r} names no HTTP host and port")
+    return host, port
 
 
 def can_read_write(info: os.stat_result, uid: int, gid: int, groups: list[int]) -> bool:
@@ -82,7 +112,8 @@ def can_read_write(info: os.stat_result, uid: int, gid: int, groups: list[int]) 
 
     Root may. Otherwise the owner bits apply to the owner, the group bits to a member of the
     file's group, and the other bits to everyone else, as the kernel's mode check applies them.
-    Access control lists are not read.
+    The IDs must be host IDs, and the file must carry no access control list, whose mask
+    replaces the group bits. The inspection refuses the other cases before it calls this.
     """
     if uid == 0:
         return True
@@ -94,9 +125,36 @@ def can_read_write(info: os.stat_result, uid: int, gid: int, groups: list[int]) 
     return mode & 0o006 == 0o006
 
 
+def has_acl(path: str) -> bool:
+    """Whether the file carries an access control list beyond its mode bits."""
+    try:
+        os.getxattr(path, ACL)
+    except OSError as error:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            return False
+        raise
+    return True
+
+
+def host_ids(credentials: Mapping[str, object]) -> list[str]:
+    """The reasons the credentials are not host IDs, one for each mapping that is not identity."""
+    problems = []
+    for name in ("uid_map", "gid_map"):
+        mapping = credentials.get(name)
+        if not isinstance(mapping, str):
+            problems.append(f"the engine user's {name} is unknown")
+        elif [line.split() for line in mapping.splitlines()] != IDENTITY_MAP:
+            ranges = "; ".join(" ".join(line.split()) for line in mapping.splitlines())
+            problems.append(
+                f"the engine user runs in a user namespace ({name} {ranges!r}), so its IDs are "
+                "not the host IDs that device permissions name"
+            )
+    return problems
+
+
 def inspect_host(out: Path, env: Mapping[str, str], backend: str) -> dict:
     """Inspect this host for the engine role that NARWHAL_ENGINE_LAUNCH_CONFIG selects."""
-    out = evidence_directory(out, (EVIDENCE, LOG))
+    out = evidence_directory(out, (EVIDENCE, LOG, OWNER))
     return inspect(out, load_inputs(env, backend, out))
 
 
@@ -114,6 +172,8 @@ class _Inspection:
         self.failures: list[str] = []
         self.image_id: str | None = None
         self.user: dict | None = None
+        # The device nodes of the selected GPUs and those every GPU needs.
+        self.gpu_devices: list[str] = []
 
     def run(self) -> dict:
         container = self.inputs.backend == "container"
@@ -191,10 +251,12 @@ class _Inspection:
             for gpu in selected
             if gpu["name"] != declared
         ]
-        if runtime == "rocm":
-            # A ROCm container sees only the device nodes the launch maps into it.
-            required = [("the KFD", "/dev/kfd")]
-            required += [(f"GPU {gpu['id']}", gpu["device"]) for gpu in selected]
+        required = [("the KFD", "/dev/kfd")] if runtime == "rocm" else []
+        required += [(f"GPU {gpu['id']}", gpu["device"]) for gpu in selected]
+        self.gpu_devices = list(dict.fromkeys([*common, *(device for _, device in required)]))
+        if self.inputs.backend == "container":
+            # The launch maps these device nodes into the container, so they must be the nodes
+            # of the GPUs that gpu_ids selects.
             for owner, device in required:
                 if device not in self.record["accelerator_devices"]:
                     problems.append(f"accelerator_devices lacks {device} for {owner}")
@@ -237,32 +299,39 @@ class _Inspection:
                 self.out,
                 LOG,
             )
-            credentials = json.loads(output.splitlines()[-1])
+            lines = output.splitlines()
+            credentials = json.loads(lines[-1]) if lines else None
+            if not isinstance(credentials, dict):
+                raise CheckFailed(f"the image's python3 printed no credentials; inspect {LOG}")
             observed["source"] = "image"
         else:
-            groups = os.getgroups()
-            credentials = {"uid": os.getuid(), "gid": os.getgid(), "groups": sorted(set(groups))}
+            credentials = {
+                "uid": os.getuid(),
+                "gid": os.getgid(),
+                "groups": sorted(set(os.getgroups())),
+                "uid_map": Path("/proc/self/uid_map").read_text(),
+                "gid_map": Path("/proc/self/gid_map").read_text(),
+            }
             observed["source"] = "process"
         user = {name: credentials[name] for name in ("uid", "gid", "groups")}
+        observed.update(
+            user, uid_map=credentials.get("uid_map"), gid_map=credentials.get("gid_map")
+        )
         if type(user["uid"]) is not int or type(user["gid"]) is not int:
             raise CheckFailed("the engine user's credentials are not numeric IDs")
-        observed.update(user)
+        if problems := host_ids(credentials):
+            raise CheckFailed("; ".join(problems))
         self.user = user
 
     def model(self, observed: dict) -> None:
-        env = self.inputs.env
-        config = Path(env["NARWHAL_MODEL_DIR"]) / "config.json"
-        observed["config_sha256"] = regular_file_digest(config)
-        problems = []
-        if observed["config_sha256"] != env["NARWHAL_MODEL_CONFIG_SHA256"]:
-            problems.append(f"{config} differs from NARWHAL_MODEL_CONFIG_SHA256")
-        if pinned := env.get("NARWHAL_MODEL_SHA256"):
-            path = Path(env["NARWHAL_MODEL_PATH"])
-            observed.update(path=str(path), sha256=regular_file_digest(path))
-            if observed["sha256"] != pinned:
-                problems.append(f"{path} differs from NARWHAL_MODEL_SHA256")
-        if problems:
-            raise CheckFailed("; ".join(problems))
+        # Prepare reads the model through the same function, so the two follow the same links
+        # and refuse the same entries.
+        config = Path(self.inputs.env["NARWHAL_MODEL_DIR"]) / "config.json"
+        observed["config_sha256"] = digest(config)
+        files = verify_model(self.inputs.plan, self.inputs.env, self.inputs.backend)
+        observed.update(directory_sha256=files.directory, tree_sha256=files.tree)
+        if files.model_file is not None:
+            observed.update(path=self.inputs.plan["model_path"], sha256=files.model_file)
 
     def run_directory(self, observed: dict) -> None:
         path = Path(self.inputs.env["NARWHAL_RUN_DIR"])
@@ -308,11 +377,7 @@ class _Inspection:
             host = "::" if ":" in host else "0.0.0.0"
         engine = plan_launcher(plan)
         side_host, side_port = engine.side_channel_address(self.inputs.values)
-        url = self.inputs.env[f"NARWHAL_NODE_{node}_ATTESTATION_URL"]
-        attestation = urlsplit(url)
-        attest_host, attest_port = attestation.hostname, attestation.port
-        if attestation.scheme != "http" or attest_host is None or attest_port is None:
-            raise CheckFailed(f"NARWHAL_NODE_{node}_ATTESTATION_URL {url!r} names no HTTP port")
+        attest_host, attest_port = attestation_address(self.inputs.env, node)
         listeners: list[tuple[str, str, int, Callable[[], None]]] = [
             ("engine", host, port, lambda: fabric.check_engine_bind(host, port)),
             (
@@ -366,7 +431,8 @@ class _Inspection:
         return []
 
     def devices(self, observed: dict) -> None:
-        paths = [*self.record["accelerator_devices"], *self.record["transfer"]["devices"]]
+        planned = [*self.record["accelerator_devices"], *self.record["transfer"]["devices"]]
+        paths = list(dict.fromkeys([*planned, *self.gpu_devices]))
         problems = []
         if self.user is None:
             problems.append("the engine user is unknown, so no device permission was checked")
@@ -390,7 +456,14 @@ class _Inspection:
                 row.update(major=os.major(info.st_rdev), minor=os.minor(info.st_rdev))
             else:
                 problems.append(f"{path} is not a character device")
-            if self.user is not None:
+            row["acl"] = has_acl(path)
+            if row["acl"]:
+                problems.append(
+                    f"{path} carries an access control list, which replaces its group bits with "
+                    "the list's mask; remove the list and grant the engine user access through "
+                    "the owner, group or other bits"
+                )
+            elif self.user is not None:
                 user = self.user
                 row["read_write"] = can_read_write(info, user["uid"], user["gid"], user["groups"])
                 if not row["read_write"]:

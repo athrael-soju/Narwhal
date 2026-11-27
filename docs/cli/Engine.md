@@ -60,13 +60,13 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
-| `inspect-host` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), before `prepare` | `host-inspection.json` and `inspection.log` in `--out` |
+| `inspect-host` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), before `prepare` | `host-inspection.json`, `inspection.log`, and on a container host the `docker-owner.json` label of the inspection's containers, in `--out` |
 | `prepare` | container, Kubernetes, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, on vLLM and TensorRT-LLM the cache-capture hook, and for Kubernetes `kubernetes.json` |
 | `check` | container, Kubernetes, native | Prepared launch directory, and for Kubernetes the engine pod's records | `checked.json`, and `image-check.log`, `runtime-check.log` or the pod's records under `pods/` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
 | `start` | container | Checked plan | One serving container, `container.id` and `container-start.json` |
-| `probe` | container, native | Launch directory of a running engine, and `NARWHAL_ENGINE_MODEL_NAME` | The engine's HTTP responses and `probe.json` in `--out` |
+| `probe` | container, native | Launch directory of a running engine | The engine's HTTP responses and `probe.json` in `--out` |
 | `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `start-native` | native | One to eight checked plans, each on its own GPU | Running engines and one `native-start.json` per engine |
@@ -81,7 +81,7 @@ These actions check their inputs:
 | `inspect-host` | The host's GPUs, image, model files, run directory, fabric interface, planned ports and device permissions against the launch record. [Inspecting every engine host](../deploy/03-Validate-Engines.md#inspecting-every-engine-host) lists each check. |
 | `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For an engine on a shared GPU, it also checks that the engine uses a single NVIDIA GPU with `tensor_parallel_size` 1, and that the engine's memory flag (`--gpu-memory-utilization`, `--mem-fraction-static` or `--free_gpu_memory_fraction`) is set to `shared_device.gpu_memory_utilization`. |
 | `check` | For `container`, image identity. For `native`, the model path. For `kubernetes`, the engine pod's records, as [Kubernetes plans](#kubernetes-plans) describes. For `container` and `native`, the model file status that `prepare` recorded. For every backend, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, which a Kubernetes plan checks at `prepare`, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
-| `probe` | The plan hash against `checked.json`, then `/health`, the engine version against the checked version, the served model in `/v1/models`, and on vLLM the process start in `/metrics` and on vLLM and TensorRT-LLM one completion. [Proving the live HTTP process](../deploy/03-Validate-Engines.md#proving-the-live-http-process) lists the responses. |
+| `probe` | The plan hash against `checked.json`, the recorded container or native process, then `/health`, the engine version against the checked version, the served model in `/v1/models`, and on vLLM the process start in `/metrics` against the recorded start and on vLLM and TensorRT-LLM one completion. [Proving the live HTTP process](../deploy/03-Validate-Engines.md#proving-the-live-http-process) lists the responses. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `start-native` | One GPU for each plan, free memory, readiness and identity for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |

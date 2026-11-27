@@ -18,7 +18,7 @@ import httpx
 from ... import command_results as results
 from .backend import plan_launcher
 from .evidence import CheckFailed, evidence_directory
-from .inspection import EVIDENCE, LOG, inspect, load_inputs
+from .inspection import EVIDENCE, LOG, OWNER, inspect, load_inputs
 from .plan import load
 from .probe import RECORD, probe, responses, summary
 
@@ -80,7 +80,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
 def _inspect(
     args: argparse.Namespace, out: Path, parser: argparse.ArgumentParser, context: str
 ) -> None:
-    out = evidence_directory(out, (EVIDENCE, LOG))
+    out = evidence_directory(out, (EVIDENCE, LOG, OWNER))
     try:
         inputs = load_inputs(dict(os.environ), args.backend, out)
     except (KeyError, TypeError, ValueError, OSError) as error:
@@ -106,9 +106,6 @@ def _probe(
         parser.exit(2, f"{context}: load run {launch}: {error}\n")
     for name in (*responses(plan_launcher(plan).live_probe), RECORD):
         results.add_artifact(name.rsplit(".", 1)[0], out / name)
-    model = os.environ.get("NARWHAL_ENGINE_MODEL_NAME", "")
-    if not model:
-        raise ValueError("set NARWHAL_ENGINE_MODEL_NAME to the served model name")
-    record = probe(launch, plan, out, model)
+    record = probe(launch, plan, out)
     results.set_data({"role": record["role"], "passed": True})
     print(summary(record))

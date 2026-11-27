@@ -87,6 +87,12 @@ def add_commands(commands: Any) -> None:
                 help="evidence directory for cache-groups.json, created when absent",
             )
             action.add_argument(
+                "--run",
+                type=Path,
+                required=True,
+                help="package directory that package wrote from the launch records",
+            )
+            action.add_argument(
                 "--cache-layout",
                 type=role_file,
                 action="append",
@@ -186,7 +192,11 @@ def _cache_groups(args: argparse.Namespace, env: dict[str, str]) -> int:
         evidence[option] = dict(pairs)
     results.add_artifact("cache_groups", args.out / cache_groups.EVIDENCE)
     document = cache_groups.derive(
-        launch_config, evidence["--cache-layout"], evidence["--transfer-record"], args.out
+        launch_config,
+        evidence["--cache-layout"],
+        evidence["--transfer-record"],
+        args.run,
+        args.out,
     )
     groups = [
         {key: group[key] for key in ("id", "representative", "roles")}
