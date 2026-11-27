@@ -689,6 +689,14 @@ class KubernetesDeployTests(unittest.TestCase):
         self.assertEqual(self.rig.releases, [])
 
 
+class DashboardTests(unittest.TestCase):
+    def test_the_chart_dashboard_comes_from_the_installed_package(self):
+        # An installed wheel has no tools/ checkout; the package renders the dashboard.
+        dashboard = json.loads(kubernetes_target.KubernetesDeployment._dashboard())
+        names = [variable["spec"]["name"] for variable in dashboard["spec"]["variables"]]
+        self.assertIn("fleet", names)
+
+
 class StubClusterTests(unittest.TestCase):
     """The stub refuses what the cluster refuses, so the tests above cannot pass on values or
     patches a real cluster would reject."""

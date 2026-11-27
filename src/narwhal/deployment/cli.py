@@ -127,9 +127,9 @@ def add_commands(commands: Any) -> None:
                 action.add_argument(
                     "--until",
                     choices=RUN_STAGES,
-                    default=stage_run.LAST_STAGE,
                     metavar="STAGE",
-                    help="stop after this stage (default: %(default)s)",
+                    help=f"stop after this stage (default: {stage_run.LAST_STAGE}, or "
+                    f"{kubernetes_target.LAST_STAGE} with --target kubernetes)",
                 )
             continue
         if name not in ("discover", "cache-groups"):
@@ -436,7 +436,7 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
                 problems[host.id] = found
     directory = args.run.resolve()
     deployment = TARGETS[args.target].Deployment(directory, env, dry=True)
-    result = deployment.runner().plan(inputs, until=args.until)
+    result = deployment.runner().plan(inputs, until=_until(args))
     rows = _decisions(result.decisions)
     for note in result.notes:
         print(f"Note: {note}")
@@ -470,6 +470,11 @@ def _stage_failure(error: StageFailed) -> tuple[str, str, int]:
     return "error", "operation_failed", 4
 
 
+def _until(args: argparse.Namespace) -> str:
+    """The last stage to plan or run: `--until`, else the target's last stage."""
+    return str(args.until or TARGETS[args.target].LAST_STAGE)
+
+
 def _publish(deployment: Any) -> None:
     """Give the routers the run's status; a missed upload is a warning, not a failure. A target
     without router hosts to copy it to publishes nothing."""
@@ -497,7 +502,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         return {"stale_lock": dict(found)}
 
     try:
-        result = runner.run(inputs, until=args.until)
+        result = runner.run(inputs, until=_until(args))
     except StageFailed as error:
         failure = error.record["failure"]
         recovery = target.recovery_url(failure["recovery"])
@@ -533,7 +538,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     results.set_data(
         {"run": str(directory), "run_id": result.run_id, "ran": ran, **stale(result.stale_lock)}
     )
-    print(f"Run {result.run_id} reached {args.until}; {len(ran)} stage instances ran.")
+    print(f"Run {result.run_id} reached {_until(args)}; {len(ran)} stage instances ran.")
     return 0
 
 
