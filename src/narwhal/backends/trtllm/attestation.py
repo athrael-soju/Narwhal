@@ -9,6 +9,7 @@ from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
+    engine_process_start,
     live_binding,
     live_identity,
     read_json,
@@ -16,7 +17,6 @@ from ...deployment.attestation_contract.evidence import (
     write_private_json,
 )
 from ...deployment.launch_engine.plan import launch_headers, option
-from ...engines.host_process import container_start, native_start
 from .identity import SERVER_INFO_PATH, VERSION_PATH
 from .plan import CONFIG_FILE
 
@@ -47,11 +47,7 @@ def capture_server(run: Path, out: Path) -> Path:
         raise ValueError(f"{SERVER_INFO_PATH} returned no object")
     record = {
         "server": {"version": reported, **{name: payload.get(name) for name in SERVER_FIELDS}},
-        "process_start_time_seconds": (
-            native_start(identity["pid"])
-            if isinstance(identity, dict)
-            else container_start(str(identity))
-        ),
+        "process_start_time_seconds": engine_process_start(identity),
         "plan_sha256": plan_hash,
         **live_binding(plan, checked, identity),
     }

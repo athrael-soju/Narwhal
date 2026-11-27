@@ -1,5 +1,8 @@
-"""Every attestation capture of one container or native engine, in an attempt directory of its
-own, and the published attempt that the sidecar serves."""
+"""Every attestation capture of one engine, in an attempt directory of its own, and the
+published attempt that the sidecar serves.
+
+A container or native engine keeps its attempts in its launch directory. A Kubernetes engine
+keeps them in its pod's directory, under the engine container they attest."""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from pathlib import Path
 
 import httpx
 
+from ..launch_engine import pod as pod_steps
 from ..launch_engine.backend import (
     CacheRegistration,
     LiveModelDimensions,
@@ -29,6 +33,14 @@ from .evidence import (
     live_identity,
     read_json,
     write_private_json,
+)
+from .pod_engine import (
+    IDENTITY_RECORD,
+    PodEngine,
+    engine_home,
+    engine_record,
+    live_pod,
+    write_identity,
 )
 
 # Each capture attempt is a new directory here; failed attempts stay as evidence.
@@ -84,7 +96,10 @@ def save_startup_log(run: Path, attempt: Path) -> Path:
     """Write the startup log of the live engine's current process into the attempt."""
     plan, checked, _ = checked_plan(run)
     identity = live_identity(run, plan, checked)
-    if isinstance(identity, str):
+    if isinstance(identity, PodEngine):
+        # The engine container's serve step copies the engine's output for this process.
+        data = engine_record(identity, pod_steps.STARTUP_LOG).read_bytes()
+    elif isinstance(identity, str):
         # `docker logs` also returns earlier runs of the container; keep only this one.
         since = container_start(run)["started_at"]
         result = subprocess.run(
@@ -110,9 +125,17 @@ def save_startup_log(run: Path, attempt: Path) -> Path:
     return destination
 
 
+def live_cache_layout(run: Path, plan: dict, checked: dict) -> Path:
+    """The live engine's KV cache layout record: the one capture-cache kept in the launch
+    directory, or the one the cache capture hook writes in a pod's engine process directory."""
+    if plan.get("backend") == "kubernetes":
+        return engine_record(live_pod(checked), pod_steps.CACHE_LAYOUT)
+    return run / "cache-layout.json"
+
+
 def captures(run: Path, attempt: Path, representative_layout: str | None = None) -> list[Capture]:
     """The captures of the engine in `run` into `attempt`, in the order `capture` runs them."""
-    plan, _, _ = checked_plan(run)
+    plan, checked, _ = checked_plan(run)
     engine = plan_launcher(plan)
     registration = engine if isinstance(engine, CacheRegistration) else None
     if representative_layout is not None:
@@ -122,7 +145,7 @@ def captures(run: Path, attempt: Path, representative_layout: str | None = None)
                 f"{label} engines register no cache layout to match a representative's"
             )
         # The cache-registration capture registers the layout the live cache resolved.
-        layout = registration.cache_layout(run)
+        layout = registration.cache_layout(live_cache_layout(run, plan, checked))
         if layout != representative_layout:
             raise ValueError(
                 f"Resolved layout {layout} differs from the representative's "
@@ -133,7 +156,19 @@ def captures(run: Path, attempt: Path, representative_layout: str | None = None)
         if isinstance(engine, LiveModelDimensions)
         else "model-dimensions.json"
     )
+    pod = plan.get("backend") == "kubernetes"
     steps = [
+        *(
+            [
+                Capture(
+                    "pod-identity",
+                    IDENTITY_RECORD,
+                    lambda: write_identity(live_pod(checked), attempt),
+                )
+            ]
+            if pod
+            else []
+        ),
         Capture("startup-log", STARTUP_LOG, lambda: save_startup_log(run, attempt)),
         Capture("model-dimensions", dimensions, lambda: capture_model_dimensions(run, attempt)),
         *engine.attestation_captures(CaptureContext(run, attempt, plan)),
@@ -142,40 +177,71 @@ def captures(run: Path, attempt: Path, representative_layout: str | None = None)
     return steps
 
 
-def published_attempt(run: Path) -> Path:
-    """The attempt directory whose document the launch directory published."""
-    path = run / PUBLISHED
+def attestation_home(run: Path, plan: dict, pod_evidence: Path | None) -> Path:
+    """The directory that holds the engine's capture attempts and its published attempt.
+
+    It is the launch directory of a container or native engine. For a Kubernetes plan it is the
+    live engine container's directory in `pod_evidence`, the pod's directory of the state
+    volume.
+    """
+    if not require_pod_evidence(plan, pod_evidence):
+        return run
+    assert pod_evidence is not None
+    _, checked, _ = checked_plan(run)
+    return engine_home(pod_evidence, live_pod(checked).identity.container_id)
+
+
+def require_pod_evidence(plan: dict, pod_evidence: Path | None) -> bool:
+    """Return whether the plan keeps its attestation in its engine pod's directory, which
+    `pod_evidence` must name exactly for a Kubernetes plan."""
+    pod = plan.get("backend") == "kubernetes"
+    if pod_evidence is not None and not pod:
+        raise ValueError(
+            "--pod-evidence names the directory of a Kubernetes engine pod; this plan's engine "
+            "runs on a host"
+        )
+    if pod_evidence is None and pod:
+        raise ValueError(
+            "a Kubernetes plan's attestation binds to its engine pod and lies in the pod's "
+            "directory of the state volume; pass --pod-evidence naming that directory"
+        )
+    return pod
+
+
+def published_attempt(home: Path) -> Path:
+    """The attempt directory whose document `home` published."""
+    path = home / PUBLISHED
     if not path.is_file():
         raise ValueError(f"{PUBLISHED} is missing; capture the engine's attestation first")
     record = read_json(path)
     name = record.get("attempt")
     if not isinstance(name, str) or ATTEMPT_NAME.fullmatch(name) is None:
         raise ValueError(f"{PUBLISHED} names no capture attempt")
-    attempt = run / ATTEMPTS / name
+    attempt = home / ATTEMPTS / name
     document = attempt / "engine-attestation.json"
     if digest(document) != record["document_sha256"]:
         raise ValueError(f"{document} differs from the document {PUBLISHED} names")
     return attempt
 
 
-def new_attempt(run: Path) -> Path:
-    attempts = run / ATTEMPTS
-    attempts.mkdir(mode=0o700, exist_ok=True)
+def new_attempt(home: Path) -> Path:
+    attempts = home / ATTEMPTS
+    attempts.mkdir(mode=0o700, parents=True, exist_ok=True)
     attempt = attempts / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"
     attempt.mkdir(mode=0o700)
     return attempt
 
 
-def refuse_published(run: Path) -> None:
-    if (run / PUBLISHED).exists():
-        raise AlreadyPublished(str(read_json(run / PUBLISHED).get("attempt")))
+def refuse_published(home: Path) -> None:
+    if (home / PUBLISHED).exists():
+        raise AlreadyPublished(str(read_json(home / PUBLISHED).get("attempt")))
 
 
-def publish(run: Path, attempt: Path) -> Path:
-    """Name `attempt` in the launch directory, unless another attempt published first."""
-    if attempt.parent != run / ATTEMPTS or ATTEMPT_NAME.fullmatch(attempt.name) is None:
-        raise ValueError(f"{attempt} is not a capture attempt of {run}")
-    destination = run / PUBLISHED
+def publish(home: Path, attempt: Path) -> Path:
+    """Name `attempt` in `home`, unless another attempt published first."""
+    if attempt.parent != home / ATTEMPTS or ATTEMPT_NAME.fullmatch(attempt.name) is None:
+        raise ValueError(f"{attempt} is not a capture attempt of {home}")
+    destination = home / PUBLISHED
     record = {
         "attempt": attempt.name,
         "document_sha256": digest(attempt / "engine-attestation.json"),
@@ -186,18 +252,26 @@ def publish(run: Path, attempt: Path) -> Path:
         try:
             os.link(temporary, destination)
         except FileExistsError:
-            refuse_published(run)
+            refuse_published(home)
             raise
     finally:
         temporary.unlink(missing_ok=True)
     return destination
 
 
-def capture(run: Path, representative_layout: str | None = None) -> Path:
+def capture(
+    run: Path, representative_layout: str | None = None, *, pod_evidence: Path | None = None
+) -> Path:
     """Run every capture of the engine in `run` in a new attempt directory, and publish the
-    attempt once its document is written. Return the published document."""
-    refuse_published(run)
-    attempt = new_attempt(run)
+    attempt once its document is written. Return the published document.
+
+    A Kubernetes plan's capture runs in the engine pod's attestation container, with
+    `pod_evidence` naming the pod's directory.
+    """
+    plan, _, _ = checked_plan(run)
+    home = attestation_home(run, plan, pod_evidence)
+    refuse_published(home)
+    attempt = new_attempt(home)
     try:
         steps = captures(run, attempt, representative_layout)
     except BaseException:
@@ -215,7 +289,7 @@ def capture(run: Path, representative_layout: str | None = None) -> Path:
             )
             raise failed from error
     try:
-        publish(run, attempt)
+        publish(home, attempt)
     except AlreadyPublished as error:
         # Another attempt passed and published while this one ran.
         write_private_json(

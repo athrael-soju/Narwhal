@@ -129,8 +129,11 @@ Export fails when:
 | `NARWHAL_KUBERNETES_MODEL_VOLUME` | A JSON volume source that serves the staged checkpoint, with one of `persistentVolumeClaim`, `hostPath`, `nfs` or `csi`, such as `{"persistentVolumeClaim": {"claimName": "models", "readOnly": true}}` |
 | `NARWHAL_KUBERNETES_STATE_CLAIM` | The name of the state PersistentVolumeClaim, where the engine pod writes its records |
 | `NARWHAL_KUBERNETES_API_KEY_SECRET` | `<secret name>/<key>` of the Secret that holds `NARWHAL_ENGINE_API_KEY`. Required when `NARWHAL_ENGINE_API_KEY` is set, and refused when it is not |
+| `NARWHAL_KUBERNETES_SERVICE_ACCOUNT` | The service account the engine pod's attestation sidecar runs as. `kubernetes.json` holds it with a Role and RoleBinding that grant `get` on pods in its namespace |
+| `NARWHAL_KUBERNETES_SIDECAR_IMAGE` | The Narwhal image the attestation sidecar runs, as a registry digest, `<repository>@sha256:<hex>` |
+| `NARWHAL_KUBERNETES_RUNTIME_CLASS` | Optional. The RuntimeClass the engine pod runs under, such as `nvidia`, for nodes whose default container runtime exposes no GPUs |
 
-A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod.
+A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod. `NARWHAL_NODE_<n>_ATTESTATION_URL` must name the pod's sidecar route, `http://<pod>:<NARWHAL_ATTEST_PORT>/v1/attestation`, which the plan pins.
 
 ### Fabric qualification inputs
 

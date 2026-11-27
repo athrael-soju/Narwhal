@@ -507,6 +507,20 @@ def build(
         plan["model_path"] = model_path
     if pod:
         plan["backend"] = "kubernetes"
+        # The pod's attestation sidecar serves this route, so the plan pins it.
+        name = f"NARWHAL_NODE_{node}_ATTESTATION_URL"
+        route = urlsplit(env.get(name, ""))
+        if (
+            route.scheme != "http"
+            or route.path != "/v1/attestation"
+            or not route.hostname
+            or route.port != attest_port
+        ):
+            raise ValueError(
+                f"{name} must name the sidecar route, http://<pod>:<NARWHAL_ATTEST_PORT>"
+                "/v1/attestation"
+            )
+        plan["attestation_url"] = route.geturl()
     if backend == "native":
         model_revision = env.get("NARWHAL_MODEL_REVISION", "")
         if not re.fullmatch(r"[0-9a-f]{40}|sha256:[0-9a-f]{64}", model_revision):

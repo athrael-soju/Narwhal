@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 class NixlConnectorCaptureTests(unittest.TestCase):
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
-        from narwhal.backends.vllm.attestation import NIXL_CAPTURE, NIXL_CAPTURE_TAG
+        from narwhal.backends.vllm.inspections import NIXL_CAPTURE, NIXL_CAPTURE_TAG
 
         for version in (17, 0, "1.4.1", True):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
@@ -28,7 +28,7 @@ class NixlConnectorCaptureTests(unittest.TestCase):
                         exec(
                             compile(
                                 NIXL_CAPTURE,
-                                "src/narwhal/backends/vllm/attestation.py:NIXL_CAPTURE",
+                                "src/narwhal/backends/vllm/inspections.py:NIXL_CAPTURE",
                                 "exec",
                             ),
                             {},
@@ -38,7 +38,7 @@ class NixlConnectorCaptureTests(unittest.TestCase):
                             exec(
                                 compile(
                                     NIXL_CAPTURE,
-                                    "src/narwhal/backends/vllm/attestation.py:NIXL_CAPTURE",
+                                    "src/narwhal/backends/vllm/inspections.py:NIXL_CAPTURE",
                                     "exec",
                                 ),
                                 {},

@@ -32,17 +32,24 @@ def main(argv: list[str] | None = None) -> int:
         "verify", help="check the running sidecar against the live engine"
     )
     verified.add_argument("--run", required=True, type=Path, help="engine launch directory")
+    for command in (captured, served, verified):
+        command.add_argument(
+            "--pod-evidence",
+            type=Path,
+            help="the engine pod's directory of the state volume, which holds its attestation; "
+            "required for a Kubernetes plan and refused for the others",
+        )
     fleet = commands.add_parser("finalize-fleet", help="write or check the fleet's engine contract")
     fleet.add_argument("--fleet", required=True, type=Path, help="router fleet file")
     args = parser.parse_args(argv)
     try:
         if args.command == "capture":
-            result = capture(args.run, args.representative_layout)
+            result = capture(args.run, args.representative_layout, pod_evidence=args.pod_evidence)
             print(f"Generated private engine attestation in {result}")
         elif args.command == "serve":
-            return serve(args.run)
+            return serve(args.run, args.pod_evidence)
         elif args.command == "verify":
-            result = verify(args.run)
+            result = verify(args.run, args.pod_evidence)
             print(f"Sidecar attestation matches the live engine and contract; captures in {result}")
         else:
             contract = finalize_fleet(args.fleet)

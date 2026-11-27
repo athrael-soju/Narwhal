@@ -48,6 +48,11 @@ class EngineLauncher(ABC):
     # probe_result(plan, environment, output), and imports only the standard library, so a
     # Kubernetes engine pod runs it as the offline check does.
     probe_reader: ClassVar[ModuleType]
+    # Standalone module that defines inspections(plan, plan_sha256), the interpreter arguments
+    # of each attestation inspection that runs with the engine image's Python, by name. It
+    # imports only the standard library, so a Kubernetes engine container runs each one before
+    # its engine starts. None when the backend's captures run no such inspection.
+    pod_inspections: ClassVar[ModuleType | None] = None
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
     live_probe: ClassVar[LiveProbe]
@@ -159,8 +164,9 @@ class CacheRegistration(ABC):
     """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def cache_layout(self, run: Path) -> str:
-        """The KV cache layout that the live engine of `run` resolved across its ranks."""
+    def cache_layout(self, source: Path) -> str:
+        """The KV cache layout that the live cache layout record `source` resolved across the
+        engine's ranks."""
 
 
 class LiveModelDimensions(ABC):

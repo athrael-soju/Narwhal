@@ -52,7 +52,7 @@ HCA_ENV = "UCX_NET_DEVICES=mlx5_0:1\nUCX_SHM_DEVICES=none\nUCX_TLS=rc,sm,self,cu
 
 
 # Attestation modules that look up `live_container`.
-LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_evidence, attestation_sidecar)
+LIVE_CONTAINER_CALLERS = (attestation_evidence, attestation_sidecar)
 
 
 @contextlib.contextmanager
@@ -522,7 +522,7 @@ class AttestationContractTests(unittest.TestCase):
             (run / "engine.env").write_text(f"PYTHONPATH={paths['engine']}\n")
             with (
                 patch(
-                    "narwhal.backends.vllm.attestation.live_native",
+                    "narwhal.deployment.attestation_contract.evidence.live_native",
                     return_value=process,
                 ),
                 patch.dict(
@@ -552,7 +552,10 @@ class AttestationContractTests(unittest.TestCase):
                 stderr="",
             )
             with (
-                patch("narwhal.backends.vllm.attestation.live_native", return_value=process),
+                patch(
+                    "narwhal.deployment.attestation_contract.evidence.live_native",
+                    return_value=process,
+                ),
                 patch(
                     "narwhal.backends.vllm.attestation.subprocess.run", return_value=result
                 ) as probe,

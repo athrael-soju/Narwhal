@@ -25,6 +25,7 @@ from narwhal.deployment.attestation_contract.evidence import (
 )
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.engines import host_process
 from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
@@ -740,7 +741,7 @@ class EngineDocumentTests(unittest.TestCase):
                 )
                 with (
                     patch.object(attestation_evidence, live, return_value=identity),
-                    patch.object(attestation, start, return_value=100.0) as started,
+                    patch.object(host_process, start, return_value=100.0) as started,
                     serving,
                 ):
                     path = attestation.capture_server(run, run)

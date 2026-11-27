@@ -5,8 +5,13 @@ import asyncio
 import contextlib
 import json
 import math
+import os
 import re
+import signal
 import subprocess
+import sys
+import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -32,6 +37,7 @@ from ..contracts import (
     versioned,
 )
 from .host_process import process_clock
+from .pod_identity import pod_clock
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
@@ -587,6 +593,30 @@ def build_app(
     return app
 
 
+# How often a pod sidecar checks that the engine process it serves still runs.
+POD_WATCH_S = 1.0
+
+
+def watch_process(process: Callable[[], float]) -> None:
+    """Stop this sidecar once the engine process that `process` clocks has ended.
+
+    In a pod, the kubelet then restarts the sidecar, which serves the replacement engine
+    container's own attestation.
+    """
+
+    def watch() -> None:
+        while True:
+            time.sleep(POD_WATCH_S)
+            try:
+                process()
+            except ValueError as error:
+                print(f"narwhal-attest: {error}; stopping", file=sys.stderr, flush=True)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=watch, name="engine-process-watch", daemon=True).start()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_version_argument(parser)
@@ -625,6 +655,11 @@ def main(argv: list[str] | None = None) -> int:
     process_owner.add_argument(
         "--engine-pid", type=int, help="engine process ID whose start time identifies the process"
     )
+    process_owner.add_argument(
+        "--engine-pod-container",
+        help="engine container of this pod, by runtime container ID, whose first process in the "
+        "shared process namespace identifies the engine; the sidecar exits once it ends",
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
@@ -642,14 +677,19 @@ def main(argv: list[str] | None = None) -> int:
     process = None
     if args.engine_container is not None or args.engine_pid is not None:
         process = process_clock(container=args.engine_container, pid=args.engine_pid)
-    elif not backend.identity.reports_process_start:
-        parser.error(f"--backend {args.backend} requires --engine-container or --engine-pid")
+    elif args.engine_pod_container is None and not backend.identity.reports_process_start:
+        parser.error(
+            f"--backend {args.backend} requires --engine-container, --engine-pid or "
+            "--engine-pod-container"
+        )
 
     try:
         document = AttestationDocument.load(args.document)
     except (OSError, ValueError) as exc:
         return failure("narwhal-attest", f"load document {args.document}", exc, 2)
     try:
+        if args.engine_pod_container is not None:
+            process = pod_clock(args.engine_pod_container)
         identity = asyncio.run(
             fetch_engine_identity(
                 args.engine_base, timeout_s=args.timeout_s, reader=backend.identity, process=process
@@ -676,6 +716,8 @@ def main(argv: list[str] | None = None) -> int:
             decoder=backend.kv_events,
         )
         feed.start()
+    if args.engine_pod_container is not None and process is not None:
+        watch_process(process)
     try:
         uvicorn.run(
             build_app(

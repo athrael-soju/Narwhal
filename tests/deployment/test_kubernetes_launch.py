@@ -21,6 +21,8 @@ from narwhal.deployment.launch_engine.plan import build
 from tests.backends.contract import fixtures, launch_record, prepared
 from tests.deployment.fixtures import launch_document, launcher_inputs
 from tests.deployment.pod_fixtures import (
+    ENGINE_PROCESS,
+    ENGINE_TICKS,
     POD_IP,
     RDMA_TRANSFER,
     SNAPSHOT,
@@ -102,6 +104,14 @@ class KubernetesLaunchTests(unittest.TestCase):
             "PersistentVolumeClaim's name": {"NARWHAL_KUBERNETES_STATE_CLAIM": "State_Claim"},
             "<secret name>/<key>": {"NARWHAL_KUBERNETES_API_KEY_SECRET": "credential"},
             "the Secret that holds": {"NARWHAL_ENGINE_API_KEY": ""},
+            "service account the attestation sidecar": {"NARWHAL_KUBERNETES_SERVICE_ACCOUNT": ""},
+            "the Narwhal image's registry digest": {
+                "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "registry.example/narwhal:latest"
+            },
+            "must name the sidecar route": {
+                "NARWHAL_NODE_1_ATTESTATION_URL": "http://engine-1.engines.example.svc:9999/v1/attestation"
+            },
+            "a RuntimeClass name": {"NARWHAL_KUBERNETES_RUNTIME_CLASS": "Nvidia Runtime"},
         }
         for index, (message, environment) in enumerate(cases.items()):
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
@@ -109,6 +119,83 @@ class KubernetesLaunchTests(unittest.TestCase):
         resource = {"NARWHAL_KUBERNETES_GPU_RESOURCE": "devices.kubernetes.io/gpu"}
         with self.assertRaisesRegex(ValueError, "extended resource name"):
             self.prepared("reserved", **resource)
+
+    def test_the_attestation_sidecar_reads_its_pod_and_nothing_else(self):
+        run, plan = self.prepared()
+        manifests = json.loads((run / "kubernetes.json").read_text())
+        spec = manifests["podSpec"]
+        self.assertTrue(spec["shareProcessNamespace"])
+        self.assertEqual(spec["serviceAccountName"], "narwhal-attestation")
+        self.assertFalse(spec["automountServiceAccountToken"])
+        self.assertNotIn("runtimeClassName", spec)
+        engine, sidecar = spec["containers"]
+        self.assertEqual(sidecar["name"], kubernetes.SIDECAR)
+        self.assertEqual(sidecar["image"], plan["kubernetes"]["sidecar_image"])
+        self.assertEqual(
+            sidecar["command"][-4:],
+            ["--run", str(kubernetes.LAUNCH_MOUNT), "--pod-evidence", str(pod.STATE)],
+        )
+        self.assertEqual(
+            sidecar["securityContext"],
+            {
+                "runAsUser": 0,
+                "runAsGroup": 0,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+            },
+        )
+        mounts = {mount["mountPath"]: mount for mount in sidecar["volumeMounts"]}
+        launch = mounts[str(kubernetes.LAUNCH_MOUNT)]
+        self.assertEqual(
+            (launch["subPathExpr"], launch["readOnly"]),
+            (f"engines/{plan['role']}/launches/$(NARWHAL_POD_UID)", True),
+        )
+        self.assertNotIn("readOnly", mounts[str(pod.STATE)])
+        self.assertEqual(mounts[str(pod.ENGINE)]["name"], "narwhal-engine")
+        # Only the sidecar holds the service account's token.
+        self.assertTrue(mounts["/var/run/secrets/kubernetes.io/serviceaccount"]["readOnly"])
+        engine_mounts = {mount["name"] for mount in engine["volumeMounts"]}
+        self.assertIn("narwhal-engine", engine_mounts)
+        self.assertNotIn("narwhal-api", engine_mounts)
+        names = {entry["name"] for entry in sidecar["env"]}
+        self.assertTrue({"NARWHAL_POD_UID", "NARWHAL_POD_NAME", "NARWHAL_POD_IP"} <= names)
+        self.assertEqual(manifests["role"]["rules"], [
+            {"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}
+        ])  # fmt: skip
+        self.assertEqual(
+            manifests["roleBinding"]["subjects"],
+            [{"kind": "ServiceAccount", "name": "narwhal-attestation"}],
+        )
+        self.assertEqual(
+            manifests["roleBinding"]["roleRef"]["name"], manifests["role"]["metadata"]["name"]
+        )
+        self.assertFalse(manifests["serviceAccount"]["automountServiceAccountToken"])
+        run, _ = self.prepared("runtime-class", NARWHAL_KUBERNETES_RUNTIME_CLASS="nvidia")
+        spec = json.loads((run / "kubernetes.json").read_text())["podSpec"]
+        self.assertEqual(spec["runtimeClassName"], "nvidia")
+
+    def test_the_engine_step_records_its_process_for_the_attestation_sidecar(self):
+        run, plan, engine = self.started()
+        directory = engine.path(pod.ENGINE) / ENGINE_PROCESS
+        self.assertEqual(engine.logs, [directory / pod.STARTUP_LOG])
+        self.assertEqual(
+            engine.cache_outputs, [str(pod.ENGINE / ENGINE_PROCESS / pod.CACHE_LAYOUT)]
+        )
+        records = json.loads((directory / pod.INSPECTIONS_RECORD).read_text())
+        expected = (
+            load_backend("vllm").launcher().pod_inspections.inspections(plan, plan_digest(run))
+        )
+        self.assertEqual({name: record["argv"] for name, record in records.items()}, expected)
+        # Outside the engine image the inspections cannot import the engine; each records why.
+        self.assertTrue(all(record["returncode"] != 0 for record in records.values()))
+        # A later engine process in the same pod replaces the earlier processes' directories.
+        (engine.path(pod.ENGINE) / "stray").write_text("")
+        stat = engine.path(pod.PROC) / "self" / "stat"
+        stat.write_text(
+            stat.read_text().replace(f"{ENGINE_TICKS}", "200000").replace("4242", "4300")
+        )
+        self.assertEqual(engine.run("engine"), 0)
+        self.assertEqual([path.name for path in engine.path(pod.ENGINE).iterdir()], ["4300-200000"])
 
     def test_a_pod_takes_whole_gpus_and_an_rdma_transfer(self):
         _, env = launcher_inputs(self.root)
@@ -190,7 +277,15 @@ class KubernetesLaunchTests(unittest.TestCase):
         self.assertEqual(
             delivered,
             sorted(
-                ["..data", SNAPSHOT, "checkpoint.py", "pod.py", "probe_reader.py", "verdict.py"]
+                [
+                    "..data",
+                    SNAPSHOT,
+                    "checkpoint.py",
+                    "inspections.py",
+                    "pod.py",
+                    "probe_reader.py",
+                    "verdict.py",
+                ]
             ),
         )
         checkpoint = engine.execute("checkpoint")
@@ -205,11 +300,15 @@ class KubernetesLaunchTests(unittest.TestCase):
         self.assertEqual(record["transfer_device"]["ucx_net_devices"], "hca0:1")
         self.assertIn("evidence", record["verdict"])
         # The engine step replaces itself with the planned engine command, which finds no engine
-        # outside the image.
+        # outside the image. Its output reaches the container's output and the startup log of
+        # the process's directory in the engine volume.
         served = engine.execute("engine")
         self.assertEqual(served.returncode, 1)
         self.assertEqual(plan["args"][0], "-m")
-        self.assertIn(f"module specification for {plan['args'][1]!r}", served.stderr)
+        missing = f"module specification for {plan['args'][1]!r}"
+        self.assertIn(missing, served.stdout)
+        log = engine.path(pod.ENGINE) / ENGINE_PROCESS / pod.STARTUP_LOG
+        self.assertIn(missing, log.read_text())
         self.assertEqual(sorted(path.name for path in tools.iterdir()), delivered)
         self.check(run, plan, engine)
         self.assertEqual(read_checked(run)["transfer_device"], record["transfer_device"])

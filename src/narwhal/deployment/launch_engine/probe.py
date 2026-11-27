@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from ..attestation_contract.evidence import live_identity, require_process_start
+from ..attestation_contract.evidence import LiveEngine, live_identity, require_process_start
 from .backend import LiveProbe, engine_backend
 from .check import read_checked, require_checked
 from .evidence import CheckFailed, evidence_directory, write_bytes, write_json
@@ -72,7 +72,9 @@ def probe(
     out = evidence_directory(out, (*names, RECORD))
     headers = launch_headers(run, plan) or {}
     observed = asyncio.run(
-        _requests(run, plan, checked, backend.identity, live, out, model, headers, transport)
+        _requests(
+            run, plan, checked, engine, backend.identity, live, out, model, headers, transport
+        )
     )
     record = {
         "schema": SCHEMA,
@@ -107,6 +109,7 @@ async def _requests(
     run: Path,
     plan: dict,
     checked: Mapping[str, Any],
+    engine: LiveEngine,
     identity: Any,
     live: LiveProbe,
     out: Path,
@@ -150,7 +153,7 @@ async def _requests(
             write_bytes(out / "metrics.txt", metrics.content)
             try:
                 start = live.process_start(metrics.text)
-                require_process_start(run, plan, start)
+                require_process_start(run, plan, engine, start)
             except (OSError, ValueError) as error:
                 raise CheckFailed(str(error)) from None
             observed["process_start_time_seconds"] = start
