@@ -4,7 +4,7 @@ description: Subcommands, options, host-key checks, time limits and exit codes o
 
 # `narwhal deploy`
 
-`narwhal deploy` runs the workstation side of [deploying a fleet](../Deploy.md) to SSH hosts: discovery, the access check, packaging and installation. It also opens role shells and port tunnels. Run it with `.env` loaded, from the directory that holds `config/`:
+`narwhal deploy` runs the workstation side of [deploying a fleet](../Deploy.md) to SSH hosts: discovery, the access check, packaging, installation and the cache-equivalence groups. It also opens role shells and port tunnels. Run it with `.env` loaded, from the directory that holds `config/`:
 
 ```bash
 narwhal deploy discover --out runs/discovery/first-deploy
@@ -22,6 +22,7 @@ narwhal deploy tunnel --forward 18000:8000
 | `access` | Checks the inventory, then logs in once to each host and records its `hostname` output. Prints each host ID with its roles. | [Running discovery and access checks](../deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `package` | Checks the release wheel that `NARWHAL_WHEEL` names and the dependency lock that `NARWHAL_REQUIREMENTS` names against their SHA-256 values, then writes them, the helper snapshots from it and each host's role files into a new directory with a private manifest. | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
 | `install` | Copies a package to each selected host, checking the SHA-256 of every file, and installs the locked dependencies and the wheel into a virtual environment in the host's deployment directory. | [Installing engine 1 and the remaining hosts](../deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
+| `cache-groups` | Groups the engine roles of the launch records that `NARWHAL_LAUNCH_CONFIG` names, else `config/engine-launch.local.json`, by their discovered image and model configuration, their allocation, runtime and transport, and each engine's captured cache layout or measured KV handoff, and writes `cache-groups.json`. Prints each group's ID, representative and roles. | [Deriving cache-equivalence groups](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) |
 | `shell` | Opens an interactive login shell on a role's host. With `--run`, the shell starts in the deployment directory with the role environment loaded and `.venv` active. | [Opening installed role shells](../deploy/02-Install.md#opening-installed-role-shells) |
 | `tunnel` | Forwards workstation loopback ports to a role's host until you press Ctrl+C. | [Tunnelling router, Prometheus, and Grafana to the workstation](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) |
 
@@ -62,17 +63,19 @@ In text mode, stdout carries progress lines, and a failure writes one stderr lin
 | Invalid arguments, inventory, environment, package or discovery inputs, or an output that already exists | `2` |
 | `tunnel` closed with Ctrl+C | `130` |
 
-With `--format json`, `discover`, `access`, `package` and `install` print a [versioned command result](../Command-Results.md). A failed or timed-out remote command exits with code `4`. Its error carries the stage, and its `context` names the host, the operation and the log. `shell` and `tunnel` are interactive, and refuse `--format json` with exit code `2`.
+With `--format json`, `discover`, `access`, `package`, `install` and `cache-groups` print a [versioned command result](../Command-Results.md). A failed or timed-out remote command exits with code `4`. Its error carries the stage, and its `context` names the host, the operation and the log. `shell` and `tunnel` are interactive, and refuse `--format json` with exit code `2`.
 
 ## Options
 
-`--format` applies to `discover`, `access`, `package` and `install`, and `--hosts` to every subcommand except `discover`. `--out` applies to `discover` and `package`, `--run` to `install` and `shell`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
+`--format` applies to `discover`, `access`, `package`, `install` and `cache-groups`, and `--hosts` to every subcommand except `discover` and `cache-groups`. `--out` applies to `discover`, `package` and `cache-groups`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--run` to `install` and `shell`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). | |
 | `--hosts` | `NARWHAL_HOSTS`, else `config/hosts.local.json` | Host inventory. | |
-| `--out` | Required | New directory for the discovery output or the package, created at mode 0700. | A path that does not exist |
+| `--out` | Required | For `discover` and `package`, a new directory for the discovery output or the package, created at mode 0700. For `cache-groups`, the directory for `cache-groups.json`, created at mode 0700 when absent. | For `discover` and `package`, a path that does not exist. For `cache-groups`, a directory without `cache-groups.json` |
+| `--cache-layout` | None | `ROLE=PATH`: the `cache-layout.json` that `narwhal-engine capture-cache` wrote for the role. Repeatable, once for each engine that captures its cache layout. | An `engine-<n>` role of the launch records |
+| `--transfer-record` | None | `ROLE=PATH`: the `transfer.json` of the role's measured KV handoffs. Repeatable, once for each engine whose handoffs are measured. | An `engine-<n>` role of the launch records |
 | `--run` | Required for `install`, none for `shell` | Package directory that `package` wrote. | |
 | `--host` | Every inventory host | Host to install, by inventory ID. Repeatable. Excludes `--role`. | An inventory host ID |
 | `--role` | Every inventory host for `install`, required for `shell`, `router` for `tunnel` | For `install`, the role whose host to install, with its colocated roles. Repeatable. Excludes `--host`. For `shell` and `tunnel`, the role whose host to open. | `router` or `engine-<n>` from the inventory |

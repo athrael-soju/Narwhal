@@ -20,13 +20,15 @@ from ..types import RoleModel
 from .engine_launch import load_launches
 from .hosts import SSH, Host, load_hosts, write_private
 from .launch_engine import checkpoint as checkpoint_manifest
+from .launch_engine.accelerators import gpu_inventory
 from .launch_engine.backend import ModelFormats, engine_backend
 from .launch_engine.plan import conv_state_layers
 from .role_env import select_values, write_environment
 
-# The remote probe applies the launcher's own convolutional-state rule.
+# The remote probe applies the launcher's own convolutional-state rule and GPU inventory.
 PROBE = (
     inspect.getsource(conv_state_layers)
+    + inspect.getsource(gpu_inventory)
     + r'''
 import hashlib, json, re, subprocess, sys
 from pathlib import Path
@@ -82,51 +84,7 @@ packages = json.loads(
         ]
     )
 )
-gpus = []
-if Path("/dev/kfd").exists():
-    runtime = "rocm"
-    agents = re.split(r"(?m)^\s*Agent\s+\d+\s*$", command(["rocminfo"]))
-    agents = [a for a in agents if re.search(r"Device Type:\s+GPU", a)]
-    renders = {}
-    for node in sorted(
-        Path("/sys/class/kfd/kfd/topology/nodes").glob("*"), key=lambda p: int(p.name)
-    ):
-        properties = dict(
-            line.split(maxsplit=1)
-            for line in (node / "properties").read_text().splitlines()
-            if " " in line
-        )
-        minor = int(properties.get("drm_render_minor", "0"))
-        if minor >= 128:
-            location = int(properties["location_id"])
-            renders.setdefault(location, []).append("/dev/dri/renderD" + str(minor))
-    if sum(len(v) for v in renders.values()) != len(agents):
-        raise RuntimeError("ROCm agents and KFD render-device counts differ")
-    for index, agent in enumerate(agents):
-        name = re.search(r"Marketing Name:\s*([^\n]+)", agent)
-        if not name:
-            raise RuntimeError("rocminfo GPU marketing name is missing")
-        bdf = re.search(r"BDFID:\s+(\d+)", agent)
-        matches = renders.get(int(bdf[1]), []) if bdf else []
-        if len(matches) != 1:
-            raise RuntimeError("Match each ROCm GPU PCI BDFID to one KFD render device")
-        gpus.append({"id": str(index), "name": name[1].strip(), "device": matches[0]})
-    common_devices = ["/dev/kfd"]
-else:
-    runtime = "cuda"
-    rows = command(
-        ["nvidia-smi", "--query-gpu=index,name,uuid", "--format=csv,noheader"]
-    ).splitlines()
-    for row in rows:
-        index, name, uuid = (part.strip() for part in row.split(","))
-        gpus.append({"id": index, "name": name, "uuid": uuid, "device": "/dev/nvidia" + index})
-    common_devices = [
-        str(p) for p in (Path("/dev/nvidiactl"), Path("/dev/nvidia-uvm")) if p.exists()
-    ]
-if not gpus:
-    raise RuntimeError("GPU inspection returned an empty allocation")
-if any(not Path(g["device"]).exists() for g in gpus):
-    raise RuntimeError("A detected GPU device is unavailable")
+runtime, gpus, common_devices = gpu_inventory(command)
 interfaces = json.loads(command(["ip", "-json", "address", "show", "dev", inputs["interface"]]))
 if not interfaces:
     raise RuntimeError("Selected fabric interface is unavailable")

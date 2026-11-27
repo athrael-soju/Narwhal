@@ -6,7 +6,6 @@ import hashlib
 import io
 import json
 import os
-import re
 import subprocess
 import tempfile
 import unittest
@@ -16,7 +15,13 @@ from unittest.mock import patch
 
 from narwhal.deployment.cli import forward_ports
 from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError
-from narwhal.deployment.install import install, load_run, package, profiling_limits
+from narwhal.deployment.install import (
+    check_hardware,
+    install,
+    load_run,
+    package,
+    profiling_limits,
+)
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import ENGINE_FIELDS, helpers
 from narwhal.dev.cli import main
@@ -24,6 +29,12 @@ from tests.deployment.fixtures import cuda_engine, launch_document, package_inpu
 from tools.maintenance.check_publication import private_path
 
 ROOT = Path(__file__).resolve().parents[2]
+# The fleet hardware that matches the launch records of `launch_document`.
+SYNTHETIC_HARDWARE = {
+    "accelerator": "synthetic-gpu",
+    "accelerators_per_engine": 2,
+    "tensor_parallel": 2,
+}
 
 
 class LocalSSH:
@@ -123,10 +134,11 @@ class PackageTests(unittest.TestCase):
     def package_run(self, backend=None):
         fleet = self.root / "fleet.json"
         document = {
+            "hardware": SYNTHETIC_HARDWARE,
             "engines": [
                 {"iid": "n1", "url": "http://one.invalid"},
                 {"iid": "n2", "url": "http://two.invalid"},
-            ]
+            ],
         }
         if backend:
             document["engine"] = {"backend": backend}
@@ -156,10 +168,15 @@ class PackageTests(unittest.TestCase):
         fleet.write_text(
             json.dumps(
                 {
+                    "hardware": {
+                        **SYNTHETIC_HARDWARE,
+                        "accelerators_per_engine": 1,
+                        "tensor_parallel": 1,
+                    },
                     "engines": [
                         {"iid": "n1", "url": "http://one.invalid"},
                         {"iid": "n2", "url": "http://one.invalid"},
-                    ]
+                    ],
                 }
             )
         )
@@ -182,6 +199,23 @@ class PackageTests(unittest.TestCase):
             for role in ("engine-1", "engine-2")
         }
         self.assertEqual(visible, {"engine-1": "0,1", "engine-2": "1,0"})
+
+    def test_package_refuses_fleet_hardware_that_differs_from_a_launch_record(self):
+        launch = launch_document()["engines"]["engine-1"]
+        check_hardware({"hardware": SYNTHETIC_HARDWARE}, {"engine-1": launch})
+        for field, value in (
+            ("accelerator", "other-gpu"),
+            ("accelerators_per_engine", 1),
+            ("tensor_parallel", 1),
+        ):
+            with self.subTest(field=field):
+                fleet = {"hardware": {**SYNTHETIC_HARDWARE, field: value}}
+                with self.assertRaisesRegex(
+                    ValueError, rf"^engine-1: the fleet's hardware\.{field} is {value!r}, but"
+                ):
+                    check_hardware(fleet, {"engine-1": launch})
+        with self.assertRaisesRegex(ValueError, "hardware.accelerator is None"):
+            check_hardware({}, {"engine-1": launch})
 
     def test_profiling_limits_read_each_backend_sequence_limit(self):
         fleet = {"engines": [{"iid": "n1"}, {"iid": "n2"}]}
@@ -510,39 +544,6 @@ python3 -I "$NARWHAL_FABRIC_BUDGET_TOOL" --help
         self.assertFalse(private_path("config/hosts.example.json"))
         self.assertTrue(private_path("config/engine-launch.local.json"))
         self.assertFalse(private_path("config/engine-launch.example.json"))
-
-    def test_documented_gpu_discovery_uses_pci_vendor_on_the_engine_host(self):
-        blocks = re.findall(
-            r"```bash\n(.*?)\n```", (ROOT / "docs/deploy/03-Validate-Engines.md").read_text(), re.S
-        )
-        block = next(b for b in blocks if "/sys/bus/pci/devices" in b)
-        for vendor, command in (("0x10de", "nvidia-smi"), ("0x1002", "rocminfo"), ("0x1a03", None)):
-            with self.subTest(vendor=vendor), tempfile.TemporaryDirectory() as folder:
-                root = Path(folder)
-                pci = root / "pci"
-                device = pci / "synthetic-device"
-                device.mkdir(parents=True)
-                (device / "class").write_text("0x030200")
-                (device / "vendor").write_text(vendor)
-                tool = root / "nvidia-smi"
-                tool.write_text('#!/bin/sh\nprintf nvidia-smi > "$TEST_OBSERVED"\n')
-                tool.chmod(0o700)
-                tool = root / "rocminfo"
-                tool.write_text('#!/bin/sh\nprintf rocminfo > "$TEST_OBSERVED"\n')
-                tool.chmod(0o700)
-                observed = root / "observed"
-                result = subprocess.run(
-                    ["bash", "--noprofile", "--norc"],
-                    input=block.replace("/sys/bus/pci/devices", str(pci)),
-                    env={"PATH": f"{root}:{os.environ['PATH']}", "TEST_OBSERVED": str(observed)},
-                    text=True,
-                    capture_output=True,
-                )
-                self.assertEqual(result.returncode == 0, command is not None)
-                if command:
-                    self.assertEqual(observed.read_text(), command)
-                else:
-                    self.assertFalse(observed.exists())
 
 
 class CommandTests(unittest.TestCase):

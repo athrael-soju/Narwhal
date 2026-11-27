@@ -14,7 +14,7 @@ If a helper changes, build a new package.
 
 ### Calculating the workload budget
 
-Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
+Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups), which match in their launch inputs and their captured cache layouts or measured handoffs, share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
 
 `calculate` accepts these options:
 

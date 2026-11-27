@@ -42,7 +42,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
       --out "$FABRIC_RUN/budget.json"
     ```
 
-    On SGLang, the representative is a prefill engine. Set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine in the group, then measure eight handoffs and calculate the budget from them:
+    On SGLang, every engine measures its own handoffs before you [derive the groups](03-Validate-Engines.md#deriving-cache-equivalence-groups), because a group's engines must match in their measured handoffs. In each engine-role shell, the engine is the prefill engine: set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine with the same image, model and launch settings, then measure eight handoffs. After the groups are derived, the representative calculates the budget from its own measurement:
 
     ```bash
     export PREFILL_IP='<this engine fabric address>'
