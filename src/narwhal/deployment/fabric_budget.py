@@ -1,22 +1,31 @@
-"""Calculate a declared KV workload's link budget and record directed link samples against it.
+"""Size a declared KV workload's link budget and bind directed link samples to it.
 
-Engine hosts run a copy of this file, checked by its SHA-256, with the host's own Python, so it
-imports only the standard library.
+`narwhal deploy fabric` sizes each cache group's budget from its representative's captured
+cache layout or measured handoffs, and records each directed link sample against the budget of
+every source role that sends KV over that link.
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import math
 import os
 import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 # The record that a backend's transfer measurement tool writes, as `TransferMeasurement` in
 # `launch_engine/backend.py` describes.
 TRANSFER_SCHEMA = "narwhal.kv-transfer-measurement"
+EVIDENCE_SCHEMA = "narwhal.fabric-edge-evidence"
+COMPARISON_SCHEMA = "narwhal.fabric-edge-comparison"
+# Version 2 records the source role, because one sample serves every role behind a link.
+EVIDENCE_VERSION = 2
+TRANSPORTS = ("ucx_tcp", "ucx_rdma")
+# The column of a perftest report, run with --report_gbits, that holds the average rate.
+RDMA_AVERAGE = "BW average[Gb/sec]"
 
 
 def positive(value: float, name: str) -> float:
@@ -28,86 +37,43 @@ def positive(value: float, name: str) -> float:
 def integer(document: dict, key: str) -> int:
     value = document.get(key)
     if type(value) is not int or value < 1:
-        raise ValueError(f"model config requires a positive integer {key}")
+        raise ValueError(f"{key} must be a positive integer")
     return value
 
 
-def cache_shape(model: dict, tp: int, element_bytes: int) -> tuple[str, int]:
-    """Sum cache elements across TP ranks, including replicated KV heads or MLA latents."""
-    model = model.get("text_config", model)
-    if type(tp) is not int or tp < 1 or element_bytes not in (1, 2, 4):
-        raise ValueError("TP must be positive; cache elements must use 1, 2 or 4 bytes")
-    if model.get("layer_types") and set(model["layer_types"]) != {"full_attention"}:
-        raise ValueError("hybrid/windowed cache needs measured pages from --runtime-layout")
-    if model.get("sliding_window") or model.get("mamba_d_state"):
-        raise ValueError("hybrid/windowed cache needs measured pages from --runtime-layout")
-    layers = integer(model, "num_hidden_layers")
-    if model.get("kv_lora_rank"):
-        if element_bytes != 2:
-            raise ValueError("packed MLA cache needs measured pages from --runtime-layout")
-        width = integer(model, "kv_lora_rank") + integer(model, "qk_rope_head_dim")
-        return "mla", layers * width * element_bytes * tp
-    heads = integer(model, "num_attention_heads")
-    kv_heads = integer(model, "num_key_value_heads") if "num_key_value_heads" in model else heads
-    if heads % tp or (kv_heads >= tp and kv_heads % tp) or (kv_heads < tp and tp % kv_heads):
-        raise ValueError("attention heads and TP require an even shard or replication mapping")
-    if "head_dim" in model:
-        width = integer(model, "head_dim")
-    else:
-        hidden = integer(model, "hidden_size")
-        if hidden % heads:
-            raise ValueError("hidden_size must divide by attention heads or supply head_dim")
-        width = hidden // heads
-    # Each rank stores at least one KV head when TP exceeds the KV head count.
-    stored_heads = max(kv_heads // tp, 1) * tp
-    return "attention", 2 * layers * stored_heads * width * element_bytes
+@dataclass(frozen=True)
+class Workload:
+    """The declared workload one directed host edge must carry for each source cache group."""
+
+    prompt_tokens: int
+    handoffs_per_s: float
+    burst: int
+    transfer_budget_s: float
+    headroom: float
+
+    def __post_init__(self) -> None:
+        integer({"prompt_tokens": self.prompt_tokens}, "prompt_tokens")
+        integer({"burst": self.burst}, "burst")
+        positive(self.handoffs_per_s, "handoffs_per_s")
+        positive(self.transfer_budget_s, "transfer_budget_s")
+        if positive(self.headroom, "headroom") < 1:
+            raise ValueError("headroom must be at least 1")
+
+    def fields(self) -> dict[str, Any]:
+        return asdict(self)
 
 
-def calculate(
-    bytes_per_token: int,
-    prompt_tokens: int,
-    block_tokens: int,
-    handoffs_per_s: float,
-    burst: int,
-    transfer_budget_s: float,
-    headroom: float,
-) -> dict:
-    for name, value in (
-        ("bytes_per_token", bytes_per_token),
-        ("prompt_tokens", prompt_tokens),
-        ("block_tokens", block_tokens),
-        ("burst", burst),
-    ):
-        if type(value) is not int or value < 1:
-            raise ValueError(f"{name} must be a positive integer")
-    padded_tokens = ((prompt_tokens + block_tokens - 1) // block_tokens) * block_tokens
-    payload = bytes_per_token * padded_tokens
-    return {
-        **workload_budget(payload, handoffs_per_s, burst, transfer_budget_s, headroom),
-        "bytes_per_token_all_ranks": bytes_per_token,
-        "prompt_tokens": prompt_tokens,
-        "block_tokens": block_tokens,
-        "padded_tokens": padded_tokens,
-    }
-
-
-def workload_budget(
-    payload: int, handoffs_per_s: float, burst: int, transfer_budget_s: float, headroom: float
-) -> dict:
+def workload_budget(payload: int, workload: Workload) -> dict:
     integer({"payload": payload}, "payload")
-    integer({"burst": burst}, "burst")
-    positive(handoffs_per_s, "handoffs_per_s")
-    positive(transfer_budget_s, "transfer_budget_s")
-    if positive(headroom, "headroom") < 1:
-        raise ValueError("headroom must be at least 1")
-    required = 8 * payload * max(handoffs_per_s, burst / transfer_budget_s) * headroom / 1e9
+    rate = max(workload.handoffs_per_s, workload.burst / workload.transfer_budget_s)
+    required = 8 * payload * rate * workload.headroom / 1e9
     positive(required, "required_gbps")
     return {
         "payload_bytes_per_handoff": payload,
-        "peak_handoffs_per_s": handoffs_per_s,
-        "burst_handoffs": burst,
-        "transfer_budget_s": transfer_budget_s,
-        "headroom": headroom,
+        "peak_handoffs_per_s": workload.handoffs_per_s,
+        "burst_handoffs": workload.burst,
+        "transfer_budget_s": workload.transfer_budget_s,
+        "headroom": workload.headroom,
         "required_gbps": required,
         "scope": "one directed host edge; all TP ranks; declared workload",
     }
@@ -137,13 +103,28 @@ def runtime_payload(layout: dict, tp: int, prompt_tokens: int) -> int:
     return payload
 
 
+def runtime_layout_name(layout: dict) -> str | None:
+    """Return the one KV cache layout every TP rank resolved, or None when no rank names one."""
+    names = {rank.get("kv_cache_layout") for rank in layout["ranks"]}
+    if names == {None}:
+        return None
+    if len(names) != 1 or None in names:
+        raise ValueError(
+            "TP ranks resolved different KV cache layouts; each layout needs its own cache group"
+        )
+    name = names.pop()
+    if not isinstance(name, str) or not name:
+        raise ValueError("the runtime cache layout names no KV cache layout")
+    return name
+
+
 def transfer_record(data: bytes, prompt_tokens: int) -> tuple[int, dict]:
     """Return the measured bytes per handoff and the budget evidence of a transfer record."""
     record = json.loads(data)
     if record.get("schema") != TRANSFER_SCHEMA or record.get("schema_version") != 1:
         raise ValueError("unsupported KV transfer measurement record")
     if record.get("prompt_tokens") != prompt_tokens:
-        raise ValueError("the transfer record measured another --prompt-tokens")
+        raise ValueError("the transfer record measured another prompt length")
     snapshots = record.get("metrics_sha256")
     if (
         not isinstance(snapshots, dict)
@@ -165,19 +146,90 @@ def transfer_record(data: bytes, prompt_tokens: int) -> tuple[int, dict]:
     }
 
 
+def budget(
+    model_data: bytes,
+    launch_data: bytes,
+    workload: Workload,
+    *,
+    runtime_layout: bytes | None = None,
+    transfer: bytes | None = None,
+) -> dict:
+    """Return the budget document of one cache group from its representative's cache source.
+
+    The source is the captured `cache-layout.json`, which must describe this model and launch
+    record, or the `transfer.json` of measured handoffs.
+    """
+    if (runtime_layout is None) == (transfer is None):
+        raise ValueError("size the budget from one runtime layout or one transfer record")
+    tp = json.loads(launch_data)["tensor_parallel_size"]
+    hashes = {
+        "model_config_sha256": hashlib.sha256(model_data).hexdigest(),
+        "launch_config_sha256": hashlib.sha256(launch_data).hexdigest(),
+    }
+    if runtime_layout is not None:
+        runtime = json.loads(runtime_layout)
+        if any(runtime[key] != value for key, value in hashes.items()):
+            raise ValueError("runtime cache sizing differs from the model or launch record")
+        payload = runtime_payload(runtime, tp, workload.prompt_tokens)
+        result = workload_budget(payload, workload)
+        result.update(
+            layout=runtime["sizing"],
+            prompt_tokens=workload.prompt_tokens,
+            runtime_layout_sha256=hashlib.sha256(runtime_layout).hexdigest(),
+            image=runtime["image"],
+            plan_sha256=runtime["plan_sha256"],
+        )
+        if (name := runtime_layout_name(runtime)) is not None:
+            result["kv_cache_layout"] = name
+    else:
+        assert transfer is not None
+        payload, evidence = transfer_record(transfer, workload.prompt_tokens)
+        result = workload_budget(payload, workload)
+        result.update(prompt_tokens=workload.prompt_tokens, **evidence)
+    result.update(tensor_parallel_size=tp, **hashes)
+    return result
+
+
 def received_gbps(sample: dict) -> float:
+    """Return the receiver's aggregate rate of an iperf3 TCP sample, in decimal Gbit/s."""
     if sample.get("error"):
-        raise ValueError("iperf3 reported an error; inspect the private sample")
-    if sample["start"]["test_start"]["protocol"] != "TCP":
-        raise ValueError("this comparison expects an iperf3 TCP sample")
+        raise ValueError(f"iperf3 reported an error: {sample['error']}")
+    protocol = sample["start"]["test_start"]["protocol"]
+    if protocol != "TCP":
+        raise ValueError(f"the iperf3 sample ran over {protocol}, not TCP")
     received = sample["end"]["sum_received"]
     positive(float(received["seconds"]), "sample duration")
     return positive(float(received["bits_per_second"]), "received bitrate") / 1e9
 
 
+def rdma_gbps(report: str, message_bytes: int) -> float:
+    """Return the average rate of an `ib_write_bw --report_gbits` report, in Gbit/s."""
+    lines = [line.strip() for line in report.splitlines()]
+    headers = [index for index, line in enumerate(lines) if RDMA_AVERAGE in line]
+    if len(headers) != 1:
+        raise ValueError(f"the perftest report has no single {RDMA_AVERAGE} column")
+    columns = re.split(r"\s{2,}", lines[headers[0]])
+    rows = [line.split() for line in lines[headers[0] + 1 :] if line and line[0].isdigit()]
+    if len(rows) != 1 or len(rows[0]) != len(columns):
+        raise ValueError("the perftest report needs one result row under its header")
+    values = dict(zip(columns, rows[0], strict=True))
+    if values.get("#bytes") != str(message_bytes):
+        raise ValueError(f"the perftest report measured another message size than {message_bytes}")
+    return positive(float(values[RDMA_AVERAGE]), "measured_gbps")
+
+
+def sample_gbps(transport: str, data: bytes, message_bytes: int | None = None) -> float:
+    """Return the measured rate of a directed sample of `transport`."""
+    if transport == "ucx_tcp":
+        return received_gbps(json.loads(data))
+    if transport == "ucx_rdma" and message_bytes is not None:
+        return rdma_gbps(data.decode(), message_bytes)
+    raise ValueError(f"no sample rate for transport {transport}")
+
+
 LINK_FIELDS = {
-    "source_role",
-    "destination_role",
+    "source_host",
+    "destination_host",
     "source_address",
     "destination_address",
     "source_interface",
@@ -191,19 +243,15 @@ LINK_FIELDS = {
 
 
 def link_fingerprint(link: dict) -> str:
-    """Bind one directed measurement to its route and test conditions."""
+    """Bind one directed measurement to its hosts, routes and test conditions."""
     if set(link) != LINK_FIELDS:
-        raise ValueError("link record requires role, address, interface, route and test fields")
+        raise ValueError("link record requires host, address, interface, route and test fields")
     for name in LINK_FIELDS - {"test_parameters"}:
         if not isinstance(link[name], str) or not link[name].strip():
             raise ValueError(f"link record requires {name}")
-    if (
-        not re.fullmatch(r"engine-[1-9][0-9]*", link["source_role"])
-        or not re.fullmatch(r"engine-[1-9][0-9]*", link["destination_role"])
-        or link["source_role"] == link["destination_role"]
-    ):
-        raise ValueError("link record requires two distinct engine roles")
-    if link["transport"] not in ("ucx_tcp", "ucx_rdma"):
+    if link["source_host"] == link["destination_host"]:
+        raise ValueError("link record requires two distinct hosts")
+    if link["transport"] not in TRANSPORTS:
         raise ValueError("link record requires ucx_tcp or ucx_rdma")
     parameters = link["test_parameters"]
     if not isinstance(parameters, dict) or not parameters:
@@ -217,87 +265,77 @@ def link_fingerprint(link: dict) -> str:
     ).hexdigest()
 
 
-def create_link(args: argparse.Namespace) -> None:
-    link = {
-        "source_role": args.source_role,
-        "destination_role": args.destination_role,
-        "source_address": args.source_address,
-        "destination_address": args.destination_address,
-        "source_interface": args.source_interface,
-        "destination_interface": args.destination_interface,
-        "source_route": args.source_route.read_text().strip(),
-        "destination_route": args.destination_route.read_text().strip(),
-        "transport": args.transport,
-        "tool_version": args.tool_version,
-        "test_parameters": json.loads(args.test_parameters),
-    }
-    link_fingerprint(link)
-    write_private(args.out, link)
+def _required(budget_data: bytes) -> float:
+    return positive(float(json.loads(budget_data)["required_gbps"]), "required_gbps")
 
 
 def record_edge(
-    link_path: Path, budget_path: Path, sample_path: Path, out: Path, gbps: float | None
-) -> bool:
+    link_path: Path, budget_path: Path, sample_path: Path, role: str, out: Path
+) -> dict:
+    """Write the evidence of a fresh sample against one source role's budget, and return it."""
     link = json.loads(link_path.read_text())
     fingerprint = link_fingerprint(link)
-    if (link["transport"] == "ucx_tcp") != (gbps is None):
-        raise ValueError("TCP uses the iperf JSON rate; RDMA requires --gbps")
     sample_data = sample_path.read_bytes()
-    measured = (
-        received_gbps(json.loads(sample_data)) if gbps is None else positive(gbps, "measured_gbps")
-    )
+    message_bytes = link["test_parameters"].get("message_bytes")
+    measured = sample_gbps(link["transport"], sample_data, message_bytes)
     budget_data = budget_path.read_bytes()
-    required = positive(float(json.loads(budget_data)["required_gbps"]), "required_gbps")
-    passed = measured >= required
-    write_private(
-        out,
-        {
-            "schema": "narwhal.fabric-edge-evidence",
-            "schema_version": 1,
-            "link_sha256": fingerprint,
-            "sample_sha256": hashlib.sha256(sample_data).hexdigest(),
-            "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
-            "measured_gbps": measured,
-            "required_gbps": required,
-            "passed": passed,
-        },
+    required = _required(budget_data)
+    evidence = {
+        "schema": EVIDENCE_SCHEMA,
+        "schema_version": EVIDENCE_VERSION,
+        "source_role": role,
+        "link_sha256": fingerprint,
+        "sample_sha256": hashlib.sha256(sample_data).hexdigest(),
+        "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
+        "measured_gbps": measured,
+        "required_gbps": required,
+        "passed": measured >= required,
+    }
+    write_private(out, evidence)
+    return evidence
+
+
+def retained_evidence(evidence: dict, fingerprint: str, sample_data: bytes) -> bool:
+    """Whether retained evidence holds for the current link record and its retained sample."""
+    return (
+        evidence.get("schema") == EVIDENCE_SCHEMA
+        and evidence.get("schema_version") == EVIDENCE_VERSION
+        and evidence.get("link_sha256") == fingerprint
+        and evidence.get("sample_sha256") == hashlib.sha256(sample_data).hexdigest()
     )
-    return passed
 
 
 def reuse_edge(
-    link_path: Path, evidence_path: Path, sample_path: Path, budget_path: Path, out: Path
-) -> bool:
+    link_path: Path,
+    evidence_path: Path,
+    sample_path: Path,
+    budget_path: Path,
+    role: str,
+    out: Path,
+) -> dict:
+    """Write a comparison of a retained sample with one source role's budget, and return it."""
     fingerprint = link_fingerprint(json.loads(link_path.read_text()))
-    evidence = json.loads(evidence_path.read_text())
-    if (
-        evidence.get("schema") != "narwhal.fabric-edge-evidence"
-        or evidence.get("schema_version") != 1
-    ):
-        raise ValueError("unsupported fabric edge evidence")
-    if evidence["link_sha256"] != fingerprint:
-        raise ValueError("link inputs changed; collect a fresh directed sample")
-    if evidence["sample_sha256"] != hashlib.sha256(sample_path.read_bytes()).hexdigest():
-        raise ValueError("retained sample differs from the recorded evidence")
+    evidence_data = evidence_path.read_bytes()
+    evidence = json.loads(evidence_data)
+    if not retained_evidence(evidence, fingerprint, sample_path.read_bytes()):
+        raise ValueError("the link record or the retained sample differs from the evidence")
     measured = positive(float(evidence["measured_gbps"]), "measured_gbps")
     budget_data = budget_path.read_bytes()
-    required = positive(float(json.loads(budget_data)["required_gbps"]), "required_gbps")
-    passed = measured >= required
-    write_private(
-        out,
-        {
-            "schema": "narwhal.fabric-edge-comparison",
-            "schema_version": 1,
-            "link_sha256": fingerprint,
-            "sample_sha256": evidence["sample_sha256"],
-            "source_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
-            "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
-            "measured_gbps": measured,
-            "required_gbps": required,
-            "passed": passed,
-        },
-    )
-    return passed
+    required = _required(budget_data)
+    comparison = {
+        "schema": COMPARISON_SCHEMA,
+        "schema_version": EVIDENCE_VERSION,
+        "source_role": role,
+        "link_sha256": fingerprint,
+        "sample_sha256": evidence["sample_sha256"],
+        "source_evidence_sha256": hashlib.sha256(evidence_data).hexdigest(),
+        "budget_sha256": hashlib.sha256(budget_data).hexdigest(),
+        "measured_gbps": measured,
+        "required_gbps": required,
+        "passed": measured >= required,
+    }
+    write_private(out, comparison)
+    return comparison
 
 
 def write_private(path: Path, value: dict) -> None:
@@ -305,158 +343,3 @@ def write_private(path: Path, value: dict) -> None:
     with os.fdopen(fd, "w") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")
-
-
-def budget(args: argparse.Namespace) -> dict:
-    """Return the budget document that `calculate` writes."""
-    model_data = args.model_config.read_bytes()
-    launch_data = args.launch_config.read_bytes()
-    tp = json.loads(launch_data)["tensor_parallel_size"]
-    hashes = {
-        "model_config_sha256": hashlib.sha256(model_data).hexdigest(),
-        "launch_config_sha256": hashlib.sha256(launch_data).hexdigest(),
-    }
-    measured = args.runtime_layout or args.transfer_record
-    if measured and (args.block_tokens is not None or args.element_bytes is not None):
-        raise ValueError("measured sizing supplies its own page sizes and token blocks")
-    if args.runtime_layout:
-        runtime_data = args.runtime_layout.read_bytes()
-        runtime = json.loads(runtime_data)
-        if any(runtime[key] != value for key, value in hashes.items()):
-            raise ValueError("runtime cache sizing differs from the model or launch record")
-        payload = runtime_payload(runtime, tp, args.prompt_tokens)
-        result = workload_budget(
-            payload, args.handoffs_per_s, args.burst, args.transfer_budget_s, args.headroom
-        )
-        result.update(
-            layout=runtime["sizing"],
-            prompt_tokens=args.prompt_tokens,
-            runtime_layout_sha256=hashlib.sha256(runtime_data).hexdigest(),
-            image=runtime["image"],
-            plan_sha256=runtime["plan_sha256"],
-        )
-    elif args.transfer_record:
-        payload, evidence = transfer_record(args.transfer_record.read_bytes(), args.prompt_tokens)
-        result = workload_budget(
-            payload, args.handoffs_per_s, args.burst, args.transfer_budget_s, args.headroom
-        )
-        result.update(prompt_tokens=args.prompt_tokens, **evidence)
-    else:
-        if args.element_bytes is None or args.block_tokens is None:
-            raise ValueError("uniform sizing requires --element-bytes and --block-tokens")
-        if args.bytes_per_token is None:
-            layout, size = cache_shape(json.loads(model_data), tp, args.element_bytes)
-        else:
-            layout, size = "measured_uniform", args.bytes_per_token
-        result = calculate(
-            size,
-            args.prompt_tokens,
-            args.block_tokens,
-            args.handoffs_per_s,
-            args.burst,
-            args.transfer_budget_s,
-            args.headroom,
-        )
-        result.update(layout=layout, element_bytes=args.element_bytes)
-    result.update(tensor_parallel_size=tp, **hashes)
-    return result
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Calculate a KV workload's link budget and bind bandwidth samples to it."
-    )
-    commands = parser.add_subparsers(dest="command", required=True)
-    sizing_parser = commands.add_parser("calculate", help="write a private workload budget")
-    sizing_parser.add_argument("--model-config", type=Path, required=True)
-    sizing_parser.add_argument("--launch-config", type=Path, required=True)
-    sizing_parser.add_argument("--element-bytes", type=int, choices=(1, 2, 4))
-    sizing = sizing_parser.add_mutually_exclusive_group(required=True)
-    sizing.add_argument(
-        "--runtime-layout",
-        type=Path,
-        help="cache-layout.json from a serving capture or measure-cache",
-    )
-    sizing.add_argument(
-        "--transfer-record",
-        type=Path,
-        help="transfer.json that the backend's transfer measurement tool writes",
-    )
-    sizing.add_argument(
-        "--uniform-cache", action="store_true", help="explicit uniform analytical estimate"
-    )
-    sizing.add_argument(
-        "--bytes-per-token", type=int, help="measured total across TP ranks for a uniform layout"
-    )
-    sizing_parser.add_argument("--prompt-tokens", type=int, required=True)
-    sizing_parser.add_argument("--block-tokens", type=int)
-    sizing_parser.add_argument("--handoffs-per-s", type=float, required=True)
-    sizing_parser.add_argument("--burst", type=int, required=True)
-    sizing_parser.add_argument("--transfer-budget-s", type=float, required=True)
-    sizing_parser.add_argument("--headroom", type=float, required=True)
-    sizing_parser.add_argument("--out", type=Path, required=True)
-    link = commands.add_parser("link", help="record current directed link and measurement inputs")
-    for field in (
-        "source-role",
-        "destination-role",
-        "source-address",
-        "destination-address",
-        "source-interface",
-        "destination-interface",
-        "tool-version",
-        "test-parameters",
-    ):
-        link.add_argument("--" + field, required=True)
-    link.add_argument("--source-route", type=Path, required=True)
-    link.add_argument("--destination-route", type=Path, required=True)
-    link.add_argument("--transport", choices=("ucx_tcp", "ucx_rdma"), required=True)
-    link.add_argument("--out", type=Path, required=True)
-    record = commands.add_parser("record-edge", help="bind a directed sample to link conditions")
-    record.add_argument("--link", type=Path, required=True)
-    record.add_argument("--budget", type=Path, required=True)
-    record.add_argument("--sample", type=Path, required=True)
-    record.add_argument("--gbps", type=float)
-    record.add_argument("--out", type=Path, required=True)
-    reuse = commands.add_parser(
-        "reuse-edge", help="check retained evidence against current link inputs"
-    )
-    reuse.add_argument("--link", type=Path, required=True)
-    reuse.add_argument("--evidence", type=Path, required=True)
-    reuse.add_argument("--sample", type=Path, required=True)
-    reuse.add_argument("--budget", type=Path, required=True)
-    reuse.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args(argv)
-    try:
-        if args.command == "calculate":
-            result = budget(args)
-            write_private(args.out, result)
-            print(f"Required per directed edge: {result['required_gbps']:.6f} Gbit/s")
-        elif args.command == "link":
-            create_link(args)
-            print(
-                json.dumps(
-                    {
-                        "link": str(args.out),
-                        "sha256": link_fingerprint(json.loads(args.out.read_text())),
-                    }
-                )
-            )
-        elif args.command == "record-edge":
-            passed = record_edge(args.link, args.budget, args.sample, args.out, args.gbps)
-            print(json.dumps({"evidence": str(args.out), "passed": passed}))
-            return 0 if passed else 1
-        else:
-            passed = reuse_edge(args.link, args.evidence, args.sample, args.budget, args.out)
-            print(json.dumps({"comparison": str(args.out), "passed": passed}))
-            return 0 if passed else 1
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        if isinstance(error, FileExistsError):
-            parser.exit(2, "Budget exists; select a fresh output path.\n")
-        if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
-            parser.exit(2, f"{error}\n")
-        parser.exit(2, "Check the model, launch record, measurement fields and file paths.\n")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

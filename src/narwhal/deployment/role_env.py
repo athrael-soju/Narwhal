@@ -49,14 +49,7 @@ class Helper:
 
 def helpers(engine: EngineLauncher) -> list[Helper]:
     """Return the helper snapshots that the engine hosts of a fleet on `engine` receive."""
-    selected = [
-        Helper(
-            "fabric_budget.py",
-            Path(__file__).with_name("fabric_budget.py"),
-            "NARWHAL_FABRIC_BUDGET_TOOL",
-            "NARWHAL_FABRIC_BUDGET_SHA256",
-        )
-    ]
+    selected: list[Helper] = []
     if (capture := cache_capture(engine)) is not None:
         selected.append(
             Helper(
@@ -132,6 +125,18 @@ def select_values(
             include(f"NARWHAL_NODE_{node}_{field}", required=False)
     else:
         raise ValueError("role must be router or engine")
+    return values
+
+
+def read_environment(path: Path) -> dict[str, str]:
+    """Return the values of a role file that `write_environment` wrote."""
+    values = {}
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        words = shlex.split(line)
+        if len(words) != 2 or words[0] != "export" or "=" not in words[1]:
+            raise ValueError(f"{path} line {number}: expected export NAME=value")
+        name, value = words[1].split("=", 1)
+        values[name] = value
     return values
 
 

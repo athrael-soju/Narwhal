@@ -14,7 +14,7 @@ Run the sidecar while its engine runs. For a container engine, run it as a user 
 python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>
 ```
 
-The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. When the engine publishes no process start (llama.cpp, SGLang and TensorRT-LLM), it passes `--engine-container`, or `--engine-pid` for a native launch. In a Kubernetes engine pod it always passes `--engine-pod-container`, as [Attesting an engine pod](../deploy/05-Attest.md#attesting-an-engine-pod) describes. When the checked launch has prefix caching on and publishes cache events, it passes `--kv-events` and `--model`. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
+The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. When the engine publishes no process start (llama.cpp, SGLang and TensorRT-LLM), it passes `--engine-container`, or `--engine-pid` for a native launch. In a Kubernetes engine pod it always passes `--engine-pod-container`, as [Attesting an engine pod](../deploy/05-Attest.md#attesting-an-engine-pod) describes. When the checked launch has prefix caching on and publishes cache events, it passes `--kv-events` and `--model`. When the launch sends KV through its HCA even to engines on its own host, it passes `--hca` with the launch's `UCX_NET_DEVICES`. That holds when the launch's environment file sets `UCX_SHM_DEVICES=none` and a single `DEVICE:PORT` in `UCX_NET_DEVICES`, and its `UCX_TLS` names `rc` and `cuda_copy` but neither `cuda` nor `cuda_ipc`. The contract tool refuses an environment file whose SHA-256 differs from the plan's `env_sha256`. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
 At startup the sidecar reads the engine's identity, which is its version and its process start time:
 
@@ -44,6 +44,7 @@ While the engine's version or process start time differs from startup, or cannot
 | `--model NAME`          | optional    | Served model name for block identities, required with `--kv-events`.                                               |
 | `--engine-container ID` |             | Engine container whose start time identifies the engine process. Required for llama.cpp, SGLang and TensorRT-LLM unless `--engine-pid` is set. |
 | `--engine-pid PID`      |             | Native engine process whose start time identifies the engine process.                                              |
+| `--hca DEVICE:PORT`     | optional    | HCA port the engine sends KV through, such as `mlx5_0:1`, which turns on `/v1/hca`.                                |
 | `--engine-pod-container ID` |         | Engine container of this pod, by runtime container ID. Its first process in the pod's shared process namespace identifies the engine process. |
 
 ## Routes
@@ -53,8 +54,11 @@ While the engine's version or process start time differs from startup, or cannot
 | `GET /health`                      | `{"status": "ok"}` once the identity check passes                                                                         |
 | `GET /v1/attestation`              | The [attestation](../configuration/01-Fleet-Schema.md#attestation) for the engine's current identity                      |
 | `GET /v1/process`                  | `process_start_time_seconds`, the engine process start time read on the host, with `--engine-container`, `--engine-pid` or `--engine-pod-container` |
+| `GET /v1/hca`                      | `device`, `port`, the host's `boot_id` and the port's `port_xmit_data` counter, with `--hca`                              |
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
+
+`/v1/hca` reads `/sys/class/infiniband/<device>/ports/<port>/counters/port_xmit_data`, which the kernel counts in words of 4 octets, and `/proc/sys/kernel/random/boot_id` on every request. It returns HTTP 503 when either is unreadable and HTTP 404 while `--hca` is unset. [Preflight](Check.md#preflight) reads it to check that KV between engines of one host crosses the HCA.
 
 The router and `narwhal-check` read the process start of a llama.cpp, SGLang or TensorRT-LLM engine from `/v1/process`. With `--engine-pid`, the sidecar takes the process start from the engine's start ticks and a boot-time record under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`.
 

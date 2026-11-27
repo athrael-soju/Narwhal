@@ -82,7 +82,6 @@ Paths are relative to the deployment directory.
 | `runs/deployment/.env.router`                 | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine credential, and optional router and monitoring stack settings. | `NARWHAL_WHEEL_SHA256`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_TARGETS_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `runs/deployment/.env.engine-<n>`             | Revision, launch and artifact fields, helper snapshot paths and SHA-256 values, selected node URLs, fabric peer addresses, and configured engine credential.                  | `NARWHAL_WHEEL_SHA256`, shared engine fields, optional `NARWHAL_NODE_<n>_<field>` overrides, derived service URLs and fabric addresses, the packaged helper snapshots, and configured engine credential. |
 | `config/engine-launch.engine-<n>.json`        | GPU allocation, TP size, device mappings, resolved UCX selection, and generated launch arguments.                                                                              | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                  |
-| `runs/deployment-tools/fabric_budget.py`      | Standalone fabric calculator snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                         | `narwhal/deployment/fabric_budget.py` in the wheel that `NARWHAL_WHEEL` names.                                                                                                                       |
 | `runs/deployment-tools/cache_capture_hook.py` | Copy of the cache-capture hook for a vLLM or TensorRT-LLM fleet, with its path and SHA-256 in `.env.engine-<n>`.                                                               | `narwhal/backends/<backend>/cache_capture_hook.py` in the wheel that `NARWHAL_WHEEL` names, for `vllm` or `trtllm`.                                                                                    |
 | `runs/deployment-tools/transfer_measure.py`   | Standalone KV handoff measurement tool for an SGLang fleet, with its path and SHA-256 in `.env.engine-<n>`.                                                                    | `narwhal/backends/sglang/transfer_measure.py` in the wheel that `NARWHAL_WHEEL` names.                                                                                                                |
 | `runs/deployment/fleet.json`                  | Effective generated fleet copied before deployment edits.                                                                                                                      | Workstation file selected by `NARWHAL_FLEET`.                                                                                                                                                            |
@@ -135,6 +134,25 @@ Export fails when:
 | `NARWHAL_KUBERNETES_RUNTIME_CLASS` | Optional. The RuntimeClass the engine pod runs under, such as `nvidia`, for nodes whose default container runtime exposes no GPUs |
 
 A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod. `NARWHAL_NODE_<n>_ATTESTATION_URL` must name the pod's sidecar route, `http://<pod>:<NARWHAL_ATTEST_PORT>/v1/attestation`, which the plan pins.
+
+### Fabric qualification inputs
+
+[`narwhal deploy fabric`](../cli/Deploy.md#fabric-qualification) reads these variables from the workstation environment. It refuses to start, before it reaches any host, when one it needs is unset or invalid.
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_FABRIC_PROMPT_TOKENS` | Prompt tokens per KV handoff, a positive integer. `narwhal deploy transfer-measure` reads it too, for the SGLang handoffs it measures |
+| `NARWHAL_FABRIC_HANDOFFS_PER_S` | Peak remote KV handoffs per second that each directed host edge carries for each source cache group |
+| `NARWHAL_FABRIC_BURST` | Handoffs in a burst, a positive integer |
+| `NARWHAL_FABRIC_TRANSFER_BUDGET_S` | Seconds in which one burst must transfer |
+| `NARWHAL_FABRIC_HEADROOM` | Multiplier of at least 1 on the required rate |
+| `NARWHAL_FABRIC_TEST_PORT` | TCP port that `iperf3` or `ib_write_bw` listens on at the destination of each sample. The firewall between the fabric addresses must already allow it |
+| `NARWHAL_RDMA_GID_INDEX` | For `ucx_rdma` engines, the GID index of the HCA port in `transfer.net_devices` |
+| `NARWHAL_RDMA_ROCE_MODE` | For `ucx_rdma` engines, `v2` or `v1` for RoCE, or `infiniband` for a native InfiniBand port |
+
+`NARWHAL_NODE_<n>_RDMA_GID_INDEX` and `NARWHAL_NODE_<n>_RDMA_ROCE_MODE` set the value for engine `<n>`, for example when engines on one host use different HCAs. The HCA and port come from the engine's `transfer.net_devices`, which `NARWHAL_TRANSFER_NET_DEVICES` or `NARWHAL_NODE_<n>_TRANSFER_NET_DEVICES` sets before discovery. Each `ucx_rdma` engine names exactly one `device:port`.
+
+[Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) shows how the workload sets the required rate.
 
 ### Profiling limits
 

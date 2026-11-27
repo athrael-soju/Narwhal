@@ -355,6 +355,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     ("model", set()),
                     ("pace", set()),
                     ("tokenize", None),
+                    ("hca", {"e0": "reading"}),
                     ("produce", {"e0": "descriptor"}),
                     ("consume", None),
                 ):
@@ -388,8 +389,16 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     constructor.call_args.kwargs["prefill_timeout_s"], self.cfg.prefill_timeout_s
                 )
                 if blocked is None:
+                    calls["hca"].assert_awaited_once_with(self.cfg, {"e0", "e3"}, report)
                     calls["consume"].assert_awaited_once_with(
-                        self.cfg, {"e0", "e3"}, {"e0": "descriptor"}, client, report, False, 3
+                        self.cfg,
+                        {"e0", "e3"},
+                        {"e0": "descriptor"},
+                        client,
+                        report,
+                        False,
+                        3,
+                        hca={"e0": "reading"},
                     )
                     self.assertEqual(report.skipped, [])
                 else:
@@ -795,6 +804,117 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({body["cache_salt"] for body in produced}), 3)
         self.assertTrue(all(body["min_tokens"] == 4 and body["ignore_eos"] for body in decoded))
 
+    async def test_hca_gate_reads_each_sidecar_that_publishes_its_hca(self):
+        status = {"engine-0.invalid": 200, "engine-3.invalid": 404}
+
+        def sidecar(request):
+            self.assertEqual(request.url.path, "/v1/hca")
+            code = status[request.url.host]
+            if code != 200:
+                return httpx.Response(code, json={"detail": "HCA counters unreadable: gone"})
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": "a", "port_xmit_data": 7}
+            return httpx.Response(200, json=reading)
+
+        report = Report()
+        ports = await transfer.gate_hca(
+            self.cfg, {"e0", "e3"}, report, httpx.MockTransport(sidecar)
+        )
+        self.assertEqual(set(ports), {"e0"})
+        self.assertEqual(report.failed, [])
+        status["engine-3.invalid"] = 503
+        report = Report()
+        ports = await transfer.gate_hca(
+            self.cfg, {"e0", "e3"}, report, httpx.MockTransport(sidecar)
+        )
+        self.assertEqual(set(ports), {"e0"})
+        self.assertEqual(len(report.failed), 1)
+        self.assertRegex(
+            report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA counters unreadable"
+        )
+
+    async def test_consume_requires_same_host_kv_to_cross_the_producer_hca(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+
+        async def output(*args, **kwargs):
+            yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
+
+        def reading(boot, words=0):
+            return {"device": "mlx5_0", "port": 1, "boot_id": boot, "port_xmit_data": words}
+
+        src, dst = (spec.iid for spec in self.cfg.engines)
+        same = {src: reading("a"), dst: reading("a")}
+
+        async def consume(hca, readings, pairs=None):
+            client = HandoffClient(prefill=AsyncMock(return_value=result), decode=output)
+            report = Report()
+            reader = AsyncMock(side_effect=readings)
+            printed = io.StringIO()
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(transfer, "read_hca_counters", new=reader))
+                stack.enter_context(redirect_stdout(printed))
+                if pairs is not None:
+                    stack.enter_context(
+                        patch.object(
+                            transfer,
+                            "validation_pairs",
+                            side_effect=lambda specs, mesh=False: (
+                                validation_pairs(specs, True) if mesh else pairs
+                            ),
+                        )
+                    )
+                await gate_consume(
+                    self.cfg,
+                    {src, dst},
+                    {src: result, dst: result},
+                    client,
+                    report,
+                    pairs is None,
+                    hca=hca,
+                )
+            return report, reader, printed.getvalue()
+
+        def counters(*words):
+            return [reading("a", value) for value in words]
+
+        report, reader, printed = await consume(same, counters(10, 30, 5, 9))
+        self.assertEqual((report.failed, report.skipped), ([], []))
+        self.assertEqual(reader.await_count, 4)
+        self.assertIn(f"ok    {src} -> {dst} sent 80 bytes through {src}'s HCA", printed)
+        self.assertIn(f"ok    {dst} -> {src} sent 16 bytes through {dst}'s HCA", printed)
+
+        report, _, _ = await consume(same, counters(10, 10, 5, 9))
+        self.assertEqual(
+            report.failed,
+            [
+                f"{src} -> {dst}: same-host KV left no traffic on {src}'s HCA mlx5_0:1, so UCX "
+                "moved it through shared memory or CUDA IPC"
+            ],
+        )
+
+        report, reader, _ = await consume({src: reading("a"), dst: reading("b")}, [])
+        self.assertEqual((report.failed, report.skipped), ([], []))
+        reader.assert_not_awaited()
+
+        report, _, _ = await consume(same, counters(10, 30), pairs=[(src, dst)])
+        self.assertEqual(report.failed, [])
+        self.assertEqual(
+            report.skipped,
+            [
+                f"{dst} HCA path: no probe sent KV from {dst} to {src} on its host; "
+                "run the full mesh to check it"
+            ],
+        )
+
+        report, _, _ = await consume(same, [*counters(10), reading("b", 30), *counters(5, 9)])
+        self.assertEqual(len(report.failed), 1)
+        self.assertIn("no longer publishes HCA mlx5_0:1", report.failed[0])
+
     async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
         connector = NixlConnector()
         result = connector.prefill_result(
@@ -1131,6 +1251,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         ("model", set()),
                         ("pace", set()),
                         ("tokenize", None),
+                        ("hca", {}),
                         ("produce", {"e0": result, "e3": result}),
                     ):
                         stack.enter_context(

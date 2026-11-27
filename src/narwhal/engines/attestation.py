@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -43,6 +44,10 @@ from .residency_feed import ResidencyFeed
 ATTESTATION_PATH = "/v1/attestation"
 PROCESS_PATH = "/v1/process"
 RESIDENCY_PATH = "/v1/residency"
+HCA_PATH = "/v1/hca"
+# The kernel's RDMA device tree, and the file that identifies the running host boot.
+INFINIBAND = Path("/sys/class/infiniband")
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 # Socket names inside the launch plan's cache-event directory; the launcher uses the same.
 EVENTS_SOCKET = "events.sock"
 REPLAY_SOCKET = "replay.sock"
@@ -255,6 +260,40 @@ async def read_process_start(
     return float(value)
 
 
+async def read_hca_counters(
+    attestation_url: str,
+    *,
+    timeout_s: float = 5.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, Any] | None:
+    """The engine's HCA port counters from its sidecar, or None when it sends KV through none."""
+    url = httpx.URL(attestation_url).copy_with(path=HCA_PATH, query=None)
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        response = await client.get(url)
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        detail: Any = ""
+        with contextlib.suppress(ValueError):
+            detail = response.json()
+        detail = detail.get("detail", "") if isinstance(detail, dict) else ""
+        raise ValueError(
+            f"{url} returned HTTP {response.status_code}" + (f": {detail}" if detail else "")
+        )
+    payload = response.json()
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("device"), str)
+        or type(payload.get("port")) is not int
+        or not isinstance(payload.get("boot_id"), str)
+        or not payload["boot_id"]
+        or type(payload.get("port_xmit_data")) is not int
+        or payload["port_xmit_data"] < 0
+    ):
+        raise ValueError(f"{url} returned no HCA counters")
+    return payload
+
+
 def attested_launch(payload: Any) -> dict[str, Any]:
     launch = payload.get("launch") if isinstance(payload, dict) else None
     return launch if isinstance(launch, dict) else {}
@@ -414,6 +453,37 @@ def verify_attestation(
     return failures
 
 
+@dataclass(frozen=True)
+class HcaPort:
+    """The RDMA device port that an engine sends its KV through."""
+
+    device: str
+    port: int
+
+    @classmethod
+    def parse(cls, value: str) -> HcaPort:
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+):([1-9][0-9]{0,2})", value)
+        if match is None:
+            raise ValueError(f"an HCA port is DEVICE:PORT, such as mlx5_0:1, not {value!r}")
+        return cls(match[1], int(match[2]))
+
+    def counters(self) -> dict[str, Any]:
+        """The port's transmit counter, in the kernel's 4-octet words, and the host's boot ID."""
+        counter = INFINIBAND / self.device / "ports" / str(self.port) / "counters/port_xmit_data"
+        words = counter.read_text().strip()
+        if not words.isdigit():
+            raise ValueError(f"{counter} holds no counter value")
+        boot_id = BOOT_ID.read_text().strip()
+        if not boot_id:
+            raise ValueError(f"{BOOT_ID} is empty")
+        return {
+            "device": self.device,
+            "port": self.port,
+            "boot_id": boot_id,
+            "port_xmit_data": int(words),
+        }
+
+
 def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
     contract = _read_contract(payload.get("contract"))
     return AttestationDocument(contract, _read_sources(payload.get("sources"), contract))
@@ -433,6 +503,7 @@ def build_app(
     residency: ResidencyIndex | None = None,
     reader: EngineIdentityReader | None = None,
     process: Callable[[], float] | None = None,
+    hca: HcaPort | None = None,
 ) -> FastAPI:
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
@@ -478,6 +549,16 @@ def build_app(
     async def attestation() -> dict[str, Any]:
         identity = await current_identity()
         return make_attestation(document, identity)
+
+    @app.get(HCA_PATH)
+    async def hca_counters() -> dict[str, Any]:
+        await current_identity()
+        if hca is None:
+            raise HTTPException(status_code=404, detail="the engine sends KV through no HCA port")
+        try:
+            return await asyncio.to_thread(hca.counters)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=f"HCA counters unreadable: {exc}") from exc
 
     def require_residency() -> ResidencyIndex:
         if residency is None:
@@ -561,6 +642,12 @@ def main(argv: list[str] | None = None) -> int:
         help="directory holding the engine's cache-event sockets; enables residency routes",
     )
     parser.add_argument("--model", help="served model name; required with --kv-events")
+    parser.add_argument(
+        "--hca",
+        metavar="DEVICE:PORT",
+        help="HCA port the engine sends KV through, even to engines on its own host; "
+        "enables the HCA counter route",
+    )
     process_owner = parser.add_mutually_exclusive_group()
     process_owner.add_argument(
         "--engine-container", help="engine container whose start time identifies the process"
@@ -578,6 +665,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
         parser.error("--kv-events requires --model")
+    hca = None
+    if args.hca is not None:
+        try:
+            hca = HcaPort.parse(args.hca)
+        except ValueError as exc:
+            parser.error(f"--hca: {exc}")
     from ..cli_errors import failure
 
     backend = load_backend(args.backend)
@@ -635,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
                 residency=residency,
                 reader=backend.identity,
                 process=process,
+                hca=hca,
             ),
             host=args.host,
             port=args.port,
