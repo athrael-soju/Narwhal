@@ -5,9 +5,21 @@
 # or the last router to hold the lease. Prometheus answers a target's last sample for 5 minutes,
 # including one from a target a previous configuration named, so the router rules count only
 # samples scraped in the last 30 seconds.
+# Every rule matches and aggregates within one `fleet`, so one Prometheus can hold several.
 groups:
   - name: narwhal
     rules:
+      - alert: NarwhalWatchdog
+        # Always firing for each fleet Prometheus scrapes. Route it to a dead man's switch,
+        # which pages when it stops arriving: Prometheus runs on the primary router's host,
+        # and no other rule fires while that host is down.
+        expr: count by (fleet) (up{job="narwhal-router"}) >= 0
+        labels:
+          severity: watchdog
+        annotations:
+          summary: "Prometheus evaluates the Narwhal alerts for this fleet"
+          description: "This alert always fires. When the receiver stops getting it, Prometheus or its host is down, and the other Narwhal alerts cannot fire."
+
       - alert: NarwhalEngineDown
         expr: up{job="engines"} == 0
         for: 30s

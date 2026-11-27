@@ -6,7 +6,7 @@ description: Inspect Narwhal alerts, troubleshoot the monitoring stack, add a GP
 
 ## Alert evaluation
 
-Prometheus evaluates the rules in `src/narwhal/observability/stack/prometheus-alerts.yml` and publishes their state in the `ALERTS` series. Each rule carries `severity="page"` or `severity="warn"`, and the `fleet` label of its series. Prometheus sends firing alerts to the Alertmanager that `--alertmanager-url` names, where you route them by those labels. Without one, the Prometheus alerts page at `/alerts` is the only place alerts show, and nobody is paged.
+Prometheus evaluates the rules in `src/narwhal/observability/stack/prometheus-alerts.yml` and publishes their state in the `ALERTS` series. Each rule carries `severity="page"` or `severity="warn"`, apart from `NarwhalWatchdog`, which carries `severity="watchdog"` and always fires for a dead man's switch, as [Monitor](../operate/02-Monitor.md) describes. Every alert carries the `fleet` label of its series. Prometheus sends firing alerts to the Alertmanager that `--alertmanager-url` names, where you route them by those labels. Without one, the Prometheus alerts page at `/alerts` is the only place alerts show, and nobody is paged.
 
 List the loaded rules on the router host:
 

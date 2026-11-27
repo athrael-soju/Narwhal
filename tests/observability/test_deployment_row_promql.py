@@ -186,7 +186,7 @@ class DeploymentRowTests(unittest.TestCase):
             lines += [f"              {key}: {json.dumps(v)}" for key, v in values.items()]
             lines += ["            exp_annotations:"]
             for key, template in rules[name]["annotations"].items():
-                text = template.replace("{{ $labels.instance }}", labels["instance"])
+                text = template.replace("{{ $labels.instance }}", labels.get("instance", ""))
                 text = text.replace("{{ $value }}", value)
                 lines += [f"              {key}: {json.dumps(text)}"]
         return lines
@@ -250,20 +250,32 @@ class DeploymentRowTests(unittest.TestCase):
         ]
         self.run_promtool(inputs, tests)
 
-    def test_router_down_fires_while_both_router_hosts_reboot(self):
-        # Prometheus reads the router targets from a file, so it keeps scraping both routers
-        # while their hosts are down.
+    def test_router_down_fires_while_the_standby_host_reboots_after_the_primary_stopped(self):
+        # Prometheus runs on the primary router's host, which stays up: the primary router has
+        # stopped, and the standby's host reboots, so no router of the pair is active. The
+        # router targets come from a file, so Prometheus keeps scraping the standby through
+        # its reboot.
+        primary = {"job": "narwhal-router", "instance": "a:8000", "fleet": "fleet-a"}
+        standby = {"job": "narwhal-router", "instance": "b:8000", "fleet": "fleet-a"}
         inputs = []
-        down = []
-        for router in ("a:8000", "b:8000"):
-            labels = {"job": "narwhal-router", "instance": router, "fleet": "fleet-a"}
-            inputs += series("up", ",".join(f'{k}="{v}"' for k, v in labels.items()), REBOOT)
-            down.append(labels)
+        for labels, values in ((primary, "0x80"), (standby, REBOOT)):
+            inputs += series("up", ",".join(f'{k}="{v}"' for k, v in labels.items()), values)
         tests = [
             "    alert_rule_test:",
-            *self.alert_at(590, "NarwhalRouterDown", []),
-            *self.alert_at(780, "NarwhalRouterDown", down),
-            *self.alert_at(1000, "NarwhalRouterDown", []),
+            *self.alert_at(590, "NarwhalRouterDown", [primary]),
+            *self.alert_at(780, "NarwhalRouterDown", [primary, standby]),
+            *self.alert_at(1000, "NarwhalRouterDown", [primary]),
+        ]
+        self.run_promtool(inputs, tests)
+
+    def test_the_watchdog_fires_for_each_fleet_while_prometheus_runs(self):
+        inputs = [
+            *series("up", 'job="narwhal-router",instance="a:8000",fleet="fleet-a"', "0x40"),
+            *series("up", 'job="narwhal-router",instance="c:8000",fleet="fleet-b"', "1x40"),
+        ]
+        tests = [
+            "    alert_rule_test:",
+            *self.alert_at(300, "NarwhalWatchdog", [{"fleet": "fleet-a"}, {"fleet": "fleet-b"}]),
         ]
         self.run_promtool(inputs, tests)
 
