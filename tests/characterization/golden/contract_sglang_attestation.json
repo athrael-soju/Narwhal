@@ -74,17 +74,17 @@
   "schema": "narwhal.attestation",
   "schema_version": 1,
   "sources": {
-    "attention_backend": "<root>/container/launch/server-info.json sha256:<digest>",
+    "attention_backend": "<root>/container/launch/attestation/20260101T000000Z-00000000/server-info.json sha256:<digest>",
     "connector": "<root>/container/launch/launch.json sha256:<digest>",
-    "engine_version": "<root>/container/launch/server-info.json sha256:<digest>",
-    "head_size": "<root>/container/launch/model-dimensions.json sha256:<digest>",
-    "hidden_layers": "<root>/container/launch/model-dimensions.json sha256:<digest>",
+    "engine_version": "<root>/container/launch/attestation/20260101T000000Z-00000000/server-info.json sha256:<digest>",
+    "head_size": "<root>/container/launch/attestation/20260101T000000Z-00000000/model-dimensions.json sha256:<digest>",
+    "hidden_layers": "<root>/container/launch/attestation/20260101T000000Z-00000000/model-dimensions.json sha256:<digest>",
     "image_digest": "<root>/container/launch/checked.json sha256:<digest>",
-    "kv_cache_dtype": "<root>/container/launch/server-info.json sha256:<digest>",
-    "kv_heads": "<root>/container/launch/model-dimensions.json sha256:<digest>",
-    "model_architecture": "<root>/container/launch/model-dimensions.json sha256:<digest>",
-    "model_dtype": "<root>/container/launch/server-info.json sha256:<digest>",
-    "speculative_config": "<root>/container/launch/server-info.json sha256:<digest>",
+    "kv_cache_dtype": "<root>/container/launch/attestation/20260101T000000Z-00000000/server-info.json sha256:<digest>",
+    "kv_heads": "<root>/container/launch/attestation/20260101T000000Z-00000000/model-dimensions.json sha256:<digest>",
+    "model_architecture": "<root>/container/launch/attestation/20260101T000000Z-00000000/model-dimensions.json sha256:<digest>",
+    "model_dtype": "<root>/container/launch/attestation/20260101T000000Z-00000000/server-info.json sha256:<digest>",
+    "speculative_config": "<root>/container/launch/attestation/20260101T000000Z-00000000/server-info.json sha256:<digest>",
     "transfer_version": "<root>/container/launch/launch.json sha256:<digest>"
   }
 }

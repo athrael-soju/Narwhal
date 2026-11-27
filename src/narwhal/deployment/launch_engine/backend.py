@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from ..attestation_contract.capture import Capture, CaptureContext
     from ..attestation_contract.document import AttestationContext, AttestationEvidence
     from .check import CheckContext, ProbeResult
     from .settings import LaunchSettings
@@ -88,10 +89,8 @@ class EngineLauncher(ABC):
     def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
 
     @abstractmethod
-    def capture_connector(self, run: Path) -> Path: ...
-
-    @abstractmethod
-    def capture_native(self, run: Path) -> Path: ...
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        """The backend's attestation captures, in order, for a container or native engine."""
 
     @abstractmethod
     def transfer_package(self, plan: dict) -> str | None:
@@ -141,15 +140,11 @@ class CacheMeasurement(ABC):
 
 
 class CacheRegistration(ABC):
-    """Optional capability: the connector's cache block registration and handshake policy."""
+    """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def registration_layout(
-        self, run: Path, plan: dict, source: Path, from_runtime: bool
-    ) -> None: ...
-
-    @abstractmethod
-    def handshake_policy(self, run: Path, plan: dict) -> None: ...
+    def cache_layout(self, run: Path) -> str:
+        """The KV cache layout that the live engine of `run` resolved across its ranks."""
 
 
 class LiveModelDimensions(ABC):
@@ -160,7 +155,8 @@ class LiveModelDimensions(ABC):
         """Write model-dimensions.json from the engine image."""
 
     @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path: ...
+    def capture_model_dimensions(self, run: Path, out: Path) -> Path:
+        """Write model-dimensions.live.json into `out` from the live engine of `run`."""
 
 
 class ModelFormats(ABC):

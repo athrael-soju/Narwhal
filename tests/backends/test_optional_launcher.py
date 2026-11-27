@@ -20,6 +20,7 @@ LAUNCH_TESTS = {
         "test_launch_command_and_environment",
         "test_runtime_check_result",
         "test_attestation_document",
+        "test_attestation_capture",
     },
 }
 

@@ -269,7 +269,8 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
-| `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |
+| `deployment/attestation_contract/capture.py`                                 | One engine's attestation captures, in attempts, and the published one    |
+| `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving and verification                             |
 | `deployment/attestation_contract/fleet.py`                                   | Router engine contract finalization                                      |
 | `deployment/attestation_contract/cli.py`                                     | Contract tool command                                                    |
 

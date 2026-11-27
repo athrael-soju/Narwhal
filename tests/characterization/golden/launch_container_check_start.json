@@ -240,6 +240,15 @@
           "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         ],
         "log": "launch.log"
+      },
+      {
+        "command": [
+          "inspect",
+          "--format",
+          "{{.State.StartedAt}}",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "log": "launch.log"
       }
     ],
     "printed": "Container started; follow its logs and verify the HTTP endpoints.\n"

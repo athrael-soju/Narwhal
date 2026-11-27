@@ -1,0 +1,210 @@
+{
+  "attempt": [
+    "cache-registration.json",
+    "engine-attestation.json",
+    "handshake-policy.json",
+    "metrics.txt",
+    "model-dimensions.live.json",
+    "model-dimensions.live.log",
+    "nixl-connector-version.json",
+    "nixl-connector-version.log",
+    "startup.log",
+    "transfer-mode.json",
+    "version.json"
+  ],
+  "calls": [
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "logs",
+        "--since",
+        "2026-01-01T00:00:00.25Z",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 120
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "exec",
+        "--env",
+        "NARWHAL_CAPTURE_CACHE=0",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "python3",
+        "-c",
+        "<script NARWHAL_LIVE_MODEL_DIMENSIONS_V1:>",
+        "<plan_sha256>",
+        "/narwhal-hooks/launch.json",
+        "/model/config.json"
+      ],
+      "timeout": null
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "authorized": true,
+      "request": "GET /version"
+    },
+    {
+      "authorized": true,
+      "request": "GET /metrics"
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "exec",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "python3",
+        "-c",
+        "<script NARWHAL_NIXL_CAPTURE_V1:>"
+      ],
+      "timeout": null
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "--label",
+        "io.narwhal.launch=<hex>",
+        "--label",
+        "io.narwhal.operation=<hex>",
+        "--rm",
+        "--network",
+        "host",
+        "--ipc",
+        "host",
+        "--ulimit",
+        "memlock=-1:-1",
+        "--env-file",
+        "<root>/launch/container.env",
+        "--mount",
+        "type=bind,src=<root>/model,dst=/model,readonly",
+        "--mount",
+        "type=bind,src=<root>/launch/cache,dst=/root/.cache",
+        "--mount",
+        "type=bind,src=<root>/launch/hook,dst=/narwhal-hooks,readonly",
+        "--mount",
+        "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+        "--device",
+        "/dev/nvidiactl",
+        "--device",
+        "/dev/nvidia0",
+        "--device",
+        "/dev/nvidia1",
+        "--gpus",
+        "all",
+        "--entrypoint",
+        "python3",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "-c",
+        "<script NARWHAL_CACHE_REGISTRATION=>",
+        "NHD"
+      ],
+      "stage": "docker-run"
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "run",
+        "--label",
+        "io.narwhal.launch=<hex>",
+        "--label",
+        "io.narwhal.operation=<hex>",
+        "--rm",
+        "--network",
+        "host",
+        "--ipc",
+        "host",
+        "--ulimit",
+        "memlock=-1:-1",
+        "--env-file",
+        "<root>/launch/container.env",
+        "--mount",
+        "type=bind,src=<root>/model,dst=/model,readonly",
+        "--mount",
+        "type=bind,src=<root>/launch/cache,dst=/root/.cache",
+        "--mount",
+        "type=bind,src=<root>/launch/hook,dst=/narwhal-hooks,readonly",
+        "--mount",
+        "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+        "--device",
+        "/dev/nvidiactl",
+        "--device",
+        "/dev/nvidia0",
+        "--device",
+        "/dev/nvidia1",
+        "--gpus",
+        "all",
+        "--entrypoint",
+        "python3",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "-c",
+        "<script NARWHAL_HANDSHAKE_POLICY=>",
+        "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}"
+      ],
+      "stage": "docker-run"
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    }
+  ],
+  "published": [
+    "attempt",
+    "document_sha256"
+  ]
+}

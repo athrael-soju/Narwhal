@@ -20,10 +20,16 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
 from narwhal.backends import EngineBackend, load, names
+from narwhal.deployment.attestation_contract.capture import (
+    PUBLISHED,
+    capture,
+    published_attempt,
+)
 from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.check import check, read_checked
 from narwhal.deployment.launch_engine.plan import load as load_plan
+from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.settings import SWITCHES, mapped_flags
 from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
@@ -37,11 +43,14 @@ from narwhal.types import Role, RoleModel
 from tests.backends.contract import (
     CONTAINER_ID,
     Engines,
+    LiveContainer,
     Stages,
+    capture_attempt,
     fixtures,
     prepared,
     random_ids,
     running_container,
+    started_container,
 )
 from tests.characterization.golden import assert_golden
 from tests.characterization.test_launch import env_lines, placeholders, redacted
@@ -563,18 +572,18 @@ class BackendFlows(Launched, unittest.TestCase):
         self.check(run, plan)
         self.start(run)
         plan = load_plan(run)
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         image = json.loads((run / "checked.json").read_text())["image_id"]
         with running_container(image):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
             self.assertEqual(
                 list(document), ["schema", "schema_version", "contract", "sources", "launch"]
             )
             (Path(plan["model_dir"]) / "config.json").write_text("{}")
             with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
-                engine_document(run, log)
+                engine_document(run, attempt)
 
     def test_the_attested_launch_carries_engine_configuration_files(self):
         launcher = type(self.backend.engine_launcher())
@@ -592,12 +601,12 @@ class BackendFlows(Launched, unittest.TestCase):
         self.check(run, plan)
         self.start(run)
         plan = load_plan(run)
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         image = json.loads((run / "checked.json").read_text())["image_id"]
         with running_container(image):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
         self.assertEqual(document["launch"]["config_files"], added)
 
 
@@ -697,12 +706,12 @@ class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
         }
 
     def attested(self, run: Path, plan: dict) -> dict:
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         checked = json.loads((run / "checked.json").read_text())
         with running_container(checked["image_id"]):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
         document["sources"] = {
             field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)
             for field, source in document["sources"].items()
@@ -728,6 +737,39 @@ class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
 
     def test_attestation_document(self):
         self.golden("attestation", self.launched(False)["attestation"])
+
+    def test_attestation_capture(self):
+        # The captures run against a started container, which answers as the fixtures hold.
+        assert self.launcher is not None
+        run, reference = started_container(self.root, self.name)
+        plan = load_plan(run)
+        self.replacements = {
+            **placeholders(self.root, plan),
+            digest(run / "launch.json"): "<plan_sha256>",
+            **self.replacements,
+        }
+        checked = read_checked(run)
+        answers = self.fixtures.engine_answers(reference)
+        live = LiveContainer(run, checked["image_id"], answers, self.fixtures.startup_log)
+        with live.serving():
+            expected = engine_document(run, reference)
+            live.calls.clear()
+            document = capture(run)
+            self.assertEqual(published_attempt(run), document.parent)
+            captured = json.loads(document.read_text())
+        self.assertEqual(
+            {key: value for key, value in captured.items() if key != "sources"},
+            {key: value for key, value in expected.items() if key != "sources"},
+        )
+        self.assertEqual(captured["sources"].keys(), expected["sources"].keys())
+        self.golden(
+            "capture",
+            {
+                "calls": live.calls,
+                "attempt": sorted(path.name for path in document.parent.iterdir()),
+                "published": sorted(json.loads((run / PUBLISHED).read_text())),
+            },
+        )
 
     async def test_handoff_request_bodies_and_order(self):
         engines = Engines(self.name, self.fixtures.handoff_random_fields)

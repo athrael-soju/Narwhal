@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
-import uuid
 from pathlib import Path
 
 import httpx
 
-from ...deployment.attestation_contract import document
-from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
+from ...deployment.attestation_contract.document import (
+    STARTUP_LOG,
+    AttestationContext,
+    AttestationEvidence,
+)
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
+    container_start,
     live_binding,
     live_container,
+    live_identity,
     live_native,
     parse_tagged_capture,
     read_json,
@@ -23,9 +29,9 @@ from ...deployment.attestation_contract.evidence import (
     require_prior_dimensions,
     write_private_json,
 )
-from ...deployment.launch_engine.docker import run_runtime_script
 from ...deployment.launch_engine.plan import launch_headers, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
+from ...engines.host_process import started_at_seconds
 from .captures import handshake_policy, registration_layout
 from .identity import parse_process_start
 
@@ -84,11 +90,11 @@ print("\\n" + {MODEL_DIMENSIONS_CAPTURE_TAG!r} + json.dumps(record), flush=True)
 """
 
 
-def capture_model_dimensions(run: Path) -> Path:
+def capture_model_dimensions(run: Path, out: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
     native = plan.get("backend") == "native"
     identity = live_native(run, plan, checked) if native else live_container(run, checked)
-    destination = run / "model-dimensions.live.json"
+    destination = out / "model-dimensions.live.json"
     if destination.exists():
         raise ValueError("Live model dimensions already exist; retain the capture")
     if native:
@@ -124,7 +130,7 @@ def capture_model_dimensions(run: Path) -> Path:
         check=False,
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"} if native else None,
     )
-    log = run / f"model-dimensions.live-{uuid.uuid4().hex}.log"
+    log = out / "model-dimensions.live.log"
     write_private(log, result.stdout + "\nSTDERR\n" + result.stderr)
     if result.returncode:
         raise ValueError(f"Live model dimension inspection failed; inspect {log}")
@@ -161,7 +167,7 @@ def capture_model_dimensions(run: Path) -> Path:
     return destination
 
 
-def capture_nixl(run: Path) -> Path:
+def capture_nixl(run: Path, out: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
     native = plan.get("backend") == "native"
     identity = live_native(run, plan, checked) if native else live_container(run, checked)
@@ -176,9 +182,13 @@ def capture_nixl(run: Path) -> Path:
         command,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
         env={**os.environ, **values, "NARWHAL_CAPTURE_CACHE": "0"} if native else None,
     )
+    log = out / "nixl-connector-version.log"
+    write_private(log, result.stdout + "\nSTDERR\n" + result.stderr)
+    if result.returncode:
+        raise ValueError(f"NIXL connector inspection exited {result.returncode}; inspect {log}")
     record = parse_nixl_capture(result.stdout)
     if (
         type(record.get("nixl_connector_version")) is not int
@@ -187,50 +197,116 @@ def capture_nixl(run: Path) -> Path:
         raise ValueError("Pinned connector returned an invalid protocol version")
     record["plan_sha256"] = plan_hash
     record.update(live_binding(plan, checked, identity))
-    destination = run / "nixl-connector-version.json"
+    destination = out / "nixl-connector-version.json"
     write_private_json(destination, record)
     return destination
 
 
-def capture_native_transfer_mode(run: Path) -> Path:
+# The transfer protocol of each connector class the pinned connector factory resolves. In the
+# pinned API, NixlConnector is an alias of NixlPullConnector, and the factory reports a class by
+# its own name, so a class named NixlConnector is another implementation.
+TRANSFER_MODES = {"NixlPullConnector": "pull", "NixlPushConnector": "push"}
+
+
+def resolved_connectors(log: str, plan_hash: str) -> set[str]:
+    """Connector classes the runtime check resolved, in check attempts of the plan `plan_hash`."""
+    resolved = set()
+    attempt = None
+    for line in log.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        if "check_attempt" in item:
+            attempt = item.get("plan_sha256")
+        elif attempt == plan_hash and isinstance(item.get("connector"), str):
+            resolved.add(item["connector"])
+    return resolved
+
+
+def capture_transfer_mode(run: Path, out: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native transfer capture requires a native launch plan")
-    process = live_native(run, plan, checked)
-    script = """import hashlib, inspect, json, sys
-from pathlib import Path
-from vllm.config import KVTransferConfig
-from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
-config = KVTransferConfig(**json.loads(sys.argv[1]))
-connector = KVConnectorFactory.get_connector_class(config)
-name = connector.__name__
-if name in ('NixlConnector', 'NixlPullConnector'):
-    mode = 'pull'
-elif name == 'NixlPushConnector':
-    mode = 'push'
-else:
-    raise ValueError('Unrecognized NIXL connector class: ' + name)
-source = Path(inspect.getfile(connector))
-print('NARWHAL_TRANSFER_MODE=' + json.dumps({
-    'transfer_mode': mode, 'connector_class': connector.__module__ + '.' + name,
-    'module_file': str(source), 'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest()
-}))
-"""
-    output = run_runtime_script(
-        run, plan, script, [json.dumps(plan["connector"])], "transfer-mode.log"
-    )
-    record = parse_tagged_capture(output, "NARWHAL_TRANSFER_MODE=", "transfer mode")
-    record.update(plan_sha256=plan_hash, process=process)
-    destination = run / "transfer-mode.json"
+    native = plan.get("backend") == "native"
+    identity = live_identity(run, plan, checked)
+    destination = out / "transfer-mode.json"
+    log = run / ("runtime-check.log" if native else "image-check.log")
+    data = log.read_bytes()
+    resolved = resolved_connectors(data.decode(errors="replace"), plan_hash)
+    if len(resolved) != 1:
+        raise ValueError(
+            f"{log.name} holds {len(resolved)} factory-resolved connector classes for this plan; "
+            "rerun the runtime check for this launch plan"
+        )
+    connector = resolved.pop()
+    mode = TRANSFER_MODES.get(connector.rsplit(".", 1)[-1])
+    if mode is None:
+        raise ValueError(f"Inspect the pinned connector implementation of {connector}")
+    record = {
+        "transfer_mode": mode,
+        "configured_connector": plan["connector"]["kv_connector"],
+        "kv_role": plan["connector"]["kv_role"],
+        "resolved_connector": connector,
+        "plan_sha256": plan_hash,
+        "source": str(log.resolve()),
+        "source_sha256": hashlib.sha256(data).hexdigest(),
+        **({"process": identity} if native else {"image_id": checked["image_id"]}),
+    }
     write_private_json(destination, record)
     return destination
 
 
-def capture_native_http(run: Path) -> None:
+# The connector factory logs each connector it creates, once per worker and scheduler:
+#   [factory.py:62] Creating v1 connector with name: NixlPullConnector and engine_id: <id>
+# Other connector lines, such as "NixlConnector setting KV cache layout to ...", name the
+# configured alias, not the resolved class.
+CREATED_CONNECTOR = re.compile(r"\bCreating v1 connector with name: (\w+) and engine_id: ")
+
+
+def check_startup_connector(attempt: Path) -> None:
+    """Require the serving process to have created the connector class that the attempt's
+    transfer-mode.json names."""
+    startup_log = attempt / STARTUP_LOG
+    expected = read_json(attempt / "transfer-mode.json")["resolved_connector"].rsplit(".", 1)[-1]
+    created = set(CREATED_CONNECTOR.findall(startup_log.read_text(errors="replace")))
+    if not created:
+        raise ValueError(
+            f"{startup_log.name} records no connector the engine created; "
+            "retain the complete engine log"
+        )
+    if created != {expected}:
+        raise ValueError(
+            f"{startup_log.name} records the engine creating {', '.join(sorted(created))}, "
+            f"not the resolved {expected}"
+        )
+
+
+# The serving process is the container's first process, so the process start in /metrics and
+# the container's State.StartedAt name one moment. /metrics derives the start from the kernel's
+# boot time, which has one-second resolution.
+CONTAINER_START_TOLERANCE_S = 2.0
+
+
+def require_process_start(run: Path, plan: dict, process_start: float) -> None:
+    """Require the process start /metrics reports to be the start of the recorded process."""
+    if plan.get("backend") == "native":
+        if process_start != read_native_start(run)["process_start_time_seconds"]:
+            raise ValueError("HTTP process start differs from the native launch record")
+        return
+    started = started_at_seconds(container_start(run)["started_at"])
+    if abs(process_start - started) > CONTAINER_START_TOLERANCE_S:
+        raise ValueError(
+            f"HTTP process start {process_start} is not the container start {started}; "
+            "the endpoint serves another process"
+        )
+
+
+def capture_http_identity(run: Path, out: Path) -> None:
+    """Write the live engine's /version and /metrics into `out`, checked against the checked
+    runtime and the recorded process start."""
     plan, checked, _ = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native HTTP capture requires a native launch plan")
-    live_native(run, plan, checked)
+    live_identity(run, plan, checked)
     with httpx.Client(timeout=10, headers=launch_headers(run, plan)) as client:
         version_response = client.get(plan["endpoint"].rstrip("/") + "/version")
         version_response.raise_for_status()
@@ -238,33 +314,38 @@ def capture_native_http(run: Path) -> None:
         metrics_response.raise_for_status()
     version = version_response.json()
     if version.get("version") != checked["engine_version"]:
-        raise ValueError("native HTTP version differs from the checked runtime")
-    if (
-        parse_process_start(metrics_response.text)
-        != read_native_start(run)["process_start_time_seconds"]
-    ):
-        raise ValueError("native HTTP process start differs from the launch record")
-    write_private_json(run / "version.json", version)
-    write_private(run / "metrics.txt", metrics_response.text)
+        raise ValueError("HTTP version differs from the checked runtime")
+    require_process_start(run, plan, parse_process_start(metrics_response.text))
+    write_private_json(out / "version.json", version)
+    write_private(out / "metrics.txt", metrics_response.text)
 
 
-def capture_native(run: Path) -> Path:
-    plan, checked, _ = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native capture requires a native launch plan")
-    live_native(run, plan, checked)
-    cache = run / "cache-layout.json"
-    if not cache.is_file():
-        raise ValueError("native engine did not capture its live KV cache layout")
-    capture_model_dimensions(run)
-    capture_nixl(run)
-    registration_layout(run, plan, cache, True)
-    handshake_policy(run, plan)
-    capture_native_transfer_mode(run)
-    capture_native_http(run)
-    snapshot = run / "startup-attestation.log"
-    write_private(snapshot, (run / "startup.log").read_text())
-    return document.generate(run, snapshot)
+def attestation_captures(context: CaptureContext) -> list[Capture]:
+    run, attempt, plan = context.run, context.attempt, context.plan
+    return [
+        Capture(
+            "http-identity",
+            "version.json, metrics.txt",
+            lambda: capture_http_identity(run, attempt),
+        ),
+        Capture(
+            "connector-version",
+            "nixl-connector-version.json",
+            lambda: capture_nixl(run, attempt),
+        ),
+        Capture(
+            "cache-registration",
+            "cache-registration.json",
+            lambda: registration_layout(run, plan, attempt),
+        ),
+        Capture("transfer-mode", "transfer-mode.json", lambda: capture_transfer_mode(run, attempt)),
+        Capture("startup-connector", STARTUP_LOG, lambda: check_startup_connector(attempt)),
+        Capture(
+            "handshake-policy",
+            "handshake-policy.json",
+            lambda: handshake_policy(run, plan, attempt),
+        ),
+    ]
 
 
 def option(args: list[str], name: str) -> str:
@@ -297,8 +378,8 @@ def nixl_package(plan: dict) -> str | None:
 
 def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
     run, plan, checked, plan_hash = context.run, context.plan, context.checked, context.plan_hash
-    native, identity = context.native, context.identity
-    registration = read_json(run / "cache-registration.json")
+    attempt, native, identity = context.attempt, context.native, context.identity
+    registration = read_json(attempt / "cache-registration.json")
     require_binding(registration, "Cache registration", plan_sha256=plan_hash, image=plan["image"])
     cache = read_json(run / "cache-layout.json")
     require_binding(
@@ -309,14 +390,14 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         model_config_sha256=plan["model_config_sha256"],
         launch_config_sha256=plan["launch_sha256"],
     )
-    nixl = read_json(run / "nixl-connector-version.json")
+    nixl = read_json(attempt / "nixl-connector-version.json")
     require_binding(
         nixl, "NIXL protocol", plan_sha256=plan_hash, **live_binding(plan, checked, identity)
     )
-    transfer = read_json(run / "transfer-mode.json")
+    transfer = read_json(attempt / "transfer-mode.json")
     transfer_binding = {"process": identity} if native else {"image_id": checked["image_id"]}
     require_binding(transfer, "Transfer mode", plan_sha256=plan_hash, **transfer_binding)
-    handshake = read_json(run / "handshake-policy.json")
+    handshake = read_json(attempt / "handshake-policy.json")
     require_binding(
         handshake,
         "Handshake policy",
@@ -326,10 +407,9 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
     )
     if handshake.get("connector_config") != plan["connector"]:
         raise ValueError("Handshake policy uses another connector configuration")
-    version = read_json(run / "version.json").get("version")
-    process_start = parse_process_start((run / "metrics.txt").read_text())
-    if native and process_start != read_native_start(run)["process_start_time_seconds"]:
-        raise ValueError("HTTP process start differs from the native launch record")
+    version = read_json(attempt / "version.json").get("version")
+    process_start = parse_process_start((attempt / "metrics.txt").read_text())
+    require_process_start(run, plan, process_start)
     ranks = cache.get("ranks", [])
     tp = int(option(plan["args"], "--tensor-parallel-size"))
     if sorted(rank.get("rank") for rank in ranks) != list(range(tp)):
@@ -362,24 +442,24 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         "enforce_handshake_compat": handshake["enforce_handshake_compat"],
     }
     sources = {
-        "engine_version": run / "version.json",
-        "connector_version": run / "nixl-connector-version.json",
+        "engine_version": attempt / "version.json",
+        "connector_version": attempt / "nixl-connector-version.json",
         "model_dtype": run / "launch.json",
         "attention_backend": context.startup_log,
         "kv_cache_dtype": run / "launch.json",
-        "cross_layers_blocks": run / "cache-registration.json",
+        "cross_layers_blocks": attempt / "cache-registration.json",
         "hybrid_kv_cache_manager": run / "cache-layout.json",
         "connector": run / "launch.json",
         "kv_role": run / "launch.json",
-        "transfer_mode": run / "transfer-mode.json",
+        "transfer_mode": attempt / "transfer-mode.json",
         "speculative_config": run / "launch.json",
-        "enforce_handshake_compat": run / "handshake-policy.json",
+        "enforce_handshake_compat": attempt / "handshake-policy.json",
     }
     launch = {
         "ucx_version": checked.get("ucx_version") or "",
         "peer_release": checked.get("peer_release") is True,
     }
-    return AttestationEvidence(version, contract, sources, launch)
+    return AttestationEvidence(version, contract, sources, launch, process_start)
 
 
 # Flags whose values change per launch.

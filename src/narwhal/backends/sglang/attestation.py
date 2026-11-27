@@ -6,11 +6,10 @@ from pathlib import Path
 
 import httpx
 
-from ...deployment.attestation_contract import document
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
-    config_model_dimensions,
     live_binding,
     live_identity,
     read_json,
@@ -18,7 +17,6 @@ from ...deployment.attestation_contract.evidence import (
     write_private_json,
 )
 from ...deployment.launch_engine.plan import env_file_name, launch_headers, option, read_env
-from ...deployment.launch_engine.runtime import write_private
 from ...engines.host_process import container_start, native_start
 from .identity import SERVER_INFO_PATH, server_version
 
@@ -42,10 +40,10 @@ LAUNCH_VARYING_FLAGS = frozenset(
 )
 
 
-def capture_server(run: Path) -> Path:
+def capture_server(run: Path, out: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
     identity = live_identity(run, plan, checked)
-    destination = run / "server-info.json"
+    destination = out / "server-info.json"
     if destination.exists():
         raise ValueError("Server evidence already exists; retain the capture")
     headers = launch_headers(run, plan)
@@ -75,15 +73,9 @@ def capture_server(run: Path) -> Path:
     return destination
 
 
-def capture_native(run: Path) -> Path:
-    plan, _, _ = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native capture requires a native launch plan")
-    config_model_dimensions(run, plan)
-    capture_server(run)
-    snapshot = run / "startup-attestation.log"
-    write_private(snapshot, (run / "startup.log").read_text())
-    return document.generate(run, snapshot)
+def attestation_captures(context: CaptureContext) -> list[Capture]:
+    run, attempt = context.run, context.attempt
+    return [Capture("server-info", "server-info.json", lambda: capture_server(run, attempt))]
 
 
 # The scheduler logs the request cap it serves with, which can sit below the requested one.
@@ -104,7 +96,7 @@ def check_request_cap(args: list[str], startup_log: str) -> None:
 def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
     run, plan, checked = context.run, context.plan, context.checked
     check_request_cap(plan["args"], context.startup_log.read_text())
-    server_path = run / "server-info.json"
+    server_path = context.attempt / "server-info.json"
     captured = read_json(server_path)
     require_binding(
         captured,

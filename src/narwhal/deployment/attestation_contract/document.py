@@ -27,20 +27,28 @@ from .evidence import (
     write_private_json,
 )
 
+# The startup log an attempt captures and its document attests.
+STARTUP_LOG = "startup.log"
 # Contract fields shared code derives for every backend; the backend supplies the rest.
 MODEL_FIELDS = ("model_architecture", "kv_heads", "head_size", "hidden_layers")
 
 
 @dataclass(frozen=True)
 class AttestationContext:
+    # The launch directory, which holds the engine's launch and start evidence.
     run: Path
+    # The capture attempt directory, which holds every attestation capture.
+    attempt: Path
     plan: dict
     checked: dict
     plan_hash: str
     # The live container ID, or the native process identity.
     identity: dict | str
-    startup_log: Path
     dimensions: dict
+
+    @property
+    def startup_log(self) -> Path:
+        return self.attempt / STARTUP_LOG
 
     @property
     def native(self) -> bool:
@@ -55,6 +63,8 @@ class AttestationEvidence:
     # The evidence file behind the engine version and each field in contract.
     sources: dict[str, Path]
     launch: dict = field(default_factory=dict)
+    # The serving process start the evidence attests, for an engine that reports one.
+    process_start: float | None = None
 
 
 def launch_args(args: list[str], per_launch: frozenset[str]) -> list[str]:
@@ -71,12 +81,12 @@ def launch_args(args: list[str], per_launch: frozenset[str]) -> list[str]:
 
 
 def bound_dimensions(
-    run: Path, plan: dict, checked: dict, plan_hash: str, identity: dict | str
+    run: Path, attempt: Path, plan: dict, checked: dict, plan_hash: str, identity: dict | str
 ) -> tuple[dict, Path]:
-    """Return the bound model dimensions and their file, live ones when the backend has them."""
-    live = run / "model-dimensions.live.json"
+    """Return the attempt's bound model dimensions and their file, live ones when the backend
+    reads them from the live engine."""
     capable = isinstance(plan_launcher(plan), LiveModelDimensions)
-    source = live if capable and live.exists() else run / "model-dimensions.json"
+    source = attempt / ("model-dimensions.live.json" if capable else "model-dimensions.json")
     dimensions = read_json(source)
     require_binding(
         dimensions,
@@ -86,7 +96,7 @@ def bound_dimensions(
         model_config_sha256=plan["model_config_sha256"],
         revision=plan["revision"],
     )
-    if source == live:
+    if capable:
         binding = live_binding(plan, checked, identity, model_revision=True)
         require_binding(
             dimensions, "Live model dimensions", launcher_sha256=plan["launcher_sha256"], **binding
@@ -99,22 +109,27 @@ def bound_dimensions(
     check_model_files(plan)
     architecture = dimensions.get("model_architecture")
     if not isinstance(architecture, str) or not architecture.strip():
-        raise ValueError(
-            "Capture live model dimensions for the resolved architecture"
-            if capable
-            else "Model dimensions name no architecture"
-        )
+        raise ValueError("Model dimensions name no architecture")
     return dimensions, source
 
 
-def engine_document(run: Path, startup_log: Path) -> dict:
+def engine_document(run: Path, attempt: Path) -> dict:
+    """The attestation document of the live engine of `run` from the captures in `attempt`."""
+    return attested(run, attempt)[0]
+
+
+def attested(run: Path, attempt: Path) -> tuple[dict, float | None]:
+    """The attestation document of the live engine of `run` from the captures in `attempt`,
+    and the serving process start the captures attest, for an engine that reports one."""
     plan, checked, plan_hash = checked_plan(run)
     engine = plan_launcher(plan)
     native = plan.get("backend") == "native"
     identity = live_identity(run, plan, checked)
-    dimensions, dimension_source = bound_dimensions(run, plan, checked, plan_hash, identity)
+    dimensions, dimension_source = bound_dimensions(
+        run, attempt, plan, checked, plan_hash, identity
+    )
     evidence = engine.attestation_evidence(
-        AttestationContext(run, plan, checked, plan_hash, identity, startup_log, dimensions)
+        AttestationContext(run, attempt, plan, checked, plan_hash, identity, dimensions)
     )
     if evidence.engine_version != checked.get("engine_version"):
         raise ValueError("HTTP version differs from the checked runtime")
@@ -167,16 +182,17 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     if cache_capture(engine) is not None:
         launch["cache_capture_code_sha256"] = plan["cache_capture_code_sha256"]
     launch.update(evidence.launch)
-    return versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
+    document = versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
+    return document, evidence.process_start
 
 
-def generate(run: Path, startup_log: Path) -> Path:
+def generate(run: Path, attempt: Path) -> Path:
     plan = read_json(run / "launch.json")
-    record = engine_document(run, startup_log)
+    record = engine_document(run, attempt)
     role = plan["role"]
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
-    destination = run / "engine-attestation.json"
+    destination = attempt / "engine-attestation.json"
     temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
     try:
         write_private_json(temporary, record)

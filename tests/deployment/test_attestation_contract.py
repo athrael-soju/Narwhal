@@ -25,14 +25,20 @@ from narwhal.backends.vllm.launch import VllmLauncher
 from narwhal.config import EngineContract
 from narwhal.deployment.attestation_contract import evidence as attestation_evidence
 from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
+from narwhal.deployment.attestation_contract.capture import publish
 from narwhal.deployment.attestation_contract.document import engine_document, generate, launch_args
 from narwhal.deployment.attestation_contract.evidence import live_native, read_json
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from tests.backends.contract import ATTEMPT
 from tests.deployment.fixtures import model_file_fields
 
 ROOT = Path(__file__).resolve().parents[2]
+# The container start that engine_evidence records; its metrics report the same start.
+STARTED_AT = "1970-01-01T00:01:40Z"
+# Files engine_evidence writes into the launch directory rather than the attempt.
+INPUTS = ("model-dimensions.json", "cache-layout.json")
 
 
 # Attestation modules that look up `live_container`.
@@ -87,7 +93,7 @@ class AttestationContractTests(unittest.TestCase):
     def native_evidence(
         self, root: Path, plan_fields: dict | None = None
     ) -> tuple[Path, Path, dict]:
-        run, log = self.engine_evidence(
+        run, attempt = self.engine_evidence(
             root, plan_fields={"backend": "native", **(plan_fields or {})}
         )
         plan = read_json(run / "launch.json")
@@ -124,32 +130,35 @@ class AttestationContractTests(unittest.TestCase):
         (run / "engine.env").write_text("VLLM_API_KEY=test\n")
         for name in (
             "model-dimensions.json",
-            "cache-registration.json",
             "cache-layout.json",
+            "model-dimensions.live.json",
+            "cache-registration.json",
             "nixl-connector-version.json",
             "transfer-mode.json",
             "handshake-policy.json",
         ):
-            path = run / name
+            path = (run if name in INPUTS else attempt) / name
             record = read_json(path)
             record["plan_sha256"] = plan_hash
             if "image" in record:
                 record["image"] = ""
-            if name in {"nixl-connector-version.json", "transfer-mode.json"}:
+            if name in {
+                "model-dimensions.live.json",
+                "nixl-connector-version.json",
+                "transfer-mode.json",
+            }:
                 record.pop("image_id", None)
                 record.pop("container_id", None)
                 record["process"] = process
+            if name == "model-dimensions.live.json":
+                record["model_revision"] = plan["model_revision"]
             save(path, record)
-        dimensions = read_json(run / "model-dimensions.json")
-        dimensions["launcher_sha256"] = plan["launcher_sha256"]
-        dimensions["process"] = process
-        dimensions["model_revision"] = plan["model_revision"]
-        save(run / "model-dimensions.live.json", dimensions)
-        return run, log, process
+        (run / "container-start.json").unlink()
+        return run, attempt, process
 
     def test_native_attestation_uses_existing_contract_and_rejects_restarted_process(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log, process = self.native_evidence(Path(folder))
+            run, attempt, process = self.native_evidence(Path(folder))
             identity = EngineIdentity("0.29.0", 100.0)
             with (
                 patch(
@@ -162,7 +171,7 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=identity,
                 ) as fetch,
             ):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
                 self.assertEqual(fetch.await_args.args, ("http://192.0.2.11:8000",))
                 self.assertEqual(
                     fetch.await_args.kwargs["headers"], {"Authorization": "Bearer test"}
@@ -180,9 +189,10 @@ class AttestationContractTests(unittest.TestCase):
 
     def test_native_sidecar_uses_frozen_startup_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log, process = self.native_evidence(Path(folder))
-            snapshot = run / "startup-attestation.log"
-            snapshot.write_text(log.read_text())
+            run, attempt, process = self.native_evidence(Path(folder))
+            # The engine keeps writing its own log; the attempt holds the copy it attests.
+            log = run / "startup.log"
+            log.write_text((attempt / "startup.log").read_text())
             with (
                 patch(
                     "narwhal.deployment.attestation_contract.evidence.process_identity",
@@ -194,6 +204,11 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=EngineIdentity("0.29.0", 100.0),
                 ),
                 patch(
+                    "narwhal.deployment.attestation_contract.sidecar.fetch_engine_identity",
+                    new_callable=AsyncMock,
+                    return_value=EngineIdentity("0.29.0", 100.0),
+                ),
+                patch(
                     "narwhal.deployment.attestation_contract.sidecar.attest_main", return_value=0
                 ) as sidecar,
                 patch.dict(
@@ -201,7 +216,8 @@ class AttestationContractTests(unittest.TestCase):
                     {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"},
                 ),
             ):
-                generate(run, snapshot)
+                generate(run, attempt)
+                publish(run, attempt)
                 with log.open("a") as output:
                     output.write("GET /metrics HTTP/1.1 200 OK\n")
                 self.assertEqual(serve(run), 0)
@@ -234,6 +250,7 @@ class AttestationContractTests(unittest.TestCase):
     def engine_evidence(
         self, root: Path, extra_args: tuple[str, ...] = (), plan_fields: dict | None = None
     ) -> tuple[Path, Path]:
+        """A started container's launch directory and a capture attempt holding its captures."""
         run = root / "run"
         run.mkdir()
         model = root / "model"
@@ -281,6 +298,11 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         (run / "container.id").write_text(cid + "\n")
+        (run / "container.env").write_text("VLLM_API_KEY=test\n")
+        # The process start the fixture's metrics report: 100 s after the epoch.
+        save(run / "container-start.json", {"container_id": cid, "started_at": STARTED_AT})
+        attempt = run / "attestation" / ATTEMPT
+        attempt.mkdir(parents=True)
         save(
             run / "model-dimensions.json",
             {
@@ -293,7 +315,7 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         save(
-            run / "cache-registration.json",
+            attempt / "cache-registration.json",
             {
                 "plan_sha256": plan_hash,
                 "image": image,
@@ -322,7 +344,7 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         save(
-            run / "nixl-connector-version.json",
+            attempt / "nixl-connector-version.json",
             {
                 "plan_sha256": plan_hash,
                 "image_id": image,
@@ -331,7 +353,7 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         save(
-            run / "transfer-mode.json",
+            attempt / "transfer-mode.json",
             {
                 "plan_sha256": plan_hash,
                 "image_id": image,
@@ -339,7 +361,7 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         save(
-            run / "handshake-policy.json",
+            attempt / "handshake-policy.json",
             {
                 "plan_sha256": plan_hash,
                 "image": image,
@@ -347,11 +369,19 @@ class AttestationContractTests(unittest.TestCase):
                 "enforce_handshake_compat": True,
             },
         )
-        save(run / "version.json", {"version": "0.29.0"})
-        (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
-        log = run / "startup.log"
-        log.write_text("Using ROCM_AITER_MLA backend.\n")
-        return run, log
+        save(
+            attempt / "model-dimensions.live.json",
+            {
+                **read_json(run / "model-dimensions.json"),
+                "launcher_sha256": plan["launcher_sha256"],
+                "image_id": image,
+                "container_id": cid,
+            },
+        )
+        save(attempt / "version.json", {"version": "0.29.0"})
+        (attempt / "metrics.txt").write_text("process_start_time_seconds 100\n")
+        (attempt / "startup.log").write_text("Using ROCM_AITER_MLA backend.\n")
+        return run, attempt
 
     def test_backend_capture_accepts_pinned_rocm_and_cuda_log_formats(self):
         self.assertEqual(
@@ -371,8 +401,8 @@ class AttestationContractTests(unittest.TestCase):
         from narwhal.backends.vllm.attestation import NIXL_CAPTURE_TAG
 
         with tempfile.TemporaryDirectory() as folder:
-            run, _ = self.engine_evidence(Path(folder))
-            (run / "nixl-connector-version.json").unlink()
+            run, attempt = self.engine_evidence(Path(folder))
+            (attempt / "nixl-connector-version.json").unlink()
             capture = {
                 "nixl_connector_version": 9,
                 "module": "vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata",
@@ -385,6 +415,7 @@ class AttestationContractTests(unittest.TestCase):
                 args=[],
                 returncode=0,
                 stdout=f"INFO: vLLM startup\n{tagged}\nINFO: native shutdown\n",
+                stderr="",
             )
             with (
                 patched_live_container(return_value="b" * 64),
@@ -393,29 +424,36 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=result,
                 ),
             ):
-                output = capture_nixl(run)
+                output = capture_nixl(run, attempt)
                 record = json.loads(output.read_text())
                 self.assertEqual(record["nixl_connector_version"], 9)
                 self.assertEqual(record["module_sha256"], "f" * 64)
                 self.assertEqual(record["container_id"], "b" * 64)
                 self.assertEqual(list(record)[-3:], ["plan_sha256", "image_id", "container_id"])
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-                output.unlink()
-                for stdout in (
-                    "INFO: vLLM startup\n",
-                    f"{tagged}\n{tagged}\n",
-                    NIXL_CAPTURE_TAG + "{bad}",
+                self.assertIn(tagged, (attempt / "nixl-connector-version.log").read_text())
+                for index, stdout in enumerate(
+                    ("INFO: vLLM startup\n", f"{tagged}\n{tagged}\n", NIXL_CAPTURE_TAG + "{bad}")
                 ):
+                    retry = attempt / f"retry-{index}"
+                    retry.mkdir()
                     result.stdout = stdout
                     with self.assertRaisesRegex(ValueError, "NIXL capture"):
-                        capture_nixl(run)
-                    self.assertFalse(output.exists())
+                        capture_nixl(run, retry)
+                    self.assertFalse((retry / "nixl-connector-version.json").exists())
+                result.returncode, result.stderr = 1, "ImportError: no module\n"
+                failed = attempt / "failed"
+                failed.mkdir()
+                with self.assertRaisesRegex(
+                    ValueError, r"^NIXL connector inspection exited 1; inspect .*\.log$"
+                ):
+                    capture_nixl(run, failed)
 
     def test_native_nixl_capture_uses_recorded_environment_for_connector_import(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            run, _, process = self.native_evidence(root)
-            (run / "nixl-connector-version.json").unlink()
+            run, attempt, process = self.native_evidence(root)
+            (attempt / "nixl-connector-version.json").unlink()
             paths = {}
             for name, version in (("parent", 11), ("engine", 22)):
                 base = root / name
@@ -448,7 +486,7 @@ class AttestationContractTests(unittest.TestCase):
                     {"PYTHONPATH": str(paths["parent"]), "NARWHAL_CAPTURE_CACHE": "1"},
                 ),
             ):
-                record = read_json(capture_nixl(run))
+                record = read_json(capture_nixl(run, attempt))
             self.assertEqual(record["nixl_connector_version"], 22)
             self.assertTrue(Path(record["module_file"]).is_relative_to(paths["engine"]))
             self.assertEqual(record["process"], process)
@@ -456,8 +494,8 @@ class AttestationContractTests(unittest.TestCase):
 
     def test_native_live_dimensions_bind_the_process_and_model_revision(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, _, process = self.native_evidence(Path(folder))
-            (run / "model-dimensions.live.json").unlink()
+            run, attempt, process = self.native_evidence(Path(folder))
+            (attempt / "model-dimensions.live.json").unlink()
             plan = read_json(run / "launch.json")
             record = {
                 **read_json(run / "model-dimensions.json"),
@@ -475,15 +513,15 @@ class AttestationContractTests(unittest.TestCase):
                     "narwhal.backends.vllm.attestation.subprocess.run", return_value=result
                 ) as probe,
             ):
-                live = read_json(capture_model_dimensions(run))
+                live = read_json(capture_model_dimensions(run, attempt))
             self.assertEqual(probe.call_args.args[0][0], plan["python_executable"])
             self.assertEqual(probe.call_args.kwargs["env"]["NARWHAL_CAPTURE_CACHE"], "0")
             self.assertEqual(live["process"], process)
             self.assertEqual(live["model_revision"], plan["model_revision"])
             self.assertEqual(list(live)[-3:], ["process", "model_revision", "capture_log_sha256"])
 
-    def test_native_http_capture_sends_the_recorded_engine_key(self):
-        metrics = "process_start_time_seconds 100\n"
+    def http_identity(self, run: Path, attempt: Path, start: str, live: dict):
+        """Capture /version and /metrics, with /metrics reporting the process start `start`."""
         requests: list[httpx.Request] = []
         client = httpx.Client
 
@@ -491,45 +529,81 @@ class AttestationContractTests(unittest.TestCase):
             requests.append(request)
             if request.url.path == "/version":
                 return httpx.Response(200, json={"version": "0.29.0"})
-            return httpx.Response(200, text=metrics)
+            return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
 
         def connect(**kwargs):
             return client(transport=httpx.MockTransport(answer), **kwargs)
 
+        with (
+            patch.object(attestation_capture, "live_identity", **live) as identity,
+            patch("narwhal.backends.vllm.attestation.httpx.Client", connect),
+        ):
+            attestation_capture.capture_http_identity(run, attempt)
+        identity.assert_called_once()
+        return requests
+
+    def test_http_identity_sends_the_recorded_engine_key(self):
         for env, authorization in (("VLLM_API_KEY=test\n", "Bearer test"), ("", None)):
             with self.subTest(authorization=authorization), tempfile.TemporaryDirectory() as folder:
-                run, _, process = self.native_evidence(Path(folder))
+                run, attempt, process = self.native_evidence(Path(folder))
                 (run / "engine.env").write_text(env)
-                (run / "version.json").unlink()
-                (run / "metrics.txt").unlink()
-                requests.clear()
-                with (
-                    patch.object(attestation_capture, "live_native", return_value=process) as live,
-                    patch("narwhal.backends.vllm.attestation.httpx.Client", connect),
-                ):
-                    attestation_capture.capture_native_http(run)
-                live.assert_called_once()
+                (attempt / "version.json").unlink()
+                (attempt / "metrics.txt").unlink()
+                requests = self.http_identity(run, attempt, "100", {"return_value": process})
                 self.assertEqual(
                     [str(request.url) for request in requests],
                     ["http://192.0.2.11:8000/version", "http://192.0.2.11:8000/metrics"],
                 )
                 for request in requests:
                     self.assertEqual(request.headers.get("Authorization"), authorization)
-                self.assertEqual(read_json(run / "version.json"), {"version": "0.29.0"})
-                self.assertEqual((run / "metrics.txt").read_text(), metrics)
+                self.assertEqual(read_json(attempt / "version.json"), {"version": "0.29.0"})
+                self.assertEqual(
+                    (attempt / "metrics.txt").read_text(), "process_start_time_seconds 100\n"
+                )
+
+    def test_http_identity_requires_the_recorded_process_start(self):
+        # The container started 100 s after the epoch; /metrics names its first process.
+        for backend, start, passes in (
+            ("container", "100.6", True),
+            ("container", "98.5", True),
+            ("container", "40", False),
+            ("native", "100", True),
+            ("native", "100.5", False),
+        ):
+            with (
+                self.subTest(backend=backend, start=start),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                if backend == "native":
+                    run, attempt, process = self.native_evidence(Path(folder))
+                    identity: dict | str = process
+                else:
+                    run, attempt = self.engine_evidence(Path(folder))
+                    identity = "b" * 64
+                (attempt / "version.json").unlink()
+                (attempt / "metrics.txt").unlink()
+                if passes:
+                    self.http_identity(run, attempt, start, {"return_value": identity})
+                    self.assertTrue((attempt / "metrics.txt").is_file())
+                    continue
+                with self.assertRaisesRegex(ValueError, "process start"):
+                    self.http_identity(run, attempt, start, {"return_value": identity})
+                self.assertFalse((attempt / "metrics.txt").exists())
 
     def test_live_dimensions_complete_an_old_plan_without_restarting_its_container(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log = self.engine_evidence(Path(folder))
+            run, attempt = self.engine_evidence(Path(folder))
             previous = read_json(run / "model-dimensions.json")
             previous.pop("model_architecture")
             save(run / "model-dimensions.json", previous)
             plan = read_json(run / "launch.json")
             plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
             cid = "b" * 64
+            (attempt / "model-dimensions.live.json").unlink()
             with patched_live_container(return_value=cid):
-                with self.assertRaisesRegex(ValueError, "Capture live model dimensions"):
-                    engine_document(run, log)
+                # A backend that reads live dimensions attests no configuration dimensions.
+                with self.assertRaisesRegex(FileNotFoundError, "model-dimensions.live.json"):
+                    engine_document(run, attempt)
                 record = {
                     **previous,
                     "model_architecture": "TestForCausalLM",
@@ -548,7 +622,7 @@ class AttestationContractTests(unittest.TestCase):
                     "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ) as run_docker:
-                    capture = capture_model_dimensions(run)
+                    capture = capture_model_dimensions(run, attempt)
                 command = run_docker.call_args.args[0]
                 self.assertEqual(
                     command[:4], ["docker", "exec", "--env", "NARWHAL_CAPTURE_CACHE=0"]
@@ -562,26 +636,27 @@ class AttestationContractTests(unittest.TestCase):
                     list(live)[-3:], ["image_id", "container_id", "capture_log_sha256"]
                 )
                 self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
-                logs = list(run.glob("model-dimensions.live-*.log"))
-                self.assertEqual(len(logs), 1)
-                self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
+                log = attempt / "model-dimensions.live.log"
+                self.assertEqual(log.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(
-                    live["capture_log_sha256"], hashlib.sha256(logs[0].read_bytes()).hexdigest()
+                    live["capture_log_sha256"], hashlib.sha256(log.read_bytes()).hexdigest()
                 )
                 self.assertEqual(
-                    engine_document(run, log)["contract"]["model_architecture"], "TestForCausalLM"
+                    engine_document(run, attempt)["contract"]["model_architecture"],
+                    "TestForCausalLM",
                 )
                 self.assertNotIn("model_architecture", read_json(run / "model-dimensions.json"))
                 with self.assertRaisesRegex(ValueError, "already exist"):
-                    capture_model_dimensions(run)
+                    capture_model_dimensions(run, attempt)
                 live["container_id"] = "c" * 64
                 save(capture, live)
                 with self.assertRaisesRegex(ValueError, "container_id differs"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
 
     def test_live_dimensions_reject_mismatch_before_writing_capture(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, _ = self.engine_evidence(Path(folder))
+            run, attempt = self.engine_evidence(Path(folder))
+            (attempt / "model-dimensions.live.json").unlink()
             previous = read_json(run / "model-dimensions.json")
             previous.pop("model_architecture")
             save(run / "model-dimensions.json", previous)
@@ -607,8 +682,8 @@ class AttestationContractTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(ValueError, "differ from the retained plan capture"),
             ):
-                capture_model_dimensions(run)
-            self.assertFalse((run / "model-dimensions.live.json").exists())
+                capture_model_dimensions(run, attempt)
+            self.assertFalse((attempt / "model-dimensions.live.json").exists())
             self.assertEqual(plan_hash, record["plan_sha256"])
 
     def test_live_dimension_probe_uses_the_plan_mounted_launcher(self):
@@ -658,20 +733,20 @@ class AttestationContractTests(unittest.TestCase):
 
     def test_engine_document_attests_the_model_tree_and_refuses_changed_model_files(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log = self.engine_evidence(Path(folder))
+            run, attempt = self.engine_evidence(Path(folder))
             plan = read_json(run / "launch.json")
             with patched_live_container(return_value="b" * 64):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
                 self.assertEqual(document["launch"]["model_tree_sha256"], plan["model_tree_sha256"])
                 (Path(plan["model_dir"]) / "model.safetensors").write_bytes(b"other weights")
                 with self.assertRaisesRegex(ValueError, "^model files changed"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
 
     def test_engine_document_uses_checked_captures_and_rejects_stale_plan(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log = self.engine_evidence(Path(folder))
+            run, attempt = self.engine_evidence(Path(folder))
             with patched_live_container(return_value="b" * 64):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
                 # The goldens sort keys, so this pins the written order.
                 self.assertEqual(
                     list(document), ["schema", "schema_version", "contract", "sources", "launch"]
@@ -686,22 +761,22 @@ class AttestationContractTests(unittest.TestCase):
                 previous = Path.cwd()
                 os.chdir(folder)
                 try:
-                    output = generate(run, log)
-                    self.assertEqual(output, run / "engine-attestation.json")
+                    output = generate(run, attempt)
+                    self.assertEqual(output, attempt / "engine-attestation.json")
                     self.assertFalse((Path("runs") / "engine-attestation.engine-1.json").exists())
                     self.assertEqual(output.stat().st_mode & 0o777, 0o600)
                     self.assertEqual(
                         AttestationDocument.load(output).contract.fields(), document["contract"]
                     )
                     with self.assertRaises(FileExistsError):
-                        generate(run, log)
+                        generate(run, attempt)
                 finally:
                     os.chdir(previous)
-                stale = json.loads((run / "transfer-mode.json").read_text())
+                stale = json.loads((attempt / "transfer-mode.json").read_text())
                 stale["plan_sha256"] = "f" * 64
-                save(run / "transfer-mode.json", stale)
+                save(attempt / "transfer-mode.json", stale)
                 with self.assertRaisesRegex(ValueError, "Transfer mode plan_sha256"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
 
     def test_gguf_launch_attests_the_model_file_and_rejects_a_changed_file(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -713,22 +788,22 @@ class AttestationContractTests(unittest.TestCase):
                 "model_path": str(weights),
                 "model_sha256": hashlib.sha256(b"gguf").hexdigest(),
             }
-            run, log = self.engine_evidence(
+            run, attempt = self.engine_evidence(
                 root, ("--model", "/model/weights.gguf"), plan_fields=fields
             )
             with patched_live_container(return_value="b" * 64):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
                 self.assertEqual(document["launch"]["model_sha256"], fields["model_sha256"])
                 # An identical file outside the mounted directory is another file to the engine.
                 outside = root / "outside.gguf"
                 weights.rename(outside)
                 weights.symlink_to(outside)
                 with self.assertRaisesRegex(ValueError, "Model file changed"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
                 weights.unlink()
                 weights.write_bytes(b"other")
                 with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
 
     def test_native_gguf_launch_attests_the_model_file(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -739,7 +814,7 @@ class AttestationContractTests(unittest.TestCase):
                 "model_path": str(weights),
                 "model_sha256": hashlib.sha256(b"gguf").hexdigest(),
             }
-            run, log, process = self.native_evidence(root, fields)
+            run, attempt, process = self.native_evidence(root, fields)
             with (
                 patch(
                     "narwhal.deployment.attestation_contract.evidence.process_identity",
@@ -751,17 +826,17 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=EngineIdentity("0.29.0", 100.0),
                 ),
             ):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
                 self.assertEqual(document["launch"]["model_sha256"], fields["model_sha256"])
                 weights.write_bytes(b"other")
                 with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
-                    engine_document(run, log)
+                    engine_document(run, attempt)
 
     def test_checkpoint_launch_attests_no_model_file(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, log = self.engine_evidence(Path(folder))
+            run, attempt = self.engine_evidence(Path(folder))
             with patched_live_container(return_value="b" * 64):
-                self.assertNotIn("model_sha256", engine_document(run, log)["launch"])
+                self.assertNotIn("model_sha256", engine_document(run, attempt)["launch"])
 
     def test_contract_records_the_launched_speculative_decoding(self):
         for extra, expected in (
@@ -769,15 +844,15 @@ class AttestationContractTests(unittest.TestCase):
             (("--speculative-config", '{"method": "eagle"}'), '{"method": "eagle"}'),
         ):
             with self.subTest(expected=expected), tempfile.TemporaryDirectory() as folder:
-                run, log = self.engine_evidence(Path(folder), extra)
+                run, attempt = self.engine_evidence(Path(folder), extra)
                 with patched_live_container(return_value="b" * 64):
-                    document = engine_document(run, log)
+                    document = engine_document(run, attempt)
                 self.assertEqual(document["contract"]["speculative_config"], expected)
 
     def test_sidecar_uses_derived_role_url_and_current_document(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            run, log = self.engine_evidence(root)
+            run, attempt = self.engine_evidence(root)
             (root / "runs").mkdir()
             previous = Path.cwd()
             os.chdir(root)
@@ -787,6 +862,11 @@ class AttestationContractTests(unittest.TestCase):
                         return_value="b" * 64,
                     ),
                     patch(
+                        "narwhal.deployment.attestation_contract.sidecar.fetch_engine_identity",
+                        new_callable=AsyncMock,
+                        return_value=EngineIdentity("0.29.0", 100.0),
+                    ) as live,
+                    patch(
                         "narwhal.deployment.attestation_contract.sidecar.attest_main",
                         return_value=0,
                     ) as start,
@@ -795,14 +875,25 @@ class AttestationContractTests(unittest.TestCase):
                         {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"},
                     ),
                 ):
-                    generate(run, log)
+                    generate(run, attempt)
+                    publish(run, attempt)
                     self.assertEqual(serve(run), 0)
+                    self.assertEqual(
+                        live.await_args.args, (read_json(run / "launch.json")["endpoint"],)
+                    )
                     args = start.call_args.args[0]
                     self.assertEqual(args[args.index("--host") + 1], "192.0.2.11")
                     self.assertEqual(args[args.index("--port") + 1], "8010")
-                    record = json.loads((run / "engine-attestation.json").read_text())
+                    document = attempt / "engine-attestation.json"
+                    published = document.read_bytes()
+                    record = json.loads(published)
                     record["contract"]["head_size"] = 32
-                    save(run / "engine-attestation.json", record)
+                    save(document, record)
+                    with self.assertRaisesRegex(ValueError, "differs from the document published"):
+                        serve(run)
+                    document.write_bytes(published)
+                    with (attempt / "startup.log").open("a") as log:
+                        log.write("Using TRITON_MLA backend.\n")
                     with self.assertRaisesRegex(
                         ValueError, "differs from current serving evidence"
                     ):

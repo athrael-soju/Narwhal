@@ -107,9 +107,9 @@ A change reruns the stages its row lists and no others. A change that touches se
 | `fabric-budget` | Once for each cache-equivalence group | `cache-groups` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `fabric-edge` | Once for each directed edge between engine hosts | `fabric-budget` | [Binding each sample to a directed route](deploy/04-Qualify-Fabric.md#binding-each-sample-to-a-directed-route) |
 | `fleet-inventory` | Once for each router host | `install` | [Checking the router inventory](deploy/05-Attest.md#checking-the-router-inventory) |
-| `attest-capture` | Once for each engine role, on its engine host | `fabric-edge`, `fleet-inventory` | [Capturing the attestation inputs](deploy/05-Attest.md#capturing-the-attestation-inputs) |
+| `attest-capture` | Once for each engine role, on its engine host | `fabric-edge`, `fleet-inventory` | [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation) |
 | `sidecar-start` | Once for each engine role, on its engine host | `attest-capture` | [Starting the sidecar](deploy/05-Attest.md#starting-the-sidecar) |
-| `sidecar-verify` | Once for each engine role, on its engine host | `sidecar-start` | [Verifying the sidecar against the engine](deploy/05-Attest.md#verifying-the-sidecar-against-the-engine) |
+| `sidecar-verify` | Once for each engine role, on its engine host | `sidecar-start` | [Verifying the sidecar](deploy/05-Attest.md#verifying-the-sidecar) |
 | `finalize-fleet` | Once for each router host | `sidecar-verify` | [Finalizing the fleet contract](deploy/05-Attest.md#finalizing-the-fleet-contract) |
 | `profile` | Once for each router host | `finalize-fleet` | [Profiling idle engines](deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
 | `calibrate` | Once for each router host | `profile` | [Calibrating the first-token deadline](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) |
@@ -156,7 +156,7 @@ Record these inputs and artifacts in the private deployment record:
 | Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
 | Fabric | Peer addresses, transport, representative process, live cache layout, workload budget | `budget.json`, `cache-layout.json`, and the `<edge>.*` files of every directed edge |
-| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json` and `startup.log` in each `ENGINE_RUN` directory, `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |
+| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | In each `ENGINE_RUN` directory, the `attestation/` attempt directories [`capture`](deploy/05-Attest.md#capturing-the-attestation) writes, `published-attestation.json` and the `attestation-check-*` directory from `verify`; `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |
 | Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
 | Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |
 | Router | Bind address, model, engine count, and role split | Router env, fleet config, endpoint captures |
@@ -167,7 +167,7 @@ Recover a failed stage with the steps on its page:
 - Discovery and access: [Access failure handling](deploy/01-Discover.md#access-failure-handling).
 - Package and install: [Recovering a failed installation](deploy/02-Install.md#recovering-a-failed-installation).
 - Fabric: [Troubleshooting an edge below its budget](deploy/04-Qualify-Fabric.md#troubleshooting-an-edge-below-its-budget).
-- Attestation: fix the failing engine, restart its sidecar against the checked process, and run `finalize-fleet` again.
+- Attestation: when `capture` fails, fix the cause it names and run `capture` again, as in [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation). When `verify` or `finalize-fleet` fails, fix the failing engine, restart its sidecar against the checked process, and run `finalize-fleet` again.
 - Profiling: [Reusing or repeating profiles](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles).
 - Preflight: follow the reported engine, transfer leg or budget into [Troubleshooting a fleet](Troubleshoot.md).
 - Router and capacity trial: [Troubleshooting the tunnel](deploy/07-Serve-and-Measure.md#troubleshooting-the-tunnel).

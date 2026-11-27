@@ -97,11 +97,9 @@ class LaunchCapabilityTests(unittest.TestCase):
 
     def test_tensorrt_llm_refuses_the_actions_only_vllm_supports(self):
         run, _, _ = self.prepared("trtllm")
-        for action in ("measure-cache", "handshake-policy"):
-            with self.subTest(action=action):
-                code, error = self.run_cli(action, "--run", str(run))
-                self.assertEqual(code, 1)
-                self.assertIn(f"TensorRT-LLM does not support {action}; it applies to vLLM", error)
+        code, error = self.run_cli("measure-cache", "--run", str(run))
+        self.assertEqual(code, 1)
+        self.assertIn("TensorRT-LLM does not support measure-cache; it applies to vLLM", error)
 
     def test_only_tensorrt_llm_captures_a_native_launch(self):
         run, _, _ = self.prepared("trtllm", native=True)

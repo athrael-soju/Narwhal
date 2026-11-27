@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import CacheCapture, EngineLauncher
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
@@ -84,11 +85,8 @@ class TrtllmLauncher(EngineLauncher, CacheCapture):
     def capture_cache(self, run: Path, plan: dict) -> None:
         captures.capture_cache(run, plan)
 
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_server(run)
-
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         # The cache transceiver ships inside the TensorRT-LLM wheel.

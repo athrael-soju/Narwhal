@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import EngineLauncher, TransferMeasurement
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
@@ -80,11 +81,8 @@ class SglangLauncher(EngineLauncher, TransferMeasurement):
     def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
         return runtime_check.result(context, output)
 
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_server(run)
-
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         return policy.transfer_package(
