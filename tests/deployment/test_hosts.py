@@ -9,6 +9,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -698,6 +699,19 @@ class SshTests(unittest.TestCase):
                 self.assert_stopped(children)
                 self.assertIn("timeout=0.5s; the host did not answer", ssh.log(host).read_text())
         self.assert_private_logs()
+
+    def test_the_clock_offset_brackets_the_hosts_clock_between_two_local_readings(self):
+        # A host whose clock runs 5 seconds ahead of the workstation's.
+        script = (
+            f"{shlex.quote(sys.executable)} -c 'import sys, time\n"
+            "for _ in sys.stdin: print(repr(time.time() + 5), flush=True)'"
+        )
+        with self.fake_ssh('exec sh -c "$last"'):
+            ssh = SSH(self.env, self.root / "logs")
+            offset, bound = ssh.clock_offset(self.hosts[1], "lease-check", "read the clock", script)
+        self.assertLess(abs(offset - 5), bound + 0.05)
+        self.assertLess(bound, 0.5)
+        self.assertIn("offset=", ssh.log(self.hosts[1]).read_text())
 
     def test_a_host_without_coreutils_timeout_is_named(self):
         tools = self.root / "host-bin"

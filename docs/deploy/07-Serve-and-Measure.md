@@ -14,19 +14,22 @@ Both routers hold one lease at `NARWHAL_LEASE_PATH`, so both router hosts must m
 2. The standby router's host reads that claim, and its own claim is refused.
 3. While the primary's host holds the lease lock, `flock` on the standby's host reports it held.
 4. Once the lease expires, the standby's host claims it, and the primary's host reads the new claim.
+5. The primary's host leaves the lease witness, `.narwhal-lease-witness`, in the lease directory, and the standby's host reads it.
+6. The stage records the file system type of the lease directory on each host.
+7. The stage reads each host's clock several times over SSH and fails when the hosts' clocks may differ by more than 1 second, the `--lease-safety-margin` the routers reserve for skew. A lease's expiry is a wall-clock time that the other host compares with its own clock.
 
-A failed step names the host, what it read and what it expected, and the stage removes the probe files. The stage keeps each step's output in `lease-check.json`. Fix the mount on both hosts, then rerun `narwhal deploy run`.
+A failed step names the host, what it read and what it expected, and the stage removes the probe files. The witness stays. The stage keeps each step's output, the file system types and the measured skew in `lease-check.json`. Fix the mount or the clocks on both hosts, then rerun `narwhal deploy run`.
 
 ## Starting the router pair
 
-`router-start` runs for the primary first, then for the standby. Each router runs as a systemd user unit that restarts it on failure:
+`router-start` runs for the primary first, then for the standby. Before either starts, the stage checks on that router's host that the lease directory holds the witness and has the file system type that `lease-check` recorded, so a host that rebooted without the shared mount starts no router. Each router runs as a systemd user unit that restarts it on failure:
 
-- The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). Unless the standby holds the lease on the current fleet, the stage removes the lease file first, so the primary claims the lease and must pass `/ready`. A later restart of the primary finds the lease file and rejoins as the standby.
-- The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary and must pass `/health`.
+- The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). It claims the lease only while no lease file exists. Otherwise it starts as the standby of its peer, and takes over once the lease expires and the peer does not control the fleet.
+- The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary.
 
-Both use `--lease-path NARWHAL_LEASE_PATH` and the host's ID as `--router-id`. The stage keeps the primary's health, readiness, state, metrics and lifecycle responses and one completion under `router/`, and the router's log and journal on its host in the attempt directory.
+The stage never removes the lease. It reads the lease's holder and expiry on the router's host before the start and keeps them in `router.json`. Both routers use `--lease-path NARWHAL_LEASE_PATH`, `--lease-witness` with the witness `lease-check` left, and the host's ID as `--router-id`. Each router must pass `/health`. The stage then waits up to 180 seconds for one router of the pair to control the fleet, and keeps that router's health, readiness, state, metrics and lifecycle responses and one completion under `router/`. The router's log and journal stay on its host in the attempt directory.
 
-When the primary starts the pair, the stage then measures the router overhead under load. It sends 64 completions, 8 at a time, to the primary and reads its `/metrics` before and after. Over the completions that reached a first token, the overhead is the router's time to first token less the time in the prefill legs and in the admission and prefill seat queues, per completion:
+Every `router-start`, including a readmission and a primary that rejoins as the standby, then measures the router overhead under load on the router that controls the fleet. It sends 64 completions, 8 at a time, and reads that router's `/metrics` before and after. Over the completions that reached a first token, the overhead is the router's time to first token less the time in the prefill legs and in the admission and prefill seat queues, per completion:
 
 ```text
 overhead = (Δ narwhal_ttft_seconds_sum
@@ -36,7 +39,7 @@ overhead = (Δ narwhal_ttft_seconds_sum
            / Δ narwhal_ttft_seconds_count
 ```
 
-The stage fails when a completion fails or when the overhead exceeds `NARWHAL_ROUTER_OVERHEAD_S`, the `slo.router_overhead_s` that preflight's [`slo` gate](../cli/Check.md#the-slo-gate) budgets. It keeps the terms in `overhead.json`.
+A window in which a counter went back, or in which the router counted fewer first tokens than the completions that succeeded, measured a restarted router, so the stage measures again, up to three windows. The stage fails when every window saw a reset, when a completion fails or when the overhead exceeds `NARWHAL_ROUTER_OVERHEAD_S`, the `slo.router_overhead_s` that preflight's [`slo` gate](../cli/Check.md#the-slo-gate) budgets. It keeps the terms in `overhead.json`.
 
 When an engine restarts and the routers still run on an unchanged fleet, the router that holds the lease readmits the engine, and its standby follows through state handoffs.
 

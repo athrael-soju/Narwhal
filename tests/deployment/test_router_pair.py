@@ -1,5 +1,6 @@
 """The router pair's host helpers: the lease check, the HAProxy configuration and overhead."""
 
+import base64
 import io
 import json
 import subprocess
@@ -9,6 +10,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from narwhal.deployment import balancer, host_http, lease_check
 
@@ -99,6 +101,54 @@ class OverheadTests(unittest.TestCase):
         # (20 - 12 - 3 - 1) / 10 requests
         self.assertAlmostEqual(terms["overhead_seconds"], 0.4)
         self.assertEqual(terms["requests"], 10)
+
+    def test_a_counter_reset_is_refused_and_the_window_measured_again(self):
+        # The router restarted during the first window: its counters went back, then a
+        # window without a restart measures it.
+        windows = iter(
+            [
+                scrape(30.0, 20, 18.0, 4.0, 1.5),
+                scrape(2.0, 4, 1.0, 0.2, 0.1),
+                scrape(2.0, 4, 1.0, 0.2, 0.1),
+                scrape(2.0 + 0.5 * 4, 8, 1.0 + 0.8, 0.2, 0.1),
+            ]
+        )
+        with (
+            patch.object(host_http, "_metrics", lambda base: next(windows)),
+            patch.object(host_http, "_request", lambda url, body, timeout: (200, b"{}")),
+        ):
+            result = self.overhead(requests=4)
+        self.assertIsNone(result["problem"], result)
+        self.assertEqual(len(result["resets"]), 1)
+        self.assertIn("went back over the window: ", result["resets"][0])
+        # (2.0 - 0.8) / 4 requests
+        self.assertAlmostEqual(result["overhead_seconds"], 0.3)
+
+    def test_counters_that_reset_in_every_window_fail_the_check(self):
+        windows = iter([scrape(30.0, 20, 18.0, 4.0, 1.5), scrape(2.0, 4, 1.0, 0.2, 0.1)] * 3)
+        with (
+            patch.object(host_http, "_metrics", lambda base: next(windows)),
+            patch.object(host_http, "_request", lambda url, body, timeout: (200, b"{}")),
+        ):
+            result = self.overhead(requests=4)
+        self.assertIn("reset in each of 3 measurement windows", result["problem"])
+
+    def test_fewer_first_tokens_than_completions_is_a_reset(self):
+        # A restart between the scrapes that the new process's counters outgrew.
+        windows = iter([scrape(1.0, 10, 0.5, 0.1, 0.1), scrape(1.2, 11, 0.6, 0.1, 0.1)] * 3)
+        with (
+            patch.object(host_http, "_metrics", lambda base: next(windows)),
+            patch.object(host_http, "_request", lambda url, body, timeout: (200, b"{}")),
+        ):
+            result = self.overhead(requests=4)
+        self.assertIn("counted 1 first tokens for 4 completed requests", result["problem"])
+
+    def overhead(self, requests):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(host_http.overhead("http://r", "{}", requests, 2, 0.5), 0)
+        line = next(line for line in out.getvalue().splitlines() if "overhead.json" in line)
+        return json.loads(base64.b64decode(line.split()[-1]))
 
     def test_the_samples_parse_from_the_exposition(self):
         text = (

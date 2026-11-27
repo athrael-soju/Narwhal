@@ -122,14 +122,28 @@ def overhead_terms(
         - terms["admission_wait_seconds"]
         - terms["prefill_wait_seconds"]
     )
+    reset = sorted(name for name, value in terms.items() if value < 0)
+    if reset:
+        raise CounterReset(f"the router's counters went back over the window: {', '.join(reset)}")
     terms["overhead_seconds"] = own / terms["requests"] if terms["requests"] else 0.0
     return terms
 
 
+class CounterReset(ValueError):
+    """The router's counters restarted between the two scrapes of a measurement window."""
+
+
+# Windows the overhead check measures before it gives up on a router whose counters reset.
+OVERHEAD_ATTEMPTS = 3
+
+
 def overhead(base: str, completion: str, requests: int, concurrency: int, limit: float) -> int:
-    """Send `requests` completions at `concurrency` and compare the router overhead to `limit`."""
+    """Send `requests` completions at `concurrency` and compare the router overhead to `limit`.
+
+    A window in which the router's counters reset, or count fewer first tokens than the
+    completions that succeeded, measured a restarted router; it is measured again.
+    """
     body = completion.encode()
-    before = _metrics(base)
 
     def send(_: int) -> int:
         try:
@@ -137,13 +151,35 @@ def overhead(base: str, completion: str, requests: int, concurrency: int, limit:
         except OSError:
             return 0
 
-    with ThreadPoolExecutor(concurrency) as pool:
-        statuses = list(pool.map(send, range(requests)))
-    after = _metrics(base)
-    terms = overhead_terms(before, after)
-    counts: dict[str, int] = {}
-    for code in statuses:
-        counts[str(code)] = counts.get(str(code), 0) + 1
+    resets = []
+    for _ in range(OVERHEAD_ATTEMPTS):
+        before = _metrics(base)
+        with ThreadPoolExecutor(concurrency) as pool:
+            statuses = list(pool.map(send, range(requests)))
+        after = _metrics(base)
+        counts: dict[str, int] = {}
+        for code in statuses:
+            counts[str(code)] = counts.get(str(code), 0) + 1
+        try:
+            terms = overhead_terms(before, after)
+        except CounterReset as reset:
+            resets.append(str(reset))
+            continue
+        if terms["requests"] < counts.get("200", 0):
+            resets.append(
+                f"the router counted {terms['requests']:g} first tokens for "
+                f"{counts.get('200', 0)} completed requests"
+            )
+            continue
+        break
+    else:
+        result = {"requests_sent": requests, "resets": resets, "limit_seconds": limit}
+        result["problem"] = (
+            f"the router's counters reset in each of {OVERHEAD_ATTEMPTS} measurement windows: "
+            + "; ".join(resets)
+        )
+        _emit("overhead.json", json.dumps(result, indent=2).encode())
+        return 0
     failed = requests - counts.get("200", 0)
     problem = None
     if failed:
@@ -161,6 +197,7 @@ def overhead(base: str, completion: str, requests: int, concurrency: int, limit:
         "statuses": counts,
         **terms,
         "limit_seconds": limit,
+        "resets": resets,
         "problem": problem,
     }
     # The verdict is in the file; the command fails only when it cannot measure.

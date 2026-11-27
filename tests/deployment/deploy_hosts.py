@@ -168,6 +168,13 @@ class Fleet:
         # Whether the standby router's host reads the probe lease the primary's host claimed.
         self.lease_coherent = True
         self.lease = ProbeLease(root / "shared")
+        # Each router host's lease mount type, its clock offset and bound, and the hosts whose
+        # lease directory is not mounted.
+        self.mounts: dict[str, str] = {}
+        self.clocks: dict[str, tuple[float, float]] = {}
+        self.unmounted: set[str] = set()
+        # The overhead measurement scripts, in order.
+        self.measured: list[str] = []
         self.monitoring_up = False
         self.monitoring_command = ""
         # What `docker compose version` reports missing on every host, or None.
@@ -175,6 +182,14 @@ class Fleet:
         self.overhead_problem: str | None = None
         # The router that controls the fleet, by host ID.
         self.active_router = "node-1"
+
+    def lease_holder(self) -> str | None:
+        """The host whose running router holds a live lease: the active router, while its
+        router unit runs."""
+        running = any(
+            name.startswith(f"{self.active_router}:") and "-router." in name for name in self.units
+        )
+        return self.active_router if running else None
 
     # Library functions of the standalone commands.
 
@@ -448,6 +463,11 @@ class _SSH:
     def log(self, host: Host) -> Path:
         return self.logs / f"{host.id}.log"
 
+    def clock_offset(self, host: Host, stage: str, operation: str, script: str, samples: int):
+        assert "lease_check clock" in script, script
+        stage_limit({}, stage)
+        return self.fleet.clocks.get(host.id, (0.0, 0.01))
+
     def run(self, host: Host, stage: str, operation: str, script: str, payload=None, reason=None):
         fleet = self.fleet
         if operation == "management access":
@@ -501,11 +521,29 @@ class _SSH:
         ):
             return "200" if _router_host(script) == fleet.active_router else "503"
         if operation == "measure the router overhead":
+            fleet.calls[operation] += 1
+            fleet.measured.append(script)
             measured = {"overhead_seconds": 0.01, "requests": 64, "problem": fleet.overhead_problem}
             return _file("overhead.json", json.dumps(measured).encode())
         if operation == "remove the lease":
             fleet.calls[operation] += 1
             return ""
+        if operation == "read the lease mount's file system type":
+            return fleet.mounts.get(host.id, "nfs")
+        if operation == "check the lease mount":
+            if host.id in fleet.unmounted:
+                return "missing\next2/ext3"
+            return f"present\n{fleet.mounts.get(host.id, 'nfs')}"
+        if operation == "read the pair's lease":
+            fleet.calls[operation] += 1
+            holder = fleet.lease_holder()
+            if holder is None:
+                return json.dumps({"holder": None, "now": 1000.0})
+            return json.dumps(
+                {"holder": f"{holder}:token", "epoch": 1, "expires_at": 1005.0, "now": 1000.0}
+            )
+        if operation == "ask which router controls the fleet":
+            return "200" if _router_host(script) == fleet.active_router else "503"
         if operation in _LEASE_CHECK:
             if operation == "read the claim" and not fleet.lease_coherent:
                 return "null"
@@ -530,6 +568,8 @@ class _SSH:
 
 
 _LEASE_CHECK = (
+    "leave the lease witness",
+    "read the lease witness",
     "claim the probe lease",
     "read the claim",
     "claim the held lease",

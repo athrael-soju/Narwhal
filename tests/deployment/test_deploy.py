@@ -161,6 +161,9 @@ class DeployTests(unittest.TestCase):
         # Only the router that holds the lease readmits.
         self.assertEqual(self.fleet.readmitted, [["n2"]])
         self.assertEqual(self.fleet.calls["start router"], 2)
+        # The readmission measured the overhead on the router that controls the fleet again.
+        self.assertEqual(self.fleet.calls["measure the router overhead"], 4)
+        self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
         self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
 
     def test_an_engine_start_on_a_used_launch_directory_prepares_a_fresh_one_first(self):
@@ -279,8 +282,9 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.ran(result), SLO_RERUN)
         self.assertEqual(self.fleet.calls["start router"], 4)
         self.assertEqual(len(self.fleet.units), UNITS)
-        # The standby ran the old fleet, so the primary started the pair afresh.
-        self.assertEqual(self.fleet.calls["remove the lease"], 2)
+        # No start removes the lease; each reads it first.
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        self.assertEqual(self.fleet.calls["read the pair's lease"], 4)
 
     def test_a_lease_path_the_hosts_do_not_share_stops_the_run_before_the_routers(self):
         self.fleet.lease_coherent = False
@@ -297,7 +301,7 @@ class DeployTests(unittest.TestCase):
 
     def test_a_lost_primary_rejoins_the_standby_that_took_over(self):
         self.deploy("run")
-        self.assertEqual(self.fleet.calls["remove the lease"], 1)
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
         del self.fleet.units[
             next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
         ]
@@ -305,9 +309,45 @@ class DeployTests(unittest.TestCase):
         code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
         self.assertEqual(self.ran(result), {"router-start[node-1]"})
-        # The standby holds the lease, so the lease stays and the primary rejoins as standby.
-        self.assertEqual(self.fleet.calls["remove the lease"], 1)
+        # The standby holds a live lease, which stays; the primary rejoins as its standby, and
+        # the rejoin measures the overhead on the standby that controls the fleet.
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
         self.assertEqual(self.fleet.calls["start router"], 3)
+        self.assertIn("http://10.0.0.2:8000", self.fleet.measured[-1])
+        start = self.run / "stages/router-start/node-1/attempt-2/router.json"
+        lease = json.loads(start.read_text())["lease"]
+        self.assertEqual((lease["holder"], lease["live"]), ("node-2:token", True))
+
+    def test_a_router_host_without_its_lease_mount_starts_no_router(self):
+        self.deploy("run")
+        del self.fleet.units[
+            next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        ]
+        self.fleet.active_router = "node-2"
+        # The host rebooted without the shared mount; lease-check's result still stands.
+        self.fleet.unmounted.add("node-1")
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("not the shared mount that lease-check saw", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def test_router_hosts_whose_clocks_differ_beyond_the_lease_margin_fail_lease_check(self):
+        self.fleet.clocks = {"node-1": (0.0, 0.04), "node-2": (0.8, 0.27)}
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "lease-check")
+        self.assertIn("clocks differ by 0.800s, measured to within 0.310s", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 0)
+        self.fleet.clocks = {"node-1": (0.0, 0.05), "node-2": (0.5, 0.2)}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        checked = json.loads(
+            (self.run / "stages/lease-check/attempt-2/lease-check.json").read_text()
+        )
+        self.assertAlmostEqual(checked["clock"]["skew_s"], 0.5)
 
     def test_router_overhead_above_its_input_fails_router_start(self):
         self.fleet.overhead_problem = "router overhead 0.0900s exceeds NARWHAL_ROUTER_OVERHEAD_S"
@@ -447,6 +487,13 @@ class InputTests(unittest.TestCase):
         before = deploy.inputs(self.env)
         after = deploy.inputs({**self.env, **values})
         return {name for name in before if before[name].digest != after[name].digest}
+
+    def test_a_lease_path_a_shell_could_misread_or_in_the_root_is_refused(self):
+        for lease in ("/srv/it's/lease.json", "/srv/a b/lease.json", "/lease.json", "/srv/../x/l"):
+            with self.subTest(lease=lease), self.assertRaises(deploy.InputError) as raised:
+                deploy.pair({**self.env, "NARWHAL_LEASE_PATH": lease})
+            self.assertIn("NARWHAL_LEASE_PATH", raised.exception.problems[0])
+        self.assertEqual(deploy.pair(self.env).lease_path, "/srv/shared/narwhal-lease.json")
 
     def test_each_input_reruns_only_its_own_fact(self):
         self.assertEqual(self.changed(NARWHAL_TTFT_S="5"), {"slo"})

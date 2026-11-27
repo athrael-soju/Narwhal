@@ -16,6 +16,7 @@ import json
 import math
 import re
 import shlex
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ from narwhal.engines.attestation import AttestationDocument, launch_digest
 
 from ..observability.stack.make_targets import FLEET_NAME, alertmanager_origin
 from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
+from ..runtime.lease import DEFAULT_SAFETY_MARGIN_S, WITNESS_NAME
 from . import (
     balancer,
     cache_groups,
@@ -49,6 +51,7 @@ from .deploy_graph import (
     TRANSFER_MEASUREMENT,
 )
 from .hosts import (
+    HOST_CAUSE,
     ROUTER_ROLES,
     SSH,
     Host,
@@ -72,6 +75,8 @@ HEALTH_SECONDS = 60
 READY_SECONDS = 180
 # Seconds a readmitted engine has to become active.
 READMIT_SECONDS = 120
+# Seconds between checks for the router that controls the fleet.
+READY_POLL_SECONDS = 2
 # The engine start keeps this much of its stage limit for the commands around the wait.
 START_MARGIN_SECONDS = 60
 DOCS = "https://athrael-soju.github.io/Narwhal/"
@@ -109,6 +114,8 @@ ROUTER_INPUTS = (
 # The probe lease's TTL in the lease check. Each step between the claim and the standby's
 # refused claim is an SSH session that starts Python, so the lease must outlive several.
 LEASE_CHECK_TTL_S = 30
+# Clock exchanges with each router host that bound their relative skew.
+CLOCK_SAMPLES = 8
 MONITORING = (
     "NARWHAL_FLEET_NAME",
     "NARWHAL_ALERTMANAGER_URL",
@@ -236,6 +243,8 @@ OVERHEAD_CONCURRENCY = 8
 OVERHEAD_REQUESTS = 64
 _LOOPBACK = re.compile(r"localhost|127\.[0-9.]+|::1|\[::1\]")
 _IMAGE = re.compile(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}")
+# An absolute lease file path in a directory below the root, of plain path segments.
+_LEASE_PATH = re.compile(r"(?:/[A-Za-z0-9_][A-Za-z0-9._-]*){2,}")
 
 
 @dataclass(frozen=True)
@@ -278,10 +287,11 @@ def pair(env: Mapping[str, str]) -> Pair:
         problems.append("set NARWHAL_STANDBY_ROUTER_URL to another origin than the primary's")
     bind = _origin(env, "NARWHAL_LOAD_BALANCER_URL", "the load balancer", problems)
     lease = env.get("NARWHAL_LEASE_PATH", "")
-    if not lease.startswith("/") or lease.endswith("/"):
+    if not _LEASE_PATH.fullmatch(lease) or "/." in lease:
         problems.append(
-            "set NARWHAL_LEASE_PATH to the absolute path of the lease file on storage that both "
-            "router hosts mount at that path"
+            "set NARWHAL_LEASE_PATH to the absolute path of the lease file, in a directory on "
+            "storage that both router hosts mount at that path, of letters, digits, '.', '_' "
+            "and '-'"
         )
     image = env.get("NARWHAL_HAPROXY_IMAGE", "")
     if not _IMAGE.fullmatch(image):
@@ -1349,11 +1359,11 @@ class Deployment:
                     + recovery_url("operate/01-Start-Routers.md#starting-a-router-pair")
                 )
 
+        missing = shlex.quote(f"{HOST_CAUSE}{directory} is not a directory on {primary.id}")
         run(
             primary,
             "check the lease directory",
-            f"test -d {shlex.quote(directory)} || {{ echo 'narwhal-host: {directory} is not a "
-            f"directory on {primary.id}' >&2; exit 4; }}",
+            f"test -d {shlex.quote(directory)} || {{ printf '%s\\n' {missing} >&2; exit 4; }}",
         )
         try:
             first, second = f"{primary.id}-lease-check", f"{standby.id}-lease-check"
@@ -1410,19 +1420,72 @@ class Deployment:
                 json.dumps({"holder": second, "epoch": 2}),
                 "the primary's host does not read the standby's claim",
             )
+            witness = shlex.quote(f"{directory}/{WITNESS_NAME}")
+            run(primary, "leave the lease witness", f"{cli} witness {witness}")
+            expect(
+                standby,
+                "read the lease witness",
+                f"{cli} witness {witness} --check",
+                "present",
+                "the standby's host does not see the witness the primary's host left",
+            )
+            mounts = {
+                host.id: run(
+                    host,
+                    "read the lease mount's file system type",
+                    f"stat -f -c %T {shlex.quote(directory)}",
+                )
+                for host in (primary, standby)
+            }
+            evidence["mounts"] = mounts
+            self._check_skew(context, ssh, manifest["remote_dir"], (primary, standby), evidence)
         finally:
             with contextlib.suppress(RemoteError, RemoteTimeout, OSError):
                 run(primary, "remove the probe lease", f"rm -f {quoted} {quoted}.lock")
         _private(context.directory / "lease-check.json", evidence)
 
+    def _check_skew(
+        self,
+        context: StageContext,
+        ssh: SSH,
+        remote_dir: str,
+        hosts: Sequence[Host],
+        evidence: dict[str, Any],
+    ) -> None:
+        """Fail when the router hosts' clocks may differ by more than the lease reserves.
+
+        A lease's expiry is a wall-clock time that the other host compares with its own clock,
+        so skew beyond the routers' --lease-safety-margin lets the standby claim a live lease.
+        """
+        cli = ".venv/bin/python -m narwhal.deployment.lease_check"
+        script = f"cd {shlex.quote(remote_dir)} && {cli} clock"
+        readings = [
+            ssh.clock_offset(host, context.stage, "read the host clock", script, CLOCK_SAMPLES)
+            for host in hosts
+        ]
+        (first, first_bound), (second, second_bound) = readings
+        skew, bound = abs(second - first), first_bound + second_bound
+        evidence["clock"] = {"skew_s": skew, "bound_s": bound, "margin_s": DEFAULT_SAFETY_MARGIN_S}
+        if skew + bound > DEFAULT_SAFETY_MARGIN_S:
+            _private(context.directory / "lease-check.json", evidence)
+            raise CheckFailed(
+                f"the router hosts' clocks differ by {skew:.3f}s, measured to within "
+                f"{bound:.3f}s, beyond the {DEFAULT_SAFETY_MARGIN_S:g}s the lease reserves for "
+                "skew; synchronise both hosts' clocks, such as with chrony or systemd-timesyncd"
+            )
+        self.announce(
+            f"lease-check: router host clocks differ by {skew:.3f}s, measured to within "
+            f"{bound:.3f}s, within {DEFAULT_SAFETY_MARGIN_S:g}s"
+        )
+
     def router_start(self, context: StageContext) -> Outcome:
         """Start this host's router of the pair, the primary first, then its standby.
 
-        The primary starts with `--first-start-primary`. While the standby does not hold the
-        lease on the current fleet, the stage removes the lease file first, so the primary
-        claims the lease and the standby shadows it; a supervisor's restart finds the file
-        and rejoins as the standby. While the standby holds the lease, the primary rejoins
-        as its standby.
+        The stage first checks that the lease directory on this host is the shared mount that
+        `lease-check` saw. The primary starts with `--first-start-primary`, so it claims the
+        lease only while no lease file exists, and otherwise starts as the standby of its peer
+        and takes over an expired lease. The stage never removes a lease. Each start ends with
+        the router overhead measured on the router that controls the fleet.
         """
         values, routers = settings(self.env), pair(self.env)
         host = self.host(context.instance)
@@ -1432,6 +1495,7 @@ class Deployment:
         env, manifest, package = self.package_of(context)
         ssh = self.ssh(context, env)
         units = self.supervisor(ssh, host, context.stage, context.run_id)
+        witness = self._check_mount(context, ssh, host, manifest["remote_dir"], routers)
         fleet = context.outputs("fleet-limits") / "fleet.json"
         engines = {role: context.product("engine_identity", role) for role in self.engines()}
         state = {"fleet_sha256": _digest(fleet), "engines": engines}
@@ -1439,15 +1503,9 @@ class Deployment:
         if previous is not None and previous["status"] == PASSED:
             kept = self._readmit(context, host, units, previous, state, url)
             if kept is not None:
+                self._measure(context, host, env, manifest["remote_dir"], (url, peer), values)
                 return kept
-        # A fresh pair: the standby does not hold the lease on this fleet.
-        fresh = primary and not self._holds_lease(context, host, peer, state)
-        lease = shlex.quote(routers.lease_path)
-
-        def clear_lease() -> None:
-            if fresh:
-                ssh.run(host, context.stage, "remove the lease", f"rm -f {lease} {lease}.lock")
-
+        lease = self._lease_state(context, ssh, host, manifest["remote_dir"], routers.lease_path)
         address = urlsplit(url)
         argv = [
             "{root}/.venv/bin/narwhal-serve",
@@ -1461,6 +1519,8 @@ class Deployment:
             "{root}/" + self.remote(context) + "/journal.jsonl",
             "--lease-path",
             routers.lease_path,
+            "--lease-witness",
+            witness,
             "--router-id",
             host.id,
             "--standby-of",
@@ -1470,47 +1530,106 @@ class Deployment:
         ]
         if primary:
             argv.append("--first-start-primary")
-        checks = [(url + "/health", HEALTH_SECONDS)]
-        if fresh:
-            checks.append((url + "/ready", READY_SECONDS))
         unit = self._supervise(
             context,
             host,
             "router",
             argv,
             self.role_env(package, self.router_role(host.id)),
-            checks,
-            before_start=clear_lease,
+            [(url + "/health", HEALTH_SECONDS)],
         )
-        _private(context.directory / "router.json", {**state, "url": url, "fresh": fresh})
-        if fresh:
-            self._router_responses(context, host, env, manifest["remote_dir"], url, True)
-            self._overhead(context, host, env, manifest["remote_dir"], url, values)
+        _private(context.directory / "router.json", {**state, "url": url, "lease": lease})
+        self._measure(context, host, env, manifest["remote_dir"], (url, peer), values)
         identity = {"host": host.id, **unit.record()}
         return Outcome({"router_identity": identity}, ({"name": "router", **identity},))
 
-    def _holds_lease(
-        self, context: StageContext, host: Host, peer: str, state: Mapping[str, Any]
-    ) -> bool:
-        """Whether the standby, on the current fleet, controls the fleet."""
-        standby = self.owner("standby-router").id
-        try:
-            entry = self._recorded_entry("router-start", standby)
-        except KeyError:
-            return False
-        earlier = self.directory / entry["directory"] / "router.json"
-        if entry["status"] != PASSED or not earlier.is_file():
-            return False
-        if _json(earlier)["fleet_sha256"] != state["fleet_sha256"]:
-            return False
-        env, manifest, _ = self.package_of(context)
-        answered = self.ssh(context, env).run(
+    def _check_mount(
+        self, context: StageContext, ssh: SSH, host: Host, remote_dir: str, routers: Pair
+    ) -> str:
+        """Check that this host's lease directory is the shared mount `lease-check` saw, and
+        return the witness path the router needs.
+
+        After a reboot that left the mount out, the directory is missing, or a local directory
+        without the witness, of another file system type.
+        """
+        directory = routers.lease_path.rsplit("/", 1)[0]
+        witness = f"{directory}/{WITNESS_NAME}"
+        checked = _json(context.outputs("lease-check") / "lease-check.json")
+        cli = ".venv/bin/python -m narwhal.deployment.lease_check"
+        quoted = shlex.quote(directory)
+        found = ssh.run(
             host,
             context.stage,
-            "ask whether the standby holds the lease",
-            _host_http(manifest["remote_dir"], "status", peer + "/narwhal/targets"),
+            "check the lease mount",
+            f"cd {shlex.quote(remote_dir)} && {cli} witness {shlex.quote(witness)} --check && "
+            f"{{ stat -f -c %T {quoted} 2> /dev/null || echo missing; }}",
+        ).splitlines()
+        expected = checked["mounts"][host.id]
+        if found != ["present", expected]:
+            raise CheckFailed(
+                f"{routers.lease_path}: {host.id}'s lease directory is not the shared mount that "
+                f"lease-check saw (witness and file system type {found}, not "
+                f"{['present', expected]}); mount the shared storage at {directory} and run "
+                "again, as in "
+                + recovery_url("deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path")
+            )
+        return witness
+
+    def _lease_state(
+        self, context: StageContext, ssh: SSH, host: Host, remote_dir: str, path: str
+    ) -> dict[str, Any]:
+        """The lease's holder and expiry as this host reads them, recorded before a start."""
+        cli = ".venv/bin/python -m narwhal.deployment.lease_check"
+        state = json.loads(
+            ssh.run(
+                host,
+                context.stage,
+                "read the pair's lease",
+                f"cd {shlex.quote(remote_dir)} && {cli} state {shlex.quote(path)}",
+            )
         )
-        return answered == "200"
+        live = state.get("holder") is not None and state["expires_at"] > state["now"]
+        holder = state.get("holder") or "no router"
+        self.announce(
+            f"router-start: the lease is {'held by ' + holder if live else 'free'}; "
+            f"{host.id}'s router starts and {'shadows it' if live else 'may claim it'}"
+        )
+        return {**state, "live": live}
+
+    def _measure(
+        self,
+        context: StageContext,
+        host: Host,
+        env: Mapping[str, str],
+        remote_dir: str,
+        urls: Sequence[str],
+        values: Settings,
+    ) -> None:
+        """Wait for a router of the pair to control the fleet, then check it and measure its
+        overhead."""
+        ssh = self.ssh(context, env)
+        deadline = time.monotonic() + READY_SECONDS
+        controlling = None
+        while controlling is None:
+            for candidate in urls:
+                answered = ssh.run(
+                    host,
+                    context.stage,
+                    "ask which router controls the fleet",
+                    _host_http(remote_dir, "status", candidate + "/narwhal/targets"),
+                )
+                if answered == "200":
+                    controlling = candidate
+                    break
+            else:
+                if time.monotonic() >= deadline:
+                    raise CheckFailed(
+                        f"no router of the pair controlled the fleet within {READY_SECONDS}s; "
+                        "read each router's /ready reason"
+                    )
+                time.sleep(READY_POLL_SECONDS)
+        self._router_responses(context, host, env, remote_dir, controlling, True)
+        self._overhead(context, host, env, remote_dir, controlling, values)
 
     def _overhead(
         self,
@@ -1608,7 +1727,6 @@ class Deployment:
                 ),
             )
             remote.write(context.directory, remote.files(output))
-            self._router_responses(context, host, env, manifest["remote_dir"], url, False)
         else:
             self.announce(f"router-start: {host.id}'s router is the standby and readmits none")
         _private(context.directory / "router.json", {**before, **state})

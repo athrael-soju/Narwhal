@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import select
 import shlex
 import signal
 import subprocess
@@ -193,6 +194,20 @@ PID_PATTERN = '"" | *[!0-9]* | 0* | 1'
 
 def _marker(token: str) -> str:
     return f'"$HOME"/{COMMANDS_DIRECTORY}/{token}'
+
+
+def _read_line(fd: int, deadline: float) -> str:
+    """One line from `fd` before the monotonic `deadline`."""
+    data = b""
+    while not data.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            raise TimeoutError("the host did not answer in time")
+        chunk = os.read(fd, 1)
+        if not chunk:
+            raise ValueError("the host closed its output")
+        data += chunk
+    return data.decode().strip()
 
 
 def bounded(script: str, limit: float, token: str) -> str:
@@ -544,6 +559,67 @@ class SSH:
             stop.start()
         for stop in stops:
             stop.join()
+
+    def clock_offset(
+        self, host: Host, stage: str, operation: str, script: str, samples: int = 8
+    ) -> tuple[float, float]:
+        """The host's wall clock minus this workstation's, and the bound on that estimate.
+
+        `script` prints the host's `time.time()` for each line it reads. Each exchange brackets
+        the host's reading between two workstation readings, and the tightest of `samples`
+        exchanges gives the offset; half its round trip bounds the error.
+        """
+        limit = stage_limit(self.env, stage)
+        log_path = self.log(host)
+        token = uuid.uuid4().hex
+        command = "sh -c " + shlex.quote(bounded(script, limit, token))
+        best: tuple[float, float] | None = None
+        with self._record(host, f"{stage}: {operation}") as log, self._client(host) as client:
+            log.write(script + "\n")
+            log.flush()
+            args = [*self._arguments(host, ["-T", "-o", "ClearAllForwardings=yes"]), command]
+            process = subprocess.Popen(
+                args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=client,
+                start_new_session=True,
+            )
+            assert process.stdin is not None and process.stdout is not None
+            with self._lock:
+                self._running[token] = (host, stage, operation, process)
+            deadline = time.monotonic() + limit + HOST_GRACE_S
+            try:
+                for _ in range(samples):
+                    sent = time.time()
+                    process.stdin.write(b"\n")
+                    process.stdin.flush()
+                    line = _read_line(process.stdout.fileno(), deadline)
+                    received = time.time()
+                    half = (received - sent) / 2
+                    offset = float(line) - (sent + received) / 2
+                    if best is None or half < best[1]:
+                        best = (offset, half)
+                process.stdin.close()
+                process.wait(timeout=max(deadline - time.monotonic(), 0.1))
+            except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                os.killpg(process.pid, signal.SIGKILL)
+                self.stop(host, stage, operation, token)
+                _, stderr = process.communicate()
+                log.write(f"failed: {error}\n{stderr.decode(errors='replace')}")
+                raise RemoteError(host.id, stage, operation, log_path, f": {error}") from None
+            except BaseException:
+                os.killpg(process.pid, signal.SIGKILL)
+                self.stop(host, stage, operation, token)
+                process.communicate()
+                raise
+            finally:
+                with self._lock:
+                    self._running.pop(token, None)
+            assert best is not None
+            log.write(f"offset={best[0]:.6f}s bound={best[1]:.6f}s\n")
+        return best
 
     def shell(self, host: Host, script: str) -> None:
         """Run an interactive `script` on `host` in this terminal, with no time limit."""

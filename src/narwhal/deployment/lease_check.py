@@ -10,6 +10,10 @@ value written on one host must be the value the other host reads.
 - `read PATH` prints the holder and epoch as JSON, or `null` for no lease.
 - `hold PATH SECONDS MARKER` holds the lock for SECONDS, creating MARKER once it holds it.
 - `probe PATH` prints `blocked` when another process holds the lock, else `free`.
+- `witness PATH [--check]` leaves the lease witness at PATH, or with `--check` prints `present`
+  or `missing`.
+- `state PATH` prints the lease's holder, epoch and expiry with this host's clock as JSON.
+- `clock` prints this host's wall clock for each line it reads, until its input ends.
 """
 
 from __future__ import annotations
@@ -17,11 +21,14 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 from ..runtime.lease import FileLease, LeaseError
+
+WITNESS_TEXT = "narwhal lease directory\n"
 
 
 def claim(path: Path, holder: str, ttl_s: float, wait_s: float) -> str:
@@ -62,6 +69,38 @@ def probe(path: Path) -> str:
     return "free"
 
 
+def witness(path: Path, check: bool) -> str:
+    if check:
+        return "present" if path.is_file() and path.read_text() == WITNESS_TEXT else "missing"
+    if not path.parent.is_dir():
+        raise ValueError(f"{path.parent} is not a directory")
+    if not path.is_file():
+        staged = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        staged.write_text(WITNESS_TEXT)
+        os.replace(staged, path)
+    return "witness"
+
+
+def state(path: Path) -> str:
+    record = FileLease(path, "lease-check", 60).read()
+    now = time.time()
+    if record is None:
+        return json.dumps({"holder": None, "now": now})
+    return json.dumps(
+        {
+            "holder": record.holder,
+            "epoch": record.epoch,
+            "expires_at": record.expires_at,
+            "now": now,
+        }
+    )
+
+
+def clock() -> None:
+    for _ in sys.stdin:
+        print(repr(time.time()), flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -78,6 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     holding.add_argument("marker", type=Path)
     probing = commands.add_parser("probe")
     probing.add_argument("path", type=Path)
+    witnessing = commands.add_parser("witness")
+    witnessing.add_argument("path", type=Path)
+    witnessing.add_argument("--check", action="store_true")
+    stating = commands.add_parser("state")
+    stating.add_argument("path", type=Path)
+    commands.add_parser("clock")
     args = parser.parse_args(argv)
     try:
         if args.command == "claim":
@@ -86,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
             print(read(args.path))
         elif args.command == "hold":
             print(hold(args.path, args.seconds, args.marker))
+        elif args.command == "witness":
+            print(witness(args.path, args.check))
+        elif args.command == "state":
+            print(state(args.path))
+        elif args.command == "clock":
+            clock()
         else:
             print(probe(args.path))
     except (OSError, LeaseError, ValueError) as error:

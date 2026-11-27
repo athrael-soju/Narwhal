@@ -189,7 +189,7 @@ Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-chan
 | `NARWHAL_ROUTER_URL` | `http://HOST:PORT` the primary router binds. The standby and the load balancer reach it there, so HOST is not a loopback address |
 | `NARWHAL_STANDBY_ROUTER_URL` | `http://HOST:PORT` the standby router binds, reachable from the primary and the load balancer |
 | `NARWHAL_LOAD_BALANCER_URL` | `http://HOST:PORT` that HAProxy binds on its host, and the origin clients use |
-| `NARWHAL_LEASE_PATH` | Absolute path of the pair's lease file, in a directory both router hosts mount at that path, as the [`lease-check` stage](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) checks |
+| `NARWHAL_LEASE_PATH` | Absolute path of the pair's lease file, in a directory below the root that both router hosts mount at that path, as the [`lease-check` stage](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) checks. Each path segment holds only letters, digits, `.`, `_` and `-`, and starts with a letter, digit or `_` |
 | `NARWHAL_HAPROXY_IMAGE` | HAProxy image pinned by image ID or registry digest, such as `haproxy@sha256:<digest>` |
 
 Each router binds its own port, so a router and HAProxy on one host need different ports.

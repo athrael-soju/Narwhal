@@ -48,11 +48,12 @@ Set `--lease-path` on both routers to the same file in the pair's [lease domain]
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--standby-of URL` | `""` | Primary router URL. | URL, or empty for an active router |
-| `--first-start-primary` | off | Start as the primary while no file exists at `--lease-path`, and as the standby of `--standby-of` once one does. Set it on one router of a pair, so that router claims the lease on the pair's first start and a later restart of it rejoins as the standby. | Requires `--standby-of` |
+| `--first-start-primary` | off | Start as the primary while no file exists at `--lease-path` and the `--lease-witness`, when set, exists, and as the standby of `--standby-of` once one does. Set it on one router of a pair, so that router claims the lease on the pair's first start and a later restart of it rejoins as the standby. | Requires `--standby-of` |
 | `--standby-probe-interval SECONDS` | `0.25` | Interval between polls of the primary. | Finite, positive |
 | `--standby-takeover-after N` | `4` | Consecutive failed polls required for takeover. | At least 1 |
 | `--standby-max-handoff-age SECONDS` | `30.0` | Maximum age of a state handoff eligible for takeover. | Finite, positive |
-| `--lease-path PATH` | `""` | Shared lease file. | Path, required with `--standby-of` |
+| `--lease-path PATH` | `""` | Shared lease file. Its directory must exist; the router never creates it, so a missing mount stops the router from taking a lease of its own. | Path, required with `--standby-of` |
+| `--lease-witness PATH` | `""` | File on the shared lease storage that must exist before the router reads or claims the lease, such as the `.narwhal-lease-witness` that `narwhal deploy`'s [lease check](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) leaves. While it is missing, `--first-start-primary` starts the router as the standby. | Path, requires `--lease-path` |
 | `--router-id NAME` | host and port | Stable router name, the prefix of each start's lease-holder token. | |
 | `--lease-ttl SECONDS` | `5.0` | Lease lifetime. | Finite, greater than the renewal interval plus the safety margin |
 | `--lease-renew-interval SECONDS` | `1.0` | Interval between lease renewals. | Finite, positive |
