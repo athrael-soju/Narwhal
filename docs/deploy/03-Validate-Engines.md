@@ -6,146 +6,36 @@ description: Validate and start every vLLM, SGLang or TensorRT-LLM engine in a N
 
 ## Inspecting every engine host
 
-Run these checks in the installed engine-role shell on every engine host.
-
-`NARWHAL_ENGINE_LAUNCH_CONFIG` selects the role's launch record.
-
-Print the allocation and launch policy:
+In the installed engine-role shell on every engine host, inspect the host before you prepare its launch plan:
 
 ```bash
-python3 - <<'PY_LAUNCH'
-import json
-import os
-from pathlib import Path
-record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
-for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
-              "accelerator_devices", "network_mode", "transfer", "environment"):
-    print(f"{field}: {json.dumps(record[field])}")
-PY_LAUNCH
+umask 077
+export INSPECTION_RUN="runs/host-inspection-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+narwhal-engine inspect-host --out "$INSPECTION_RUN"
 ```
 
-Retain this output.
+For a native engine, add `--backend native`. The inspection reads the launch record that `NARWHAL_ENGINE_LAUNCH_CONFIG` selects and the role environment, and runs every check:
 
-Read the physical accelerator identity and count:
+| Check | Passes when |
+| --- | --- |
+| `accelerators` | The host's GPUs run the runtime that `gpu_visibility_env` selects: ROCm for `ROCR_VISIBLE_DEVICES`, CUDA for `CUDA_VISIBLE_DEVICES`. Each `gpu_ids` entry names a distinct GPU on the host by index or UUID, and each selected GPU's product equals `accelerator`. On ROCm, `accelerator_devices` maps `/dev/kfd` and the render device of each selected GPU. A ROCm GPU's index is its `rocminfo` agent number and its product the agent's `Marketing Name`. A CUDA GPU's index, product and UUID come from `nvidia-smi`, and its device node `/dev/nvidia<minor>` takes the minor number that the driver reports for its PCI bus ID, which differs from the index on a host that exposes only some of a machine's GPUs |
+| `image` | For a container engine, `NARWHAL_ENGINE_IMAGE` is the local image ID, or a registry digest among the local image's `RepoDigests` |
+| `engine_user` | The inspection reads the user and groups the engine runs as. A container engine runs as the image's user with the image's groups, because its launch sets neither `--user` nor `--group-add`, so the inspection reads them from a process it starts from the image with no network. A native engine runs as the user that runs `narwhal-engine`. The engine user must run in the inspection's user namespace, so a container under rootless Docker or userns-remap fails: its IDs are not the IDs that the device owners name |
+| `model` | The model files pass the checks that `prepare` applies, reading them the same way: `NARWHAL_MODEL_DIR/config.json` matches `NARWHAL_MODEL_CONFIG_SHA256`, the directory's tree digest matches `NARWHAL_MODEL_TREE_SHA256` when it is set, and with `NARWHAL_MODEL_SHA256` set, `NARWHAL_MODEL_PATH` has that SHA-256 |
+| `run_directory` | `NARWHAL_RUN_DIR` is a directory |
+| `fabric_interface` | `NARWHAL_FABRIC_INTERFACE` is up and holds `NARWHAL_NODE_<n>_IP` |
+| `ports` | These ports are free to bind: the engine port at the address the engine binds, every address of the endpoint's family for a container engine and the endpoint's host for a native one; the vLLM NIXL side channel, SGLang bootstrap server or TensorRT-LLM transfer port; the attestation port of `NARWHAL_NODE_<n>_ATTESTATION_URL`; and for `ucx_tcp`, every port of `NARWHAL_UCX_TCP_PORT_RANGE` at `NARWHAL_NODE_<n>_IP` |
+| `devices` | Each path in `accelerator_devices` and `transfer.devices`, and each selected GPU's device node, is a character device without an access control list that the engine's user can read and write |
 
-```bash
-(
-  set -e
-  vendors=
-  for device in /sys/bus/pci/devices/*; do
-    test -r "$device/class" && test -r "$device/vendor" || continue
-    case "$(cat "$device/class")" in
-      0x03*|0x12*) ;;
-      *) continue ;;
-    esac
-    case "$(cat "$device/vendor")" in
-      0x10de) vendors="$vendors nvidia" ;;
-      0x1002) vendors="$vendors amd" ;;
-    esac
-  done
-  if test -z "$vendors"; then
-    printf '%s\n' 'Inspect GPU PCI device exposure on this engine host.' >&2
-    exit 1
-  fi
-  case "$vendors" in
-    *nvidia*) nvidia-smi --query-gpu=pci.bus_id,name,uuid --format=csv ;;
-  esac
-  case "$vendors" in
-    *amd*) rocminfo ;;
-  esac
-)
+A device passes the permission check when the engine's user is root, or the device's mode grants read and write to that user: the owner bits when the user owns the device, otherwise the group bits when the user's group or one of its groups owns it, otherwise the other bits. The check reads the mode bits. It refuses a device that carries an access control list, because the list's mask replaces the group bits. On ROCm, this covers `/dev/kfd` and each selected `/dev/dri/renderD<minor>`. A ROCm container that runs as a non-root user passes only when its image gives that user the devices' group, such as `render` or `video` with the host's group ID, or the devices grant access to every user.
+
+The inspection writes `host-inspection.json` at mode 0600 with the launch record's allocation fields (`role`, `accelerator`, `gpu_ids`, `tensor_parallel_size`, `accelerator_devices`, `network_mode`, `transfer` and `environment`), each check's observations, the failures and `passed`. Commands it runs on the host log to `inspection.log`. On success it prints `engine-<n>: host inspection passed; evidence in <path>`. When a check fails, it still writes `host-inspection.json`, then exits 1 naming every failed check. A missing or malformed input, such as an unset `NARWHAL_FABRIC_INTERFACE` or an attestation URL without an HTTP port, exits 2 before any check runs. A failed check reads:
+
+```text
+narwhal-engine: inspect-host: ports: the engine port 8000 at 0.0.0.0 is unavailable: [Errno 98] Address already in use; inspect runs/host-inspection-<id>/host-inspection.json
 ```
 
-Record the accelerator product and the visible physical GPU count. On ROCm, count the `rocminfo` agents with `Device Type` set to `GPU`, and read the product from `Marketing Name`.
-
-In the router shell, check the `hardware` fields in `runs/deployment/fleet.json` against the host observations:
-
-| Field                              | Must equal                                              |
-| ---------------------------------- | ------------------------------------------------------- |
-| `hardware.accelerator`             | The observed accelerator product                        |
-| `hardware.accelerators_per_engine` | The number of `gpu_ids` in each replica's launch record |
-| `hardware.tensor_parallel`         | Each replica's `tensor_parallel_size`                   |
-
-Every selected index or UUID must be visible on its engine host.
-
-Verify the local artifacts and planned listeners before launch:
-
-```bash
-test "$(docker image inspect "$NARWHAL_ENGINE_IMAGE" --format '{{.Id}}')" = "$NARWHAL_ENGINE_IMAGE"
-test "$(sha256sum "$NARWHAL_MODEL_DIR/config.json" | cut -d' ' -f1)" = "$NARWHAL_MODEL_CONFIG_SHA256"
-test -d "$NARWHAL_RUN_DIR"
-ip address show dev "$NARWHAL_FABRIC_INTERFACE"
-ss -ltnp
-```
-
-For a GGUF model, also verify the file:
-
-```bash
-test "$(sha256sum "$NARWHAL_MODEL_PATH" | cut -d' ' -f1)" = "$NARWHAL_MODEL_SHA256"
-```
-
-A passing `test` command is silent and exits with status 0.
-
-- If `ss -ltnp` shows a planned HTTP, attestation, vLLM NIXL side-channel, SGLang bootstrap, TensorRT-LLM transfer, or UCX transfer port in use, free the port.
-- If `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest with the configured digest.
-- If the provisioned checkpoint changed, rerun discovery.
-
-Check every declared device path:
-
-```bash
-python3 - <<'PY_DEVICES'
-import json
-import os
-from pathlib import Path
-record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
-paths = record["accelerator_devices"] + record["transfer"]["devices"]
-missing = [path for path in paths if not Path(path).exists()]
-for path in paths:
-    print(f"{path}: {'missing' if path in missing else 'present'}")
-if missing:
-    raise SystemExit("Restore the declared device exposure before launch.")
-PY_DEVICES
-```
-
-For ROCm containers:
-
-- The container requires `/dev/kfd` and the selected DRI devices.
-- A `/dev/dri` mapping exposes every DRI device on the host.
-- Verify the user, group, and container-user permissions on each device file.
-
-## Deriving cache-equivalence groups
-
-From the management shell with `config/deployment.env` loaded:
-
-```bash
-python3 - <<'PY_CACHE_GROUPS'
-import hashlib
-import json
-import os
-from collections import defaultdict
-from pathlib import Path
-
-launches = json.loads(Path(os.environ["NARWHAL_LAUNCH_CONFIG"]).read_text())["engines"]
-groups = defaultdict(list)
-for role, launch in sorted(launches.items()):
-    observed = json.loads(Path(launch["sources"]["runtime"]).read_text())
-    inputs = {
-        "image_id": observed["image_id"],
-        "model_config_sha256": observed["model_sha256"],
-        "accelerator": launch["accelerator"],
-        "tensor_parallel_size": launch["tensor_parallel_size"],
-        "gpu_visibility_env": launch["gpu_visibility_env"],
-        "runtime": launch["runtime"],
-        "transport": launch["transfer"]["transport"],
-    }
-    signature = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()[:16]
-    groups[signature].append(role)
-for signature, roles in sorted(groups.items()):
-    print(f"{signature}: representative={roles[0]}; roles={','.join(roles)}")
-PY_CACHE_GROUPS
-```
-
-Each output line names a signature group, its representative role, and its member roles.
+Free an unavailable port, restore a missing device or its permissions, or correct the launch record, then inspect again into a new `--out` directory. When the provisioned checkpoint or a GPU changed, rerun discovery. `narwhal deploy package` has already checked the fleet's `hardware` fields against the launch records, as [Building the deployment package](02-Install.md#building-the-deployment-package) describes, so an inspection that passes on every host ties them to the hosts.
 
 ## Preparing, checking, and starting each engine
 
@@ -165,14 +55,14 @@ The launcher builds one launch plan per engine with these properties:
 
 For the [capacity trial](../measure/03-Load-Trial.md), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans. To turn it off after launch:
 
-1. Derive the cache-equivalence groups again.
-2. Prepare a fresh launch directory.
-3. Restart each engine.
+1. Prepare a fresh launch directory.
+2. Restart each engine.
+3. Capture the live cache layout, or measure the handoffs on SGLang, and derive the cache-equivalence groups again.
 4. Repeat the stages that [Rerunning after a change](../Deploy.md#rerunning-after-a-change) lists for an engine process restart and for a changed attested binding digest.
 
 For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env` before discovery, or set `runtime.tokenizer` to `PATH` before preparing the launch plan.
 
-When the image, model, dtype, cache policy, TP allocation or model arguments change, derive the groups again. On vLLM and TensorRT-LLM, also capture the live cache layout. When the workload assumptions change, recalculate the fabric budget.
+When the image, model, dtype, cache policy, TP allocation or model arguments change, capture the live cache layout on vLLM and TensorRT-LLM, or measure the handoffs on SGLang, and derive the groups again. When the workload assumptions change, recalculate the fabric budget.
 
 In every engine-role shell, prepare the launch plan:
 
@@ -275,71 +165,27 @@ Before you reuse a failed deployment:
 
 ## Proving the live HTTP process
 
-1. Wait for the engine's `/health` endpoint to return HTTP 200.
-2. Run the probe from the same engine-role shell:
+Once the engine answers `/health`, probe it from the same engine-role shell into a new directory:
 
-    ```bash
-    python3 - <<'PY_ENGINE'
-    import hashlib
-    import json
-    import os
-    from pathlib import Path
-    from urllib.request import Request, urlopen
-    run = Path(os.environ["ENGINE_RUN"])
-    plan_data = (run / "launch.json").read_bytes()
-    plan = json.loads(plan_data)
-    checked = json.loads((run / "checked.json").read_text())
-    assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
-    sglang = plan.get("engine") == "sglang"
-    # TensorRT-LLM's /metrics serves JSON iteration statistics, with no process start.
-    trtllm = plan.get("engine") == "trtllm"
-    expected_version = checked["engine_version"]
-    headers = {"Content-Type": "application/json"}
-    if os.environ.get("NARWHAL_ENGINE_API_KEY"):
-        headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
-    def probe(path, filename=None, body=None):
-        data = json.dumps(body).encode() if body is not None else None
-        request = Request(plan["endpoint"].rstrip("/") + path, data=data, headers=headers)
-        with urlopen(request, timeout=60) as response:
-            content = response.read()
-        if filename:
-            with (run / filename).open("xb") as output:
-                output.write(content)
-        return content
-    probe("/health", "health.txt")
-    if sglang:
-        # /server_info also returns the engine's API key; keep only the version.
-        version = {"version": json.loads(probe("/server_info"))["version"]}
-        with (run / "version.json").open("x") as output:
-            json.dump(version, output)
-    else:
-        version = json.loads(probe("/version", "version.json"))
-    assert version["version"] == expected_version, (
-        f"engine reported version {version['version']!r}; checked image expects {expected_version!r}"
-    )
-    models = json.loads(probe("/v1/models", "models.json"))
-    assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
-    if sglang:
-        print("Engine health, version and model passed.")
-    else:
-        if not trtllm:
-            metrics = probe("/metrics", "metrics.txt").decode()
-            assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
-        completion = json.loads(probe("/v1/completions", "completion.json", {
-            "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
-            "max_tokens": 32, "temperature": 0,
-        }))
-        assert completion["choices"][0]["text"]
-        if trtllm:
-            print("Engine health, version, model and completion passed.")
-        else:
-            print("Engine health, version, model, process identity and completion passed.")
-    PY_ENGINE
-    ```
+```bash
+narwhal-engine probe --run "$ENGINE_RUN" --out "$ENGINE_RUN/probe"
+```
 
-For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For a TensorRT-LLM engine, it checks `/version` and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list.
+The probe reads the engine's credential and served model name from the launch directory. It checks, in order, and stops at the first failure:
 
-If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
+1. The plan hash in `checked.json` matches `launch.json`.
+2. The engine that `start` recorded is still serving: the container in `container.id` runs the checked image and has not started again since `container-start.json`, or the native process in `native-process.json` is the same process. An endpoint answers for whichever process holds its port, so this keeps an engine left from another launch from passing.
+3. `/health` answers with a 2xx status.
+4. The engine version equals the checked `engine_version`. vLLM and TensorRT-LLM report it at `/version`, and SGLang at `/server_info`.
+5. `/v1/models` lists the plan's `served_model_name`.
+6. On vLLM, `/metrics` publishes a `process_start_time_seconds` within 2 seconds of the recorded container start, or equal to the native launch record's.
+7. On vLLM and TensorRT-LLM, one completion of `The sea is` with `max_tokens` 32 and `temperature` 0 returns text.
+
+SGLang publishes no process start over HTTP, and serves a completion only with a peer engine for the other leg. [Attestation](05-Attest.md) reads the SGLang process start on the host, and [preflight](06-Profile-and-Preflight.md) sends paired completions.
+
+Each response lands in `--out` at mode 0600 as it arrives: `health.txt`, `version.json`, `models.json`, `metrics.txt` on vLLM and `completion.json` on vLLM and TensorRT-LLM. `version.json` holds only `{"version": ...}`, because `/server_info` also returns the engine's API key. Once every check passes, the probe writes `probe.json` with the role, endpoint, plan hash, checked version, container ID or native process, model, the vLLM process start, and the SHA-256 of each response, then prints a line such as `engine-1: engine health, version, model, process start and completion passed.`
+
+A failed check exits 1 and keeps the responses that led to it, such as `version.json` with the version the engine reported. If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. The probe refuses an `--out` directory that already holds its files, so probe again into a new directory.
 
 - Leave each serving container running through the workload trial.
 - Keep the engines idle during fabric qualification and profiling.
@@ -354,9 +200,54 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
-Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Building the source budget](04-Qualify-Fabric.md#building-the-source-budget) measures.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+## Measuring KV handoffs without a cache layout
+
+SGLang publishes no cache layout, so on SGLang each engine's handoff size comes from measured handoffs, and a group's engines must match in them. Measure before you derive the groups.
+
+In each engine-role shell, check the packaged measurement tool, then measure eight handoffs with this engine as the prefill engine. Set `DECODE_URL` to the base URL of another idle engine with the same image, model and launch settings:
+
+```bash
+echo "$NARWHAL_TRANSFER_MEASURE_SHA256  $NARWHAL_TRANSFER_MEASURE_TOOL" | sha256sum -c
+export PREFILL_IP='<this engine fabric address>'
+export DECODE_URL='http://<decode engine address>:<decode engine port>'
+python3 "$NARWHAL_TRANSFER_MEASURE_TOOL" \
+  --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
+  --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
+  --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
+  --prompt-tokens 1024 --out-dir "$ENGINE_RUN/transfer"
+```
+
+The measurement writes `$ENGINE_RUN/transfer/transfer.json`, which the groups and the [source budget](04-Qualify-Fabric.md#building-the-source-budget) read.
+
+## Deriving cache-equivalence groups
+
+Engines in one cache-equivalence group share one fabric budget. Two engine roles share a group when they match in:
+
+- the image ID and the model configuration SHA-256 that discovery observed
+- `accelerator`, `tensor_parallel_size`, `gpu_visibility_env`, `runtime` and `transfer.transport` in their launch records
+- their live cache geometry: every TP rank's captured layers, page sizes, block sizes and `kv_cache_layout`, or on SGLang the measured series, prompt length and payload bytes per handoff
+
+The group's representative is its lowest-numbered role.
+
+Copy each engine's `cache-layout.json`, or on SGLang its `transfer.json`, to the management workstation. Then, from the management shell with `config/deployment.env` loaded, pass one file for every engine role:
+
+```bash
+narwhal deploy cache-groups --run "$PACKAGE_RUN" --out runs/cache-groups/first-deploy \
+  --cache-layout engine-1=runs/cache-layouts/engine-1.json \
+  --cache-layout engine-2=runs/cache-layouts/engine-2.json
+```
+
+On SGLang, pass `--transfer-record engine-<n>=<path>` instead. `PACKAGE_RUN` is the directory that [`narwhal deploy package`](02-Install.md) wrote, such as `runs/deployment-env/first-deploy`. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG`, each role's discovery record from its `sources.runtime`, and each role's packaged launch record from `--run`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
+
+It prints one line per group, such as:
+
+```text
+3f0c2a9d81b4e675: representative=engine-1; roles=engine-1,engine-2
+```
+
+and writes `cache-groups.json` at mode 0600 with each group's ID, its static-input `signature`, representative, roles and geometry, and each role's inputs and the SHA-256 of the files it read.
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 

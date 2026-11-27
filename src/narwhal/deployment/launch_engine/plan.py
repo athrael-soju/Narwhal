@@ -495,6 +495,7 @@ def build(
         "expected_packages": runtime["expected_packages"],
         **({"runtime_pins": pins} if (pins := engine.runtime_pins(runtime)) else {}),
         "endpoint": endpoint.geturl(),
+        "served_model_name": env["NARWHAL_ENGINE_MODEL_NAME"],
         "attestation_port": attest_port,
         "side_channel_port": side_port,
         "ucx_tls": values["UCX_TLS"],
@@ -524,7 +525,7 @@ def build(
     return plan, values
 
 
-def check_model_file(plan: dict, env: dict[str, str], backend: str) -> bool:
+def check_model_file(plan: dict, env: Mapping[str, str], backend: str) -> bool:
     """Check the planned model file before `prepare` hashes it, and return whether one is named.
 
     A launch from an image requires NARWHAL_MODEL_SHA256; a native launch checks it when it is
@@ -553,12 +554,15 @@ def check_model_file(plan: dict, env: dict[str, str], backend: str) -> bool:
     return True
 
 
-def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
-    source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
-    record = json.loads(source.read_text())
-    plan, values = build(record, env, output.resolve(), backend=backend)
-    if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
-        raise ValueError("model config differs from its supplied hash")
+def verify_model(plan: dict, env: Mapping[str, str], backend: str) -> ModelFiles:
+    """Hash the plan's model files and check them against the supplied pins.
+
+    Prepare and host inspection both call this, so both follow the same links and refuse the
+    same entries outside the model directory.
+    """
+    config = Path(env["NARWHAL_MODEL_DIR"]) / "config.json"
+    if digest(config) != env["NARWHAL_MODEL_CONFIG_SHA256"]:
+        raise ValueError(f"{config} differs from NARWHAL_MODEL_CONFIG_SHA256")
     names_file = check_model_file(plan, env, backend)
     files = model_files(plan)
     pinned = env.get("NARWHAL_MODEL_TREE_SHA256")
@@ -566,7 +570,15 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         raise ValueError("model directory files differ from NARWHAL_MODEL_TREE_SHA256")
     supplied = env.get("NARWHAL_MODEL_SHA256")
     if names_file and supplied and files.model_file != supplied:
-        raise ValueError("model file differs from its supplied hash")
+        raise ValueError(f"{plan['model_path']} differs from NARWHAL_MODEL_SHA256")
+    return files
+
+
+def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
+    source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
+    record = json.loads(source.read_text())
+    plan, values = build(record, env, output.resolve(), backend=backend)
+    files = verify_model(plan, env, backend)
     plan["model_tree_sha256"] = files.tree
     pod = backend == "kubernetes"
     if pod:
@@ -610,7 +622,7 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
             cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
         )
     plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
-    if names_file:
+    if files.model_file is not None:
         plan["model_sha256"] = files.model_file
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())

@@ -14,7 +14,7 @@ If a helper changes, build a new package.
 
 ### Calculating the workload budget
 
-Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
+Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups), which match in their launch inputs and their captured cache layouts or measured handoffs, share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
 
 `calculate` accepts these options:
 
@@ -48,7 +48,7 @@ The SGLang transfer measurement tool, `"$NARWHAL_TRANSFER_MEASURE_TOOL"`, puts t
 | `--api-key-env NAME`    | `NARWHAL_ENGINE_API_KEY` | Environment variable whose value, when set, goes to both engines as a bearer token.                             |
 | `--out-dir PATH`        | required                 | New directory for `before.prom`, `after.prom` and `transfer.json`.                                              |
 
-`transfer.json`, schema `narwhal.kv-transfer-measurement` version 1, holds the metric series, the prompt length, the mean payload bytes per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`. The tool writes all three files at mode 0600.
+`transfer.json`, schema `narwhal.kv-transfer-measurement` version 1, holds the metric series, the SHA-256 of the prefill engine's `--launch-config`, the prompt length, the mean payload bytes per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`. The tool writes all three files at mode 0600.
 
 ### Retained budget evidence
 

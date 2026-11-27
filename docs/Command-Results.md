@@ -4,7 +4,7 @@ description: Machine-readable JSON results and exit codes for automating Narwhal
 
 # Command results for automation
 
-`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package` and `install` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
+`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package`, `install` and `cache-groups` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
 
 With `--format json`, stdout carries one `narwhal.command-result` version 1 object for every outcome. stderr carries live progress and diagnostics, subprocess stdout and stderr replayed at completion, and the help text for `--format json --help`.
 
@@ -24,7 +24,7 @@ Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes)
 | Status | Exit code | Operation state | Error codes |
 | --- | :--: | --- | --- |
 | `success` | 0 | The requested operation completed | |
-| `failed_gate` | 1 | A preflight, evidence, or health gate rejected the operation | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
+| `failed_gate` | 1 | A preflight, evidence, health, host inspection or engine probe gate rejected the operation | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
 | `invalid_input` | 2 | Arguments, configuration, or required inputs failed validation | `invalid_arguments`, `invalid_input`, `input_missing`, `output_exists`, `engine_selection_empty`, `runtime_package_missing` |
 | `degraded` | 3 | Completed with skipped preflight gates, a degraded development instance, or a partial diagnostic bundle | `gates_skipped`, `instance_degraded`, `collection_partial` |
 | `error` | 4 | An operational failure or stage deadline interrupted completion | `permission_denied`, `engine_http_error`, `operation_failed`, `stage_timeout` |
@@ -51,9 +51,12 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | `narwhal deploy discover` | `out`, the discovery directory, and `deployment_env`, the derived variables file |
 | `narwhal deploy access` | `logs`, the log directory, and `hosts`, each with its `id` and `roles` |
 | `narwhal deploy package`, `narwhal deploy install` | `run`, the package directory, and `hosts`, the packaged or installed host IDs |
+| `narwhal deploy cache-groups` | `out`, the evidence directory, and `groups`, each with its `id`, `representative` and `roles` |
 | `narwhal config` actions | The `narwhal.effective-config` document |
 | `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and the `sources` count |
 | `narwhal-engine` actions | `runs`, the launch directories |
+| `narwhal-engine inspect-host` | `out`, the evidence directory, and on success `role` and `passed` |
+| `narwhal-engine probe` | `out`, the evidence directory, `runs`, the launch directory, and on success `role` and `passed` |
 | `narwhal-profile` | `engines`, the selected engine IDs |
 | `narwhal-check` preflight | `failed`, `skipped`, `warnings`, `pairs`, and [`first_token_calibration`](cli/Check.md#the-calibration-gate) |
 | `narwhal-check --verify-evidence` | `failed` |

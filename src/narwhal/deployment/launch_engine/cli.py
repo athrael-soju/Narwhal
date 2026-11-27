@@ -12,7 +12,7 @@ from ...backends import names
 from ...cli_support import add_version_argument
 from .. import native_engine
 from ..attestation_contract.evidence import model_dimensions
-from . import kubernetes
+from . import kubernetes, validation
 from .backend import (
     CacheCapture,
     CacheMeasurement,
@@ -46,11 +46,13 @@ CAPTURE_ACTIONS: dict[str, tuple[str, str, type]] = {
 
 
 ACTIONS = (
+    "inspect-host",
     "prepare",
     "check",
     "measure-cache",
     "model-dimensions",
     "start",
+    "probe",
     "capture-cache",
     "start-shared",
     "start-native",
@@ -94,6 +96,7 @@ def _main(argv: list[str]) -> int:
         "native-start.json (native only).",
         "stop-native": "Stop owned process groups after validating the recorded native "
         "process identities in the run directory (native only).",
+        **validation.DESCRIPTIONS,
     }
     capturing = {
         name: capture_backends(capability) for name, (_, _, capability) in CAPTURE_ACTIONS.items()
@@ -165,10 +168,13 @@ def _main(argv: list[str]) -> int:
     public["stop-native"].add_argument(
         "--run", type=Path, required=True, help="native launch directory with process records"
     )
+    validation.add_arguments(public)
     args = parser.parse_args(argv)
     if args.command in ("start-shared", "start-native") and args.ready_seconds < 1:
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     results.set_operation(args.command)
+    if args.command in validation.DESCRIPTIONS:
+        return validation.run(args, parser)
     roots = [args.out] if args.command == "prepare" else args.run
     if not isinstance(roots, list):
         roots = [roots]

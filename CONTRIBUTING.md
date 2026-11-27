@@ -256,16 +256,22 @@ Import each name from the subpackage module that defines it.
 | `deployment/discovery.py`                                                    | Host discovery and the generated deployment configuration                |
 | `deployment/role_env.py`                                                     | Role environments and the helper snapshots of each backend               |
 | `deployment/install.py`                                                      | Deployment packages and their installation on SSH hosts                  |
+| `deployment/cache_groups.py`                                                 | Cache-equivalence groups of the engine roles                             |
 | `deployment/fabric_budget.py`                                                | Fabric workload budget and directed link records, run on engine hosts    |
 | `deployment/cli.py`                                                          | `narwhal deploy`                                                         |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
+| `deployment/launch_engine/accelerators.py`                                   | GPU inventory, also run by discovery on engine hosts                     |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
 | `deployment/launch_engine/verdict.py`                                        | Verdict on runtime probe output, also run in a Kubernetes engine pod     |
-| `deployment/launch_engine/backend.py`                                        | Launcher, cache capture, transfer measurement and model dimension interfaces for backends |
+| `deployment/launch_engine/inspection.py`                                     | Engine host inspection before launch                                     |
+| `deployment/launch_engine/probe.py`                                          | Live HTTP probe of a started engine                                      |
+| `deployment/launch_engine/evidence.py`                                       | Evidence and failed checks of `inspect-host` and `probe`                 |
+| `deployment/launch_engine/validation.py`                                     | `narwhal-engine inspect-host` and `probe`                                |
+| `deployment/launch_engine/backend.py`                                        | Launcher, live probe, cache capture, transfer measurement and model dimension interfaces for backends |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
 | `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |

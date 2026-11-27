@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import command_results as results
 from ..cli_errors import failure
-from . import discovery, install
+from . import cache_groups, discovery, install
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 
 DESCRIPTIONS = {
@@ -25,6 +25,9 @@ DESCRIPTIONS = {
     "and each host's role files into a fresh package directory with a private manifest.",
     "install": "Copy a package to each selected host, checking every file's SHA-256, and "
     "install the wheel into the host's deployment directory.",
+    "cache-groups": "Group the engine roles of the launch records into cache-equivalence "
+    "groups by image, model, allocation, runtime and transport, and by each engine's captured "
+    "cache layout or measured KV handoff, and write cache-groups.json.",
     "shell": "Open an interactive shell on a role's host, in its deployment directory with the "
     "role environment loaded when --run names a package.",
     "tunnel": "Forward workstation loopback ports to a role's host until interrupted.",
@@ -41,6 +44,14 @@ def forward_ports(value: str) -> tuple[int, int]:
     return local, remote
 
 
+def role_file(value: str) -> tuple[str, Path]:
+    """Parse ROLE=PATH into an engine role and a file path."""
+    role, separator, path = value.partition("=")
+    if not separator or not re.fullmatch(r"engine-[1-9][0-9]*", role) or not path:
+        raise argparse.ArgumentTypeError("Use ROLE=PATH with an engine-<n> role")
+    return role, Path(path)
+
+
 def add_commands(commands: Any) -> None:
     """Register `deploy` beneath the installed root command."""
     deploy = commands.add_parser(
@@ -48,8 +59,9 @@ def add_commands(commands: Any) -> None:
         help="Discover, package and install a fleet on SSH hosts",
         description="Discover, package and install a fleet on SSH hosts. discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
-        "writes the wheel and role files, install copies and installs them, shell opens a role "
-        "shell and tunnel forwards router ports to the workstation.",
+        "writes the wheel and role files, install copies and installs them, cache-groups "
+        "groups the engines that share a fabric budget, shell opens a role shell and tunnel "
+        "forwards router ports to the workstation.",
         epilog="Documentation: https://athrael-soju.github.io/Narwhal/cli/Deploy/",
     )
     actions = deploy.add_subparsers(dest="action", required=True)
@@ -57,7 +69,7 @@ def add_commands(commands: Any) -> None:
         action = actions.add_parser(name, help=description, description=description)
         if name not in ("shell", "tunnel"):
             results.add_format(action)
-        if name != "discover":
+        if name not in ("discover", "cache-groups"):
             action.add_argument(
                 "--hosts",
                 type=Path,
@@ -66,6 +78,37 @@ def add_commands(commands: Any) -> None:
         if name in ("discover", "package"):
             action.add_argument(
                 "--out", type=Path, required=True, help="fresh private output directory"
+            )
+        if name == "cache-groups":
+            action.add_argument(
+                "--out",
+                type=Path,
+                required=True,
+                help="evidence directory for cache-groups.json, created when absent",
+            )
+            action.add_argument(
+                "--run",
+                type=Path,
+                required=True,
+                help="package directory that package wrote from the launch records",
+            )
+            action.add_argument(
+                "--cache-layout",
+                type=role_file,
+                action="append",
+                default=[],
+                metavar="ROLE=PATH",
+                help="an engine role's captured cache-layout.json; repeat for every engine "
+                "that captures its cache layout",
+            )
+            action.add_argument(
+                "--transfer-record",
+                type=role_file,
+                action="append",
+                default=[],
+                metavar="ROLE=PATH",
+                help="an engine role's measured transfer.json; repeat for every engine whose "
+                "KV handoffs are measured",
             )
         if name == "install":
             action.add_argument(
@@ -133,6 +176,36 @@ def _discover(args: argparse.Namespace, env: dict[str, str]) -> int:
     derived = discovery.discover(env, args.out)
     results.set_data({"out": str(args.out), "deployment_env": str(derived)})
     print(f"Generated private configuration. Load {derived} before packaging.")
+    return 0
+
+
+def _cache_groups(args: argparse.Namespace, env: dict[str, str]) -> int:
+    launch_config = Path(env.get("NARWHAL_LAUNCH_CONFIG", "config/engine-launch.local.json"))
+    evidence: dict[str, dict[str, Path]] = {}
+    for option, pairs in (
+        ("--cache-layout", args.cache_layout),
+        ("--transfer-record", args.transfer_record),
+    ):
+        roles = [role for role, _ in pairs]
+        if len(set(roles)) != len(roles):
+            raise ValueError(f"Give one {option} for each role")
+        evidence[option] = dict(pairs)
+    results.add_artifact("cache_groups", args.out / cache_groups.EVIDENCE)
+    document = cache_groups.derive(
+        launch_config,
+        evidence["--cache-layout"],
+        evidence["--transfer-record"],
+        args.run,
+        args.out,
+    )
+    groups = [
+        {key: group[key] for key in ("id", "representative", "roles")}
+        for group in document["groups"]
+    ]
+    results.set_data({"out": str(args.out), "groups": groups})
+    for group in groups:
+        members = ",".join(group["roles"])
+        print(f"{group['id']}: representative={group['representative']}; roles={members}")
     return 0
 
 
@@ -207,6 +280,8 @@ def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
         raise ValueError(f"deploy {args.action} is interactive; run it without --format json")
     if args.action == "discover":
         return _discover(args, env)
+    if args.action == "cache-groups":
+        return _cache_groups(args, env)
     hosts = _hosts(args, env)
     if args.action == "access":
         return _access(hosts, env)

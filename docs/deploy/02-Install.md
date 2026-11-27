@@ -33,7 +33,7 @@ In the management checkout:
     narwhal deploy package --out runs/deployment-env/first-deploy
     ```
 
-`package` refuses a wheel or lock whose SHA-256 differs from its input. On success it prints:
+`package` refuses a wheel or lock whose SHA-256 differs from its input. It also refuses a fleet whose `hardware.accelerator`, `hardware.accelerators_per_engine` or `hardware.tensor_parallel` differs from an engine's launch record `accelerator`, number of `gpu_ids` or `tensor_parallel_size`, naming the role and the field. [Inspecting every engine host](03-Validate-Engines.md#inspecting-every-engine-host) then checks each launch record against its host's GPUs. On success it prints:
 
 ```text
 Packaged <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready

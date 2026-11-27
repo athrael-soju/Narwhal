@@ -13,12 +13,14 @@ from ...deployment.launch_engine.backend import (
     CacheRegistration,
     EngineLauncher,
     LiveModelDimensions,
+    LiveProbe,
     ModelFormats,
 )
 from ...deployment.launch_engine.check import CheckContext
 from . import attestation, captures, dev, discovery, probe_reader
 from . import check as runtime_check
 from . import plan as policy
+from .identity import parse_process_start
 from .runtime import LAUNCHER
 
 
@@ -44,6 +46,7 @@ class VllmLauncher(
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     fleet_settings = discovery.FLEET_SETTINGS
     probe_reader: ClassVar[ModuleType] = probe_reader
+    live_probe = LiveProbe(parse_process_start, completion=True)
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
@@ -14,6 +15,19 @@ if TYPE_CHECKING:
     from ..attestation_contract.document import AttestationContext, AttestationEvidence
     from .check import CheckContext
     from .settings import LaunchSettings
+
+
+@dataclass(frozen=True)
+class LiveProbe:
+    """What `narwhal-engine probe` reads from a live engine after its health, version and models.
+
+    `process_start` reads the process start from the engine's /metrics text; None means the
+    engine publishes no process start there. `completion` is False for an engine that serves a
+    completion only with a peer engine for the other leg.
+    """
+
+    process_start: Callable[[str], float] | None
+    completion: bool
 
 
 class EngineLauncher(ABC):
@@ -36,6 +50,7 @@ class EngineLauncher(ABC):
     probe_reader: ClassVar[ModuleType]
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
+    live_probe: ClassVar[LiveProbe]
     # Discovery settings that take one value for the fleet; a NARWHAL_NODE_<n>_ override is
     # refused.
     fleet_settings: ClassVar[frozenset[str]] = frozenset()

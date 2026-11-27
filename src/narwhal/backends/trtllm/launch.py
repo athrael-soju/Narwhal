@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import CacheCapture, EngineLauncher
+from ...deployment.launch_engine.backend import CacheCapture, EngineLauncher, LiveProbe
 from ...deployment.launch_engine.check import CheckContext
 from . import attestation, captures, dev, discovery, probe_reader
 from . import check as runtime_check
@@ -32,6 +32,8 @@ class TrtllmLauncher(EngineLauncher, CacheCapture):
     prefix_cache_name = "KV block reuse"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     probe_reader: ClassVar[ModuleType] = probe_reader
+    # /metrics serves JSON iteration statistics, with no process start.
+    live_probe = LiveProbe(None, completion=True)
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)

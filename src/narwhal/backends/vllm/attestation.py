@@ -17,21 +17,19 @@ from ...deployment.attestation_contract.document import (
 )
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
-    container_start,
     live_binding,
     live_container,
     live_identity,
     live_native,
     parse_tagged_capture,
     read_json,
-    read_native_start,
     require_binding,
     require_prior_dimensions,
+    require_process_start,
     write_private_json,
 )
 from ...deployment.launch_engine.plan import launch_headers, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
-from ...engines.host_process import started_at_seconds
 from .captures import handshake_policy, registration_layout
 from .identity import parse_process_start
 
@@ -279,26 +277,6 @@ def check_startup_connector(attempt: Path) -> None:
         raise ValueError(
             f"{startup_log.name} records the engine creating {', '.join(sorted(created))}, "
             f"not the resolved {expected}"
-        )
-
-
-# The serving process is the container's first process, so the process start in /metrics and
-# the container's State.StartedAt name one moment. /metrics derives the start from the kernel's
-# boot time, which has one-second resolution.
-CONTAINER_START_TOLERANCE_S = 2.0
-
-
-def require_process_start(run: Path, plan: dict, process_start: float) -> None:
-    """Require the process start /metrics reports to be the start of the recorded process."""
-    if plan.get("backend") == "native":
-        if process_start != read_native_start(run)["process_start_time_seconds"]:
-            raise ValueError("HTTP process start differs from the native launch record")
-        return
-    started = started_at_seconds(container_start(run)["started_at"])
-    if abs(process_start - started) > CONTAINER_START_TOLERANCE_S:
-        raise ValueError(
-            f"HTTP process start {process_start} is not the container start {started}; "
-            "the endpoint serves another process"
         )
 
 

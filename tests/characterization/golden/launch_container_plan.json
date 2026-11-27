@@ -108,6 +108,7 @@
     "name": "<name>",
     "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "role": "engine-1",
+    "served_model_name": "synthetic",
     "side_channel_port": 5600,
     "ucx_tls": "tcp,sm,self,rocm"
   }

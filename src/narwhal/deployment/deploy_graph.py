@@ -93,8 +93,8 @@ STAGES = (
     _stage(
         "transfer-measure",
         ENGINE,
-        _FABRIC,
-        "Building the source budget",
+        _ENGINES,
+        "Measuring KV handoffs without a cache layout",
         ("engine-probe",),
         ("handoff_geometry",),
         capability=TRANSFER_MEASUREMENT,

@@ -71,6 +71,27 @@ def profiling_limits(launches: dict[str, dict], fleet: dict) -> dict:
     return {"schema": "narwhal.profiling-limits", "schema_version": 1, "engines": limits}
 
 
+def check_hardware(fleet: dict, launches: dict[str, dict]) -> None:
+    """Refuse a fleet whose `hardware` fields differ from an engine's launch record.
+
+    `narwhal-engine inspect-host` checks each launch record against its host's GPUs, so the
+    two checks together tie the fleet's hardware to the hosts.
+    """
+    hardware = fleet.get("hardware") or {}
+    for role, record in launches.items():
+        declared = {
+            "accelerator": record["accelerator"],
+            "accelerators_per_engine": len(record["gpu_ids"]),
+            "tensor_parallel": record["tensor_parallel_size"],
+        }
+        for field, value in declared.items():
+            if hardware.get(field) != value:
+                raise ValueError(
+                    f"{role}: the fleet's hardware.{field} is {hardware.get(field)!r}, but the "
+                    f"launch record gives {value!r}; correct the fleet or rerun discovery"
+                )
+
+
 def wheel_version(name: str) -> str:
     match = WHEEL_NAME.fullmatch(name)
     if match is None:
@@ -175,6 +196,7 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
         engine_roles,
         selected,
     )
+    check_hardware(fleet, launches)
     expose_colocated_gpus(launches, [list(host.roles) for host in hosts])
     selected_helpers = helpers(launcher(fleet.get("engine", {}).get("backend")))
     # Engine hosts run the helpers of the release that they install.

@@ -26,8 +26,6 @@ In each engine-role shell, check the packaged helpers against the SHA-256 values
 echo "$NARWHAL_FABRIC_BUDGET_SHA256  $NARWHAL_FABRIC_BUDGET_TOOL" | sha256sum -c
 ```
 
-On SGLang, check `NARWHAL_TRANSFER_MEASURE_TOOL` against `NARWHAL_TRANSFER_MEASURE_SHA256` the same way.
-
 Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
 1. In the representative's engine-role shell, calculate the budget. On vLLM and TensorRT-LLM, calculate it from the captured cache layout:
@@ -42,20 +40,13 @@ Each outgoing directed edge from the cache group's roles carries the full handof
       --out "$FABRIC_RUN/budget.json"
     ```
 
-    On SGLang, the representative is a prefill engine. Set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine in the group, then measure eight handoffs and calculate the budget from them:
+    On SGLang, calculate it from the representative's own [handoff measurement](03-Validate-Engines.md#measuring-kv-handoffs-without-a-cache-layout):
 
     ```bash
-    export PREFILL_IP='<this engine fabric address>'
-    export DECODE_URL='http://<decode engine address>:<decode engine port>'
-    python3 "$NARWHAL_TRANSFER_MEASURE_TOOL" \
-      --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
-      --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
-      --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --prompt-tokens 1024 --out-dir "$FABRIC_RUN/transfer"
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
       --model-config "$NARWHAL_MODEL_DIR/config.json" \
       --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --transfer-record "$FABRIC_RUN/transfer/transfer.json" \
+      --transfer-record "$ENGINE_RUN/transfer/transfer.json" \
       --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
       --transfer-budget-s 1 --headroom 1.25 \
       --out "$FABRIC_RUN/budget.json"
@@ -87,7 +78,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
     - The budget digest
     - `required_gbps`
     - The resolved layout, on vLLM
-    - The cache-group signature
+    - The cache-group ID that `cache-groups` printed
 
 4. For each role that uses another host's representative budget, create a local comparison budget from the representative's `required_gbps` and budget digest:
 

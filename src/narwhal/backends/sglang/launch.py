@@ -7,7 +7,11 @@ from typing import ClassVar
 
 from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import EngineLauncher, TransferMeasurement
+from ...deployment.launch_engine.backend import (
+    EngineLauncher,
+    LiveProbe,
+    TransferMeasurement,
+)
 from ...deployment.launch_engine.check import CheckContext
 from . import attestation, dev, discovery, probe_reader
 from . import check as runtime_check
@@ -30,6 +34,9 @@ class SglangLauncher(EngineLauncher, TransferMeasurement):
     prefix_cache_name = "The radix cache"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     probe_reader: ClassVar[ModuleType] = probe_reader
+    # SGLang publishes no process start over HTTP, and serves a completion only with a
+    # peer engine for the other leg.
+    live_probe = LiveProbe(None, completion=False)
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
