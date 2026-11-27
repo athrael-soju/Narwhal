@@ -37,6 +37,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                     artifacts.CONTROL_TOKEN_FILE,
                     artifacts.TOOL_TARGETS,
                     "prometheus/targets/router.json",
+                    "prometheus/targets/sidecars.json",
                 }
                 self.assertEqual(
                     {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}, expected
@@ -56,7 +57,9 @@ class MonitoringArtifactTests(unittest.TestCase):
                 for relative, target in artifacts.FILES.items():
                     expected_bytes = (source / relative).read_bytes()
                     if relative == "prometheus.yml":
-                        expected_bytes = expected_bytes.replace(b"<<targets>>", b"127.0.0.1:8000")
+                        expected_bytes = artifacts.render_prometheus(
+                            expected_bytes.decode(), contract
+                        ).encode()
                     self.assertEqual((root / target).read_bytes(), expected_bytes)
                 for path, mode in original_modes.items():
                     self.assertEqual(path.stat().st_mode, mode, str(path))

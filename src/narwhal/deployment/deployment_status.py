@@ -8,7 +8,6 @@ deployment directory. Each router reads it on every scrape of `/metrics`.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,6 @@ HOST_PATH = "runs/deployment/deployment-status.json"
 LOCAL_NAME = "deployment-status.json"
 # The edge results that `fabric-edge` keeps in its attempt directory.
 EDGE_RESULTS = "edge-results.json"
-FLEET_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 
 
 def _ended(entry: Mapping[str, Any] | None) -> float | None:

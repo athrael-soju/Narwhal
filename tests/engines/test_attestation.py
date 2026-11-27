@@ -192,6 +192,25 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             failed = True
             self.assertEqual((await client.get("/health")).status_code, 503)
 
+    async def test_sidecar_metrics_report_its_unit_and_pod_restarts(self):
+        transport = httpx.MockTransport(lambda request: httpx.Response(503))
+        app = build_app(
+            self.document,
+            "http://engine",
+            self.identity,
+            transport=transport,
+            supervised=lambda: {"sidecar": 2},
+            kubelet=lambda: {"engine": 1, "attestation": 0},
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://sidecar"
+        ) as client:
+            response = await client.get("/metrics")
+        # The counts answer even while the engine does not.
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('narwhal_supervisor_restarts{process="sidecar"} 2', response.text)
+        self.assertIn('narwhal_kubelet_restarts{container="engine"} 1', response.text)
+
     async def test_sidecar_serves_residency_only_with_an_event_feed(self):
         start = 100
 

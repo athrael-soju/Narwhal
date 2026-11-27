@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -15,6 +16,12 @@ DEFAULT_TARGETS_DIR = Path("runs") / "observability" / "mounts" / "prometheus" /
 ENGINE_TARGETS_PATH = "/narwhal/targets"
 ROUTER_URL_ENV = "NARWHAL_ROUTER_URL"
 TARGETS_URL_ENV = "NARWHAL_TARGETS_URL"
+FLEET_ENV = "NARWHAL_FLEET_NAME"
+ALERTMANAGER_ENV = "NARWHAL_ALERTMANAGER_URL"
+SIDECAR_URLS_ENV = "NARWHAL_SIDECAR_URLS"
+# The fleet label of a stack started without a fleet name.
+DEFAULT_FLEET = "default"
+FLEET_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,12 @@ class TargetContract:
     routers: tuple[str, ...]
     # The origin Prometheus reads the engine targets from.
     targets: str
+    # The attestation sidecar origins Prometheus scrapes, one per engine.
+    sidecars: tuple[str, ...] = ()
+    # The `fleet` label every scraped series carries.
+    fleet: str = DEFAULT_FLEET
+    # The Alertmanager Prometheus sends alerts to, as scheme, host:port and path, or None.
+    alertmanager: tuple[str, str, str] | None = None
 
     @property
     def engine_targets_url(self) -> str:
@@ -72,7 +85,28 @@ def router_urls(values: Sequence[str]) -> list[str]:
     return [url.strip() for value in values for url in value.split(",") if url.strip()]
 
 
-def load_contract(urls: Sequence[str], targets_url: str | None = None) -> TargetContract:
+def alertmanager_origin(url: str) -> tuple[str, str, str]:
+    """The scheme, `host:port` and path prefix of an Alertmanager URL."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid {ALERTMANAGER_ENV} {url!r}: {exc}") from exc
+    if parsed.scheme not in ("http", "https") or parsed.hostname is None or port is None:
+        raise ValueError(f"{ALERTMANAGER_ENV} {url!r} needs http(s)://HOST:PORT")
+    if parsed.username is not None or parsed.password is not None or parsed.query:
+        raise ValueError(f"{ALERTMANAGER_ENV} {url!r} must hold no credentials or query")
+    return parsed.scheme, parsed.netloc, parsed.path.rstrip("/") or "/"
+
+
+def load_contract(
+    urls: Sequence[str],
+    targets_url: str | None = None,
+    *,
+    sidecars: Sequence[str] = (),
+    fleet: str | None = None,
+    alertmanager: str | None = None,
+) -> TargetContract:
     """Validate the router origins Prometheus scrapes and the origin of the engine targets.
 
     One router serves its own engine targets. A router pair needs `targets_url`, an origin that
@@ -97,15 +131,31 @@ def load_contract(urls: Sequence[str], targets_url: str | None = None) -> Target
             f"a router pair requires --targets-url or {TARGETS_URL_ENV}: "
             "the load balancer origin that reaches the active router"
         )
-    return TargetContract(routers, targets)
+    fleet = fleet or DEFAULT_FLEET
+    if not FLEET_NAME.fullmatch(fleet):
+        raise ValueError(
+            f"{FLEET_ENV} {fleet!r} must be lowercase letters, digits, '.', '_' or '-', "
+            "starting with a letter or digit, at most 63 characters"
+        )
+    return TargetContract(
+        routers,
+        targets,
+        tuple(metrics_authority(url) for url in router_urls(sidecars)),
+        fleet,
+        alertmanager_origin(alertmanager) if alertmanager else None,
+    )
 
 
 def write_contract(
     contract: TargetContract,
     targets_dir: Path = DEFAULT_TARGETS_DIR,
 ) -> None:
-    """Write the router discovery document."""
+    """Write the router and sidecar discovery documents."""
     _write_json(targets_dir / "router.json", [{"targets": list(contract.routers)}])
+    _write_json(
+        targets_dir / "sidecars.json",
+        [{"targets": list(contract.sidecars)}] if contract.sidecars else [],
+    )
 
 
 def write_targets(

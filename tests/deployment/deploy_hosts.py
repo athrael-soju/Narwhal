@@ -76,6 +76,7 @@ def environment(root: Path) -> dict[str, str]:
         "NARWHAL_LOAD_BALANCER_URL": "http://10.0.0.1:8080",
         "NARWHAL_LEASE_PATH": "/srv/shared/narwhal-lease.json",
         "NARWHAL_HAPROXY_IMAGE": "haproxy@sha256:" + "a" * 64,
+        "NARWHAL_FLEET_NAME": "fleet-a",
     }
 
 
@@ -158,6 +159,7 @@ class Fleet:
         # Whether the standby router's host reads the probe lease the primary's host claimed.
         self.lease_coherent = True
         self.monitoring_up = False
+        self.monitoring_command = ""
         self.overhead_problem: str | None = None
         # The router that controls the fleet, by host ID.
         self.active_router = "node-1"
@@ -322,6 +324,7 @@ class Fleet:
             return f"{cid} {started}"
         elif stage == "monitoring":
             self.monitoring_up = True
+            self.monitoring_command = step.command
             return "prometheus ready at http://127.0.0.1:9090 (abc, prom/prometheus)"
         elif stage == "engine-probe":
             files["probe/probe.json"] = b"{}"

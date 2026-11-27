@@ -80,6 +80,11 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.fleet.calls["start router"], 2)
         self.assertEqual(len(self.fleet.units), UNITS)
         self.assertTrue(self.fleet.monitoring_up)
+        command = self.fleet.monitoring_command
+        for origin in ("http://10.0.0.1:8200", "http://10.0.0.2:8200"):
+            self.assertIn(f"--sidecar-url {origin}", command)
+        self.assertIn("NARWHAL_FLEET_NAME=fleet-a", command)
+        self.assertIn("--targets-url http://10.0.0.1:8080", command)
         self.assertIn("load-balancer", self.fleet.containers)
         fleet = json.loads((self.run / "stages/fleet-limits/attempt-1/fleet.json").read_text())
         self.assertEqual(fleet["slo"], {"ttft_s": 4.0, "tpot_s": 0.1, "router_overhead_s": 0.05})
@@ -447,6 +452,10 @@ class InputTests(unittest.TestCase):
         self.assertEqual(self.changed(NARWHAL_ROUTER_URL="http://10.0.0.1:9000"), {"router"})
         self.assertEqual(self.changed(NARWHAL_LEASE_PATH="/srv/other/lease.json"), {"router"})
         self.assertEqual(self.changed(NARWHAL_GRAFANA_BIND_ADDRESS="127.0.0.1"), {"monitoring"})
+        self.assertEqual(self.changed(NARWHAL_FLEET_NAME="fleet-b"), {"monitoring"})
+        self.assertEqual(
+            self.changed(NARWHAL_ALERTMANAGER_URL="http://10.0.0.9:9093"), {"monitoring"}
+        )
         self.assertEqual(self.changed(NARWHAL_LOAD_BALANCER_SSH="deploy@h2"), {"destinations"})
         self.assertEqual(self.changed(NARWHAL_NODE_2_SSH="deploy@h3"), {"destinations"})
         self.assertEqual(self.changed(NARWHAL_MODEL_DIR="/models/other"), {"discovery"})
@@ -462,6 +471,8 @@ class InputTests(unittest.TestCase):
             "NARWHAL_ROUTER_URL": "router:8000",
             "NARWHAL_FIRST_TOKEN_MARGIN_S": "0",
             "NARWHAL_CALIBRATION_SAMPLES": "99",
+            "NARWHAL_FLEET_NAME": "Fleet A",
+            "NARWHAL_ALERTMANAGER_URL": "alertmanager:9093",
         }
         del env["NARWHAL_CALIBRATION_INPUT_TOKENS"]
         with self.assertRaises(deploy.InputError) as caught:
@@ -472,6 +483,9 @@ class InputTests(unittest.TestCase):
                 "set NARWHAL_FIRST_TOKEN_MARGIN_S to a positive number",
                 "set NARWHAL_CALIBRATION_INPUT_TOKENS to comma-separated positive integers",
                 "set NARWHAL_ROUTER_URL to the router's http://HOST:PORT",
+                "set NARWHAL_FLEET_NAME to the fleet's name, lowercase letters, digits, '.', '_' "
+                "or '-', which labels every series",
+                "NARWHAL_ALERTMANAGER_URL 'alertmanager:9093' needs http(s)://HOST:PORT",
                 f"set NARWHAL_CALIBRATION_SAMPLES to an integer of at least "
                 f"{MIN_SAMPLES_PER_GROUP}",
             },

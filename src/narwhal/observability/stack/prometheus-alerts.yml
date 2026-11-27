@@ -17,6 +17,17 @@ groups:
           summary: "Engine {{ $labels.iid }} stopped answering its scrape"
           description: "Check the engine process and its metrics endpoint. Targets remain monitored while the router lists them in /narwhal/targets."
 
+      # The sidecar targets come from the fleet, so they stay listed while a host is down or
+      # after it reboots, when the router lists no engine and Prometheus scrapes none.
+      - alert: NarwhalHostDown
+        expr: up{job="sidecars"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "The engine host of sidecar {{ $labels.instance }} stopped reporting"
+          description: "The attestation sidecar does not answer its scrape: the host, its engine or the sidecar is down. After a reboot, run narwhal deploy run to start them again."
+
       - alert: NarwhalEngineEjected
         expr: narwhal_ejected_instances > 0 and on (instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == scalar(max((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)))))
         for: 1m

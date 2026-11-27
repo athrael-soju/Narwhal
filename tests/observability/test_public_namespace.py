@@ -517,7 +517,10 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             for rule in alert_rules().values()
             for selector in re.findall(r"\bup(\{[^}]*\})?", rule["expr"])
         ]
-        self.assertEqual(sorted(set(selectors)), ['{job="engines"}', '{job="narwhal-router"}'])
+        self.assertEqual(
+            sorted(set(selectors)),
+            ['{job="engines"}', '{job="narwhal-router"}', '{job="sidecars"}'],
+        )
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()

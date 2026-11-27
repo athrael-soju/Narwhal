@@ -22,6 +22,7 @@ from uuid import uuid4
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 
 from ..backends import DEFAULT_BACKEND
 from ..backends import load as load_backend
@@ -36,8 +37,11 @@ from ..contracts import (
     validate_document,
     versioned,
 )
+from ..observability import restarts
+from ..observability.metrics.exposition import CONTENT_TYPE
+from ..observability.restarts import render_restarts
 from .host_process import process_clock
-from .pod_identity import pod_clock
+from .pod_identity import pod_clock, read_pod
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
@@ -523,6 +527,8 @@ def build_app(
     reader: EngineIdentityReader | None = None,
     process: Callable[[], float] | None = None,
     hca: HcaPort | None = None,
+    supervised: Callable[[], dict[str, int]] | None = None,
+    kubelet: Callable[[], dict[str, int]] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
@@ -563,6 +569,13 @@ def build_app(
                 raise HTTPException(
                     status_code=503, detail=f"engine process unreadable: {exc}"
                 ) from exc
+
+    @app.get("/metrics", summary="The restart counts of this sidecar and its engine pod")
+    async def metrics() -> Response:
+        counts = await asyncio.to_thread(supervised) if supervised is not None else {}
+        pod = await asyncio.to_thread(kubelet) if kubelet is not None else None
+        text = "".join(line + "\n" for line in render_restarts(counts, pod))
+        return Response(content=text, media_type=CONTENT_TYPE)
 
     @app.get(ATTESTATION_PATH)
     async def attestation() -> dict[str, Any]:
@@ -610,6 +623,14 @@ def build_app(
         }
 
     return app
+
+
+def _kubelet(pod: str | None) -> Callable[[], dict[str, int]] | None:
+    """The kubelet restart count of each container of `pod`, read from the pod status."""
+    if pod is None:
+        return None
+    namespace, name = pod.split("/")
+    return restarts.Cached(lambda: restarts.pod_restarts(read_pod(namespace, name)))
 
 
 # How often a pod sidecar checks that the engine process it serves still runs.
@@ -679,7 +700,14 @@ def main(argv: list[str] | None = None) -> int:
         help="engine container of this pod, by runtime container ID, whose first process in the "
         "shared process namespace identifies the engine; the sidecar exits once it ends",
     )
+    parser.add_argument(
+        "--pod",
+        metavar="NAMESPACE/NAME",
+        help="this engine pod, whose containers' kubelet restart counts /metrics exports",
+    )
     args = parser.parse_args(argv)
+    if args.pod is not None and args.pod.count("/") != 1:
+        parser.error("--pod must be NAMESPACE/NAME")
     if not 0 <= args.port <= 65535:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
@@ -748,6 +776,8 @@ def main(argv: list[str] | None = None) -> int:
                 reader=backend.identity,
                 process=process,
                 hca=hca,
+                supervised=restarts.supervisor("sidecar"),
+                kubelet=_kubelet(args.pod),
             ),
             host=args.host,
             port=args.port,

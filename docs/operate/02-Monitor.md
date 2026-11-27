@@ -57,6 +57,7 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | `NarwhalNoRouterReady` | Prometheus scrapes more than one router, none reports `narwhal_router_ready` `1`, and `NarwhalRouterDown` does not cover it | 1m | `page` |
 | `NarwhalMultipleRoutersReady` | More than one router reports `narwhal_router_ready` `1` | 30s | `page` |
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
+| `NarwhalHostDown` | An attestation sidecar scrape fails: its engine host, engine or sidecar is down, after a reboot too | 1m | `page` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
 | `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
 | `NarwhalRejectedRising` | Rejected requests above 1% of offered requests over 5m | 5m | `warn` |
@@ -68,6 +69,8 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
 `NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The request rate rules also sum over the routers of a pair, since each router counts the requests it answered. No rule reads `narwhal_standby_refusals_total`, which counts the requests a standby refuses while its last probe found its primary controlling the fleet, because the load balancer retries those on the primary. Every other refusal counts in `narwhal_rejected_total`, including those of a standby that waits for a killed primary's lease to expire and of a fenced or single router.
+
+Prometheus takes the sidecar targets from the deployment rather than from the router, so `NarwhalHostDown` fires while no router lists the engine, and the router targets come from a file too, so `NarwhalRouterDown` fires after the router host reboots. Prometheus sends firing alerts to the Alertmanager that `NARWHAL_ALERTMANAGER_URL` names, as in [Starting Prometheus and Grafana](../observability/01-Start-and-Verify.md#starting-prometheus-and-grafana). Without one, the Prometheus alerts page at `/alerts` is the only place they show.
 
 A stopped single router raises `NarwhalRouterDown` only, and a single router that is not ready raises no router alert. The router rules count only samples scraped in the last 30 seconds.
 

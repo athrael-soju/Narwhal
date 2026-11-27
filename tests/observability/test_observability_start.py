@@ -568,7 +568,9 @@ class ReadinessTests(unittest.TestCase):
         config = (observe_stack.BASE / "prometheus.yml").read_text()
         self.assertIn("/etc/prometheus/targets/router.json", config)
         self.assertIn("url: http://<<targets>>/narwhal/targets", config)
-        self.assertNotIn("static_configs:", config)
+        # The only static list is the Alertmanager's; every scrape target is discovered.
+        self.assertEqual(config.count("static_configs:"), 1)
+        self.assertIn("        - targets: [<<alertmanagers>>]", config)
 
     def test_start_writes_targets_after_listener_ownership_check(self) -> None:
         calls: list[str] = []

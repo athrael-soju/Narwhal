@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 from narwhal import provenance
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 
+from ..observability.stack.make_targets import FLEET_NAME, alertmanager_origin
 from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
 from . import (
     balancer,
@@ -106,6 +107,8 @@ ROUTER_INPUTS = (
     "NARWHAL_HAPROXY_IMAGE",
 )
 MONITORING = (
+    "NARWHAL_FLEET_NAME",
+    "NARWHAL_ALERTMANAGER_URL",
     "NARWHAL_GRAFANA_BIND_ADDRESS",
     "NARWHAL_PROMETHEUS_LISTEN_ADDRESS",
 )
@@ -345,6 +348,16 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
             )
     if not env.get("NARWHAL_ENGINE_MODEL_NAME"):
         problems.append("set NARWHAL_ENGINE_MODEL_NAME to the served model name")
+    if not FLEET_NAME.fullmatch(env.get("NARWHAL_FLEET_NAME", "")):
+        problems.append(
+            "set NARWHAL_FLEET_NAME to the fleet's name, lowercase letters, digits, '.', '_' or "
+            "'-', which labels every series"
+        )
+    if env.get("NARWHAL_ALERTMANAGER_URL"):
+        try:
+            alertmanager_origin(env["NARWHAL_ALERTMANAGER_URL"])
+        except ValueError as error:
+            problems.append(str(error))
     if problems:
         raise InputError(list(dict.fromkeys(problems)))
     access = {
@@ -1691,6 +1704,14 @@ class Deployment:
             "--targets-url",
             routers.balancer_url,
         ]
+        _, _, package = self.package_of(context)
+        for role in self.engines():
+            sidecar = self.role_env(package, role).get(
+                f"NARWHAL_NODE_{_node(role)}_ATTESTATION_URL"
+            )
+            if sidecar:
+                address = urlsplit(sidecar)
+                args += ["--sidecar-url", f"{address.scheme}://{address.netloc}"]
         listeners = " ".join(
             f"{name}={shlex.quote(self.env[name])}" for name in MONITORING if self.env.get(name)
         )

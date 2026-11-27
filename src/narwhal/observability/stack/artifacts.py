@@ -253,6 +253,22 @@ def _write_targets(target: Path, authority: str | None) -> None:
     _write(target, (json.dumps(targets, indent=2) + "\n").encode())
 
 
+def render_prometheus(text: str, contract: TargetContract) -> str:
+    """The shipped Prometheus configuration with the deployment's origins and fleet label."""
+    scheme, authority, path = contract.alertmanager or ("http", "", "/")
+    for placeholder, value in (
+        ("<<targets>>", contract.targets),
+        ("<<fleet>>", contract.fleet),
+        ("<<alertmanager_scheme>>", scheme),
+        ("<<alertmanager_path>>", path),
+        ("<<alertmanagers>>", json.dumps(authority) if authority else ""),
+    ):
+        if placeholder not in text:
+            raise ValueError(f"prometheus.yml has no {placeholder} placeholder")
+        text = text.replace(placeholder, value)
+    return text
+
+
 def stage_artifacts(
     contract: TargetContract,
     console: str = DEFAULT_CONSOLE_URL,
@@ -275,7 +291,7 @@ def stage_artifacts(
     for origin, destination in FILES.items():
         data = (source / origin).read_bytes()
         if origin == "prometheus.yml":
-            data = data.replace(b"<<targets>>", contract.targets.encode())
+            data = render_prometheus(data.decode(), contract).encode()
         _write(root / destination, data)
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)
