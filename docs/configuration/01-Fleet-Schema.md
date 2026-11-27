@@ -156,14 +156,7 @@ The attestation generator derives each field from the deployed engine. Fields th
 
 On SGLang and TensorRT-LLM, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
 
-Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
-
-Check the resolved `head_size` dimensions against the live engine. On vLLM, also check these values:
-
-- `connector_version`
-- `cross_layers_blocks`
-- the resolved `transfer_mode` class and mode
-- `enforce_handshake_compat`, both the configured value and the installed default
+[Capturing the attestation](../deploy/05-Attest.md#capturing-the-attestation) reads every contract value from the deployed engine. On vLLM, the model dimensions come from the live engine, `connector_version` and the `enforce_handshake_compat` default from the installed connector, `cross_layers_blocks` from the live cache layout, and `transfer_mode` from the connector class the factory resolved and the startup log confirms.
 
 ### Attestation
 

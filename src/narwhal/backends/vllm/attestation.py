@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,12 +10,13 @@ from pathlib import Path
 
 import httpx
 
-from ...deployment.attestation_contract import document
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
     live_binding,
     live_container,
+    live_identity,
     live_native,
     parse_tagged_capture,
     read_json,
@@ -23,7 +25,6 @@ from ...deployment.attestation_contract.evidence import (
     require_prior_dimensions,
     write_private_json,
 )
-from ...deployment.launch_engine.docker import run_runtime_script
 from ...deployment.launch_engine.plan import launch_headers, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
 from .captures import handshake_policy, registration_layout
@@ -192,38 +193,84 @@ def capture_nixl(run: Path) -> Path:
     return destination
 
 
-def capture_native_transfer_mode(run: Path) -> Path:
+# The transfer protocol of each connector class the pinned connector factory resolves. In the
+# pinned API, NixlConnector is an alias of NixlPullConnector, and the factory reports a class by
+# its own name, so a class named NixlConnector is another implementation.
+TRANSFER_MODES = {"NixlPullConnector": "pull", "NixlPushConnector": "push"}
+
+
+def resolved_connectors(log: str, plan_hash: str) -> set[str]:
+    """Connector classes the runtime check resolved, in check attempts of the plan `plan_hash`."""
+    resolved = set()
+    attempt = None
+    for line in log.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        if "check_attempt" in item:
+            attempt = item.get("plan_sha256")
+        elif attempt == plan_hash and isinstance(item.get("connector"), str):
+            resolved.add(item["connector"])
+    return resolved
+
+
+def capture_transfer_mode(run: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native transfer capture requires a native launch plan")
-    process = live_native(run, plan, checked)
-    script = """import hashlib, inspect, json, sys
-from pathlib import Path
-from vllm.config import KVTransferConfig
-from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
-config = KVTransferConfig(**json.loads(sys.argv[1]))
-connector = KVConnectorFactory.get_connector_class(config)
-name = connector.__name__
-if name in ('NixlConnector', 'NixlPullConnector'):
-    mode = 'pull'
-elif name == 'NixlPushConnector':
-    mode = 'push'
-else:
-    raise ValueError('Unrecognized NIXL connector class: ' + name)
-source = Path(inspect.getfile(connector))
-print('NARWHAL_TRANSFER_MODE=' + json.dumps({
-    'transfer_mode': mode, 'connector_class': connector.__module__ + '.' + name,
-    'module_file': str(source), 'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest()
-}))
-"""
-    output = run_runtime_script(
-        run, plan, script, [json.dumps(plan["connector"])], "transfer-mode.log"
-    )
-    record = parse_tagged_capture(output, "NARWHAL_TRANSFER_MODE=", "transfer mode")
-    record.update(plan_sha256=plan_hash, process=process)
+    native = plan.get("backend") == "native"
+    identity = live_identity(run, plan, checked)
     destination = run / "transfer-mode.json"
+    if destination.exists():
+        raise ValueError("Transfer mode already exists; retain the capture")
+    log = run / ("runtime-check.log" if native else "image-check.log")
+    data = log.read_bytes()
+    resolved = resolved_connectors(data.decode(errors="replace"), plan_hash)
+    if len(resolved) != 1:
+        raise ValueError(
+            f"{log.name} holds {len(resolved)} factory-resolved connector classes for this plan; "
+            "rerun the runtime check for this launch plan"
+        )
+    connector = resolved.pop()
+    mode = TRANSFER_MODES.get(connector.rsplit(".", 1)[-1])
+    if mode is None:
+        raise ValueError(f"Inspect the pinned connector implementation of {connector}")
+    record = {
+        "transfer_mode": mode,
+        "configured_connector": plan["connector"]["kv_connector"],
+        "kv_role": plan["connector"]["kv_role"],
+        "resolved_connector": connector,
+        "plan_sha256": plan_hash,
+        "source": str(log.resolve()),
+        "source_sha256": hashlib.sha256(data).hexdigest(),
+        **({"process": identity} if native else {"image_id": checked["image_id"]}),
+    }
     write_private_json(destination, record)
     return destination
+
+
+# The connector factory logs each connector it creates, once per worker and scheduler:
+#   [factory.py:62] Creating v1 connector with name: NixlPullConnector and engine_id: <id>
+# Other connector lines, such as "NixlConnector setting KV cache layout to ...", name the
+# configured alias, not the resolved class.
+CREATED_CONNECTOR = re.compile(r"\bCreating v1 connector with name: (\w+) and engine_id: ")
+
+
+def check_startup_connector(run: Path, startup_log: Path) -> None:
+    """Require the serving process to have created the connector class transfer-mode.json names."""
+    expected = read_json(run / "transfer-mode.json")["resolved_connector"].rsplit(".", 1)[-1]
+    created = set(CREATED_CONNECTOR.findall(startup_log.read_text(errors="replace")))
+    if not created:
+        raise ValueError(
+            f"{startup_log.name} records no connector the engine created; "
+            "retain the complete engine log"
+        )
+    if created != {expected}:
+        raise ValueError(
+            f"{startup_log.name} records the engine creating {', '.join(sorted(created))}, "
+            f"not the resolved {expected}"
+        )
 
 
 def capture_native_http(run: Path) -> None:
@@ -248,23 +295,29 @@ def capture_native_http(run: Path) -> None:
     write_private(run / "metrics.txt", metrics_response.text)
 
 
-def capture_native(run: Path) -> Path:
-    plan, checked, _ = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native capture requires a native launch plan")
-    live_native(run, plan, checked)
-    cache = run / "cache-layout.json"
-    if not cache.is_file():
-        raise ValueError("native engine did not capture its live KV cache layout")
-    capture_model_dimensions(run)
-    capture_nixl(run)
-    registration_layout(run, plan, cache, True)
-    handshake_policy(run, plan)
-    capture_native_transfer_mode(run)
-    capture_native_http(run)
-    snapshot = run / "startup-attestation.log"
-    write_private(snapshot, (run / "startup.log").read_text())
-    return document.generate(run, snapshot)
+def attestation_captures(context: CaptureContext) -> list[Capture]:
+    run, plan = context.run, context.plan
+    captures = [
+        Capture("connector-version", "nixl-connector-version.json", lambda: capture_nixl(run)),
+        Capture(
+            "cache-registration",
+            "cache-registration.json",
+            lambda: registration_layout(run, plan),
+        ),
+        Capture("transfer-mode", "transfer-mode.json", lambda: capture_transfer_mode(run)),
+        Capture(
+            "startup-connector",
+            context.startup_log.name,
+            lambda: check_startup_connector(run, context.startup_log),
+        ),
+        Capture("handshake-policy", "handshake-policy.json", lambda: handshake_policy(run, plan)),
+    ]
+    if plan.get("backend") == "native":
+        # The engine probe writes a container engine's version.json and metrics.txt.
+        captures.append(
+            Capture("http-identity", "version.json, metrics.txt", lambda: capture_native_http(run))
+        )
+    return captures
 
 
 def option(args: list[str], name: str) -> str:

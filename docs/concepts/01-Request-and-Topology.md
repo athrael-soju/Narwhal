@@ -19,7 +19,7 @@ The fleet's `engine_contract` lists the [compatibility fields](../configuration/
 
 ### KV transfer for vLLM engines
 
-A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh once [attestation capture](../deploy/05-Attest.md#capturing-the-attestation-inputs) has read its inputs from the live process and [`narwhal-check`](../cli/Check.md) has validated the attested process. The attestation sidecar binds the process to its image, NIXL connector and runtime features.
+A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh once [attestation capture](../deploy/05-Attest.md#capturing-the-attestation) has read its inputs from the live process and [`narwhal-check`](../cli/Check.md) has validated the attested process. The attestation sidecar binds the process to its image, NIXL connector and runtime features.
 
 ### KV transfer for SGLang engines
 

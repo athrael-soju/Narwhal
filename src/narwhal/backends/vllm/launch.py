@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
+from ...deployment.attestation_contract.evidence import read_json
 from ...deployment.launch_engine.backend import (
     CacheCapture,
     CacheMeasurement,
@@ -117,20 +119,14 @@ class VllmLauncher(
     def model_dimensions(self, run: Path, plan: dict) -> None:
         captures.model_dimensions(run, plan)
 
-    def handshake_policy(self, run: Path, plan: dict) -> None:
-        captures.handshake_policy(run, plan)
-
-    def registration_layout(self, run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
-        captures.registration_layout(run, plan, source, from_runtime)
-
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_nixl(run)
+    def registered_layout(self, run: Path) -> str:
+        return read_json(run / "cache-registration.json")["kv_cache_layout"]
 
     def capture_model_dimensions(self, run: Path) -> Path:
         return attestation.capture_model_dimensions(run)
 
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         return attestation.nixl_package(plan)

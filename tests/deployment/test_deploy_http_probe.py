@@ -8,11 +8,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import AsyncMock, patch
-
-import httpx
-
-from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from unittest.mock import patch
 
 
 def heredoc(guide: str, marker: str) -> str:
@@ -22,157 +18,6 @@ def heredoc(guide: str, marker: str) -> str:
 
 
 class DeploymentHTTPProbeTests(unittest.TestCase):
-    def test_attestation_capture_checks_live_identity_and_retains_failure(self):
-        root = Path(__file__).resolve().parents[2]
-        guide = (root / "docs/deploy/05-Attest.md").read_text()
-        script = heredoc(guide, "PY_ATTEST_CHECK")
-        document_path = root / "config/engine-attestation.example.json"
-        document = AttestationDocument.load(document_path)
-        live = EngineIdentity(document.contract.engine_version, 200.0)
-        stale = EngineIdentity(document.contract.engine_version, 100.0)
-        for status, attested, passes in (
-            (200, live, True),
-            (200, stale, False),
-            (503, live, False),
-        ):
-            with (
-                self.subTest(status=status, attested=attested),
-                tempfile.TemporaryDirectory() as folder,
-            ):
-                run = Path(folder)
-                capture = run / "capture"
-                capture.mkdir()
-                (run / "launch.json").write_text(
-                    json.dumps({"endpoint": "http://engine.invalid:8000"})
-                )
-                payload = make_attestation(document, attested)
-                responses = [
-                    httpx.Response(status, json=body) for body in ({"status": "ok"}, payload)
-                ]
-                with (
-                    patch.dict(
-                        "os.environ",
-                        {
-                            "ENGINE_RUN": folder,
-                            "ATTEST_RUN": str(capture),
-                            "ATTEST_BASE": "http://sidecar.invalid:8010",
-                            "ATTEST_DOCUMENT": str(document_path),
-                            "NARWHAL_ENGINE_API_KEY": "synthetic-key",
-                        },
-                    ),
-                    patch("httpx.Client") as client,
-                    patch(
-                        "narwhal.engines.attestation.fetch_engine_identity",
-                        new_callable=AsyncMock,
-                        return_value=live,
-                    ) as fetch,
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    client.return_value.__enter__.return_value.get.side_effect = responses
-                    if passes:
-                        exec(
-                            compile(script, "docs/deploy/05-Attest.md:PY_ATTEST_CHECK", "exec"), {}
-                        )
-                    else:
-                        with self.assertRaises(SystemExit):
-                            exec(
-                                compile(script, "docs/deploy/05-Attest.md:PY_ATTEST_CHECK", "exec"),
-                                {},
-                            )
-                    if status == 503:
-                        fetch.assert_not_called()
-                    else:
-                        fetch.assert_awaited_once_with(
-                            "http://engine.invalid:8000",
-                            headers={"authorization": "Bearer synthetic-key"},
-                        )
-                self.assertEqual((capture / "health.status").read_text(), f"{status}\n")
-                self.assertTrue((capture / "attestation.json").is_file())
-                self.assertFalse(
-                    any("synthetic-key" in path.read_text() for path in capture.iterdir())
-                )
-
-    def test_transfer_mode_capture_uses_resolved_class_and_preserves_evidence(self):
-        guide = (Path(__file__).resolve().parents[2] / "docs/deploy/05-Attest.md").read_text()
-        script = heredoc(guide, "PY_TRANSFER_MODE")
-        cases = (
-            (["NixlPullConnector"], "pull"),
-            (["NixlPushConnector"], "push"),
-            (["NixlConnector"], None),
-            (["NixlPullConnector", "NixlPushConnector"], None),
-            ([], None),
-        )
-        for names, mode in cases:
-            with self.subTest(names=names), tempfile.TemporaryDirectory() as folder:
-                run = Path(folder)
-                data = json.dumps(
-                    {"connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"}}
-                ).encode()
-                (run / "launch.json").write_bytes(data)
-                checked = {
-                    "plan_sha256": hashlib.sha256(data).hexdigest(),
-                    "image_id": "sha256:" + "a" * 64,
-                }
-                (run / "checked.json").write_text(json.dumps(checked))
-                log = run / "image-check.log"
-                log.write_text(
-                    "startup diagnostic\n"
-                    + "\n".join(
-                        json.dumps(
-                            {
-                                "connector": "vllm.distributed.kv_transfer.kv_connector."
-                                "v1.nixl.connector." + name
-                            }
-                        )
-                        for name in names
-                    )
-                )
-                original = log.read_bytes()
-                with (
-                    patch.dict("os.environ", {"ENGINE_RUN": folder}),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    if mode is None:
-                        with self.assertRaises(SystemExit):
-                            exec(
-                                compile(
-                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
-                                ),
-                                {},
-                            )
-                        self.assertFalse((run / "transfer-mode.json").exists())
-                    else:
-                        exec(
-                            compile(script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"), {}
-                        )
-                        output = run / "transfer-mode.json"
-                        record = json.loads(output.read_text())
-                        self.assertEqual(record["transfer_mode"], mode)
-                        self.assertEqual(record["kv_role"], "kv_both")
-                        self.assertEqual(
-                            record["source_sha256"], hashlib.sha256(original).hexdigest()
-                        )
-                        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-                        retained = output.read_bytes()
-                        with self.assertRaises(FileExistsError):
-                            exec(
-                                compile(
-                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
-                                ),
-                                {},
-                            )
-                        self.assertEqual(output.read_bytes(), retained)
-                        checked["plan_sha256"] = "0" * 64
-                        (run / "checked.json").write_text(json.dumps(checked))
-                        with self.assertRaisesRegex(SystemExit, "belonging to this launch plan"):
-                            exec(
-                                compile(
-                                    script, "docs/deploy/05-Attest.md:PY_TRANSFER_MODE", "exec"
-                                ),
-                                {},
-                            )
-                self.assertEqual(log.read_bytes(), original)
-
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
         from narwhal.backends.vllm.attestation import NIXL_CAPTURE, NIXL_CAPTURE_TAG
 
@@ -191,7 +36,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                         exec(
                             compile(
                                 NIXL_CAPTURE,
-                                "src/narwhal/deployment/attestation_contract/capture.py",
+                                "src/narwhal/backends/vllm/attestation.py:NIXL_CAPTURE",
                                 "exec",
                             ),
                             {},
@@ -201,7 +46,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                             exec(
                                 compile(
                                     NIXL_CAPTURE,
-                                    "src/narwhal/deployment/attestation_contract/capture.py",
+                                    "src/narwhal/backends/vllm/attestation.py:NIXL_CAPTURE",
                                     "exec",
                                 ),
                                 {},

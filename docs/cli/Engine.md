@@ -34,7 +34,7 @@ echo '{"model_dir": "/path/to/model"}' | .venv/bin/python -m narwhal.deployment.
 
 The output's `model_tree_sha256` is the pin. For a native launch whose model directory links outside itself, add `"follow_links": true` to the input.
 
-`prepare` records each model file's size, inode, modification time and change time. `check`, `start`, `start-shared`, `start-native`, and the attestation tool's `generate` and `serve` compare them, hashing no model file other than `config.json`, and refuse the launch when a file was added, removed or changed. A `chmod` or a new hard link changes the change time, so they refuse the launch even when the content is unchanged. To serve changed files, run `prepare` with a fresh `--out` directory.
+`prepare` records each model file's size, inode, modification time and change time. `check`, `start`, `start-shared`, `start-native`, and the attestation tool's `capture` and `serve` compare them, hashing no model file other than `config.json`, and refuse the launch when a file was added, removed or changed. A `chmod` or a new hard link changes the change time, so they refuse the launch even when the content is unchanged. To serve changed files, run `prepare` with a fresh `--out` directory.
 
 These later stages trust file status. They miss a rewrite that keeps a file's size, inode, modification time and change time, such as one after the system clock was set back, a write to the block device beneath the file system, or a write through a network or FUSE mount that does not update those times.
 
@@ -64,15 +64,13 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
-| `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
 | `start` | container | Checked plan | One serving container and `container.id` |
 | `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
-| `cache-registration` | container, native, vLLM | Checked plan and one of `--startup-log` or `--runtime-layout` | `cache-registration.json` with the resolved block grouping |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `start-native` | native | One to eight checked plans, each on its own GPU | Running engines and one `native-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
 
-SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`. TensorRT-LLM plans reject all of them except `capture-cache`.
+SGLang plans reject `measure-cache` and `capture-cache`. TensorRT-LLM plans reject `measure-cache`.
 
 These actions check their inputs:
 
@@ -96,8 +94,6 @@ With text output, `prepare` exits 2 when it fails and 1 when its `--out` directo
 | `--out` | required | New launch directory for `prepare`. |
 | `--run` | required | Launch directory for every action except `prepare`, given two to eight times for `start-shared` and one to eight times for `start-native`. |
 | `--ready-seconds` | 180 | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. |
-| `--startup-log` | optional | Serving log with one resolved KV layout, read by `cache-registration`. |
-| `--runtime-layout` | optional | Captured runtime cache-layout JSON, read by `cache-registration`. |
 
 ## Shared-GPU startup
 
@@ -109,7 +105,7 @@ narwhal-engine prepare --backend native --out runs/engine-2
 narwhal-engine check --run runs/engine-1
 narwhal-engine check --run runs/engine-2
 narwhal-engine start-shared --backend native --run runs/engine-1 --run runs/engine-2
-python -m narwhal.deployment.attestation_contract.cli native-capture --run runs/engine-1
+python -m narwhal.deployment.attestation_contract.cli capture --run runs/engine-1
 narwhal-engine stop-native --run runs/engine-1
 ```
 
@@ -143,7 +139,7 @@ Before each engine starts, `start-native` requires its GPU's free memory to cove
 
 Before a native start, `start-shared` and `start-native` check that each engine's ports are free to bind: the engine address from `launch.json`, the KV side channel from `engine.env`, and the sidecar address from `NARWHAL_NODE_<n>_ATTESTATION_URL`. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. Both actions read `NARWHAL_NODE_<n>_ATTESTATION_URL` from their own environment and fall back to the value `prepare` recorded.
 
-To serve the attestation that `native-capture` writes, set `NARWHAL_NODE_<n>_ATTESTATION_URL` in your shell and run:
+To serve the attestation that [`capture`](../deploy/05-Attest.md#capturing-the-attestation) writes, set `NARWHAL_NODE_<n>_ATTESTATION_URL` in your shell and run:
 
 ```bash
 python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>

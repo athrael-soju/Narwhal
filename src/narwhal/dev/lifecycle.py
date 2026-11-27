@@ -530,7 +530,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
         _run(
             run,
             "narwhal.deployment.attestation_contract.cli",
-            ["native-capture", "--run", str(engine_run)],
+            ["capture", "--run", str(engine_run)],
             f"attest-{index + 1}",
         )
         url = fleet["engines"][index]["attestation_url"]

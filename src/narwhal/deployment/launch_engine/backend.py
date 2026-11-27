@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from ..attestation_contract.capture import Capture, CaptureContext
     from ..attestation_contract.document import AttestationContext, AttestationEvidence
     from .check import CheckContext, ProbeResult
     from .settings import LaunchSettings
@@ -88,10 +89,8 @@ class EngineLauncher(ABC):
     def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
 
     @abstractmethod
-    def capture_connector(self, run: Path) -> Path: ...
-
-    @abstractmethod
-    def capture_native(self, run: Path) -> Path: ...
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        """The backend's attestation captures, in order, for a container or native engine."""
 
     @abstractmethod
     def transfer_package(self, plan: dict) -> str | None:
@@ -141,15 +140,11 @@ class CacheMeasurement(ABC):
 
 
 class CacheRegistration(ABC):
-    """Optional capability: the connector's cache block registration and handshake policy."""
+    """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def registration_layout(
-        self, run: Path, plan: dict, source: Path, from_runtime: bool
-    ) -> None: ...
-
-    @abstractmethod
-    def handshake_policy(self, run: Path, plan: dict) -> None: ...
+    def registered_layout(self, run: Path) -> str:
+        """The layout name that the engine's attestation capture registered."""
 
 
 class LiveModelDimensions(ABC):

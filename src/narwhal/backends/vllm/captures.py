@@ -51,36 +51,32 @@ def model_dimensions(run: Path, plan: dict) -> None:
     print("Model contract dimensions captured in model-dimensions.json.")
 
 
-def registration_layout(run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
+def registration_layout(run: Path, plan: dict) -> None:
+    """Write cache-registration.json from the live cache layout in cache-layout.json."""
     require_checked(run, plan)
     destination = run / "cache-registration.json"
     if destination.exists():
         raise ValueError(
             "cache registration capture exists; retain it and use a fresh inspection plan"
         )
+    source = run / "cache-layout.json"
+    if not source.is_file():
+        raise ValueError("the engine has captured no live KV cache layout in cache-layout.json")
     data = source.read_bytes()
-    if from_runtime:
-        record = json.loads(data)
-        for field, expected in (
-            ("image", plan["image"]),
-            ("model_config_sha256", plan["model_config_sha256"]),
-            ("launch_config_sha256", plan["launch_sha256"]),
-        ):
-            if record[field] != expected:
-                raise ValueError(
-                    "cache layout record differs from this image, model or launch input"
-                )
-        tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
-        if sorted(rank["rank"] for rank in record["ranks"]) != list(range(tp)):
-            raise ValueError("cache layout record requires every TP rank exactly once")
-        names = {rank.get("kv_cache_layout") for rank in record["ranks"]}
-    else:
-        names = set(re.findall(r"\bUsing ([A-Z]+) KV cache layout\.", data.decode()))
+    record = json.loads(data)
+    for field, expected in (
+        ("image", plan["image"]),
+        ("model_config_sha256", plan["model_config_sha256"]),
+        ("launch_config_sha256", plan["launch_sha256"]),
+    ):
+        if record[field] != expected:
+            raise ValueError("cache layout record differs from this image, model or launch input")
+    tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
+    if sorted(rank["rank"] for rank in record["ranks"]) != list(range(tp)):
+        raise ValueError("cache layout record requires every TP rank exactly once")
+    names = {rank.get("kv_cache_layout") for rank in record["ranks"]}
     if len(names) != 1 or None in names:
-        raise ValueError(
-            "Capture one resolved KV cache layout from the serving log "
-            "or updated measure-cache output"
-        )
+        raise ValueError("cache-layout.json must hold one resolved KV cache layout across TP ranks")
     name = next(iter(names))
     script = """import hashlib, inspect, json, sys
 from pathlib import Path
@@ -112,11 +108,10 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
         plan_sha256=digest(run / "launch.json"),
         input_path=str(source.resolve()),
         input_sha256=hashlib.sha256(data).hexdigest(),
-        input_kind="runtime_cache_layout" if from_runtime else "serving_startup_log",
+        input_kind="runtime_cache_layout",
         launcher_sha256=digest(LAUNCHER),
     )
     write_private(destination, json.dumps(result, indent=2) + "\n")
-    print("Cache block grouping captured in cache-registration.json.")
 
 
 def handshake_policy(run: Path, plan: dict) -> None:
@@ -181,7 +176,6 @@ print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
         launcher_sha256=digest(LAUNCHER),
     )
     write_private(destination, json.dumps(result, indent=2) + "\n")
-    print("Compatibility-check configuration captured in handshake-policy.json.")
 
 
 def measure_cache(run: Path, plan: dict) -> None:

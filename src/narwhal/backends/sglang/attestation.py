@@ -6,11 +6,10 @@ from pathlib import Path
 
 import httpx
 
-from ...deployment.attestation_contract import document
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
-    config_model_dimensions,
     live_binding,
     live_identity,
     read_json,
@@ -18,7 +17,6 @@ from ...deployment.attestation_contract.evidence import (
     write_private_json,
 )
 from ...deployment.launch_engine.plan import env_file_name, launch_headers, option, read_env
-from ...deployment.launch_engine.runtime import write_private
 from ...engines.host_process import container_start, native_start
 from .identity import SERVER_INFO_PATH, server_version
 
@@ -75,15 +73,8 @@ def capture_server(run: Path) -> Path:
     return destination
 
 
-def capture_native(run: Path) -> Path:
-    plan, _, _ = checked_plan(run)
-    if plan.get("backend") != "native":
-        raise ValueError("native capture requires a native launch plan")
-    config_model_dimensions(run, plan)
-    capture_server(run)
-    snapshot = run / "startup-attestation.log"
-    write_private(snapshot, (run / "startup.log").read_text())
-    return document.generate(run, snapshot)
+def attestation_captures(context: CaptureContext) -> list[Capture]:
+    return [Capture("server-info", "server-info.json", lambda: capture_server(context.run))]
 
 
 # The scheduler logs the request cap it serves with, which can sit below the requested one.
