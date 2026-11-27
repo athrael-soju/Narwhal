@@ -290,6 +290,25 @@ class DeploymentRowTests(unittest.TestCase):
         ]
         self.run_promtool(inputs, tests)
 
+    def test_a_fleets_only_router_that_admits_nothing_pages(self):
+        # Fleet B's ready router does not stand in for fleet A's only router.
+        router = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
+        other = 'job="narwhal-router",instance="c:8000",fleet="fleet-b"'
+        inputs = [
+            *series("up", router, "1x40"),
+            *series("narwhal_router_role", router + ',role="active"', "1x40"),
+            *series("narwhal_router_ready", router, "0x40"),
+            *series("up", other, "1x40"),
+            *series("narwhal_router_role", other + ',role="active"', "1x40"),
+            *series("narwhal_router_ready", other, "1x40"),
+        ]
+        tests = [
+            "    alert_rule_test:",
+            *self.alert_at(300, "NarwhalNoRouterReady", [{"fleet": "fleet-a"}]),
+            *self.alert_at(300, "NarwhalRouterDown", []),
+        ]
+        self.run_promtool(inputs, tests)
+
     def test_a_fleets_only_router_that_stops_pages_once(self):
         router = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
         down = {"job": "narwhal-router", "instance": "a:8000", "fleet": "fleet-a"}
