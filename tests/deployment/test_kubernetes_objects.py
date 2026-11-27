@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from narwhal.deployment import fleet_resource
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.kubernetes_objects import (
     ApiKey,
@@ -815,6 +816,152 @@ def without_release(document: dict) -> dict:
     return document
 
 
+# The chart's admission policy, mirrored in Python for workloads a requester creates: the CEL
+# cannot run here. Each entry is one of the policy's validations, in its order.
+POLICY = ROOT / "deploy" / "helm" / "narwhal" / "templates" / "admission-policy.yaml"
+CONTROLLER_USER = f"system:serviceaccount:{chart_fixtures.NAMESPACE}:fleet-controller"
+POLICY_KINDS = {
+    "engine": ["StatefulSet"],
+    "router": ["StatefulSet"],
+    "gate": ["Job"],
+    "haproxy": ["Deployment", "ReplicaSet"],
+}
+SYSCTLS = {
+    "kernel.shm_rmid_forced",
+    "net.ipv4.ip_local_port_range",
+    "net.ipv4.ip_unprivileged_port_start",
+    "net.ipv4.tcp_syncookies",
+    "net.ipv4.ping_group_range",
+    "net.ipv4.ip_local_reserved_ports",
+    "net.ipv4.tcp_keepalive_time",
+    "net.ipv4.tcp_fin_timeout",
+    "net.ipv4.tcp_keepalive_intvl",
+    "net.ipv4.tcp_keepalive_probes",
+}
+SELINUX_TYPES = {"", "container_t", "container_init_t", "container_kvm_t", "container_engine_t"}
+VOLUME_TYPES = (
+    "configMap",
+    "secret",
+    "emptyDir",
+    "projected",
+    "downwardAPI",
+    "persistentVolumeClaim",
+)
+
+
+def policy_refusals(
+    document: dict,
+    requester: str = CONTROLLER_USER,
+    *,
+    sources: tuple[str, ...] = ("persistentVolumeClaim",),
+    runtime_classes: tuple[str, ...] = (),
+) -> list[str]:
+    """The validations of the admission policy that refuse a workload `requester` creates."""
+    pod = document["spec"]["template"]
+    spec = pod["spec"]
+    labels = (pod.get("metadata") or {}).get("labels") or {}
+    component = (
+        labels.get("app.kubernetes.io/component", "")
+        if labels.get("app.kubernetes.io/name") == "narwhal"
+        else ""
+    )
+    trusted = document["kind"] if requester == CONTROLLER_USER else ""
+    controlled = component in POLICY_KINDS and trusted in POLICY_KINDS[component]
+    engine = component == "engine" and controlled
+    host_network_gate = (
+        component == "gate"
+        and controlled
+        and labels.get(fleet_resource.GATE_LABEL) in objects.HOST_NETWORK_KINDS
+    )
+    host_network_allowed = engine or host_network_gate
+    containers = [
+        *spec["containers"],
+        *spec.get("initContainers", []),
+        *spec.get("ephemeralContainers", []),
+    ]
+    checkpoint = engine and any(c["name"] == "checkpoint" for c in spec.get("initContainers", []))
+    pod_context = spec.get("securityContext") or {}
+    contexts = [pod_context] if "securityContext" in spec else []
+    contexts += [c["securityContext"] for c in containers if "securityContext" in c]
+    pod_seccomp = (pod_context.get("seccompProfile") or {}).get("type", "")
+    volumes = spec.get("volumes", [])
+    model = objects.MODEL_VOLUME
+
+    def context(c: dict) -> dict:
+        return c.get("securityContext") or {}
+
+    def seccomp(c: dict) -> str:
+        found = context(c).get("seccompProfile")
+        return found["type"] if found else pod_seccomp
+
+    def adds(c: dict) -> list[str]:
+        return (context(c).get("capabilities") or {}).get("add") or []
+
+    annotations = (pod.get("metadata") or {}).get("annotations") or {}
+    rules = {
+        "host network": not spec.get("hostNetwork") or host_network_allowed,
+        "reserved label": component not in POLICY_KINDS or controlled,
+        "host namespaces": not spec.get("hostPID") and not spec.get("hostIPC"),
+        "privileged": not any(context(c).get("privileged") for c in containers),
+        "capabilities": all(
+            (a == "IPC_LOCK" and host_network_allowed)
+            or (a in ("CHOWN", "FOWNER") and c["name"] == "checkpoint" and checkpoint)
+            for c in containers
+            for a in adds(c)
+        ),
+        "seccomp": engine or all(seccomp(c) in ("RuntimeDefault", "Localhost") for c in containers),
+        "host ports": all(
+            not port.get("hostPort")
+            or (spec.get("hostNetwork") and port["hostPort"] == port["containerPort"])
+            for c in containers
+            for port in c.get("ports", [])
+        ),
+        "SELinux": all(
+            "seLinuxOptions" not in s
+            or (
+                s["seLinuxOptions"].get("type", "") in SELINUX_TYPES
+                and "user" not in s["seLinuxOptions"]
+                and "role" not in s["seLinuxOptions"]
+            )
+            for s in contexts
+        ),
+        "AppArmor": all(
+            (s.get("appArmorProfile") or {}).get("type") != "Unconfined" for s in contexts
+        )
+        and not any(
+            key.startswith("container.apparmor.security.beta.kubernetes.io/")
+            and value == "unconfined"
+            for key, value in annotations.items()
+        ),
+        "procMount": all(context(c).get("procMount", "Default") == "Default" for c in containers),
+        "Windows host process": not any(
+            (s.get("windowsOptions") or {}).get("hostProcess") for s in contexts
+        ),
+        "sysctls": all(item["name"] in SYSCTLS for item in pod_context.get("sysctls", [])),
+        "RuntimeClass": "runtimeClassName" not in spec
+        or spec["runtimeClassName"] in runtime_classes,
+        "image digest": all(
+            "image" in c and re.search(fleet_resource._DIGEST, c["image"]) for c in containers
+        ),
+        "volume types": all(
+            v["name"] == model or any(kind in v for kind in VOLUME_TYPES) for v in volumes
+        ),
+        "model volume source": all(
+            v["name"] != model or any(kind in v for kind in sources) for v in volumes
+        ),
+        # The hostPath, nfs and csi allow-lists apply only to a model volume of those sources.
+        "model hostPath": all(v["name"] != model or "hostPath" not in v for v in volumes),
+        "model nfs": all(v["name"] != model or "nfs" not in v for v in volumes),
+        "model csi": all(v["name"] != model or "csi" not in v for v in volumes),
+        "model read-only": all(
+            m["name"] != model or m.get("readOnly")
+            for c in containers
+            for m in c.get("volumeMounts", [])
+        ),
+    }
+    return [name for name, holds in rules.items() if not holds]
+
+
 class RouterTests(unittest.TestCase):
     """The router pair the chart ran on the Lease: its Service and StatefulSet."""
 
@@ -1006,6 +1153,44 @@ class RouterTests(unittest.TestCase):
         for path in written:
             with self.subTest(path=str(path)):
                 self.assertTrue(any(path.is_relative_to(mount) for mount in writable), path)
+
+    def test_the_router_pair_passes_the_charts_admission_policy(self):
+        validations = POLICY.read_text().split("  validations:\n", 1)[1].split("\n---", 1)[0]
+        # The mirror holds every validation of the policy.
+        self.assertEqual(validations.count("\n    - expression:") + 1, 20)
+        statefulset = router_set()
+        self.assertEqual(policy_refusals(statefulset), [])
+        # The router labels are reserved: only the controller may apply them.
+        self.assertEqual(
+            policy_refusals(statefulset, f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x"),
+            ["reserved label"],
+        )
+        # Each rule the routers keep to refuses them once broken.
+        broken = {
+            "seccomp": lambda pod, c: pod["securityContext"].update(
+                seccompProfile={"type": "Unconfined"}
+            ),
+            "image digest": lambda pod, c: c.update(image="registry.example/narwhal:latest"),
+            "capabilities": lambda pod, c: c["securityContext"]["capabilities"].update(
+                add=["NET_ADMIN"]
+            ),
+            "host network": lambda pod, c: pod.update(hostNetwork=True),
+            "privileged": lambda pod, c: c["securityContext"].update(privileged=True),
+            "volume types": lambda pod, c: pod["volumes"].append(
+                {"name": "host", "hostPath": {"path": "/"}}
+            ),
+        }
+        for rule, breaks in broken.items():
+            with self.subTest(rule):
+                document = copy.deepcopy(statefulset)
+                pod = template(document)
+                breaks(pod, pod["containers"][0])
+                self.assertIn(rule, policy_refusals(document))
+        # The router pod runs the RuntimeDefault profile and adds no capability.
+        pod = template(statefulset)
+        self.assertEqual(pod["securityContext"]["seccompProfile"], {"type": "RuntimeDefault"})
+        self.assertNotIn("add", pod["containers"][0]["securityContext"]["capabilities"])
+        self.assertTrue(re.search(fleet_resource._DIGEST, pod["containers"][0]["image"]))
 
     def test_the_engines_may_not_run_as_the_routers_service_account(self):
         with self.assertRaisesRegex(ValueError, "may not be narwhal-router"):
