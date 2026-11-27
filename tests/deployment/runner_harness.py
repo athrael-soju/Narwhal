@@ -61,9 +61,12 @@ def crash(directory: Path) -> None:
 
     def second(context: StageContext) -> Outcome:
         def kill() -> None:
+            # The first evidence names only the stage worker, which exits unstarted when its
+            # controller dies before it releases the worker. Die once the evidence also names
+            # the helper the worker started.
             while True:
                 for evidence in context.directory.glob("*.stage.json"):
-                    if json.loads(evidence.read_text()).get("processes"):
+                    if len(json.loads(evidence.read_text()).get("processes", {})) >= 2:
                         os.kill(os.getpid(), signal.SIGKILL)
                 time.sleep(0.02)
 
