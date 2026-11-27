@@ -792,12 +792,24 @@ def named(
 
 def without_release(document: dict) -> dict:
     """An object without what differs by design, as `spec_only`, and without the release in
-    the routers' spread constraint."""
+    the routers' spread constraint.
+
+    The chart at ad38650c ran the routers with no security context; the builder hardens them
+    on purpose. This drops the security contexts and the scratch volume, which
+    `test_each_router_runs_unprivileged_on_a_read_only_root` checks instead.
+    """
     document = spec_only(document)
-    for constraint in (
-        document["spec"].get("template", {}).get("spec", {}).get("topologySpreadConstraints", [])
-    ):
+    pod = document["spec"].get("template", {}).get("spec", {})
+    for constraint in pod.get("topologySpreadConstraints", []):
         constraint["labelSelector"]["matchLabels"].pop("app.kubernetes.io/instance", None)
+    if pod:
+        pod.pop("securityContext", None)
+        pod["volumes"] = [v for v in pod["volumes"] if v["name"] != objects.TMP_VOLUME]
+        for container in pod["containers"]:
+            container.pop("securityContext", None)
+            container["volumeMounts"] = [
+                m for m in container["volumeMounts"] if m["name"] != objects.TMP_VOLUME
+            ]
     return document
 
 
@@ -922,6 +934,68 @@ class RouterTests(unittest.TestCase):
                     self.assertEqual(
                         account == "narwhal-router", document["metadata"]["name"] == "router"
                     )
+
+    def test_each_router_runs_unprivileged_on_a_read_only_root(self):
+        spec = template(router_set())
+        self.assertEqual(
+            spec["securityContext"],
+            {
+                "runAsNonRoot": True,
+                "runAsUser": 10001,
+                "runAsGroup": 10001,
+                "fsGroup": 10001,
+                "fsGroupChangePolicy": "OnRootMismatch",
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+        )
+        for container in [*spec.get("initContainers", []), *spec["containers"]]:
+            with self.subTest(container["name"]):
+                self.assertEqual(
+                    container["securityContext"],
+                    {
+                        "allowPrivilegeEscalation": False,
+                        "readOnlyRootFilesystem": True,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                )
+        custom = template(router_set(router_fleet(run_as_user=2000, run_as_group=3000)))
+        self.assertEqual(
+            {k: custom["securityContext"][k] for k in ("runAsUser", "runAsGroup", "fsGroup")},
+            {"runAsUser": 2000, "runAsGroup": 3000, "fsGroup": 3000},
+        )
+        for value in (0, -1, 2**31, True, "10001"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "non-root"):
+                router_fleet(run_as_user=value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "non-root"):
+                router_fleet(run_as_group=value)
+
+    def test_the_router_writes_only_its_own_volume_and_scratch(self):
+        spec = template(router_set())
+        [container] = spec["containers"]
+        volumes = {volume["name"]: volume for volume in spec["volumes"]}
+        writable = {}
+        for mount in container["volumeMounts"]:
+            if not mount.get("readOnly"):
+                writable[mount["mountPath"]] = mount["name"]
+        self.assertEqual(writable, {"/narwhal-router": "router-state", "/tmp": "tmp"})
+        self.assertEqual(volumes["tmp"], {"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}})
+        [claim] = router_set()["spec"]["volumeClaimTemplates"]
+        self.assertEqual(claim["metadata"]["name"], "router-state")
+        # What the router writes: its journal, its handoff state with the temporary file
+        # written beside it, and any relative path from its working directory.
+        argv = container["command"]
+        work = Path(container["workingDir"])
+        # fleet-limits sets the handoff state path under the target's ROUTER_HOME.
+        handoff = Path(ROUTER_HOME) / "router-state.json"
+        written = [
+            Path(argv[argv.index("--journal") + 1]),
+            handoff,
+            handoff.with_name(f".{handoff.name}.1.0.tmp"),
+            work / "runs" / "state.json",
+        ]
+        for path in written:
+            with self.subTest(path=str(path)):
+                self.assertTrue(any(path.is_relative_to(mount) for mount in writable), path)
 
     def test_the_engines_may_not_run_as_the_routers_service_account(self):
         with self.assertRaisesRegex(ValueError, "may not be narwhal-router"):

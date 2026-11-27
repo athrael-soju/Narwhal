@@ -349,7 +349,8 @@ class Fleet:
 
     `engine_account` is the engines' ServiceAccount, which the chart makes. `rdma_resource` and
     `model_volume` are the engines' RDMA resource name and model volume source, which fabric
-    and discovery gates use.
+    and discovery gates use. `run_as_user` and `run_as_group` are the non-root IDs the routers
+    run as, the chart's `controller.runAsUser` and `runAsGroup`.
     """
 
     owner: Owner
@@ -363,6 +364,8 @@ class Fleet:
     model_volume: Mapping[str, Any] | None = None
     cluster_domain: str = "cluster.local"
     haproxy_replicas: int = 1
+    run_as_user: int = 10001
+    run_as_group: int = 10001
 
     def __post_init__(self) -> None:
         _digest(self.narwhal_image, "the Narwhal image")
@@ -384,6 +387,10 @@ class Fleet:
             _volume_source(self.model_volume, "the model volume")
         if not isinstance(self.haproxy_replicas, int) or self.haproxy_replicas < 1:
             raise ValueError("HAProxy needs at least one replica")
+        for value, what in ((self.run_as_user, "user"), (self.run_as_group, "group")):
+            # 0 is root; Kubernetes takes IDs up to 2^31 - 1.
+            if type(value) is not int or not 0 < value < 2**31:
+                raise ValueError(f"the routers run as a non-root {what} ID, not {value!r}")
 
 
 def _volume_source(source: Mapping[str, Any], what: str) -> None:
@@ -842,6 +849,10 @@ ROUTER_VOLUME = "router-state"
 API_VOLUME = "narwhal-api"
 TOKEN_MOUNT = "/var/run/secrets/kubernetes.io/serviceaccount"
 TOKEN_SECONDS = 3600
+# The read-only root filesystem leaves the router this scratch directory beside its volume.
+TMP_VOLUME = "tmp"
+TMP_MOUNT = "/tmp"
+TMP_LIMIT = "64Mi"
 # A fleet file on the state volume: relative, with no hidden or parent part.
 ROUTER_FLEET = re.compile(r"([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.json")
 ROUTER_ARG_LENGTH = 256
@@ -943,12 +954,20 @@ class Routers:
         )
 
 
+# The routers' ServiceAccount, Role and RoleBinding stay in the chart, decided for task 26:
+# the controller holds no RBAC or ServiceAccount verbs. RBAC lets an identity create a Role or
+# RoleBinding only for permissions it holds itself, so building them here would need get and
+# update on the router Lease, with which the controller could take that Lease over.
 def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
     """The router pair's headless Service and StatefulSet.
 
     The pods run as ROUTER_ACCOUNT and elect the primary through ROUTER_LEASE. Only the router
     container mounts a ServiceAccount token, a projected one of an hour. The pods never share
     a node while another node can take one.
+
+    Each router runs as the fleet's non-root user on a read-only root filesystem, with no
+    capability and the runtime's default seccomp filter. It writes only its own volume at
+    ROUTER_HOME (the journal and its handoff state) and the scratch directory at TMP_MOUNT.
     """
     owner = fleet.owner
     domain = f"{ROUTER_SERVICE}.{owner.namespace}.svc.{fleet.cluster_domain}"
@@ -987,10 +1006,16 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
         # A relative recovery.state_path lies on the router's own volume.
         "workingDir": ROUTER_HOME,
         "ports": [{"name": "http", "containerPort": ROUTER_PORT}],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "capabilities": {"drop": ["ALL"]},
+        },
         "volumeMounts": [
             {"name": STATE_VOLUME, "mountPath": STATE_MOUNT, "readOnly": True},
             {"name": API_VOLUME, "mountPath": TOKEN_MOUNT, "readOnly": True},
             {"name": ROUTER_VOLUME, "mountPath": ROUTER_HOME},
+            {"name": TMP_VOLUME, "mountPath": TMP_MOUNT},
         ],
     }
     token = {
@@ -1023,6 +1048,16 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
         # Only the router container mounts the token, for the router Lease.
         "serviceAccountName": ROUTER_ACCOUNT,
         "automountServiceAccountToken": False,
+        # fsGroup lets the router's user write its own volume; the kubelet leaves the read-only
+        # state volume as it is.
+        "securityContext": {
+            "runAsNonRoot": True,
+            "runAsUser": fleet.run_as_user,
+            "runAsGroup": fleet.run_as_group,
+            "fsGroup": fleet.run_as_group,
+            "fsGroupChangePolicy": "OnRootMismatch",
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
         # On several nodes the two routers never share one, so losing a node leaves a router.
         # On one node both still schedule. Tainted nodes the routers cannot run on do not count.
         "topologySpreadConstraints": [
@@ -1041,6 +1076,7 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
                 "persistentVolumeClaim": {"claimName": fleet.state_claim, "readOnly": True},
             },
             token,
+            {"name": TMP_VOLUME, "emptyDir": {"sizeLimit": TMP_LIMIT}},
         ],
     }
     documents = [
