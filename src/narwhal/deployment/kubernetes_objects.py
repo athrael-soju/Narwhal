@@ -32,26 +32,17 @@ from typing import Any
 
 from narwhal import __version__
 
+from .fleet_resource import (
+    API_VERSION,
+    CONFIG_SHA256,
+    ENGINE_SERVICE,
+    GROUP,
+    KIND,
+    PLACEMENT_GATE,
+)
 from .launch_engine import engine_set
 from .launch_engine.kubernetes import MODEL_VOLUME_SOURCES
 
-try:
-    from .fleet_resource import (  # type: ignore[import-not-found, unused-ignore]
-        ENGINE_SERVICE,
-        GROUP,
-        KIND,
-        VERSION,
-    )
-except ModuleNotFoundError as error:
-    # Until task 26 step A's fleet_resource merges: its values. Drop this branch on rebase.
-    if error.name != f"{__package__}.fleet_resource":
-        raise
-    GROUP = "narwhal.example.com"
-    VERSION = "v1alpha1"
-    KIND = "NarwhalFleet"
-    ENGINE_SERVICE = "engines"
-
-API_VERSION = f"{GROUP}/{VERSION}"
 # The field manager of every apply, and the value of the managed-by label.
 MANAGER = "narwhal-controller"
 
@@ -59,10 +50,7 @@ NAME_LABEL = "app.kubernetes.io/name"
 COMPONENT_LABEL = "app.kubernetes.io/component"
 MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 VERSION_LABEL = "app.kubernetes.io/version"
-GATE_LABEL = f"{GROUP}/gate"
-RUN_LABEL = f"{GROUP}/run"
-PLACEMENT_GATE = f"{GROUP}/placement"
-CONFIG_ANNOTATION = f"{GROUP}/config-sha256"
+CONFIG_ANNOTATION = CONFIG_SHA256
 # The only keys a derived object's labels and annotations may hold.
 ALLOWED_LABELS = (NAME_LABEL, COMPONENT_LABEL, MANAGED_BY_LABEL, VERSION_LABEL)
 ALLOWED_PREFIX = f"{GROUP}/"
