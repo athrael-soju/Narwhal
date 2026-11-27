@@ -116,7 +116,8 @@ class Step:
 def run(ssh: SSH, step: Step, directory: Path) -> str:
     """Run `step`, write the files it returns to `directory`, and return its output.
 
-    Raises `StepFailed` with the command's last output line after writing the files.
+    Raises `StepFailed` with the command's last error line, or its last output line when it
+    wrote no error, after writing the files. The output returned is standard output.
     """
     script = prelude(step.remote_dir, step.role)
     if step.workdir is not None:
@@ -124,14 +125,21 @@ def run(ssh: SSH, step: Step, directory: Path) -> str:
         script += (
             f"mkdir -p {shlex.quote(str(workdir.parent))}\nmkdir {shlex.quote(str(workdir))}\n"
         )
-    script += f"""set +e
-output=$({step.command} 2>&1)
+    # Standard error is kept apart: a command's cause is its last error line, which a
+    # block-buffered standard output can print after.
+    script += f"""errors=$(mktemp) || exit 4
+set +e
+output=$({step.command} 2> "$errors")
 status=$?
 set -e
+error=$(cat "$errors"); rm -f "$errors"
 printf '%s\\n' "$output" >&2
+printf '%s\\n' "$error" >&2
 printf '{STREAM}%s\\n' "$(printf '%s' "$output" | base64 -w 0)"
 printf '{STATUS}%s\\n' "$status"
-printf '{LAST}%s\\n' "$(printf '%s' "$output" | tail -n 1)"
+cause=$(printf '%s\\n' "$error" | grep -v '^[[:space:]]*$' | tail -n 1)
+test -n "$cause" || cause=$(printf '%s\\n' "$output" | grep -v '^[[:space:]]*$' | tail -n 1)
+printf '{LAST}%s\\n' "$cause"
 """
     if step.on_failure:
         script += f'if test "$status" != 0; then {step.on_failure}; fi\n'

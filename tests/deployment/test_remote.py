@@ -109,6 +109,12 @@ class StepTests(unittest.TestCase):
         self.assertFalse((self.out / "absent.json").exists())
         self.assertTrue((self.home / "Narwhal-deploy/x/cleanup.txt").exists())
 
+    def test_a_failed_step_names_its_error_line_before_later_progress(self):
+        command = "{ echo 'narwhal-profile: the fit failed' >&2; echo progress; exit 1; }"
+        with self.assertRaises(remote.StepFailed) as caught:
+            remote.run(self.ssh, self.step(command), self.out)
+        self.assertIn("probe exited 1: narwhal-profile: the fit failed;", str(caught.exception))
+
     def test_a_step_refuses_an_existing_working_directory(self):
         (self.home / "Narwhal-deploy/x/runs/deploy/r/work").mkdir(parents=True)
         with self.assertRaises(RemoteError):
