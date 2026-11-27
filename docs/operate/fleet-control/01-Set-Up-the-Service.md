@@ -8,7 +8,7 @@ The fleet control service runs on the router host. Write its configuration and b
 
 ## Prerequisites
 
-- A deployed fleet with its router serving on the router host, as in [Starting and locally verifying the router](../../deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router).
+- A deployed fleet with its router serving on the router host, as in [Starting and locally verifying the router](../../deploy/07-Serve-and-Measure.md#starting-the-router-pair).
 - The router shell: opened with `narwhal deploy shell --run <package> --role router`.
 - The monitoring stack, started as in [Starting Prometheus and Grafana](../../observability/01-Start-and-Verify.md#starting-prometheus-and-grafana).
 - The baseline fleet configuration file that the router is running.

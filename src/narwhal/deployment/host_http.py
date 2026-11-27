@@ -1,8 +1,10 @@
 """HTTP checks that `narwhal deploy run` runs on a host, from the installed wheel.
 
-`wait` waits for a route to answer HTTP 200. `responses` retains the router's health,
-readiness, state, metrics and lifecycle, and optionally one completion. `readmit` waits until
-a running router serves each restarted engine's new process, readmitting a held engine.
+`wait` waits for a route to answer HTTP 200, and `status` prints the HTTP status a route
+answers. `responses` retains the router's health, readiness, state, metrics and lifecycle,
+and optionally one completion. `readmit` waits until a running router serves each restarted
+engine's new process, readmitting a held engine. `overhead` measures the time the router adds
+before the first token while it serves concurrent completions.
 Each prints the files it returns as `narwhal-file <name> <base64>` lines, and a failure's
 cause on standard error after `narwhal-host: `.
 """
@@ -12,10 +14,12 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 CAUSE = "narwhal-host: "
@@ -56,6 +60,112 @@ def wait(url: str, seconds: float) -> int:
             pass
         time.sleep(0.5)
     return _fail(f"{url} did not answer HTTP 200 within {seconds:g} seconds")
+
+
+def status(url: str) -> int:
+    """Print the HTTP status `url` answers, or 0 when nothing answers."""
+    try:
+        code = _request(url, timeout=5)[0]
+    except OSError:
+        code = 0
+    print(code)
+    return 0
+
+
+_SAMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})? (\S+)$")
+
+
+def _metrics(base: str) -> dict[tuple[str, str], float]:
+    """The router's samples by name and label set."""
+    code, content = _request(base + "/metrics")
+    if code != 200:
+        raise OSError(f"GET /metrics answered HTTP {code}")
+    samples = {}
+    for line in content.decode().splitlines():
+        if match := _SAMPLE.match(line):
+            samples[(match[1], match[2] or "")] = float(match[3])
+    return samples
+
+
+def _total(samples: dict[tuple[str, str], float], name: str, *labels: str) -> float:
+    """The sum of `name`'s samples whose label set holds every one of `labels`."""
+    return sum(
+        value
+        for (sample, series), value in samples.items()
+        if sample == name and all(label in series for label in labels)
+    )
+
+
+def overhead_terms(
+    before: dict[tuple[str, str], float], after: dict[tuple[str, str], float]
+) -> dict[str, float]:
+    """The router's own first-token time over a window, from two scrapes of its `/metrics`.
+
+    Over the requests that reached their first token in the window, the router overhead is
+    the router's time to first token less the prefill legs' upstream time and the waits for
+    an admission seat and a prefill seat, divided by the number of those requests.
+    """
+
+    def delta(name: str, *labels: str) -> float:
+        return _total(after, name, *labels) - _total(before, name, *labels)
+
+    terms = {
+        "requests": delta("narwhal_ttft_seconds_count"),
+        "ttft_seconds": delta("narwhal_ttft_seconds_sum"),
+        "prefill_upstream_seconds": delta("narwhal_upstream_seconds_total", 'phase="prefill"'),
+        "admission_wait_seconds": delta("narwhal_queue_wait_seconds_sum", 'stage="admission"'),
+        "prefill_wait_seconds": delta("narwhal_queue_wait_seconds_sum", 'stage="prefill"'),
+    }
+    own = (
+        terms["ttft_seconds"]
+        - terms["prefill_upstream_seconds"]
+        - terms["admission_wait_seconds"]
+        - terms["prefill_wait_seconds"]
+    )
+    terms["overhead_seconds"] = own / terms["requests"] if terms["requests"] else 0.0
+    return terms
+
+
+def overhead(base: str, completion: str, requests: int, concurrency: int, limit: float) -> int:
+    """Send `requests` completions at `concurrency` and compare the router overhead to `limit`."""
+    body = completion.encode()
+    before = _metrics(base)
+
+    def send(_: int) -> int:
+        try:
+            return _request(base + "/v1/completions", body, timeout=300)[0]
+        except OSError:
+            return 0
+
+    with ThreadPoolExecutor(concurrency) as pool:
+        statuses = list(pool.map(send, range(requests)))
+    after = _metrics(base)
+    terms = overhead_terms(before, after)
+    counts: dict[str, int] = {}
+    for code in statuses:
+        counts[str(code)] = counts.get(str(code), 0) + 1
+    failed = requests - counts.get("200", 0)
+    problem = None
+    if failed:
+        problem = f"{failed} of {requests} measurement requests failed: {counts}"
+    elif not terms["requests"]:
+        problem = "the router's time to first token counted no measurement request"
+    elif terms["overhead_seconds"] > limit:
+        problem = (
+            f"router overhead {terms['overhead_seconds']:.4f}s over {terms['requests']:g} "
+            f"requests at concurrency {concurrency} exceeds NARWHAL_ROUTER_OVERHEAD_S {limit:g}s"
+        )
+    result = {
+        "requests_sent": requests,
+        "concurrency": concurrency,
+        "statuses": counts,
+        **terms,
+        "limit_seconds": limit,
+        "problem": problem,
+    }
+    # The verdict is in the file; the command fails only when it cannot measure.
+    _emit("overhead.json", json.dumps(result, indent=2).encode())
+    return 0
 
 
 def responses(base: str, completion: str | None) -> int:
@@ -175,6 +285,14 @@ def main(argv: list[str] | None = None) -> int:
     kept = commands.add_parser("responses")
     kept.add_argument("base")
     kept.add_argument("--completion")
+    answered = commands.add_parser("status")
+    answered.add_argument("url")
+    measured = commands.add_parser("overhead")
+    measured.add_argument("base")
+    measured.add_argument("--completion", required=True)
+    measured.add_argument("--requests", type=int, required=True)
+    measured.add_argument("--concurrency", type=int, required=True)
+    measured.add_argument("--limit", type=float, required=True)
     readmitted = commands.add_parser("readmit")
     readmitted.add_argument("base")
     readmitted.add_argument("seconds", type=float)
@@ -183,6 +301,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "wait":
             return wait(args.url, args.seconds)
+        if args.command == "status":
+            return status(args.url)
+        if args.command == "overhead":
+            return overhead(
+                args.base.rstrip("/"), args.completion, args.requests, args.concurrency, args.limit
+            )
         if args.command == "responses":
             return responses(args.base.rstrip("/"), args.completion)
         return readmit(args.base.rstrip("/"), args.engines, args.seconds)

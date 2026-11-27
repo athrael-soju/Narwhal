@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypeVar
 
-ROLE = re.compile(r"router|engine-[1-9][0-9]*")
+ROLE = re.compile(r"router|standby-router|load-balancer|engine-[1-9][0-9]*")
+# The primary router of a pair first, then its standby.
+ROUTER_ROLES = ("router", "standby-router")
 # Seconds one remote command of each stage may run. NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS sets
 # one stage's limit and NARWHAL_STAGE_TIMEOUT_SECONDS every stage's, as for local stages.
 STAGE_LIMITS = {
@@ -45,7 +47,10 @@ STAGE_LIMITS = {
     "calibrate": 7200.0,
     "fleet-limits": 300.0,
     "preflight": 3600.0,
+    "lease-check": 120.0,
     "router-start": 600.0,
+    "load-balancer": 300.0,
+    "monitoring": 600.0,
     "down": 300.0,
 }
 # The shortest stage limit: `bounded` passes limits to `timeout` in milliseconds, and `timeout`
@@ -112,7 +117,9 @@ def load_hosts(path: Path, env: Mapping[str, str]) -> list[Host]:
             raise ValueError(f"{host.id}: combine roles that use the same management destination")
         for role in host.roles:
             if not ROLE.fullmatch(role) or role in roles:
-                raise ValueError(f"{host.id}: each router or numbered engine role needs one owner")
+                raise ValueError(
+                    f"{host.id}: each router, load balancer or numbered engine role needs one owner"
+                )
             roles.add(role)
         hosts.append(host)
         ids.add(host.id)

@@ -32,7 +32,8 @@ SHA = "c" * 64
 
 
 def environment(root: Path) -> dict[str, str]:
-    """Every input `narwhal deploy run` needs, for two engine hosts with the router on node-1."""
+    """Every input `narwhal deploy run` needs, for two engine hosts with the primary router and
+    the load balancer on node-1 and the standby router on node-2."""
     wheel = root / "narwhal_inference-1.2.3-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
     lock = root / "requirements.txt"
@@ -69,7 +70,12 @@ def environment(root: Path) -> dict[str, str]:
         "NARWHAL_CALIBRATION_INPUT_TOKENS": "256,4096",
         "NARWHAL_CALIBRATION_SAMPLES": "100",
         "NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S": "20",
-        "NARWHAL_ROUTER_URL": "http://127.0.0.1:8000",
+        "NARWHAL_ROUTER_URL": "http://10.0.0.1:8000",
+        "NARWHAL_STANDBY_ROUTER_SSH": "deploy@h2",
+        "NARWHAL_STANDBY_ROUTER_URL": "http://10.0.0.2:8000",
+        "NARWHAL_LOAD_BALANCER_URL": "http://10.0.0.1:8080",
+        "NARWHAL_LEASE_PATH": "/srv/shared/narwhal-lease.json",
+        "NARWHAL_HAPROXY_IMAGE": "haproxy@sha256:" + "a" * 64,
     }
 
 
@@ -104,13 +110,15 @@ class _Plan:
     def __init__(self, hosts: list[Host], groups: list[dict]) -> None:
         self.hosts = hosts
         self.groups = [_Group(tuple(group["roles"])) for group in groups]
-        self.engines = {role: None for host in hosts for role in host.roles if role != "router"}
+        self.engines = {
+            role: None for host in hosts for role in host.roles if role.startswith("engine-")
+        }
 
     def group(self, role: str) -> _Group:
         return next(group for group in self.groups if role in group.roles)
 
     def edges(self) -> tuple[_Edge, ...]:
-        engines = [host for host in self.hosts if any(r != "router" for r in host.roles)]
+        engines = [host for host in self.hosts if any(r.startswith("engine-") for r in host.roles)]
         return tuple(_Edge(a, b) for a in engines for b in engines if a != b)
 
 
@@ -147,6 +155,12 @@ class Fleet:
         # The container each launch directory started.
         self.used: dict[str, str] = {}
         self.uploads: dict[str, bytes] = {}
+        # Whether the standby router's host reads the probe lease the primary's host claimed.
+        self.lease_coherent = True
+        self.monitoring_up = False
+        self.overhead_problem: str | None = None
+        # The router that controls the fleet, by host ID.
+        self.active_router = "node-1"
 
     # Library functions of the standalone commands.
 
@@ -193,7 +207,9 @@ class Fleet:
             directory.mkdir(mode=0o700)
             for role in host.roles:
                 values = {"NARWHAL_ROUTER_URL": env["NARWHAL_ROUTER_URL"]}
-                if role != "router":
+                if role == "load-balancer":
+                    values = {}
+                elif role.startswith("engine-"):
                     n = role.split("-")[1]
                     values[f"NARWHAL_NODE_{n}_ATTESTATION_URL"] = env[
                         f"NARWHAL_NODE_{n}_ATTESTATION_URL"
@@ -211,7 +227,7 @@ class Fleet:
                         }
                     )
                 write_environment(directory / f".env.{role}", values)
-            if "router" in host.roles:
+            if {"router", "standby-router"} & set(host.roles):
                 write_private(
                     directory / "fleet.local.json", Path(env["NARWHAL_FLEET"]).read_bytes()
                 )
@@ -261,7 +277,7 @@ class Fleet:
 
     def step(self, ssh: Any, step: remote.Step, directory: Path) -> str:
         stage, role = step.stage, step.role
-        self.calls[f"{stage}[{role}]" if role and role != "router" else stage] += 1
+        self.calls[f"{stage}[{role}]" if role and role.startswith("engine-") else stage] += 1
         if self.fail_stage == stage:
             raise remote.StepFailed(
                 step.host.id, step.operation, self.fail_status, "stubbed failure", directory
@@ -292,6 +308,14 @@ class Fleet:
             files["container-start.json"] = json.dumps(
                 {"container_id": cid, "started_at": started}
             ).encode()
+        elif stage == "load-balancer":
+            cid = uuid.uuid4().hex
+            started = f"2026-01-01T00:00:{sum(self.calls.values()):04d}Z"
+            self.containers["load-balancer"] = (cid, started)
+            return f"{cid} {started}"
+        elif stage == "monitoring":
+            self.monitoring_up = True
+            return "prometheus ready at http://127.0.0.1:9090 (abc, prom/prometheus)"
         elif stage == "engine-probe":
             files["probe/probe.json"] = b"{}"
         elif stage == "cache-capture":
@@ -345,7 +369,7 @@ class Fleet:
     # The systemd supervisor of each host.
 
     def supervisor(self, ssh: Any, host: Host, stage: str, run_id: str) -> _Units:
-        return _Units(self, run_id)
+        return _Units(self, run_id, host.id)
 
     @contextlib.contextmanager
     def patched(self) -> Iterator[None]:
@@ -445,6 +469,28 @@ class _SSH:
             return _file("readmission.json", b"{}")
         if operation == "check the router":
             return "\n".join(_file(name, b"{}") for name in ("health.json", "ready.json"))
+        if operation in (
+            "ask whether the standby holds the lease",
+            "ask whether the router controls the fleet",
+        ):
+            return "200" if _router_host(script) == fleet.active_router else "503"
+        if operation == "measure the router overhead":
+            measured = {"overhead_seconds": 0.01, "requests": 64, "problem": fleet.overhead_problem}
+            return _file("overhead.json", json.dumps(measured).encode())
+        if operation == "remove the lease":
+            fleet.calls[operation] += 1
+            return ""
+        if operation in _LEASE_CHECK:
+            if operation == "read the claim" and not fleet.lease_coherent:
+                return "null"
+            return _LEASE_CHECK[operation]
+        if operation == "read the monitoring containers":
+            if "docker ps" in script:
+                return "p1 prometheus\ng1 grafana\nr1 renderer"
+            return "true\ntrue\ntrue" if fleet.monitoring_up else ""
+        if operation == "remove the monitoring containers":
+            fleet.monitoring_up = False
+            return ""
         if operation.startswith("verify the restarted"):
             fleet.verified.append(operation)
             if fleet.fail_verify:
@@ -457,16 +503,34 @@ class _SSH:
         return self.fleet.run_directory / Path(*parts[3:-1])
 
 
-class _Units(Supervisor[SystemdUnit]):
-    """Units that run until the test stops or restarts them."""
+_LEASE_CHECK = {
+    "claim the probe lease": "claimed 1",
+    "read the claim": json.dumps({"holder": "node-1-lease-check", "epoch": 1}),
+    "claim the held lease": "refused",
+    "probe the held lock": "blocked",
+    "claim the expired lease": "claimed 2",
+    "read the takeover": json.dumps({"holder": "node-2-lease-check", "epoch": 2}),
+}
+# Each router host's router origin in `environment`.
+_ROUTER_HOSTS = {"10.0.0.1:8000": "node-1", "10.0.0.2:8000": "node-2"}
 
-    def __init__(self, fleet: Fleet, run_id: str) -> None:
+
+def _router_host(script: str) -> str:
+    """The host whose router a status script asks about."""
+    return next((host for origin, host in _ROUTER_HOSTS.items() if origin in script), "")
+
+
+class _Units(Supervisor[SystemdUnit]):
+    """Units that run until the test stops or restarts them, keyed by host and unit name."""
+
+    def __init__(self, fleet: Fleet, run_id: str, host: str) -> None:
         self.fleet = fleet
         self.run_id = run_id
+        self.host = host
         self.runner = None
 
     def unit(self, name: str) -> str:
-        return f"narwhal-{self.run_id}-{name}.service"
+        return f"{self.host}:narwhal-{self.run_id}-{name}.service"
 
     def start(self, spec: supervision.ProcessSpec) -> SystemdUnit:
         unit = self.unit(spec.name)

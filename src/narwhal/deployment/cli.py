@@ -38,13 +38,14 @@ TARGETS: dict[str, Any] = {"ssh": stage_run, "kubernetes": kubernetes_target}
 
 DESCRIPTIONS = {
     "plan": "Check every deployment input and each host's systemd user manager, then print "
-    "each stage up to the router start and whether run would run or skip it, and why.",
-    "run": "Run the stages from host access to a ready router in the run directory, skipping "
+    "each stage up to the monitoring stack and whether run would run or skip it, and why.",
+    "run": "Run the stages from host access to a ready router pair in the run directory, skipping "
     "each stage whose recorded result still holds, and stop at the first stage that fails.",
     "status": "Print each stage's state and evidence from the run record, and check whether "
-    "each engine, sidecar and router the run started still runs or has stopped.",
-    "down": "Stop the router, sidecars and engines the run started, each only while its "
-    "recorded identity still matches, and print each as stopped or not running.",
+    "each engine, sidecar, router and container the run started still runs or has stopped.",
+    "down": "Stop the monitoring stack, load balancer, routers, sidecars and engines the run "
+    "started, each only while its recorded identity still matches, and print each as stopped "
+    "or not running.",
     "discover": "Log in to every host named in the loaded environment with its pinned host key, "
     "inspect GPUs, the engine image and the checkpoint, and write the host inventory, launch "
     "records, fleet and deployment.env.",
@@ -92,7 +93,8 @@ def add_commands(commands: Any) -> None:
         "deploy",
         help="Deploy a fleet on SSH hosts, or run one of its stages alone",
         description="Deploy a fleet on SSH hosts. plan checks the inputs and prints what run "
-        "would do, run takes the hosts to a ready router and resumes at the stage that did not "
+        "would do, run takes the hosts to a ready router pair and resumes at the stage that "
+        "did not "
         "pass, status reports the run and down stops what it started. discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
         "writes the wheel and role files, install copies and installs them, transfer-measure "

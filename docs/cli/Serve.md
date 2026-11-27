@@ -47,6 +47,7 @@ Set `--lease-path` on both routers to the same file in the pair's [lease domain]
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--standby-of URL` | `""` | Primary router URL. | URL, or empty for an active router |
+| `--first-start-primary` | off | Start as the primary while no file exists at `--lease-path`, and as the standby of `--standby-of` once one does. Set it on one router of a pair, so that router claims the lease on the pair's first start and a later restart of it rejoins as the standby. | Requires `--standby-of` |
 | `--standby-probe-interval SECONDS` | `0.25` | Interval between polls of the primary. | Finite, positive |
 | `--standby-takeover-after N` | `4` | Consecutive failed polls required for takeover. | At least 1 |
 | `--standby-max-handoff-age SECONDS` | `30.0` | Maximum age of a state handoff eligible for takeover. | Finite, positive |

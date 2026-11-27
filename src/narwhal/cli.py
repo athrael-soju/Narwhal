@@ -8,6 +8,7 @@ import logging
 import math
 import socket
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -84,6 +85,12 @@ def serve(argv: list[str] | None = None) -> int:
         help="run as a warm standby of the primary router at URL: remain "
         "non-ready while shadowing its handoff, then attempt fenced takeover "
         "after the primary is silent and its shared lease expires",
+    )
+    ap.add_argument(
+        "--first-start-primary",
+        action="store_true",
+        help="start as the primary while no lease file exists at --lease-path, and as the "
+        "standby of --standby-of once one does, so a supervisor's restart rejoins the pair",
     )
     ap.add_argument(
         "--standby-probe-interval",
@@ -188,6 +195,12 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--standby-max-handoff-age must be positive")
     if args.standby_of and not args.lease_path:
         ap.error("--standby-of requires --lease-path for fenced takeover")
+    if args.first_start_primary and not args.standby_of:
+        ap.error("--first-start-primary requires --standby-of")
+    if args.first_start_primary and not Path(args.lease_path).exists():
+        # The first router of a pair claims the free lease; any later start finds the lease
+        # file and shadows the router that holds it.
+        args.standby_of = ""
     if args.lease_safety_margin < 0:
         ap.error("--lease-safety-margin must be nonnegative")
     if (

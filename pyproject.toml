@@ -105,6 +105,7 @@ narwhal = ["py.typed", "fleet.example.json"]
   "grafana/provisioning/datasources/prometheus.yml",
 ]
 "narwhal.fleet_control" = ["console.html"]
+"narwhal.deployment" = ["haproxy.cfg"]
 "narwhal.backends.vllm" = ["icon.png"]
 "narwhal.backends.sglang" = ["icon.png"]
 "narwhal.backends.llamacpp" = ["icon.png"]

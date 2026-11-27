@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .engine_launch import expose_colocated_gpus, load_launches
-from .hosts import HOST_CAUSE, SSH, Host, write_private
+from .hosts import HOST_CAUSE, ROUTER_ROLES, SSH, Host, write_private
 from .launch_engine.backend import launcher
 from .role_env import HELPER_DIRECTORY, helpers, select_values, write_environment
 
@@ -51,7 +51,7 @@ def role_files(host: Host, helper_names: list[str]) -> list[str]:
     files += [f"engine-launch.{role}.json" for role in host.roles if role.startswith("engine-")]
     if any(role.startswith("engine-") for role in host.roles):
         files.extend(helper_names)
-    if "router" in host.roles:
+    if set(ROUTER_ROLES) & set(host.roles):
         files.extend(("fleet.local.json", "profiling-limits.json"))
     return files
 
@@ -182,7 +182,12 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
     for host in hosts:
         for role in host.roles:
             node = int(role.split("-")[1]) if role.startswith("engine-") else None
-            selected[role] = select_values("engine" if node else "router", node, fleet, env)
+            # The load balancer's host runs HAProxy alone, with no Narwhal role settings.
+            selected[role] = (
+                {}
+                if role == "load-balancer"
+                else select_values("engine" if node else "router", node, fleet, env)
+            )
             # Launch plans and attestations record the installed wheel as the revision.
             selected[role]["NARWHAL_DEPLOYMENT_REVISION"] = wheel_sha256
     engine_roles = [role for role in selected if role.startswith("engine-")]
@@ -223,7 +228,7 @@ def package(hosts: list[Host], env: Mapping[str, str], output: Path) -> None:
         if any(role.startswith("engine-") for role in host.roles):
             for name, content in snapshots.items():
                 write_private(directory / name, content)
-        if "router" in host.roles:
+        if set(ROUTER_ROLES) & set(host.roles):
             write_private(directory / "fleet.local.json", fleet_path.read_bytes())
             write_private(
                 directory / "profiling-limits.json",

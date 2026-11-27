@@ -188,7 +188,7 @@ A change reruns the stages its row lists, and a changed output file reruns its s
 | `sidecar-start` | Once for each engine | `attest-capture` | [Starting the sidecar](../deploy/05-Attest.md#starting-the-sidecar) |
 | `finalize-fleet` | Once per run | `sidecar-start` | [Finalizing the fleet contract](../deploy/05-Attest.md#finalizing-the-fleet-contract) |
 | `profile` | Once per run | `finalize-fleet` | [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
-| `router-start` | Once per run | `profile` | [Starting and locally verifying the router](../deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router) |
+| `router-start` | Once per run | `profile` | [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ For llama.cpp engines from `setup`:
 | `package` | Once per run |  | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
 | `engine-start` | Once per run | `package` | [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
 | `profile` | Once per run | `engine-start` | [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
-| `router-start` | Once per run | `profile` | [Starting and locally verifying the router](../deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router) |
+| `router-start` | Once per run | `profile` | [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |

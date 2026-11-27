@@ -4,53 +4,59 @@ description: Start the Narwhal router and validate fleet capacity through the pr
 
 # Serve and measure
 
-## Starting and locally verifying the router
+`narwhal deploy run` starts a router pair after preflight: the primary router on the router host, its standby on the standby router host, HAProxy in front of both, and the monitoring stack. The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair).
 
-Replace `<served-model>` with the fleet model.
+## Checking the shared lease path
 
-1. In the router shell, start the router:
+Both routers hold one lease at `NARWHAL_LEASE_PATH`, so both router hosts must mount that file's directory at the same path, with POSIX `flock`, coherent reads and atomic rename. The `lease-check` stage proves this with the router's own lease code before either router starts. On a probe lease beside the pair's lease:
 
-    ```bash
-    .venv/bin/narwhal-serve \
-      --fleet runs/deployment/fleet.json \
-      --host 127.0.0.1 \
-      --port 8000
-    ```
+1. The primary router's host claims the lease.
+2. The standby router's host reads that claim, and its own claim is refused.
+3. While the primary's host holds the lease lock, `flock` on the standby's host reports it held.
+4. Once the lease expires, the standby's host claims it, and the primary's host reads the new claim.
 
-2. From another router-host shell, check the router:
+A failed step names the host, what it read and what it expected, and the stage removes the probe files. The stage keeps each step's output in `lease-check.json`. Fix the mount on both hosts, then rerun `narwhal deploy run`.
 
-    ```bash
-    curl -fsS http://127.0.0.1:8000/health
-    curl -fsS http://127.0.0.1:8000/ready
-    curl -fsS http://127.0.0.1:8000/narwhal/state | python3 -m json.tool
-    curl -fsS http://127.0.0.1:8000/metrics
-    curl -fsS http://127.0.0.1:8000/v1/completions \
-      -H 'content-type: application/json' \
-      -d '{"model":"<served-model>","prompt":"Return one sentence about narwhals.","max_tokens":32}'
-    ```
+## Starting the router pair
 
-3. Retain these responses before load:
+`router-start` runs for the primary first, then for the standby. Each router runs as a systemd user unit that restarts it on failure:
 
-    | Response          | Shows                                                                                                           |
-    | ----------------- | --------------------------------------------------------------------------------------------------------------- |
-    | `/health`         | `status` (`ok` when the router is ready), `instances` and `available_instances`                                 |
-    | `/ready`          | `status` `ready` or `not_ready` with a `reason`, and HTTP 503 when not ready                                |
-    | `/narwhal/state`  | Engine inventory and role split                                                                                 |
-    | `/metrics`        | Router metrics                                                                                                  |
-    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`                                          |
+- The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). Unless the standby holds the lease on the current fleet, the stage removes the lease file first, so the primary claims the lease and must pass `/ready`. A later restart of the primary finds the lease file and rejoins as the standby.
+- The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary and must pass `/health`.
 
-## Starting the monitoring stack on the router
+Both use `--lease-path NARWHAL_LEASE_PATH` and the host's ID as `--router-id`. The stage keeps the primary's health, readiness, state, metrics and lifecycle responses and one completion under `router/`, and the router's log and journal on its host in the attempt directory.
 
-With the router running, start the stack in the router shell:
+When the primary starts the pair, the stage then measures the router overhead under load. It sends 64 completions, 8 at a time, to the primary and reads its `/metrics` before and after. Over the completions that reached a first token, the overhead is the router's time to first token less the time in the prefill legs and in the admission and prefill seat queues, per completion:
 
-```bash
-export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
-python -m narwhal.observability.stack.start.cli
+```text
+overhead = (Δ narwhal_ttft_seconds_sum
+            − Δ narwhal_upstream_seconds_total{phase="prefill"}
+            − Δ narwhal_queue_wait_seconds_sum{stage="admission"}
+            − Δ narwhal_queue_wait_seconds_sum{stage="prefill"})
+           / Δ narwhal_ttft_seconds_count
 ```
 
-The command waits until Prometheus scrapes the router, then prints one line for each service: `<service> ready at <URL> (<container ID>, <image>)`. Retain those lines.
+The stage fails when a completion fails or when the overhead exceeds `NARWHAL_ROUTER_OVERHEAD_S`, the `slo.router_overhead_s` that preflight's [`slo` gate](../cli/Check.md#the-slo-gate) budgets. It keeps the terms in `overhead.json`.
 
-For a router pair, set both router origins and the load balancer origin as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).
+When an engine restarts and the routers still run on an unchanged fleet, the router that holds the lease readmits the engine, and its standby follows through state handoffs.
+
+## Starting the load balancer
+
+The `load-balancer` stage renders [`deploy/ha/haproxy.cfg`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg), which the wheel carries, with `bind` set to the `NARWHAL_LOAD_BALANCER_URL` address and the two `server` lines set to the routers' origins. On the load balancer's host, it checks the file with `haproxy -c`, then starts `NARWHAL_HAPROXY_IMAGE` as the container `narwhal-<run ID>-load-balancer`, with host networking and Docker's `on-failure` restart policy. HAProxy reads the file from the attempt directory as the deployment user.
+
+The stage passes when `/ready` answers HTTP 200 through HAProxy. It keeps `haproxy.cfg` and the health, readiness, state, metrics, lifecycle and completion responses through HAProxy under `router/`. Clients and the capacity trial use `NARWHAL_LOAD_BALANCER_URL`.
+
+## Starting the monitoring stack
+
+The `monitoring` stage starts the [monitoring stack](../observability/01-Start-and-Verify.md) on the primary router's host from the installed wheel, in the deployment directory:
+
+```bash
+.venv/bin/python -m narwhal.observability.stack.start.cli \
+  --router-url "$NARWHAL_ROUTER_URL" --router-url "$NARWHAL_STANDBY_ROUTER_URL" \
+  --targets-url "$NARWHAL_LOAD_BALANCER_URL"
+```
+
+Prometheus scrapes both routers and reads the engine targets through the load balancer. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory.
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 

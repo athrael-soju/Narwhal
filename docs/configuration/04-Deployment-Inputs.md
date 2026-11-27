@@ -170,9 +170,27 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 | `NARWHAL_CALIBRATION_INPUT_TOKENS` | `calibrate` | `narwhal-check --input-tokens`, comma-separated positive integers |
 | `NARWHAL_CALIBRATION_SAMPLES` | `calibrate` | `--samples`, an integer of at least 100, the fewest that preflight accepts as calibration evidence |
 | `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | `calibrate` | `--observation-timeout-s`, positive seconds |
-| `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the router binds and that the router host checks |
+| `NARWHAL_ROUTER_URL` | `router-start` | `http://HOST:PORT` that the primary router binds, as in [Router pair](#router-pair) |
+| `NARWHAL_STANDBY_ROUTER_URL`, `NARWHAL_LOAD_BALANCER_URL`, `NARWHAL_LEASE_PATH`, `NARWHAL_HAPROXY_IMAGE` | `lease-check`, `router-start`, `load-balancer`, `monitoring` | The [router pair](#router-pair) |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `monitoring` | Optional listen addresses of the [monitoring stack](../observability/02-Access.md) |
 
 Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-change), and a change reruns the stages of its row. Every other `NARWHAL_` variable belongs to discovery, apart from the SSH, inventory, stage limit and trial variables. A secret enters the run record only as part of a digest.
+
+### Router pair
+
+`run` deploys a primary router, a standby router and an HAProxy load balancer, as in [Serve and measure](../deploy/07-Serve-and-Measure.md).
+
+| Variable | Value |
+| --- | --- |
+| `NARWHAL_STANDBY_ROUTER_SSH` | SSH destination of the standby router's host, another host than the primary router's |
+| `NARWHAL_LOAD_BALANCER_SSH` | Optional SSH destination of the load balancer's host. Without it, HAProxy runs on the primary router's host |
+| `NARWHAL_ROUTER_URL` | `http://HOST:PORT` the primary router binds. The standby and the load balancer reach it there, so HOST is not a loopback address |
+| `NARWHAL_STANDBY_ROUTER_URL` | `http://HOST:PORT` the standby router binds, reachable from the primary and the load balancer |
+| `NARWHAL_LOAD_BALANCER_URL` | `http://HOST:PORT` that HAProxy binds on its host, and the origin clients use |
+| `NARWHAL_LEASE_PATH` | Absolute path of the pair's lease file, in a directory both router hosts mount at that path, as the [`lease-check` stage](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) checks |
+| `NARWHAL_HAPROXY_IMAGE` | HAProxy image pinned by image ID or registry digest, such as `haproxy@sha256:<digest>` |
+
+Each router binds its own port, so a router and HAProxy on one host need different ports.
 
 ### Profiling limits
 
@@ -197,7 +215,7 @@ A host with both roles holds both role files in one deployment directory.
 
 `narwhal deploy access`, `package`, `install`, `shell` and `tunnel` read the physical-host inventory from `--hosts PATH`, then from `NARWHAL_HOSTS`, then from `config/hosts.local.json`, as in `narwhal deploy access --hosts <path>`.
 
-Roles with identical `NARWHAL_NODE_<n>_SSH` or `NARWHAL_ROUTER_SSH` destinations share one physical-host record.
+Roles with identical `NARWHAL_NODE_<n>_SSH`, `NARWHAL_ROUTER_SSH`, `NARWHAL_STANDBY_ROUTER_SSH` or `NARWHAL_LOAD_BALANCER_SSH` destinations share one physical-host record.
 
 Each `hosts` entry contains:
 
@@ -210,7 +228,9 @@ Each `hosts` entry contains:
 
 Role names:
 
-- `router`, assigned once
+- `router`, the primary router, assigned once
+- `standby-router`, the standby router of a pair, on another host than `router`
+- `load-balancer`, the HAProxy host of a pair
 - `engine-<n>`, where `<n>` matches the numbered deployment variables
 
 The [example inventory](https://github.com/athrael-soju/Narwhal/blob/main/config/hosts.example.json) assigns `router` and `engine-1` to one machine and `engine-2` to another.
