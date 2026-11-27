@@ -138,7 +138,7 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 
 | Variable | Value |
 | --- | --- |
-| `NARWHAL_FABRIC_PROMPT_TOKENS` | Prompt tokens per KV handoff, a positive integer |
+| `NARWHAL_FABRIC_PROMPT_TOKENS` | Prompt tokens per KV handoff, a positive integer. `narwhal deploy transfer-measure` reads it too, for the SGLang handoffs it measures |
 | `NARWHAL_FABRIC_HANDOFFS_PER_S` | Peak remote KV handoffs per second that each directed host edge carries for each source cache group |
 | `NARWHAL_FABRIC_BURST` | Handoffs in a burst, a positive integer |
 | `NARWHAL_FABRIC_TRANSFER_BUDGET_S` | Seconds in which one burst must transfer |

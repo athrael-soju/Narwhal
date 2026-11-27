@@ -412,6 +412,20 @@
       "path": "/tokenize"
     },
     {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/hca"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/hca"
+    },
+    {
       "body": {
         "ignore_eos": true,
         "kv_transfer_params": {

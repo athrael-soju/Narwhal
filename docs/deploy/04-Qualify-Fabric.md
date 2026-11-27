@@ -1,10 +1,25 @@
 ---
-description: Measure each directed host edge of a Narwhal fleet against its KV cache budget with narwhal deploy fabric.
+description: Measure SGLang handoffs, then each directed host edge of a Narwhal fleet against its KV cache budget, with narwhal deploy.
 ---
 
 # Qualify the transfer fabric
 
-`narwhal deploy fabric` sizes each cache group's KV budget and measures every directed edge between engine hosts against it, while the fleet is idle. It runs from the workstation and needs no shell on a host.
+`narwhal deploy fabric` sizes each cache group's KV budget and measures every directed edge between engine hosts against it, while the fleet is idle. On SGLang, `narwhal deploy transfer-measure` first measures each engine's handoffs. Both run from the workstation and need no shell on a host.
+
+## Measuring KV handoffs
+
+An SGLang engine reports no cache layout, so its budget comes from the KV it moves in real handoffs. Measure every SGLang engine before you [derive the cache-equivalence groups](03-Validate-Engines.md#deriving-cache-equivalence-groups), because engines of one group must match in their measured handoffs:
+
+```bash
+narwhal deploy transfer-measure --run runs/deployment-env/first-deploy \
+  --out runs/transfer-measure/first-deploy
+```
+
+Each engine measures eight handoffs of `NARWHAL_FABRIC_PROMPT_TOKENS` tokens as the prefill engine. Its decode peer is the next engine role, in role order and wrapping around to the first, with the same image, model configuration, accelerator, TP size, GPU visibility variable, runtime settings and transport. With `engine-1` to `engine-3` alike, `engine-1` sends to `engine-2`, `engine-2` to `engine-3` and `engine-3` to `engine-1`. The peer accepts the handoffs and resizes for decode as the engine itself would. The tool switches the peer to the decode role and back to the role it found, so every engine must be running and idle.
+
+An engine with no such peer would also be alone in its cache group, and nothing could decode its handoffs, so the command stops before it reaches a host and names that engine. Add an engine with the same launch inputs, or change the engine's inputs to match another.
+
+The command writes `before.prom`, `after.prom` and `transfer.json` for each engine to `<out>/<role>/`, and `transfer-measure.json` with each engine's peer, record SHA-256 and payload per handoff. [Deriving the groups](03-Validate-Engines.md#deriving-cache-equivalence-groups) reads each engine's `transfer.json` as its measured handoffs. Measure again after `NARWHAL_FABRIC_PROMPT_TOKENS` changes, since the budget refuses a record of another prompt length.
 
 ## Running the qualification
 
@@ -13,21 +28,22 @@ Before you run it:
 - Set the [fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) in `.env`: the budget workload, the test port and, for `ucx_rdma`, each engine's GID index and RoCE mode.
 - Install `iperf3` for `ucx_tcp`, or `perftest` for `ucx_rdma`, and `iproute2` and `util-linux`, on every engine host.
 - Open `NARWHAL_FABRIC_TEST_PORT` between the fabric addresses. Opening a firewall needs root, so the command never does it.
-- Keep the engines from [Validate the engines](03-Validate-Engines.md) running and idle, and have the cache-equivalence groups and each representative's launch directory at hand.
+- Keep the engines from [Validate the engines](03-Validate-Engines.md) running and idle.
+- [Derive the cache-equivalence groups](03-Validate-Engines.md#deriving-cache-equivalence-groups) from the same package, and keep the cache layouts or transfer records they read where they are.
 
-Pass each cache group with `--group`, its representative first. On vLLM and TensorRT-LLM, pass each representative's launch directory with `--engine-run`, as a path in its host's deployment directory:
+Pass the groups' `cache-groups.json`:
 
 ```bash
 narwhal deploy fabric --run runs/deployment-env/first-deploy \
-  --group engine-1,engine-2 --engine-run engine-1=runs/engine-launch-20260101T000000Z-4242 \
-  --out runs/fabric/first-deploy
+  --groups runs/cache-groups/first-deploy/cache-groups.json --out runs/fabric/first-deploy
 ```
 
-The command runs three stages in order, and stops at the first that fails, naming the edge or role and the cause:
+The command takes each group and its representative from the file. It sizes each group's budget from the representative's cache layout on vLLM and TensorRT-LLM, or its transfer record on SGLang, as the groups recorded them. It refuses groups derived from another package's launch records, and a layout or record that changed after the groups were derived.
 
-1. `transfer-measure`, on SGLang: the representative of each group measures eight handoffs to the group's second engine.
-2. `fabric-budget`: each group's budget from its representative.
-3. `fabric-edge`: every directed host edge, one at a time.
+The command runs two stages in order, and stops at the first that fails, naming the edge or role and the cause:
+
+1. `fabric-budget`: each group's budget from its representative.
+2. `fabric-edge`: every directed host edge, one at a time.
 
 `n` engine hosts have `n * (n - 1)` directed edges. A fleet on one host has none, and [preflight](06-Profile-and-Preflight.md#running-preflight) qualifies its transfers. [`narwhal deploy`](../cli/Deploy.md#fabric-qualification) lists the options, outputs and exit codes, and [Fabric workload qualification](../configuration/06-Fabric-and-Operations.md#fabric-workload-qualification) the evidence files.
 
@@ -51,7 +67,7 @@ These initial trial values suit a first qualification:
 | `NARWHAL_FABRIC_TRANSFER_BUDGET_S` | 1     |
 | `NARWHAL_FABRIC_HEADROOM`          | 1.25  |
 
-`payload_bytes` comes from the representative. On vLLM and TensorRT-LLM, it is the padded cache pages of a prompt in the captured `cache-layout.json`, summed over every TP rank. On SGLang, it is the mean of the measured handoffs. An SGLang group of one engine has no peer to measure against, so the command stops before it reaches a host. Every directed edge leaving a group's hosts carries the full handoff rate.
+`payload_bytes` comes from the representative. On vLLM and TensorRT-LLM, it is the padded cache pages of a prompt in the captured `cache-layout.json`, summed over every TP rank. On SGLang, it is the mean of the representative's [measured handoffs](#measuring-kv-handoffs). Every directed edge leaving a group's hosts carries the full handoff rate.
 
 ## Binding each sample to a directed route
 

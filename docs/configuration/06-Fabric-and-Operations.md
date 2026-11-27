@@ -20,7 +20,7 @@ Each cache group has one `budget.json`, `fabric-budget/<representative>/budget.j
 
 On vLLM and TensorRT-LLM, the payload is the padded-page bound of the captured `cache-layout.json`, copied beside the budget. The budget records its SHA-256, the image identity and the launch-plan hash. The layout must name this model configuration and launch record. On vLLM, every TP rank must resolve one KV cache layout, which the budget records as `kv_cache_layout`.
 
-On SGLang, the payload is the mean measured handoff of `transfer-measure/<representative>/transfer.json`, schema `narwhal.kv-transfer-measurement` version 1. The packaged measurement tool, `transfer_measure.py`, runs on the representative's host. It puts the group's second engine in the decode role, switching it out and back first when it already serves decode, sends eight handoffs of `NARWHAL_FABRIC_PROMPT_TOKENS` tokens, and returns that engine to the role it found. `transfer.json` holds the metric series, the SHA-256 of the engine's packaged launch record, the prompt length, the payload per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`, which sit beside it. The budget records the SHA-256 of all three.
+On SGLang, the payload is the mean measured handoff of the representative's `transfer.json`, schema `narwhal.kv-transfer-measurement` version 1, from [`narwhal deploy transfer-measure`](../deploy/04-Qualify-Fabric.md#measuring-kv-handoffs). The packaged measurement tool, `transfer_measure.py`, runs on each engine's host. It puts the engine's decode peer in the decode role, switching it out and back first when it already serves decode, sends eight handoffs of `NARWHAL_FABRIC_PROMPT_TOKENS` tokens, and returns the peer to the role it found. `transfer.json` holds the metric series, the SHA-256 of the engine's packaged launch record, the prompt length, the payload per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`, which sit beside it. The budget records the SHA-256 of all three, and `fabric-budget/<representative>/` keeps copies of them.
 
 ### Link evidence
 
@@ -39,7 +39,7 @@ The link record holds both hosts, addresses and interfaces, both routes, the tra
 
 Evidence and comparisons hold the source role, the link fingerprint, the SHA-256 of the sample and the budget, `measured_gbps`, `required_gbps` and `passed`. A comparison also holds the SHA-256 of the evidence it reuses. For `ucx_tcp`, the measured rate is the receiver's aggregate `end.sum_received.bits_per_second`. For `ucx_rdma`, it is the report's `BW average[Gb/sec]` column.
 
-`fabric.json` lists the input digests, the budget of each group, the transfer measurement of each SGLang representative, and every sample with its roles, link fingerprint, measured rate, whether it was reused, and each source role's required rate and verdict.
+`fabric.json` lists the input digests, the budget of each group, and every sample with its roles, link fingerprint, measured rate, whether it was reused, and each source role's required rate and verdict.
 
 ## CLI precedence
 

@@ -102,7 +102,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | `engine-start` | Once for each engine role, on its engine host | `engine-check` | [Preparing, checking, and starting each engine](deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
 | `engine-probe` | Once for each engine role, on its engine host | `engine-start` | [Proving the live HTTP process](deploy/03-Validate-Engines.md#proving-the-live-http-process) |
 | `cache-capture` | Once for each engine role, on its engine host, on TensorRT-LLM or vLLM | `engine-probe` | [Capturing the live cache layout](deploy/03-Validate-Engines.md#capturing-the-live-cache-layout) |
-| `transfer-measure` | Once for each engine role, on its engine host, on SGLang | `engine-probe` | [Measuring KV handoffs without a cache layout](deploy/03-Validate-Engines.md#measuring-kv-handoffs-without-a-cache-layout) |
+| `transfer-measure` | Once for each engine role, on its engine host, on SGLang | `engine-probe` | [Measuring KV handoffs](deploy/04-Qualify-Fabric.md#measuring-kv-handoffs) |
 | `cache-groups` | Once per run, on the management workstation | `discover`, `cache-capture`, `transfer-measure` | [Deriving cache-equivalence groups](deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) |
 | `fabric-budget` | Once for each cache-equivalence group | `cache-groups` | [Building the source budget](deploy/04-Qualify-Fabric.md#building-the-source-budget) |
 | `fabric-edge` | Once for each directed edge between engine hosts | `fabric-budget` | [Binding each sample to a directed route](deploy/04-Qualify-Fabric.md#binding-each-sample-to-a-directed-route) |
@@ -130,7 +130,7 @@ A change reruns the stages its row lists and no others. A change that touches se
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
-| Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `fabric-budget`, `fabric-edge` |
+| Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `transfer-measure` on SGLang when the prompt tokens change, `fabric-budget`, `fabric-edge` |
 | Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
 | Router settings | The bind address, port, lease path, standby options and load balancer | `router-start`, `monitoring`, `trial` |
 | Monitoring origins | The router and load balancer origins and the listen addresses | `monitoring` |

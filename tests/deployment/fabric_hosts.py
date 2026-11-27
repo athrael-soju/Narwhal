@@ -40,7 +40,9 @@ for name, data in (("before.prom", before), ("after.prom", after)):
     with open(os.path.join(args.out_dir, name), "wb") as stream:
         stream.write(data)
 record = {"schema": "narwhal.kv-transfer-measurement", "schema_version": 1,
-          "series": "sglang:kv_transfer_total_mb", "prompt_tokens": int(args.prompt_tokens),
+          "series": "sglang:kv_transfer_total_mb",
+          "launch_config_sha256": hashlib.sha256(open(args.launch_config, "rb").read()).hexdigest(),
+          "prompt_tokens": int(args.prompt_tokens),
           "payload_bytes_per_handoff": 4194304, "handoffs": 8,
           "metrics_sha256": {"before.prom": hashlib.sha256(before).hexdigest(),
                              "after.prom": hashlib.sha256(after).hexdigest()}}
@@ -290,7 +292,9 @@ class Fleet:
                 launch = json.dumps(
                     {
                         "role": role,
+                        "accelerator": "synthetic-accelerator",
                         "tensor_parallel_size": tp,
+                        "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
                         "transfer": {
                             "transport": "ucx_rdma" if rdma else "ucx_tcp",
                             "net_devices": net,
@@ -303,6 +307,8 @@ class Fleet:
                 (deployment / f"config/engine-launch.{role}.json").write_bytes(launch)
                 values = {
                     "NARWHAL_FABRIC_INTERFACE": "fabric0",
+                    "NARWHAL_ENGINE_IMAGE": "sha256:" + "c" * 64,
+                    "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(model).hexdigest(),
                     "NARWHAL_MODEL_DIR": str(deployment / "model"),
                     "NARWHAL_ENGINE_LAUNCH_CONFIG": f"config/engine-launch.{role}.json",
                     "NARWHAL_ENGINE_MODEL_NAME": "synthetic",
@@ -348,10 +354,43 @@ class Fleet:
         host = next(host for host in self.hosts if role in host.roles)
         return self.ssh.home(host.id)
 
-    def representatives(self, groups: list[list[str]]) -> dict[str, str]:
-        if self.backend == "sglang":
-            return {}
-        return {group[0]: self.engine_runs[group[0]] for group in groups}
+    def groups_file(self, groups, transfers=None, name="cache-groups") -> Path:
+        """Write the `cache-groups.json` that `narwhal deploy cache-groups` would derive.
+
+        A vLLM representative's geometry source is a workstation copy of its host's captured
+        layout; an SGLang representative's is its `transfers` entry, when given.
+        """
+        folder = self.root / name
+        folder.mkdir(parents=True, exist_ok=True)
+        engines = {}
+        for group in groups:
+            for role in group:
+                launch = next(self.run.glob(f"*/engine-launch.{role}.json"))
+                engines[role] = {"launch_sha256": hashlib.sha256(launch.read_bytes()).hexdigest()}
+            source = None
+            if self.backend != "sglang":
+                captured = self.host_of(group[0]) / REMOTE_DIR / self.engine_runs[group[0]]
+                source = folder / f"{group[0]}-layout.json"
+                source.write_bytes((captured / "cache-layout.json").read_bytes())
+            elif transfers and group[0] in transfers:
+                source = Path(transfers[group[0]])
+            if source is not None:
+                engines[group[0]].update(
+                    geometry_source=str(source),
+                    geometry_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                )
+        document = {
+            "schema": "narwhal.cache-groups",
+            "schema_version": 1,
+            "groups": [
+                {"id": f"{index:016x}", "representative": group[0], "roles": list(group)}
+                for index, group in enumerate(groups)
+            ],
+            "engines": engines,
+        }
+        path = folder / "cache-groups.json"
+        path.write_text(json.dumps(document))
+        return path
 
 
 def _words(gid: str) -> list[int]:

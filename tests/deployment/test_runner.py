@@ -91,7 +91,7 @@ ROWS = {
     "deadline_margin": {"all": ("fleet-limits", *SERVING)},
     "profiling": {"all": ("profile", *SERVING)},
     "calibration": {"all": ("calibrate", "fleet-limits", *SERVING)},
-    "fabric_workload": {"all": ("fabric-budget", "fabric-edge")},
+    "fabric_workload": {"all": ("transfer-measure", "fabric-budget", "fabric-edge")},
     "fabric_test": {"all": ("fabric-edge",)},
     "router": {"all": ("router-start", "monitoring", "trial")},
     "monitoring": {"all": ("monitoring",)},

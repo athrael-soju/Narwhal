@@ -200,26 +200,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Measuring KV handoffs without a cache layout](#measuring-kv-handoffs-without-a-cache-layout) measures.
-
-## Measuring KV handoffs without a cache layout
-
-SGLang publishes no cache layout, so on SGLang each engine's handoff size comes from measured handoffs, and a group's engines must match in them. Measure before you derive the groups.
-
-In each engine-role shell, check the packaged measurement tool, then measure eight handoffs with this engine as the prefill engine. Set `DECODE_URL` to the base URL of another idle engine with the same image, model and launch settings:
-
-```bash
-echo "$NARWHAL_TRANSFER_MEASURE_SHA256  $NARWHAL_TRANSFER_MEASURE_TOOL" | sha256sum -c
-export PREFILL_IP='<this engine fabric address>'
-export DECODE_URL='http://<decode engine address>:<decode engine port>'
-python3 "$NARWHAL_TRANSFER_MEASURE_TOOL" \
-  --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
-  --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
-  --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-  --prompt-tokens 1024 --out-dir "$ENGINE_RUN/transfer"
-```
-
-The measurement writes `$ENGINE_RUN/transfer/transfer.json`, which the groups and the [source budget](04-Qualify-Fabric.md#building-the-source-budget) read.
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. An SGLang engine's cache geometry is its measured KV handoff instead, which [Measuring KV handoffs](04-Qualify-Fabric.md#measuring-kv-handoffs) measures before the groups are derived.
 
 ## Deriving cache-equivalence groups
 
@@ -231,7 +212,7 @@ Engines in one cache-equivalence group share one fabric budget. Two engine roles
 
 The group's representative is its lowest-numbered role.
 
-Copy each engine's `cache-layout.json`, or on SGLang its `transfer.json`, to the management workstation. Then, from the management shell with `config/deployment.env` loaded, pass one file for every engine role:
+Copy each engine's `cache-layout.json` to the management workstation. On SGLang, `narwhal deploy transfer-measure` has already written each engine's `transfer.json` there. Then, from the management shell with `config/deployment.env` loaded, pass one file for every engine role:
 
 ```bash
 narwhal deploy cache-groups --run "$PACKAGE_RUN" --out runs/cache-groups/first-deploy \
@@ -239,7 +220,7 @@ narwhal deploy cache-groups --run "$PACKAGE_RUN" --out runs/cache-groups/first-d
   --cache-layout engine-2=runs/cache-layouts/engine-2.json
 ```
 
-On SGLang, pass `--transfer-record engine-<n>=<path>` instead. `PACKAGE_RUN` is the directory that [`narwhal deploy package`](02-Install.md) wrote, such as `runs/deployment-env/first-deploy`. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG`, each role's discovery record from its `sources.runtime`, and each role's packaged launch record from `--run`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
+On SGLang, pass `--transfer-record engine-<n>=<path>` instead, with the `transfer.json` that [`narwhal deploy transfer-measure`](04-Qualify-Fabric.md#measuring-kv-handoffs) wrote for the role, such as `runs/transfer-measure/first-deploy/engine-1/transfer.json`. `PACKAGE_RUN` is the directory that [`narwhal deploy package`](02-Install.md) wrote, such as `runs/deployment-env/first-deploy`. The command reads the launch records from `NARWHAL_LAUNCH_CONFIG`, each role's discovery record from its `sources.runtime`, and each role's packaged launch record from `--run`. Every cache layout and transfer record names the SHA-256 of the packaged launch record its engine was prepared from, and the command refuses one that names another. It also refuses a role without the file its engine needs, a file for a role that has none, a packaged record that differs from the launch records, a cache layout that lacks a TP rank or was captured from another image or model configuration, and an `--out` directory that already holds `cache-groups.json`.
 
 It prints one line per group, such as:
 

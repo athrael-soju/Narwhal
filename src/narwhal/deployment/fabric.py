@@ -1,12 +1,13 @@
 """Qualify every directed edge between engine hosts against the budgets of its source roles.
 
 These functions run the fabric stages of the deployment graph. `transfer-measure` measures the
-KV handoffs of a cache group's representative on backends that size budgets from measured
-handoffs. `fabric-budget` sizes each cache group's budget. `fabric-edge` checks the tools,
-routes and RDMA GID tables of one directed host edge, then samples it with `iperf3` or
-`ib_write_bw`, or reuses a retained sample when the link record is unchanged, and records the
-sample against the budget of every source role behind the link. `narwhal deploy fabric` runs
-the three stages in order and writes each instance's evidence to `<out>/<stage>/<instance>/`.
+KV handoffs of each engine whose backend sizes budgets from measured handoffs, before the cache
+groups are derived; `narwhal deploy transfer-measure` runs it. `fabric-budget` sizes each cache
+group's budget. `fabric-edge` checks the tools, routes and RDMA GID tables of one directed host
+edge, then samples it with `iperf3` or `ib_write_bw`, or reuses a retained sample when the link
+record is unchanged, and records the sample against the budget of every source role behind the
+link. `narwhal deploy fabric` runs those two stages in order and writes each instance's
+evidence to `<out>/<stage>/<instance>/`.
 
 Engine roles that share a host, an address, an interface and, on RDMA, an HCA port share one
 fabric endpoint, so a directed host pair whose hosts each have one endpoint has one sample.
@@ -24,13 +25,14 @@ import shlex
 import shutil
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 from pathlib import Path
 from typing import Any
 
 from narwhal.contracts import canonical_digest
 
+from .cache_groups import SCHEMA as CACHE_GROUPS_SCHEMA
 from .fabric_budget import (
     Workload,
     budget,
@@ -39,6 +41,7 @@ from .fabric_budget import (
     retained_evidence,
     reuse_edge,
     sample_gbps,
+    transfer_record,
     write_private,
 )
 from .hosts import HOST_CAUSE, SSH, Host
@@ -81,6 +84,11 @@ WORKLOAD = (
     ("headroom", "NARWHAL_FABRIC_HEADROOM", float),
 )
 TEST_PORT = "NARWHAL_FABRIC_TEST_PORT"
+PROMPT_TOKENS = WORKLOAD[0][1]
+TRANSFER_FILES = ("before.prom", "after.prom", "transfer.json")
+# The launch inputs that decide an engine's KV cache. A measured engine's decode peer shares
+# them, so the peer accepts its handoffs and resizes for decode as it would.
+CACHE_INPUTS = ("accelerator", "tensor_parallel_size", "gpu_visibility_env", "runtime")
 # Recovery sections of the fabric gate page.
 _PAGE = "deploy/04-Qualify-Fabric.md"
 BELOW_BUDGET = _PAGE + "#troubleshooting-an-edge-below-its-budget"
@@ -125,9 +133,11 @@ class Engine:
     role: str
     host: Host
     endpoint: Endpoint
+    net_devices: str
     tensor_parallel: int
     launch: Path
     env: Mapping[str, str]
+    cache_inputs: Mapping[str, Any]
     captures_cache: bool
     measures_transfer: bool
 
@@ -177,7 +187,11 @@ class Fabric:
     workload: Workload
     test_port: int
     remote_dir: str
-    engine_runs: Mapping[str, str]
+    # Each representative's captured `cache-layout.json`, on a backend that captures it.
+    layouts: Mapping[str, bytes]
+    # Each representative's `transfer.json` with the metric snapshots beside it, on a backend
+    # that measures its handoffs.
+    transfers: Mapping[str, Mapping[str, bytes]]
 
     def group(self, role: str) -> Group:
         return next(group for group in self.groups if role in group.roles)
@@ -281,60 +295,137 @@ def rdma_input(env: Mapping[str, str], role: str, net_devices: str) -> Rdma:
     return Rdma(match[1], int(match[2]), int(index), mode)
 
 
-def load(
-    hosts: Sequence[Host],
-    manifest: Mapping[str, Any],
-    run: Path,
-    env: Mapping[str, str],
-    groups: Sequence[Sequence[str]],
-    engine_runs: Mapping[str, str],
-) -> Fabric:
-    """Read the engines of an installed package, and check the groups and inputs against it.
+def _node(role: str) -> int:
+    return int(role.split("-")[1])
 
-    `groups` lists each cache-equivalence group with its representative first. `engine_runs`
-    gives the launch directory, on its host, of each representative whose backend captures
-    the cache layout.
-    """
-    workload, port = inputs(env)
+
+def read_engines(hosts: Sequence[Host], run: Path) -> dict[str, Engine]:
+    """Read every engine role of an installed package from its role environment and launch."""
     engines: dict[str, Engine] = {}
     for host in hosts:
         for role in (role for role in host.roles if role.startswith("engine-")):
             role_env = read_environment(run / host.id / f".env.{role}")
             launch_path = run / host.id / f"engine-launch.{role}.json"
             launch = json.loads(launch_path.read_text())
-            node = role.split("-")[1]
-            address = role_env.get(f"NARWHAL_NODE_{node}_IP", "")
+            address = role_env.get(f"NARWHAL_NODE_{_node(role)}_IP", "")
             interface = role_env.get("NARWHAL_FABRIC_INTERFACE", "")
             if not address or not interface:
                 raise ValueError(f"{role}: its role environment lacks a fabric address")
             transfer = launch["transfer"]
-            transport, net = transfer["transport"], transfer["net_devices"]
-            rdma = None
-            if transport == "ucx_rdma":
-                rdma = rdma_input(env, role, net)
-            elif net != interface:
-                raise ValueError(
-                    f"{role}: KV leaves through transfer.net_devices {net}, but "
-                    f"NARWHAL_FABRIC_INTERFACE is {interface}; qualification measures the "
-                    "interface KV uses, so set them to one interface"
-                )
+            inputs = {
+                "image": role_env.get("NARWHAL_ENGINE_IMAGE", ""),
+                "model_config_sha256": role_env.get("NARWHAL_MODEL_CONFIG_SHA256", ""),
+                **{name: launch[name] for name in CACHE_INPUTS},
+                "transport": transfer["transport"],
+            }
             engine = launcher(launch.get("runtime", {}).get("backend"))
             engines[role] = Engine(
                 role,
                 host,
-                Endpoint(host, address, interface, transport, rdma),
+                Endpoint(host, address, interface, transfer["transport"], None),
+                transfer["net_devices"],
                 launch["tensor_parallel_size"],
                 launch_path,
                 role_env,
+                inputs,
                 cache_capture(engine) is not None,
                 transfer_measurement(engine) is not None,
             )
-    listed = [role for group in groups for role in group]
-    if sorted(listed) != sorted(engines) or len(set(listed)) != len(listed):
+    return engines
+
+
+def transfer_files(role: str, data: bytes, path: Path, prompt_tokens: int) -> dict[str, bytes]:
+    """Check a `transfer.json` and read the metric snapshots beside it at `path`.
+
+    `prompt_tokens` is the workload's prompt length, which the measurement must have used.
+    """
+    try:
+        files = {name: (path.parent / name).read_bytes() for name in TRANSFER_FILES[:2]}
+    except OSError as error:
+        raise ValueError(f"{role}: {error}") from None
+    files["transfer.json"] = data
+    try:
+        transfer_record(data, prompt_tokens)
+        recorded = json.loads(data)["metrics_sha256"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"{role}: {path}: {error}") from None
+    for name in TRANSFER_FILES[:2]:
+        if recorded[name] != hashlib.sha256(files[name]).hexdigest():
+            raise ValueError(f"{role}: {name} beside {path} is not the one it records")
+    return files
+
+
+def read_groups(path: Path, engines: Mapping[str, Engine]) -> tuple[tuple[Group, ...], dict]:
+    """Read the cache groups of `narwhal deploy cache-groups`, checked against the package.
+
+    Returns the groups, each led by its representative, and each representative's geometry
+    source: the cache layout or the transfer record the groups were derived from, with the
+    file's path. Every role's packaged launch record must be the one the groups read.
+    """
+    try:
+        document = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"--groups {path}: {error}") from None
+    if document.get("schema") != CACHE_GROUPS_SCHEMA or document.get("schema_version") != 1:
+        raise ValueError(f"--groups {path}: expected a {CACHE_GROUPS_SCHEMA} version 1 record")
+    roles = document["engines"]
+    if sorted(roles) != sorted(engines):
         raise ValueError(
-            "Give every engine role to exactly one --group: " + ", ".join(sorted(engines))
+            f"--groups {path} groups {', '.join(sorted(roles))}, but the package holds "
+            + ", ".join(sorted(engines))
         )
-    cache_groups = tuple(Group(tuple(group)) for group in groups)
+    for role, engine in engines.items():
+        if roles[role]["launch_sha256"] != hashlib.sha256(engine.launch.read_bytes()).hexdigest():
+            raise ValueError(
+                f"{role}: --groups {path} was derived from another launch record; derive the "
+                "groups again from this package"
+            )
+    groups = tuple(Group(tuple(group["roles"])) for group in document["groups"])
+    sources = {}
+    for group in groups:
+        record = roles[group.name]
+        if "geometry_source" not in record:
+            continue
+        source = Path(record["geometry_source"])
+        try:
+            data = source.read_bytes()
+        except OSError as error:
+            raise ValueError(f"{group.name}: {error}") from None
+        if hashlib.sha256(data).hexdigest() != record["geometry_source_sha256"]:
+            raise ValueError(
+                f"{group.name}: {source} changed after the groups were derived; derive them again"
+            )
+        sources[group.name] = (data, source)
+    return groups, sources
+
+
+def load(
+    hosts: Sequence[Host],
+    manifest: Mapping[str, Any],
+    run: Path,
+    env: Mapping[str, str],
+    groups_path: Path,
+) -> Fabric:
+    """Read the engines of an installed package, and the cache groups derived from it.
+
+    `groups_path` is the `cache-groups.json` that `narwhal deploy cache-groups` wrote. Its
+    representatives' cache layouts and transfer records size the budgets.
+    """
+    workload, port = inputs(env)
+    engines = read_engines(hosts, run)
+    for role, engine in engines.items():
+        endpoint, net = engine.endpoint, engine.net_devices
+        if endpoint.transport == "ucx_rdma":
+            engines[role] = replace(
+                engine, endpoint=replace(endpoint, rdma=rdma_input(env, role, net))
+            )
+        elif net != endpoint.interface:
+            raise ValueError(
+                f"{role}: KV leaves through transfer.net_devices {net}, but "
+                f"NARWHAL_FABRIC_INTERFACE is {endpoint.interface}; qualification measures the "
+                "interface KV uses, so set them to one interface"
+            )
+    cache_groups, sources = read_groups(groups_path, engines)
     for group in cache_groups:
         members = [engines[role] for role in group.roles]
         if len({(m.captures_cache, m.measures_transfer) for m in members}) != 1:
@@ -344,30 +435,44 @@ def load(
                 f"{group.name}: its backend neither captures the cache layout nor measures "
                 "handoffs, so its fabric budget has no source"
             )
-        if members[0].measures_transfer and len(members) == 1:
-            raise ValueError(
-                f"{group.name}: this backend sizes its fabric budget from handoffs to another "
-                "idle engine of the cache group, and the group has no other engine"
-            )
-        if members[0].captures_cache and group.name not in engine_runs:
-            raise ValueError(
-                f"Give --engine-run {group.name}=<directory> for the launch directory that "
-                "holds its captured cache-layout.json"
-            )
-    representatives = {group.name for group in cache_groups if engines[group.name].captures_cache}
-    if extra := sorted(set(engine_runs) - representatives):
-        raise ValueError(
-            "--engine-run names roles that are not representatives of a capturing cache "
-            "group: " + ", ".join(extra)
-        )
-    fabric = Fabric(
-        engines, cache_groups, workload, port, manifest["remote_dir"], dict(engine_runs)
-    )
+        if group.name not in sources:
+            raise ValueError(f"{group.name}: --groups {groups_path} names no geometry source")
+    layouts = {role: data for role, (data, _) in sources.items() if engines[role].captures_cache}
+    records = {
+        role: transfer_files(role, data, source, workload.prompt_tokens)
+        for role, (data, source) in sorted(sources.items())
+        if engines[role].measures_transfer
+    }
+    fabric = Fabric(engines, cache_groups, workload, port, manifest["remote_dir"], layouts, records)
     fabric.edges()
     return fabric
 
 
-def _prelude(fabric: Fabric) -> str:
+def decode_peers(engines: Mapping[str, Engine]) -> dict[str, str]:
+    """Choose the decode peer of each engine that measures its handoffs.
+
+    The peer is the next engine role, in role order and wrapping around, among the measuring
+    engines with the same image, model configuration and cache launch inputs. An engine with no
+    such peer cannot be measured, and its cache group could hold no other engine.
+    """
+    measuring = sorted(
+        (engine for engine in engines.values() if engine.measures_transfer),
+        key=lambda engine: _node(engine.role),
+    )
+    peers = {}
+    for engine in measuring:
+        alike = [other.role for other in measuring if other.cache_inputs == engine.cache_inputs]
+        if len(alike) == 1:
+            raise ValueError(
+                f"{engine.role}: its backend sizes the fabric budget from handoffs to another "
+                "idle engine with the same image, model configuration, accelerator, TP size, "
+                "GPU visibility, runtime and transport, and no other engine matches it"
+            )
+        peers[engine.role] = alike[(alike.index(engine.role) + 1) % len(alike)]
+    return peers
+
+
+def _prelude(remote_dir: str) -> str:
     return f"""set -eu
 umask 077
 fail() {{ printf '{HOST_CAUSE}%s\\n' "$1" >&2; exit 1; }}
@@ -375,7 +480,7 @@ emit() {{
   test -f "$2" && test ! -L "$2" || fail "$2 is missing or not a regular file"
   printf 'narwhal-file %s %s\\n' "$1" "$(base64 -w 0 < "$2")"
 }}
-cd {shlex.quote(fabric.remote_dir)}
+cd {shlex.quote(remote_dir)}
 """
 
 
@@ -400,20 +505,21 @@ def _fetch(
     return files
 
 
-def measure_transfer(fabric: Fabric, ssh: SSH, role: str, peer: str, directory: Path) -> str:
-    """Run `transfer-measure` for a representative with an idle peer of its cache group.
+def measure_transfer(
+    engine: Engine, peer: Engine, ssh: SSH, remote_dir: str, prompt_tokens: int, directory: Path
+) -> str:
+    """Run `transfer-measure` for one engine, with `peer` switched to decode.
 
     Writes `before.prom`, `after.prom` and `transfer.json` to `directory`, and returns the
     SHA-256 of `transfer.json`, the stage's `handoff_geometry` product.
     """
-    engine, other = fabric.engines[role], fabric.engines[peer]
-    if peer == role or peer not in fabric.group(role).roles:
-        raise ValueError(f"{role}: measure handoffs to another engine of its cache group")
-    node, peer_node = role.split("-")[1], peer.split("-")[1]
-    prefill = engine.env.get(f"NARWHAL_NODE_{node}_URL", "")
-    decode = other.env.get(f"NARWHAL_NODE_{peer_node}_URL", "")
+    role = engine.role
+    prefill = engine.env.get(f"NARWHAL_NODE_{_node(role)}_URL", "")
+    decode = peer.env.get(f"NARWHAL_NODE_{_node(peer.role)}_URL", "")
     if not prefill or not decode:
-        raise ValueError(f"{role}: the role environments lack the engine URL of {role} or {peer}")
+        raise ValueError(
+            f"{role}: the role environments lack the engine URL of {role} or {peer.role}"
+        )
     scratch = f"runs/fabric/{uuid.uuid4().hex}"
     command = shlex.join(
         [
@@ -424,13 +530,14 @@ def measure_transfer(fabric: Fabric, ssh: SSH, role: str, peer: str, directory: 
             "--bootstrap-host",
             engine.endpoint.address,
             "--prompt-tokens",
-            str(fabric.workload.prompt_tokens),
+            str(prompt_tokens),
             "--out-dir",
             scratch,
         ]
     )
+    # The peer shares this engine's runtime, so this engine's launch record sizes its decode.
     script = (
-        _prelude(fabric)
+        _prelude(remote_dir)
         + f""". ./runs/deployment/.env.{role}
 test "$(sha256sum "$NARWHAL_TRANSFER_MEASURE_TOOL" | cut -d' ' -f1)" = \\
   "$NARWHAL_TRANSFER_MEASURE_SHA256" ||
@@ -440,53 +547,101 @@ trap 'rm -rf {scratch}' EXIT
 output=$(python3 -I "$NARWHAL_TRANSFER_MEASURE_TOOL" {command} \\
   --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" --model "$NARWHAL_ENGINE_MODEL_NAME" \\
   --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" 2>&1) ||
-  fail "the transfer measurement to {peer} failed: $(printf '%s' "$output" | tail -n 1)"
+  fail "the transfer measurement to {peer.role} failed: $(printf '%s' "$output" | tail -n 1)"
 printf '%s\\n' "$output" >&2
 for name in before.prom after.prom transfer.json; do emit "$name" "{scratch}/$name"; done
 """
     )
-    names = ("before.prom", "after.prom", "transfer.json")
-    files = _fetch(ssh, engine.host, TRANSFER_MEASURE, f"{role} handoffs to {peer}", script, names)
+    operation = f"{role} handoffs to {peer.role}"
+    files = _fetch(ssh, engine.host, TRANSFER_MEASURE, operation, script, TRANSFER_FILES)
     record = json.loads(files["transfer.json"])
     snapshots = record.get("metrics_sha256", {})
-    for name in ("before.prom", "after.prom"):
+    for name in TRANSFER_FILES[:2]:
         if snapshots.get(name) != hashlib.sha256(files[name]).hexdigest():
             raise FabricFailure(
                 TRANSFER_MEASURE, role, f"transfer.json does not record the {name} it came with"
             )
     directory.mkdir(mode=0o700, parents=True)
-    for name in names:
+    for name in TRANSFER_FILES:
         _write(directory / name, files[name])
     return hashlib.sha256(files["transfer.json"]).hexdigest()
 
 
-def group_budget(
-    fabric: Fabric, ssh: SSH, group: Group, directory: Path, transfer: Path | None = None
-) -> dict:
+def measure_handoffs(
+    hosts: Sequence[Host],
+    manifest: Mapping[str, Any],
+    run: Path,
+    env: Mapping[str, str],
+) -> tuple[dict[str, Engine], dict[str, str], int]:
+    """Read the measuring engines of a package, their decode peers and the prompt length."""
+    prompt_tokens = _number(env, PROMPT_TOKENS, int)
+    if prompt_tokens < 1:
+        raise ValueError(f"{PROMPT_TOKENS} must be a positive integer")
+    engines = read_engines(hosts, run)
+    peers = decode_peers(engines)
+    if not peers:
+        raise ValueError(
+            "No engine of this package measures its handoffs; its backend captures the cache "
+            "layout, so run narwhal-engine capture-cache instead"
+        )
+    return engines, peers, prompt_tokens
+
+
+def measure(
+    engines: Mapping[str, Engine],
+    peers: Mapping[str, str],
+    prompt_tokens: int,
+    remote_dir: str,
+    ssh: SSH,
+    out: Path,
+) -> dict[str, Any]:
+    """Run `transfer-measure` for every measuring engine, writing each to `<out>/<role>/`."""
+    summary: dict[str, Any] = {
+        "schema": "narwhal.transfer-measurements",
+        "schema_version": 1,
+        "prompt_tokens": prompt_tokens,
+        "engines": {},
+    }
+    try:
+        for role, peer in peers.items():
+            folder = out / role
+            digest = measure_transfer(
+                engines[role], engines[peer], ssh, remote_dir, prompt_tokens, folder
+            )
+            payload = json.loads((folder / "transfer.json").read_bytes())
+            summary["engines"][role] = {
+                "peer": peer,
+                "transfer_sha256": digest,
+                "payload_bytes_per_handoff": payload["payload_bytes_per_handoff"],
+            }
+            print(
+                f"{TRANSFER_MEASURE} {role}: {payload['payload_bytes_per_handoff']} bytes per "
+                f"handoff to {peer}",
+                flush=True,
+            )
+    finally:
+        write_private(out / "transfer-measure.json", summary)
+    return summary
+
+
+def group_budget(fabric: Fabric, ssh: SSH, group: Group, directory: Path) -> dict:
     """Run `fabric-budget` for one cache group and return its budget.
 
-    Copies the representative's model configuration, launch record and, on a capturing
-    backend, its `cache-layout.json` from its host into `directory`, then writes `budget.json`
-    there. `transfer` is the `transfer.json` of the group's `transfer-measure`.
+    Copies the representative's model configuration and launch record from its host into
+    `directory`, with the `cache-layout.json` or `transfer-measure` files the groups were
+    derived from, then writes `budget.json` there.
     """
     engine = fabric.engines[group.name]
     names = ["model-config.json", "engine-launch.json"]
     script = (
-        _prelude(fabric)
+        _prelude(fabric.remote_dir)
         + f""". ./runs/deployment/.env.{group.name}
 emit model-config.json "$NARWHAL_MODEL_DIR/config.json"
 emit engine-launch.json "$NARWHAL_ENGINE_LAUNCH_CONFIG"
 """
     )
-    transfer_data = None
-    if engine.captures_cache:
-        layout = shlex.quote(f"{fabric.engine_runs[group.name]}/cache-layout.json")
-        script += f"emit cache-layout.json {layout}\n"
-        names.append("cache-layout.json")
-    elif transfer is None:
-        raise ValueError(f"{group.name}: size the budget from its transfer-measure record")
-    else:
-        transfer_data = transfer.read_bytes()
+    transfer = fabric.transfers.get(group.name, {})
+    layout = fabric.layouts.get(group.name)
     files = _fetch(ssh, engine.host, FABRIC_BUDGET, f"{group.name} budget inputs", script, names)
     if files["engine-launch.json"] != engine.launch.read_bytes():
         raise FabricFailure(
@@ -499,15 +654,18 @@ emit engine-launch.json "$NARWHAL_ENGINE_LAUNCH_CONFIG"
             files["model-config.json"],
             files["engine-launch.json"],
             fabric.workload,
-            runtime_layout=files.get("cache-layout.json"),
-            transfer=transfer_data,
+            runtime_layout=layout,
+            transfer=transfer.get("transfer.json"),
         )
     except (ValueError, KeyError, TypeError) as error:
         raise FabricFailure(FABRIC_BUDGET, group.name, str(error)) from None
     result["cache_group"] = list(group.roles)
     directory.mkdir(mode=0o700, parents=True)
-    for name in names:
-        _write(directory / name, files[name])
+    copies = {name: files[name] for name in names}
+    if layout is not None:
+        copies["cache-layout.json"] = layout
+    for name, data in {**copies, **transfer}.items():
+        _write(directory / name, data)
     write_private(directory / "budget.json", result)
     return result
 
@@ -550,7 +708,7 @@ printf 'narwhal-rdma-gid %s\\n' "$(cat "$port/gids/{index}")"
 printf 'narwhal-rdma-type %s\\n' "$(cat "$port/gid_attrs/types/{index}" 2> /dev/null || true)"
 printf 'narwhal-rdma-ndev %s\\n' "$(cat "$port/gid_attrs/ndevs/{index}" 2> /dev/null || true)"
 """
-    return _prelude(fabric) + script
+    return _prelude(fabric.remote_dir) + script
 
 
 def _lines(output: str) -> dict[str, str]:
@@ -788,7 +946,7 @@ def _listeners(fabric: Fabric, ssh: SSH, where: str, host: Host) -> None:
         host,
         FABRIC_EDGE,
         f"{where} test port on {host.id}",
-        _prelude(fabric)
+        _prelude(fabric.remote_dir)
         + f"""busy=$(ss -Hltn "sport = :{port}")
 test -z "$busy" || fail "test port {port} is in use: $(printf '%s' "$busy" | head -n 1)"
 """,
@@ -805,7 +963,7 @@ def _sample(fabric: Fabric, ssh: SSH, where: str, sample: Sample) -> bytes:
     port = fabric.test_port
     destination = sample.destination.host
     start = (
-        _prelude(fabric)
+        _prelude(fabric.remote_dir)
         + f"""mkdir -p runs/fabric
 mkdir {scratch}
 setsid timeout -k 5 {window} {shlex.join(server)} > {scratch}/server.log 2>&1 < /dev/null &
@@ -824,7 +982,7 @@ done
 """
     )
     stop = (
-        _prelude(fabric)
+        _prelude(fabric.remote_dir)
         + f"""test -f {scratch}/server.pid || exit 0
 read -r pid ticks < {scratch}/server.pid
 alive() {{
@@ -844,7 +1002,7 @@ rm -rf {scratch}
             sample.source.host,
             FABRIC_EDGE,
             f"{where} {client[0]} client on {sample.source.host.id}",
-            _prelude(fabric)
+            _prelude(fabric.remote_dir)
             + f"""status=0
 {shlex.join(client)} || status=$?
 test "$status" -eq 0 || fail "the {client[0]} client exited with status $status"
@@ -1029,23 +1187,13 @@ def qualify(fabric: Fabric, ssh: SSH, out: Path, retained: Path | None = None) -
         "schema": "narwhal.fabric-qualification",
         "schema_version": 1,
         "inputs": fabric.digests(),
-        "transfers": {},
         "budgets": {},
         "edges": [],
     }
-    transfers = {}
-    for group in fabric.groups:
-        if fabric.engines[group.name].measures_transfer:
-            peer = group.roles[1]
-            folder = out / TRANSFER_MEASURE / group.name
-            digest = measure_transfer(fabric, ssh, group.name, peer, folder)
-            transfers[group.name] = folder / "transfer.json"
-            summary["transfers"][group.name] = {"peer": peer, "transfer_sha256": digest}
-            print(f"{TRANSFER_MEASURE} {group.name}: measured handoffs to {peer}", flush=True)
     budgets = {}
     for group in fabric.groups:
         folder = out / FABRIC_BUDGET / group.name
-        result = group_budget(fabric, ssh, group, folder, transfers.get(group.name))
+        result = group_budget(fabric, ssh, group, folder)
         for role in group.roles:
             budgets[role] = folder / "budget.json"
         summary["budgets"][group.name] = {

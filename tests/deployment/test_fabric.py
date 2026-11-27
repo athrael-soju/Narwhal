@@ -30,16 +30,25 @@ class FabricTestCase(unittest.TestCase):
     def fleet(self, assignment, **options):
         return Fleet(self.root, assignment, **options)
 
-    def load(self, fleet, groups, **changes):
+    def load(self, fleet, groups, transfers=None, **changes):
         env = {**fleet.env, **changes}
         return fabric.load(
-            fleet.hosts,
-            fleet.manifest,
-            fleet.run,
-            env,
-            groups,
-            fleet.representatives(groups),
+            fleet.hosts, fleet.manifest, fleet.run, env, fleet.groups_file(groups, transfers)
         )
+
+    def measure(self, fleet, **changes):
+        self.runs += 1
+        out = self.root / f"measured-{self.runs}"
+        out.mkdir()
+        env = {**fleet.env, **changes}
+        engines, peers, tokens = fabric.measure_handoffs(
+            fleet.hosts, fleet.manifest, fleet.run, env
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            summary = fabric.measure(
+                engines, peers, tokens, fleet.manifest["remote_dir"], fleet.ssh, out
+            )
+        return out, summary
 
     def qualify(self, fleet, groups, retained=None, **changes):
         self.runs += 1
@@ -163,10 +172,30 @@ class EdgeMatrixTests(FabricTestCase):
         ):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
                 self.load(fleet, groups, **changes)
-        with self.assertRaisesRegex(ValueError, "exactly one --group"):
+        with self.assertRaisesRegex(ValueError, "groups engine-1, but the package holds"):
             self.load(fleet, [["engine-1"]])
-        with self.assertRaisesRegex(ValueError, "--engine-run engine-1"):
-            fabric.load(fleet.hosts, fleet.manifest, fleet.run, fleet.env, groups, {})
+        path = fleet.groups_file(groups, name="sourceless")
+        document = json.loads(path.read_text())
+        del document["engines"]["engine-1"]["geometry_source"]
+        path.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, "engine-1: --groups .* names no geometry source"):
+            fabric.load(fleet.hosts, fleet.manifest, fleet.run, fleet.env, path)
+        self.assertEqual(fleet.ssh.calls, [])
+
+    def test_groups_from_another_package_or_a_changed_layout_are_refused(self):
+        fleet = self.fleet([[1], [2]])
+        groups = [["engine-1", "engine-2"]]
+        path = fleet.groups_file(groups)
+        layout = path.parent / "engine-1-layout.json"
+        layout.write_text(layout.read_text() + " ")
+        with self.assertRaisesRegex(ValueError, "engine-1: .* changed after the groups were"):
+            fabric.load(fleet.hosts, fleet.manifest, fleet.run, fleet.env, path)
+        path = fleet.groups_file(groups, name="stale")
+        document = json.loads(path.read_text())
+        document["engines"]["engine-2"]["launch_sha256"] = "0" * 64
+        path.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, "engine-2: --groups .* another launch record"):
+            fabric.load(fleet.hosts, fleet.manifest, fleet.run, fleet.env, path)
         self.assertEqual(fleet.ssh.calls, [])
 
     def test_rdma_inputs_select_one_hca_port_with_gid_index_and_roce_mode(self):
@@ -401,7 +430,7 @@ class FailureTests(FabricTestCase):
 
 
 class CommandTests(FabricTestCase):
-    def invoke(self, fleet, *arguments, **changes):
+    def invoke(self, fleet, *arguments, action="fabric", **changes):
         with (
             patch.dict(os.environ, {**fleet.env, **changes}),
             patch("narwhal.deployment.cli.load_hosts", return_value=fleet.hosts),
@@ -410,13 +439,12 @@ class CommandTests(FabricTestCase):
             contextlib.redirect_stdout(io.StringIO()) as stdout,
             contextlib.redirect_stderr(io.StringIO()) as stderr,
         ):
-            code = main(["deploy", "fabric", "--run", str(fleet.run), *arguments])
+            code = main(["deploy", action, "--run", str(fleet.run), *arguments])
         return code, stdout.getvalue(), stderr.getvalue()
 
     def test_the_command_writes_its_evidence_and_reports_each_outcome(self):
         fleet = self.fleet([[1], [2]])
-        run = f"engine-1={fleet.engine_runs['engine-1']}"
-        group = ["--group", "engine-1,engine-2", "--engine-run", run]
+        group = ["--groups", str(fleet.groups_file([["engine-1", "engine-2"]]))]
         first = self.root / "first"
         code, stdout, _ = self.invoke(fleet, *group, "--out", str(first))
         self.assertEqual(code, 0, stdout)
@@ -443,48 +471,137 @@ class CommandTests(FabricTestCase):
         code, _, stderr = self.invoke(fleet, *group, "--out", str(first))
         self.assertEqual(code, 2)
         code, _, stderr = self.invoke(
-            fleet, "--group", "engine-1,engine-2", "--out", str(self.root / "fifth")
+            fleet, "--groups", str(self.root / "missing.json"), "--out", str(self.root / "fifth")
         )
         self.assertEqual(code, 2)
-        self.assertIn("--engine-run engine-1=<directory>", stderr)
+        self.assertIn("--groups", stderr)
         self.assertFalse((self.root / "fifth").exists())
+
+    def test_transfer_measure_writes_each_engines_record_for_the_fabric_budget(self):
+        fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
+        measured = self.root / "measured"
+        code, stdout, _ = self.invoke(
+            fleet, "--out", str(measured), "--format", "json", action="transfer-measure"
+        )
+        result = json.loads(stdout)
+        self.assertEqual((code, result["status"]), (0, "success"))
+        self.assertEqual(result["data"]["engines"]["engine-2"]["peer"], "engine-1")
+        # Each record names the packaged launch record that cache-groups checks it against.
+        for role in ("engine-1", "engine-2"):
+            launch = next(fleet.run.glob(f"*/engine-launch.{role}.json"))
+            record = json.loads((measured / role / "transfer.json").read_text())
+            self.assertEqual(
+                record["launch_config_sha256"], hashlib.sha256(launch.read_bytes()).hexdigest()
+            )
+        groups = fleet.groups_file(
+            [["engine-1", "engine-2"]], {"engine-1": measured / "engine-1/transfer.json"}
+        )
+        code, stdout, _ = self.invoke(
+            fleet, "--groups", str(groups), "--out", str(self.root / "fabric")
+        )
+        self.assertEqual(code, 0, stdout)
+        code, _, _ = self.invoke(fleet, "--out", str(measured), action="transfer-measure")
+        self.assertEqual(code, 2)
 
 
 class TransferMeasurementTests(FabricTestCase):
-    def test_a_measuring_backend_sizes_the_budget_from_handoffs_to_a_group_peer(self):
-        fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
-        out, summary = self.qualify(fleet, [["engine-1", "engine-2"]])
-        self.assertEqual(summary["transfers"]["engine-1"]["peer"], "engine-2")
-        call = json.loads((fleet.ssh.home("node-1") / "transfer-calls").read_text())
-        self.assertEqual(call["decode"], f"http://{address(2)}:8000")
-        self.assertEqual(call["bootstrap_host"], address(1))
-        self.assertEqual(call["bootstrap_port"], "5600")
-        self.assertEqual(call["prompt_tokens"], "1024")
-        transfer = out / "transfer-measure/engine-1/transfer.json"
-        budget = json.loads((out / "fabric-budget/engine-1/budget.json").read_text())
-        self.assertEqual(budget["layout"], "measured_transfer")
-        self.assertEqual(
-            budget["transfer_record_sha256"], hashlib.sha256(transfer.read_bytes()).hexdigest()
-        )
-        self.assertFalse((out / "fabric-budget/engine-1/cache-layout.json").exists())
-        self.assertEqual(len(summary["edges"]), 2)
+    def relaunch(self, fleet, role, **runtime):
+        host = fleet.host_of(role).name
+        path = fleet.run / host / f"engine-launch.{role}.json"
+        launch = json.loads(path.read_text())
+        launch["runtime"].update(runtime)
+        path.write_text(json.dumps(launch))
 
-    def test_a_measuring_group_of_one_stops_with_that_cause(self):
+    def test_each_engine_measures_handoffs_to_the_next_engine_with_its_launch_inputs(self):
+        fleet = self.fleet([[1, 2], [3], [4]], backend="sglang", tp=1)
+        self.relaunch(fleet, "engine-4", mem_fraction_static=0.5)
+        self.relaunch(fleet, "engine-2", mem_fraction_static=0.5)
+        out, summary = self.measure(fleet)
+        peers = {role: record["peer"] for role, record in summary["engines"].items()}
+        self.assertEqual(
+            peers,
+            {"engine-1": "engine-3", "engine-2": "engine-4", "engine-3": "engine-1",
+             "engine-4": "engine-2"},
+        )  # fmt: skip
+        calls = (fleet.ssh.home("node-1") / "transfer-calls").read_text().splitlines()
+        first = json.loads(calls[0])
+        self.assertEqual(first["decode"], f"http://{address(2)}:8000")
+        self.assertEqual(first["bootstrap_host"], address(1))
+        self.assertEqual(first["bootstrap_port"], "5600")
+        self.assertEqual(first["prompt_tokens"], "1024")
+        record = json.loads((out / "transfer-measure.json").read_text())
+        self.assertEqual(record["engines"]["engine-3"]["payload_bytes_per_handoff"], 4194304)
+        for role in peers:
+            folder = out / role
+            self.assertEqual(sorted(path.name for path in folder.iterdir()),
+                             ["after.prom", "before.prom", "transfer.json"])  # fmt: skip
+            self.assertEqual(stat.S_IMODE((folder / "transfer.json").stat().st_mode), 0o600)
+
+    def test_an_engine_without_a_peer_of_its_launch_inputs_stops_with_that_cause(self):
         fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
+        self.relaunch(fleet, "engine-2", mem_fraction_static=0.5)
         with self.assertRaisesRegex(
             ValueError,
-            "engine-1: this backend sizes its fabric budget from handoffs to another idle "
-            "engine of the cache group, and the group has no other engine",
+            "engine-1: its backend sizes the fabric budget from handoffs to another idle "
+            "engine with the same image, model configuration, accelerator, TP size, GPU "
+            "visibility, runtime and transport, and no other engine matches it",
         ):
-            self.load(fleet, [["engine-1"], ["engine-2"]])
+            self.measure(fleet)
+        with self.assertRaisesRegex(ValueError, "Set NARWHAL_FABRIC_PROMPT_TOKENS"):
+            self.measure(fleet, NARWHAL_FABRIC_PROMPT_TOKENS="")
         self.assertEqual(fleet.ssh.calls, [])
+        self.setUp()
+        with self.assertRaisesRegex(ValueError, "measures its handoffs; its backend captures"):
+            self.measure(self.fleet([[1], [2]]))
+
+    def test_the_budget_is_sized_from_the_representatives_transfer_record(self):
+        fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
+        measured, _ = self.measure(fleet)
+        transfers = {"engine-1": measured / "engine-1/transfer.json"}
+        groups = [["engine-1", "engine-2"]]
+        self.runs += 1
+        out = self.root / "qualified"
+        out.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()):
+            summary = fabric.qualify(self.load(fleet, groups, transfers), fleet.ssh, out)
+        budget = json.loads((out / "fabric-budget/engine-1/budget.json").read_text())
+        self.assertEqual(budget["layout"], "measured_transfer")
+        transfer = (measured / "engine-1/transfer.json").read_bytes()
+        self.assertEqual(budget["transfer_record_sha256"], hashlib.sha256(transfer).hexdigest())
+        for name in ("transfer.json", "before.prom", "after.prom"):
+            self.assertEqual(
+                (out / "fabric-budget/engine-1" / name).read_bytes(),
+                (measured / "engine-1" / name).read_bytes(),
+            )
+        self.assertFalse((out / "fabric-budget/engine-1/cache-layout.json").exists())
+        self.assertEqual(len(summary["edges"]), 2)
+        # A group of one is sized from the measurement its engine made to a peer of its inputs.
+        plan = self.load(fleet, [["engine-1"], ["engine-2"]], {
+            "engine-1": transfers["engine-1"], "engine-2": measured / "engine-2/transfer.json",
+        })  # fmt: skip
+        self.assertEqual([group.roles for group in plan.groups], [("engine-1",), ("engine-2",)])
+
+    def test_a_missing_foreign_or_altered_transfer_record_stops_before_any_host(self):
+        fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
+        measured, _ = self.measure(fleet)
+        calls = len(fleet.ssh.calls)
+        groups = [["engine-1", "engine-2"]]
+        record = measured / "engine-1/transfer.json"
+        with self.assertRaisesRegex(ValueError, "engine-1: --groups .* names no geometry source"):
+            self.load(fleet, groups)
+        with self.assertRaisesRegex(ValueError, "measured another prompt length"):
+            self.load(fleet, groups, {"engine-1": record}, NARWHAL_FABRIC_PROMPT_TOKENS="2048")
+        (measured / "engine-1/before.prom").write_text("changed\n")
+        with self.assertRaisesRegex(ValueError, "before.prom beside .* is not the one it records"):
+            self.load(fleet, groups, {"engine-1": record})
+        self.assertEqual(len(fleet.ssh.calls), calls)
 
     def test_a_changed_tool_or_launch_record_on_the_host_stops(self):
         fleet = self.fleet([[1], [2]], backend="sglang", tp=1)
         deployment = fleet.host_of("engine-1") / fleet.manifest["remote_dir"]
         (deployment / "runs/deployment-tools/transfer_measure.py").write_text("changed\n")
         with self.assertRaisesRegex(RemoteError, "differs from its packaged SHA-256"):
-            self.qualify(fleet, [["engine-1", "engine-2"]])
+            self.measure(fleet)
         self.setUp()
         fleet = self.fleet([[1], [2]])
         deployment = fleet.host_of("engine-1") / fleet.manifest["remote_dir"]

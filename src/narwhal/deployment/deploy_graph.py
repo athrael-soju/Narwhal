@@ -90,12 +90,13 @@ STAGES = (
         ("cache_geometry",),
         capability=CACHE_CAPTURE,
     ),
-    # An engine without a captured layout sizes its budget from measured handoffs.
+    # An engine without a captured layout sizes its budget from measured handoffs, sent to the
+    # next engine role with the same image, model configuration and cache launch inputs.
     _stage(
         "transfer-measure",
         ENGINE,
-        _ENGINES,
-        "Measuring KV handoffs without a cache layout",
+        _FABRIC,
+        "Measuring KV handoffs",
         ("engine-probe",),
         ("handoff_geometry",),
         capability=TRANSFER_MEASUREMENT,
@@ -269,7 +270,10 @@ FACTS = (
         WORKSTATION,
         "Fabric budget workload",
         "The prompt tokens, handoffs per second, burst, transfer budget and headroom",
-        _reruns("fabric-budget", "fabric-edge"),
+        (
+            Rerun("transfer-measure", note="when the prompt tokens change"),
+            *_reruns("fabric-budget", "fabric-edge"),
+        ),
     ),
     Fact(
         "fabric_test",

@@ -166,7 +166,7 @@ def derive(
             "launch": str(packaged),
             "launch_sha256": digest(packaged),
             **(
-                {"geometry_source": str(path), "geometry_source_sha256": digest(path)}
+                {"geometry_source": str(path.resolve()), "geometry_source_sha256": digest(path)}
                 if path is not None
                 else {}
             ),
