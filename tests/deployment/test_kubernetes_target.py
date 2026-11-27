@@ -4,10 +4,12 @@ engine API key kept in its Secret."""
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -46,6 +48,8 @@ ENGINES = tuple(NODES)
 EDGES = ("gpu-a-to-gpu-b", "gpu-b-to-gpu-a")
 # The gate Jobs one run starts, in order: two engines on two nodes, one cache group.
 JOBS = [
+    # Each run first reads the HMAC of the engine API key.
+    "key-check",
     *("discovery", "fabric-probe") * 2,
     *("prepare",) * 2,
     *("engine-check",) * 2,
@@ -221,9 +225,13 @@ class KubernetesDeployTests(KubernetesTest):
         # The sidecar runs as another user and reads the launch, which holds no key.
         self.assertIn('chmod -R u=rwX,go=rX "$stage"', entry["command"][-1])
         self.assertTrue(all(entry["serviceAccount"] for entry in self.entries("sidecar-verify")))
-        # Every Job keeps its output in its attempt's directory on the state volume.
+        # Every Job keeps its output in its attempt's directory on the state volume; the key
+        # check, which runs before any attempt, keeps its own.
         for job in self.rig.jobs.values():
             entry = job["entry"]
+            if entry["kind"] == "key-check":
+                self.assertEqual(entry["keep"], f"deploy/key-check/{entry['name']}")
+                continue
             self.assertEqual(entry["command"][:2], ["sh", "-c"])
             self.assertRegex(
                 entry["keep"], rf"^deploy/{record['run_id']}/stages/.+/jobs/{entry['name']}$"
@@ -239,7 +247,8 @@ class KubernetesDeployTests(KubernetesTest):
         code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
         self.assertEqual(result["data"]["ran"], [])
-        self.assertEqual(len(self.rig.jobs), jobs)
+        # Only the key check ran, and it found the key unchanged.
+        self.assertEqual(self.rig.kinds[jobs:], ["key-check"])
 
     def test_every_object_names_the_fleet_as_its_controller(self):
         self.assertEqual(self.deploy("run")[0], 0)
@@ -571,7 +580,7 @@ class KubernetesDeployTests(KubernetesTest):
         self.assertEqual(error["stage"], "access")
         self.assertIn("node gpu-b of engine-2 offers no gpu.example.com/gpu", error["message"])
         self.assertIn("offers no rdma.example.com/hca", error["message"])
-        self.assertEqual(self.rig.jobs, {})
+        self.assertEqual(self.rig.kinds, ["key-check"])
         # The fleet was deleted and made again under its name: the run's uid no longer names it.
         fleet = copy.deepcopy(self.rig.fleet)
         fleet["metadata"]["uid"] = "11111111-2222-4333-8444-555555555555"
@@ -760,7 +769,7 @@ class AdoptionTests(KubernetesTest):
         self.rig.hold = set()
         code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
-        self.assertEqual(self.rig.kinds[:4], ["discovery", "fabric-probe"] * 2)
+        self.assertEqual(self.rig.kinds[:5], ["key-check", *["discovery", "fabric-probe"] * 2])
         self.assertEqual(self.rig.kinds.count("discovery"), 2)
         self.assertEqual(self.record()["stages"]["discover"]["jobs"], names)
         # A readmission runs two Jobs in turn; the runner ends once the second exists.
@@ -872,6 +881,224 @@ class AdoptionTests(KubernetesTest):
             deployment.adopt({"stage": "discover", "instance": "", "jobs": [name]})
 
 
+def active(rig: Rig, kind: str) -> list[dict]:
+    """The running gate Jobs of `kind`."""
+    return [
+        job
+        for job in rig.live_jobs()
+        if job["metadata"]["labels"][fleet_resource.GATE_LABEL] == kind
+        and (job.get("status") or {}).get("active")
+    ]
+
+
+class ReviewTests(KubernetesTest):
+    """The review of the first Cluster target: each test fails on that target."""
+
+    def test_a_new_run_directory_replaces_another_runs_job_of_its_name(self):
+        # A run ends while its discovery Jobs run; a new run directory for the same fleet
+        # names its own discovery Jobs alike.
+        self.rig.hold = {"discovery"}
+        self.crash_when("discovery")
+        self.crashed()
+        first = self.record()["run_id"]
+        [held, *_] = self.record()["stages"]["discover"]["jobs"]
+        earlier = self.rig.store.get(JOB, NAMESPACE, held)["metadata"]["uid"]
+        self.rig.hold = set()
+        self.run = self.root / "run-b"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        second = self.record()["run_id"]
+        # The earlier run's Job had another spec digest, so it was deleted by its uid and the
+        # new run's Job made in its place, keeping the new run's evidence.
+        made = [entry for entry in self.rig.created if entry["name"] == held]
+        self.assertEqual(len(made), 2)
+        self.assertIn(f"deploy/{first}/", made[0]["keep"])
+        self.assertIn(f"deploy/{second}/", made[1]["keep"])
+        self.assertIn((held, earlier), self.rig.preconditions)
+        job = self.rig.jobs[held]["job"]
+        self.assertIn(kubernetes_target.SPEC_ANNOTATION, job["metadata"]["annotations"])
+
+    def test_every_delete_names_the_uid_it_read(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.assertTrue(self.rig.preconditions)
+        self.assertTrue(all(uid for _, uid in self.rig.preconditions))
+
+    def test_a_brief_api_outage_mid_stage_is_waited_out(self):
+        self.rig.hold = {"profile"}
+        outage = {}
+
+        def go_down() -> None:
+            if not outage and active(self.rig, "profile"):
+                outage["at"] = self.rig.store.clock()
+                self.rig.outage_until = outage["at"] + 30
+                # The Job finishes while the API is down.
+                self.rig.hold = set()
+
+        self.rig.on_tick = go_down
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertGreater(self.rig.calls["refused in the outage"], 0)
+        self.assertGreaterEqual(self.rig.store.clock(), outage["at"] + 30)
+        self.assertEqual(self.rig.kinds.count("profile"), 1)
+
+    def test_an_unreadable_log_interrupts_the_attempt_and_the_next_pass_adopts_the_job(self):
+        self.rig.hold = {"profile"}
+
+        def refuse_logs() -> None:
+            if active(self.rig, "profile") and not self.rig.calls["logs refused"]:
+                self.rig.calls["logs refused"] += 1
+                self.rig.hold = set()
+                self.rig.store.fail(
+                    "logs", POD, code=403, message="forbidden", times=kubernetes_target.LOG_TRIES
+                )
+
+        self.rig.on_tick = refuse_logs
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        entry = self.record()["stages"]["profile"]
+        self.assertEqual(entry["status"], "interrupted")
+        self.assertIn("its log could not be read", entry["failure"]["message"])
+        [name] = entry["jobs"]
+        self.assertIsNotNone(self.rig.store.get(JOB, NAMESPACE, name))
+        self.rig.on_tick = None
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        entry = self.record()["stages"]["profile"]
+        self.assertEqual((entry["status"], entry["attempt"]), ("passed", 1))
+        self.assertEqual(self.rig.kinds.count("profile"), 1)
+
+    def test_a_router_pod_that_waits_for_a_node_a_while_still_starts(self):
+        label = {"example.com/router": "yes"}
+        self.rig.router_selector = label
+        waited = {}
+
+        def add_node() -> None:
+            pending = self.rig.pods.get("router-0")
+            if pending is None:
+                return
+            waited.setdefault("since", self.rig.store.clock())
+            if self.rig.store.clock() - waited["since"] > 60 and "done" not in waited:
+                waited["done"] = True
+                node = copy.deepcopy(self.rig.store.get(kubernetes_node_kind(), None, "cpu-a"))
+                node["metadata"]["labels"].update(label)
+                self.rig.store.put(node)
+
+        self.rig.on_tick = add_node
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertTrue(waited.get("done"))
+
+    def test_a_router_pod_no_node_takes_for_minutes_fails_router_start(self):
+        self.rig.router_selector = {"example.com/router": "yes"}
+        self.assertEqual(self.deploy("run", "--until", "preflight")[0], 0)
+        start = self.rig.store.clock()
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["data"]["failed_stage"], "router-start")
+        self.assertIn("no node can schedule the pod", result["errors"][0]["message"])
+        self.assertGreater(
+            self.rig.store.clock() - start, kubernetes_target.ROUTER_UNSCHEDULABLE_SECONDS
+        )
+
+    def test_a_key_edited_in_place_reruns_the_engines_and_the_routers(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        kept = json.loads((self.run / kubernetes_target.CREDENTIAL_FILE).read_text())
+        self.assertEqual(set(kept), {"salt", "hmac"})
+        self.rig.set_key("rotated-in-place")
+        code, result = self.deploy("plan")
+        # Plan reads no key, so it cannot see the edit; run can.
+        self.assertNotIn(
+            "engine-prepare[engine-1]", [r["stage"] for r in result["data"]["stages"] if r["runs"]]
+        )
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        ran = set(result["data"]["ran"])
+        self.assertTrue({f"engine-prepare[{role}]" for role in ENGINES} <= ran)
+        self.assertIn("router-start", ran)
+        self.assertFalse({"access", "discover"} & ran)
+        # The run directory keeps the salt and the new HMAC, and neither the key nor its plain
+        # hash.
+        now = json.loads((self.run / kubernetes_target.CREDENTIAL_FILE).read_text())
+        self.assertEqual(now["salt"], kept["salt"])
+        self.assertNotEqual(now["hmac"], kept["hmac"])
+        stored = (self.run / kubernetes_target.CREDENTIAL_FILE).read_text()
+        for key in (SECRET, "rotated-in-place"):
+            self.assertNotIn(key, stored)
+            self.assertNotIn(hashlib.sha256(key.encode()).hexdigest(), stored)
+        self.assertEqual(stat.S_IMODE((self.run / "credential.json").stat().st_mode), 0o600)
+        code, result = self.deploy("run")
+        self.assertEqual(result["data"]["ran"], [])
+
+    def test_a_resumed_sample_whose_server_window_passed_is_interrupted(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        hosts = {role: Host(node, "", None, (role,)) for role, node in NODES.items()}
+        endpoints = {
+            role: fabric.Endpoint(hosts[role], f"10.0.0.{role[-1]}", "f0", "ucx_tcp", None)
+            for role in NODES
+        }
+        engines = {
+            role: fabric.Engine(
+                role, hosts[role], endpoints[role], "f0", 2, Path("l"), {}, {}, True, False
+            )
+            for role in NODES
+        }
+        plan = fabric.Fabric(engines, (), None, 5201, "/tmp", {}, {})  # type: ignore[arg-type]
+        sample = fabric.Sample(
+            endpoints["engine-1"], endpoints["engine-2"], ("engine-1",), ("engine-2",)
+        )
+        context = kubernetes_target._LiveContext(self.run)
+        first = self.deployment()
+        kubernetes_target.JobShell(first, context).sample(plan, "e", sample)  # type: ignore[arg-type]
+        server, client = [e["name"] for e in self.rig.created if e["kind"].startswith("fabric-")][
+            -2:
+        ]
+        # The runner ended after the server's window and before its client: a resumed attempt
+        # finds the finished server and no client.
+        if self.rig.store._objects[JOB].get((NAMESPACE, client)) is not None:
+            self.rig.store.remove(JOB, NAMESPACE, client)
+        self.rig.store.put(self.finished(server))
+        context.resumed = True  # type: ignore[attr-defined]
+        # A resumed attempt starts from an empty directory.
+        shutil.rmtree(context.directory)
+        again = self.deployment()
+        with self.assertRaisesRegex(kubernetes_target.Interrupted, "window passed"):
+            kubernetes_target.JobShell(again, context).sample(plan, "e", sample)  # type: ignore[arg-type]
+        self.rig.settle()
+        self.assertIsNone(self.rig.store._objects[JOB].get((NAMESPACE, server)))
+
+    def finished(self, name: str) -> dict:
+        job = copy.deepcopy(self.rig.store.get(JOB, NAMESPACE, name))
+        job["status"] = {
+            "succeeded": 1,
+            "conditions": [{"type": "Complete", "status": "True"}],
+        }
+        return job
+
+    def test_a_pod_waiting_on_its_claim_or_a_passing_runtime_error_is_not_failed(self):
+        unbound = {
+            "status": {
+                "conditions": [
+                    {
+                        "type": "PodScheduled",
+                        "status": "False",
+                        "reason": "Unschedulable",
+                        "message": "0/3 nodes are available: pod has unbound immediate "
+                        "PersistentVolumeClaims.",
+                    }
+                ]
+            }
+        }
+        self.assertIsNone(kubernetes_target.never_runs(unbound, scheduled=True))
+        created = {
+            "status": {
+                "containerStatuses": [
+                    {"name": "gate", "state": {"waiting": {"reason": "CreateContainerError"}}}
+                ]
+            }
+        }
+        self.assertIsNone(kubernetes_target.never_runs(created, scheduled=False))
+
+
 class ApiFailureTests(KubernetesTest):
     """Every write whose reply is lost is read back before the run decides, and every
     injected failure below is met."""
@@ -908,7 +1135,9 @@ class ApiFailureTests(KubernetesTest):
 
     def test_a_job_whose_name_is_taken_but_missing_fails_its_stage(self):
         # A 409 for a Job no read then finds: the name is held but no object answers to it.
-        self.rig.store.fail("create", JOB, code=409, message="already exists")
+        uid = self.rig.env[kubernetes_target.FLEET_UID]
+        name = objects.job_name("discovery", uid, "discover", "", 1, 0)
+        self.rig.store.fail("create", JOB, name=name, code=409, message="already exists")
         code, result = self.deploy("run")
         self.assertEqual(code, 4, result)
         self.assert_met()
@@ -1035,7 +1264,8 @@ class CredentialTests(KubernetesTest):
             if "NARWHAL_ENGINE_KEY" in entry["env"]
         }
         self.assertEqual(
-            keyed, {"sidecar-verify", "finalize-fleet", "profile", "calibrate", "preflight"}
+            keyed,
+            {"key-check", "sidecar-verify", "finalize-fleet", "profile", "calibrate", "preflight"},
         )
         for job in self.rig.jobs.values():
             for item in job["entry"]["env"].values():
@@ -1255,6 +1485,13 @@ class KubectlClusterTests(unittest.TestCase):
         self.answer("job.batch/gate deleted")
         self.assertTrue(cluster.delete(JOB, "gate"))
         self.assertIn("--cascade=background", self.last())
+        # A delete of one uid goes to the object's path with its precondition on stdin.
+        self.answer("{}")
+        self.assertTrue(cluster.delete(kubernetes_target.JOB, "gate", uid="u-1"))
+        self.assertIn("delete --context admin@cluster --namespace fleet --raw", self.last())
+        self.assertIn("/apis/batch/v1/namespaces/fleet/jobs/gate -f -", self.last())
+        self.answer("", 'Error from server (NotFound): jobs.batch "gate" not found', 1)
+        self.assertFalse(cluster.delete(kubernetes_target.JOB, "gate", uid="u-1"))
 
     def test_kubectl_failures_become_the_apis_errors(self):
         cluster = self.cluster()

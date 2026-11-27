@@ -63,7 +63,7 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 | Namespace, fleet, Kubernetes context or kubectl path | `NARWHAL_KUBERNETES_NAMESPACE`, the fleet's uid in `NARWHAL_KUBERNETES_FLEET_UID`, `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` | `access` and every stage after it |
 | Engine node, model volume, image, checkpoint, launch policy or transport | The discovery fields of `.env`, the Kubernetes inputs of the engine pods and the images | `discover` and every stage after it |
 | Narwhal release | The SHA-256 of the installed package's Python files, which build every object | `discover` and every stage after it |
-| Engine API key Secret | The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, never the key itself | `engine-prepare`, `router-start` |
+| Engine API key Secret, or the key in it | The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key under the fleet's salt from a key-check Job, never the key itself | `engine-prepare`, `router-start` |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start` |
 | Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start` |
@@ -82,6 +82,8 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 | Router pod replaced or restarted | Each router pod's UID and its router container's ID and start, checked live on every run | `router-start` |
 
 <!-- End of the generated stage tables. -->
+
+Keep the engine API key in an immutable Secret whose name carries a version, such as `engine-key-v2`, and rotate it by creating the next Secret and pointing `apiKeySecret` at it. Each `run` also starts a key-check Job that holds the key and reports only its HMAC under a salt kept in the run directory, so a key edited in place still restarts the engines and the routers.
 
 ## Checking cluster access
 

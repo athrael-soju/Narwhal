@@ -462,6 +462,16 @@
             "name": "checkpoint",
             "securityContext": {
               "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "add": [
+                  "CHOWN",
+                  "FOWNER"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "runAsUser": 0,
               "seccompProfile": {
                 "type": "RuntimeDefault"
               }

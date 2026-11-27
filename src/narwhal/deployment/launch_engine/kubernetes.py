@@ -387,13 +387,15 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
             {
                 "name": "checkpoint",
                 "image": plan["image"],
-                # It keeps the runtime's default capabilities, to hand the pod's directory of
+                # It runs as root with CHOWN and FOWNER alone, to hand the pod's directory of
                 # the state volume to the sidecar's user.
                 "command": command("checkpoint", str(settings["sidecar_user"])),
                 "env": env[: len(DOWNWARD_ENV)],
                 "volumeMounts": [*delivered, state(False)],
                 "securityContext": {
+                    "runAsUser": 0,
                     "allowPrivilegeEscalation": False,
+                    "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
                     "seccompProfile": {"type": "RuntimeDefault"},
                 },
             },

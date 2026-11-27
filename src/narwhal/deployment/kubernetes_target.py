@@ -31,15 +31,18 @@ its attestation sidecar waits for it.
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import inspect
 import json
 import math
+import os
 import re
 import secrets
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -47,6 +50,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from narwhal import provenance
+from narwhal.contracts import canonical_digest
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 from narwhal.runtime import kubernetes_api
 from narwhal.runtime.kubernetes_api import (
@@ -121,7 +125,18 @@ from .launch_engine.kubernetes import (
 from .launch_engine.plan import API_KEY_ENV, conv_state_layers
 from .role_env import HELPER_DIRECTORY, helpers, read_environment, select_values, write_environment
 from .run_record import PASSED, key
-from .runner import Cancelled, Input, Outcome, Runner, StageContext, Unobserved, check_directory
+from .runner import (
+    Cancelled,
+    Input,
+    Interrupted,
+    Outcome,
+    Runner,
+    RunResult,
+    StageContext,
+    Stop,
+    Unobserved,
+    check_directory,
+)
 
 TARGET = "kubernetes"
 LAST_STAGE = "router-start"
@@ -200,13 +215,19 @@ JOB_SECONDS = {
     "calibrate": 3600,
     "preflight": 1800,
     "router-check": 600,
+    "key-check": 300,
 }
 GRACE_SECONDS = 120
 POLL_SECONDS = 2.0
 START_SECONDS = 1800
 ROUTER_SECONDS = 600
+# A router pod may wait this long for a node, as when a cluster autoscaler adds one.
+ROUTER_UNSCHEDULABLE_SECONDS = 300
 # How long a Job being deleted may take to go before its name is free again.
 GONE_SECONDS = 120
+# Reads of a finished Job's log, and the longest wait between reads the API refused.
+LOG_TRIES = 5
+BACKOFF_SECONDS = 30.0
 PUBLISH_SECONDS = 900
 # A gate's log is read whole; the kubelet rotates a container log at 10 MiB by default.
 LOG_BYTES = kubernetes_api.LOG_MAX_BYTES
@@ -214,7 +235,8 @@ LOG_BYTES = kubernetes_api.LOG_MAX_BYTES
 WRITE_TRIES = 3
 
 # A container that waits for one of these never starts by itself.
-NEVER_STARTS = ("CreateContainerConfigError", "CreateContainerError", "InvalidImageName")
+# CreateContainerError is left out: the runtime gives it for passing causes too.
+NEVER_STARTS = ("CreateContainerConfigError", "InvalidImageName")
 # An engine pod that waits for its image this way runs no other image.
 IMAGE_FAILURES = ("ErrImagePull", "ImagePullBackOff")
 
@@ -232,6 +254,22 @@ RETIRED = (
     "NARWHAL_KUBERNETES_RELEASE",
     "NARWHAL_HELM",
 )
+
+# The key check: its Job reports the HMAC of the engine API key under the fleet's salt, which
+# the run directory keeps in CREDENTIAL_FILE with the last HMAC.
+KEY_CHECK = "key-check"
+CREDENTIAL_FILE = "credential.json"
+HEX64 = re.compile(r"[0-9a-f]{64}")
+_KEY_HMAC = f"""import hashlib, hmac, json, os
+salt = bytes.fromhex(open('/tmp/narwhal-in/salt').read().strip())
+key = os.environ[{API_KEY_ENV!r}].encode()
+digest = hmac.new(salt, key, hashlib.sha256).hexdigest()
+with open('/tmp/narwhal-key.json', 'w') as out:
+    json.dump({{"hmac_sha256": digest}}, out)
+"""
+
+# The digest of a gate Job's spec and inputs, which adoption matches exactly.
+SPEC_ANNOTATION = fleet_resource.qualified("spec-sha256")
 
 # The time functions the deployment waits with.
 _sleep: Callable[[float], None] = time.sleep
@@ -309,7 +347,7 @@ class Cluster(Protocol):
         self, kind: Kind, name: str, operations: Sequence[Mapping[str, Any]]
     ) -> dict[str, Any]: ...
 
-    def delete(self, kind: Kind, name: str) -> bool: ...
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool: ...
 
     def log(self, pod: str, container: str) -> bytes: ...
 
@@ -347,8 +385,8 @@ class ApiCluster:
     ) -> dict[str, Any]:
         return self.client.patch(kind, name, operations)
 
-    def delete(self, kind: Kind, name: str) -> bool:
-        return self.client.delete(kind, name, propagation=kubernetes_objects.BACKGROUND)
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool:
+        return self.client.delete(kind, name, propagation=kubernetes_objects.BACKGROUND, uid=uid)
 
     def log(self, pod: str, container: str) -> bytes:
         return self.client.log(pod, container=container, limit_bytes=LOG_BYTES)
@@ -461,7 +499,29 @@ class KubectlCluster:
         )
         return dict(json.loads(output))
 
-    def delete(self, kind: Kind, name: str) -> bool:
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool:
+        if uid is not None:
+            # kubectl names no precondition, so the delete goes to the object's own path with
+            # DeleteOptions that hold the uid.
+            options = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Background",
+                "preconditions": {"uid": uid},
+            }
+            try:
+                self.kubectl(
+                    "delete",
+                    "--raw",
+                    f"{kind.path(self.namespace)}/{name}",
+                    "-f",
+                    "-",
+                    data=json.dumps(options),
+                    write=True,
+                )
+            except NotFound:
+                return False
+            return True
         output = self.kubectl(
             "delete",
             self._resource(kind),
@@ -623,10 +683,21 @@ def never_runs(pod: Mapping[str, Any], *, scheduled: bool) -> str | None:
             return f"container {container.get('name')}: {waiting['reason']}: " + str(
                 waiting.get("message") or "no message"
             )
-    placed = _conditions(pod).get("PodScheduled") or {}
-    if scheduled and placed.get("status") == "False" and placed.get("reason") == "Unschedulable":
-        return f"no node can schedule the pod: {placed.get('message') or 'Unschedulable'}"
+    if scheduled and (cause := unschedulable(pod)):
+        return cause
     return None
+
+
+def unschedulable(pod: Mapping[str, Any]) -> str | None:
+    """Why the scheduler finds no node for the pod, or None. A pod that waits for its
+    PersistentVolumeClaims to bind is not unschedulable: the claim binds by itself."""
+    placed = _conditions(pod).get("PodScheduled") or {}
+    if placed.get("status") != "False" or placed.get("reason") != "Unschedulable":
+        return None
+    message = str(placed.get("message") or "Unschedulable")
+    if "unbound" in message and "PersistentVolumeClaim" in message:
+        return None
+    return f"no node can schedule the pod: {message}"
 
 
 # Discovery in the engine image, which holds the engine's Python but not Narwhal.
@@ -931,18 +1002,39 @@ def container_identity(pod: Mapping[str, Any], name: str) -> dict | None:
     }
 
 
+def stamp(job: dict[str, Any], inputs: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Annotate a gate Job with the digest of everything it runs: its labels, which name the
+    run, its whole pod template, with image, env, command, volumes and keep subPath, and its
+    inputs ConfigMap's content."""
+    content = (inputs or {}).get("binaryData") or {}, (inputs or {}).get("data") or {}
+    digest = canonical_digest(
+        {
+            "labels": job["metadata"].get("labels") or {},
+            "spec": job["spec"],
+            "inputs": content,
+        }
+    )
+    job["metadata"].setdefault("annotations", {})[SPEC_ANNOTATION] = digest
+    return job
+
+
 def _same_gate(live: Mapping[str, Any], desired: Mapping[str, Any]) -> bool:
-    """Whether a Job found under a name runs the gate `desired` describes."""
+    """Whether a Job found under a name is the one `desired` describes, to the digest of its
+    spec and inputs. A Job another run, attempt or older Narwhal made under the name is not."""
 
-    def gate(job: Mapping[str, Any]) -> tuple[Any, ...]:
-        labels = job["metadata"].get("labels") or {}
-        containers = job["spec"]["template"]["spec"].get("containers") or []
-        return (
-            labels.get(fleet_resource.GATE_LABEL),
-            [(c.get("command"), c.get("args")) for c in containers],
-        )
+    def digest(job: Mapping[str, Any]) -> str | None:
+        return (job["metadata"].get("annotations") or {}).get(SPEC_ANNOTATION)
 
-    return gate(live) == gate(desired)
+    return digest(desired) is not None and digest(live) == digest(desired)
+
+
+def _finished(job: Mapping[str, Any] | None) -> bool:
+    """Whether a Job has completed or failed; a missing Job has finished too."""
+    if job is None:
+        return True
+    return any(
+        _conditions(job).get(kind, {}).get("status") == "True" for kind in ("Complete", "Failed")
+    )
 
 
 def _empty(directory: Path) -> None:
@@ -980,6 +1072,7 @@ class _Action:
         resumed = " (resumed)" if context.resumed else ""
         deployment.announce(f"{where}: attempt {context.attempt}{resumed}")
         deployment.begin(context)
+        deployment.save_credential()
         if context.resumed:
             _empty(context.directory)
         else:
@@ -991,6 +1084,28 @@ class _Action:
 
     def adopt(self, previous: Mapping[str, Any]) -> bool:
         return self.deployment.adopt(previous)
+
+
+class KeyedRunner(Runner):
+    """The deployment's runner, whose `credential` input also holds the HMAC of the engine API
+    key itself, so an edit of the Secret in place reruns the engines and the routers.
+
+    `run` reads the key's HMAC through a key-check Job first. `plan` takes the HMAC the last
+    run recorded, and starts no Job.
+    """
+
+    def __init__(self, deployment: KubernetesDeployment, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.deployment = deployment
+
+    def run(
+        self, inputs: Mapping[str, Input], *, until: str | None = None, stop: Stop | None = None
+    ) -> RunResult:
+        keyed = self.deployment.keyed(inputs, observe=True)
+        return super().run(keyed, until=until, stop=stop)
+
+    def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
+        return super().plan(self.deployment.keyed(inputs, observe=False), until=until)
 
 
 class KubernetesDeployment:
@@ -1018,10 +1133,12 @@ class KubernetesDeployment:
         self._fleet: kubernetes_objects.Fleet | None = None
         # The Jobs each running attempt started, in order, by stage instance and attempt.
         self._jobs: dict[tuple[str, str, int], list[str]] = {}
+        # The key check's salt and HMAC, until the run directory can keep them.
+        self._credential: dict[str, str] | None = None
 
     # The runner.
 
-    def runner(self) -> Runner:
+    def runner(self) -> KeyedRunner:
         actions = {
             "access": self.access,
             "discover": self.discover,
@@ -1044,7 +1161,8 @@ class KubernetesDeployment:
             "preflight": self.preflight,
             "router-start": self.router_start,
         }
-        return Runner(
+        return KeyedRunner(
+            self,
             KUBERNETES_GRAPH,
             self.directory,
             target=TARGET,
@@ -1094,6 +1212,103 @@ class KubernetesDeployment:
         return f"{STATE}/deploy/{context.run_id}/{relative}"
 
     # The fleet.
+
+    # The engine API key, seen only through its HMAC.
+
+    def keyed(self, inputs: Mapping[str, Input], *, observe: bool) -> dict[str, Input]:
+        """`inputs` with the key's HMAC added to the `credential` fact. With `observe`, a
+        key-check Job reads it; otherwise it is the one the last run recorded."""
+        found = dict(inputs)
+        if "credential" not in found or api_key_secret(self.env) is None:
+            return found
+        if observe and not self._fleet_holds():
+            # Its Job would go with the fleet it names; `access` says why the run stops.
+            return found
+        digest = self.key_hmac(observe=observe)
+        if digest is not None:
+            reference = found["credential"]
+            found["credential"] = Input.value(
+                {"reference": reference.digest, "key_hmac_sha256": digest}, reference.source
+            )
+        return found
+
+    def _fleet_holds(self) -> bool:
+        """Whether the namespace holds the fleet of this run's uid."""
+        live = self.cluster().get(FLEET, fleet_resource.NAME)
+        return live is not None and live["metadata"].get("uid") == self.env[FLEET_UID]
+
+    def recorded_credential(self) -> dict[str, str] | None:
+        """The salt and the HMAC the last key check left in the run directory, or None."""
+        path = self.directory / CREDENTIAL_FILE
+        if not path.is_file():
+            return None
+        found = _json(path)
+        if not isinstance(found, dict) or not all(
+            isinstance(found.get(field), str) and HEX64.fullmatch(found[field])
+            for field in ("salt", "hmac")
+        ):
+            raise ValueError(f"{path} holds no salt and HMAC; remove it and run again")
+        return {"salt": found["salt"], "hmac": found["hmac"]}
+
+    def key_hmac(self, *, observe: bool) -> str | None:
+        """The HMAC-SHA256 of the engine API key under the fleet's salt.
+
+        The salt is drawn once per run directory and kept there, so the digest shows a change
+        of the key and nothing about it: never the key, and no plain hash of it.
+        """
+        recorded = self.recorded_credential()
+        if not observe:
+            return recorded["hmac"] if recorded else None
+        salt = recorded["salt"] if recorded else secrets.token_hex(32)
+        digest = self._key_check(salt)
+        self._credential = {"salt": salt, "hmac": digest}
+        self.save_credential()
+        return digest
+
+    def save_credential(self) -> None:
+        """Keep the key check's salt and HMAC once the run directory holds its record."""
+        if self._credential is None or not (self.directory / run_record.RECORD).is_file():
+            return
+        path = self.directory / CREDENTIAL_FILE
+        if path.is_file() and _json(path) == self._credential:
+            return
+        pending = path.with_name(f".{CREDENTIAL_FILE}.{os.getpid()}")
+        write_private(pending, (json.dumps(self._credential) + "\n").encode())
+        os.replace(pending, path)
+
+    def _key_check(self, salt: str) -> str:
+        """Run a key-check Job, which holds the key from its Secret, and return its HMAC."""
+        cluster = self.cluster()
+        name = kubernetes_objects.job_name(
+            KEY_CHECK, self.env[FLEET_UID], KEY_CHECK, "", secrets.randbelow(2**31), 0
+        )
+        command = _gate_command(
+            inputs=True,
+            returns={"key.json": "/tmp/narwhal-key.json"},
+            command=["python", "-c", _KEY_HMAC],
+        )
+        files = {kubernetes_gate.INPUTS: kubernetes_gate.pack({"salt": salt.encode()})}
+        gate = Gate(KEY_CHECK, KEY_CHECK, command, files=files)
+        job = self._gate_job_at(gate, name, f"deploy/{KEY_CHECK}/{name}", None)
+        fleet = self.fleet()
+        inputs = kubernetes_objects.inputs(fleet, job, gate.files)
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            if (self.directory / run_record.RECORD).is_file():
+                logs = self.directory / "live" / KEY_CHECK
+            context = cast(StageContext, _KeyContext(logs))
+            try:
+                self.apply(cluster, inputs)
+                self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
+                result = self.finish_gate(context, gate, name)
+            finally:
+                self.remove(cluster, JOB, name)
+                self.remove(cluster, CONFIG_MAP, name)
+        reported = json.loads(result.files["key.json"])
+        digest = reported.get("hmac_sha256") if isinstance(reported, dict) else None
+        if not isinstance(digest, str) or not HEX64.fullmatch(digest):
+            raise GateOutputError(f"Job {name} reported no HMAC of the engine API key")
+        return digest
 
     def owner(self) -> Owner:
         return Owner(fleet_resource.NAME, self.env[FLEET_UID], self.env[NAMESPACE])
@@ -1172,7 +1387,9 @@ class KubernetesDeployment:
 
     def remove(self, cluster: Cluster, kind: Kind, name: str) -> None:
         """Delete one object the fleet controls, in the background; one another owner controls
-        stays. A delete whose outcome is unknown is made again until the object is gone."""
+        stays. The delete names the uid that was read, so an object made again under the name
+        in between stays. A delete whose outcome is unknown is made again until the object is
+        gone."""
         for attempt in range(WRITE_TRIES):
             live = cluster.get(kind, name)
             if (
@@ -1182,8 +1399,11 @@ class KubernetesDeployment:
             ):
                 return
             try:
-                cluster.delete(kind, name)
+                cluster.delete(kind, name, uid=live["metadata"]["uid"])
                 return
+            except Conflict:
+                # Another object holds the name now; the next read decides on it.
+                continue
             except OutcomeUnknown:
                 if attempt + 1 == WRITE_TRIES:
                     raise
@@ -1191,11 +1411,12 @@ class KubernetesDeployment:
     def create_job(self, cluster: Cluster, job: Mapping[str, Any]) -> bool:
         """Create a gate Job, or adopt the one of its name: returns whether it was adopted.
 
-        The name follows from the attempt, so a Job of that name that the fleet controls and
-        that runs the same command is this attempt's own, started before the runner restarted.
-        One another owner controls is refused, as its log is not this gate's. One the fleet
-        controls that runs another command, which a replay that took another path meets, or one
-        being deleted, is waited out and the Job created again.
+        The name follows from the fleet and the attempt, so a Job of that name that the fleet
+        controls and whose spec digest matches is this attempt's own, started before the runner
+        restarted. One another owner controls is refused, as its log is not this gate's. One
+        the fleet controls with another digest, which another run directory, a replay that took
+        another path or an older Narwhal made, is deleted with its uid as precondition and the
+        Job created again, as is one already being deleted once it is gone.
         """
         name = job["metadata"]["name"]
         for attempt in range(WRITE_TRIES):
@@ -1217,7 +1438,7 @@ class KubernetesDeployment:
                     self._gone(cluster, name)
                     continue
                 if not _same_gate(live, job):
-                    self.announce(f"Job {name} ran another command; replacing it")
+                    self.announce(f"Job {name} is another run's or attempt's; replacing it")
                     self.remove(cluster, JOB, name)
                     self._gone(cluster, name)
                     continue
@@ -1302,8 +1523,24 @@ class KubernetesDeployment:
         started.append(name)
         return name
 
+    def next_job_name(self, context: StageContext, kind: str) -> str:
+        """The name the attempt's next Job takes, without taking it."""
+        started = self._jobs.get(self._attempt(context), [])
+        return kubernetes_objects.job_name(
+            kind,
+            self.env[FLEET_UID],
+            context.stage,
+            context.instance,
+            context.attempt,
+            len(started),
+        )
+
     def _gate_job(self, context: StageContext, gate: Gate, name: str) -> GateJob:
         keep = self.state_dir(context).removeprefix(f"{STATE}/") + f"/jobs/{name}"
+        return self._gate_job_at(gate, name, keep, context.run_id)
+
+    @staticmethod
+    def _gate_job_at(gate: Gate, name: str, keep: str, run: str | None) -> GateJob:
         return GateJob(
             name=name,
             kind=gate.kind,
@@ -1319,7 +1556,7 @@ class KubernetesDeployment:
             inputs=name if gate.files else None,
             model_volume=gate.model_volume,
             service_account=gate.service_account,
-            run=context.run_id,
+            run=run,
         )
 
     def start_gates(self, context: StageContext, gates: Sequence[Gate]) -> list[str]:
@@ -1336,9 +1573,10 @@ class KubernetesDeployment:
             record(names)
         for gate, name in zip(gates, names, strict=True):
             job = self._gate_job(context, gate, name)
-            if gate.files:
-                self.apply(cluster, kubernetes_objects.inputs(fleet, job, gate.files))
-            self.create_job(cluster, kubernetes_objects.job(fleet, job))
+            inputs = kubernetes_objects.inputs(fleet, job, gate.files) if gate.files else None
+            if inputs is not None:
+                self.apply(cluster, inputs)
+            self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
         return names
 
     def job_pods(self, cluster: Cluster, job: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1351,19 +1589,59 @@ class KubernetesDeployment:
         ]
         return sorted(pods, key=lambda pod: pod["metadata"].get("creationTimestamp", ""))
 
-    def job_log(self, cluster: Cluster, job: Mapping[str, Any]) -> str:
-        """The log of the Job's newest pod, or "" while it has none to read."""
-        pods = self.job_pods(cluster, job)
-        if not pods:
-            return ""
-        try:
-            return cluster.log(pods[-1]["metadata"]["name"], GATE_CONTAINER).decode(
-                errors="replace"
-            )
-        except LogTooLarge as error:
-            raise GateOutputError(f"Job {job['metadata']['name']}: {error}") from None
-        except KubernetesError:
-            return ""
+    def job_log(self, cluster: Cluster, job: Mapping[str, Any], *, finished: bool = True) -> str:
+        """The log of the Job's newest pod.
+
+        For a finished Job the log is its evidence: a read the API refuses is tried again with
+        backoff, and one that still fails interrupts the attempt, whose next pass adopts the
+        Job and reads it again. While the Job runs, as a sample waits for its server, a pod
+        with no log to read yet gives "".
+        """
+        name = job["metadata"]["name"]
+        backoff = POLL_SECONDS
+        for attempt in range(LOG_TRIES):
+            try:
+                pods = self.job_pods(cluster, job)
+                if not pods:
+                    if finished:
+                        raise Interrupted(f"Job {name} finished and no pod of it is left to read")
+                    return ""
+                return cluster.log(pods[-1]["metadata"]["name"], GATE_CONTAINER).decode(
+                    errors="replace"
+                )
+            except LogTooLarge as error:
+                raise GateOutputError(f"Job {name}: {error}") from None
+            except KubernetesError as error:
+                if not finished:
+                    return ""
+                if isinstance(error, Unavailable):
+                    # An outage is the caller's to wait out.
+                    raise
+                if attempt + 1 == LOG_TRIES:
+                    raise Interrupted(
+                        f"Job {name}: its log could not be read ({error}); the next pass "
+                        "adopts the Job and reads it again"
+                    ) from error
+                self.sleep(backoff)
+                backoff = min(backoff * 2, BACKOFF_SECONDS)
+        raise AssertionError("unreachable")
+
+    def _patient(self, name: str, limit: float, call: Callable[[], Any]) -> Any:
+        """`call`, tried again with backoff while the API is unavailable, for up to `limit`
+        seconds; past that the attempt is interrupted, for the next pass to adopt its Job."""
+        started = self.clock()
+        backoff = POLL_SECONDS
+        while True:
+            try:
+                return call()
+            except Unavailable as error:
+                if self.clock() - started > limit:
+                    raise Interrupted(
+                        f"Job {name}: the API was unavailable for {self.clock() - started:.0f}s; "
+                        "the next pass adopts the Job"
+                    ) from error
+                self.sleep(backoff)
+                backoff = min(backoff * 2, BACKOFF_SECONDS)
 
     def _cancel(self, context: StageContext, cluster: Cluster) -> None:
         """Delete every Job the cancelled attempt started, then end it."""
@@ -1382,11 +1660,13 @@ class KubernetesDeployment:
         """
         cluster = self.cluster(context)
         here = where or gate.node or "cluster"
-        deadline = self.clock() + JOB_SECONDS[gate.kind] + GRACE_SECONDS
+        limit = JOB_SECONDS[gate.kind] + GRACE_SECONDS
+        deadline = self.clock() + limit
         while True:
             if getattr(context, "cancelled", False):
                 self._cancel(context, cluster)
-            job = cluster.get(JOB, name)
+            # An API outage while the Job runs is waited out for as long as the Job may run.
+            job = self._patient(name, limit, lambda: cluster.get(JOB, name))
             if job is None:
                 raise GateFailed(
                     here, f"Job {name}", 4, "the Job is gone before it finished", context.directory
@@ -1395,7 +1675,8 @@ class KubernetesDeployment:
             done = [c for t, c in conditions.items() if t in ("Complete", "Failed")]
             if any(c.get("status") == "True" for c in done):
                 break
-            for pod in self.job_pods(cluster, job):
+            pods = self._patient(name, limit, functools.partial(self.job_pods, cluster, job))
+            for pod in pods:
                 if cause := never_runs(pod, scheduled=False):
                     self.remove(cluster, JOB, name)
                     raise GateFailed(here, f"Job {name}", 4, cause, context.directory / "logs")
@@ -1408,15 +1689,20 @@ class KubernetesDeployment:
                     context.directory / "logs",
                 )
             self.sleep(POLL_SECONDS)
-        pods = self.job_pods(cluster, job)
+        pods = self._patient(name, limit, lambda: self.job_pods(cluster, job))
         pod = pods[-1] if pods else {}
-        output = self.job_log(cluster, job)
+        failed = conditions.get("Failed", {}).get("status") == "True"
+        if failed and pod and never_runs(pod, scheduled=False):
+            # A pod the kubelet refused ran nothing, so it has no log to read.
+            output = ""
+        else:
+            output = self._patient(name, limit, lambda: self.job_log(cluster, job))
         log = context.directory / "logs" / f"{name}.log"
         log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         write_private(log, output.encode())
         if gate.files:
-            self.remove(cluster, CONFIG_MAP, name)
-        if conditions.get("Failed", {}).get("status") == "True":
+            self._patient(name, limit, lambda: self.remove(cluster, CONFIG_MAP, name))
+        if failed:
             terminated = (_container(pod, GATE_CONTAINER) or {}).get("state", {}).get("terminated")
             status = int((terminated or {}).get("exitCode", 4))
             causes = [
@@ -2452,10 +2738,20 @@ fi
         for document in objects:
             self.apply(cluster, document)
         deadline = self.clock() + ROUTER_SECONDS
+        # When each router pod, by uid, was first found with no node to run on.
+        waiting: dict[str, float] = {}
         while (routers := self._routers(cluster)) is None:
             for name in ROUTERS:
                 pod = cluster.get(POD, name)
-                if pod is not None and (cause := never_runs(pod, scheduled=True)):
+                if pod is None:
+                    continue
+                cause = never_runs(pod, scheduled=False)
+                if cause is None and (pending := unschedulable(pod)):
+                    # Routers schedule anywhere the chart allows, so a node may yet come.
+                    since = waiting.setdefault(pod["metadata"]["uid"], self.clock())
+                    if self.clock() - since > ROUTER_UNSCHEDULABLE_SECONDS:
+                        cause = f"{pending}, for {ROUTER_UNSCHEDULABLE_SECONDS}s"
+                if cause:
                     raise GateFailed(
                         "cluster", f"router {name}", 4, cause, context.directory / "logs"
                     )
@@ -2784,7 +3080,7 @@ test "$status" -eq 0 ||
         deadline = deployment.clock() + JOB_SECONDS["fabric-server"]
         while True:
             job = cluster.get(JOB, server_name) or {}
-            if job and "narwhal-listening" in deployment.job_log(cluster, job):
+            if job and "narwhal-listening" in deployment.job_log(cluster, job, finished=False):
                 break
             finished = any(
                 c.get("status") == "True" for t, c in _conditions(job).items() if t != "Suspended"
@@ -2799,8 +3095,17 @@ test "$status" -eq 0 ||
                     context.directory / "logs",
                 )
             deployment.sleep(POLL_SECONDS)
-        # A replayed sample whose server already finished has no server for its client; the
-        # stage fails and its next attempt measures the sample again.
+        if getattr(context, "resumed", False) and _finished(cluster.get(JOB, server_name)):
+            following = deployment.next_job_name(context, "fabric-client")
+            if cluster.get(JOB, following) is None:
+                # A resumed sample whose server window passed while no runner ran has no
+                # server for its client. Its server goes, and the next pass, which adopts the
+                # attempt again, measures the sample with a new one.
+                deployment.remove(cluster, JOB, server_name)
+                deployment.remove(cluster, CONFIG_MAP, server_name)
+                raise Interrupted(
+                    f"{where}: the {server[0]} server's window passed while no runner ran"
+                )
         [client_name] = deployment.start_gates(context, [client_gate])
         try:
             result = deployment.finish_gate(context, client_gate, client_name, where)
@@ -2810,6 +3115,15 @@ test "$status" -eq 0 ||
         if report is None:
             raise GateOutputError(f"{where}: the {client[0]} client's log holds no report")
         return report + b"\n"
+
+
+@dataclass
+class _KeyContext:
+    """The parts of a stage context the key check's Job uses: where its log goes."""
+
+    directory: Path
+    stage: str = KEY_CHECK
+    instance: str = ""
 
 
 @dataclass

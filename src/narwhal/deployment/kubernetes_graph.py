@@ -149,14 +149,16 @@ FACTS = (
         "The SHA-256 of the installed package's Python files, which build every object",
         (Rerun("discover", onward=True),),
     ),
-    # The Secret holding the engine API key. Its name is versioned, so rotating the key is an
-    # edit of this reference: the engines restart on the new Secret and the routers take it.
+    # The Secret holding the engine API key. Rotating the key is an edit of this reference to a
+    # new, immutable Secret; a key-check Job's HMAC of the key also catches an edit in place.
+    # Either restarts the engines on the key and gives the routers it.
     Fact(
         "credential",
         INPUT,
         WORKSTATION,
-        "Engine API key Secret",
-        "The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, never the key itself",
+        "Engine API key Secret, or the key in it",
+        "The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key "
+        "under the fleet's salt from a key-check Job, never the key itself",
         _reruns("engine-prepare", "router-start"),
     ),
     *(

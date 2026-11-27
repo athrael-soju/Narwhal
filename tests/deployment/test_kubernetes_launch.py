@@ -383,11 +383,16 @@ class KubernetesLaunchTests(unittest.TestCase):
             "allowPrivilegeEscalation": False,
             "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
         }
-        # The checkpoint step keeps the runtime's default capabilities to hand the pod's
-        # directory to the sidecar, and adds none.
+        # The checkpoint step runs as root with CHOWN and FOWNER alone, to hand the pod's
+        # directory to the sidecar.
         self.assertEqual(
             engine.containers["checkpoint"]["securityContext"],
-            {"allowPrivilegeEscalation": False, "seccompProfile": {"type": "RuntimeDefault"}},
+            {
+                "runAsUser": 0,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER"]},
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
         )
         for name in ("runtime-check", "engine"):
             self.assertEqual(

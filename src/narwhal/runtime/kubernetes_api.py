@@ -793,17 +793,34 @@ class ApiClient:
         *,
         namespace: str | None = None,
         propagation: str = "Background",
+        uid: str | None = None,
     ) -> bool:
         """Delete the object and let the garbage collector remove its dependents.
 
         Returns False when it was already gone. The API's own default for Jobs orphans their
-        pods, so a Job delete always sends `Background`.
+        pods, so a Job delete always sends `Background`. With `uid`, the API deletes only the
+        object of that uid and answers `Conflict` for another one under the name.
         """
         if propagation not in PROPAGATION:
             raise ValueError(f"propagation must be one of {', '.join(PROPAGATION)}")
         if _is_job(kind) and propagation != "Background":
             raise ValueError("a Job delete propagates in the background, or its pods stay behind")
         _object_name(name)
+        if uid is not None:
+            options = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": propagation,
+                "preconditions": {"uid": uid},
+            }
+            path = f"{kind.path(self._namespace(kind, namespace))}/{name}"
+            with _translate():
+                reply = self._http.request("DELETE", path, json=options)
+            if reply.status_code == 404:
+                return False
+            if not reply.is_success:
+                raise _response_error(reply)
+            return True
         resource, _ = _resources(kind)
         try:
             with _translate():

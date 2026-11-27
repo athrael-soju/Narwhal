@@ -103,10 +103,13 @@ GATE_KINDS = (
     "calibrate",
     "preflight",
     "router-check",
+    "key-check",
 )
 # The gates that call engines get the key. Preparing a launch names the key's Secret and calls
 # no engine, so no launch file holds the key.
+# A key check holds the key to report its HMAC, which shows an edit of the Secret in place.
 CREDENTIAL_KINDS = (
+    "key-check",
     "transfer-measure",
     "sidecar-verify",
     "finalize-fleet",

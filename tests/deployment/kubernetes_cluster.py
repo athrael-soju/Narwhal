@@ -30,6 +30,7 @@ import contextlib
 import copy
 import functools
 import hashlib
+import hmac
 import io
 import json
 import random
@@ -3152,6 +3153,7 @@ ENGINE_ACCOUNT = "narwhal-engine"
 SIDECAR_USER = 10002
 # The gate kinds whose commands call an engine's API.
 ENGINE_CALLERS = {
+    "key-check",
     "transfer-measure",
     "sidecar-verify",
     "finalize-fleet",
@@ -3407,6 +3409,12 @@ class Rig:
         self.timeline: list[tuple[str, str]] = []
         # Called on each wait of the target, before the cluster moves on.
         self.on_tick: Callable[[], None] | None = None
+        # Each delete's name and the uid it named as its precondition, or None.
+        self.preconditions: list[tuple[str, str | None]] = []
+        # Until this time on the store's clock, every request meets a 503.
+        self.outage_until = 0.0
+        # A node selector the router pods take instead of their node, to wait for one.
+        self.router_selector: dict[str, str] | None = None
         self.calls: Counter[str] = Counter()
         # Each request's RBAC verb and resource, as `(verb, group, resource)`.
         self.requests: list[tuple[str, str, str]] = []
@@ -3454,9 +3462,17 @@ class Rig:
         self.store.settle()
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
+        if self.store.clock() < self.outage_until:
+            # The API server is down: the load balancer in front of it answers.
+            self.calls["refused in the outage"] += 1
+            return httpx.Response(503, text="no healthy upstream")
         self._before(request)
         self.store.settle()
         self.requests.append(_rbac(request))
+        if request.method == "DELETE":
+            options = json.loads(request.content or b"{}")
+            name = request.url.path.rsplit("/", 1)[-1]
+            self.preconditions.append((name, (options.get("preconditions") or {}).get("uid")))
         return self.store.handle(request)
 
     def _before(self, request: httpx.Request) -> None:
@@ -3601,6 +3617,8 @@ class Rig:
                 files[f"{name}cache-layout.json"] = json.dumps(
                     {"schema_version": 1, "ranks": [{"rank": 0, "kv_cache_layout": layout}]}
                 ).encode()
+            elif kind == "key-check":
+                files[name] = json.dumps({"hmac_sha256": self.key_hmac(entry)}).encode()
             elif name == "verify/":
                 files["verify/identity.json"] = b"{}"
             elif name == "host/":
@@ -3616,6 +3634,20 @@ class Rig:
             else:
                 files[name] = b"{}"
         return files
+
+    def key_hmac(self, entry: Mapping[str, Any]) -> str:
+        """What a key check reports: the HMAC of the key in the engines' Secret now, under the
+        salt its inputs gave it."""
+        salt = bytes.fromhex(self.files(entry)["salt"].decode())
+        secret = self.store.get(SECRET_KIND, NAMESPACE, self.secret["name"])
+        key = base64.b64decode(secret["data"][self.secret["key"]])
+        return hmac.new(salt, key, hashlib.sha256).hexdigest()
+
+    def set_key(self, value: str) -> None:
+        """Edit the key in the engines' Secret in place."""
+        secret = copy.deepcopy(self.store.get(SECRET_KIND, NAMESPACE, self.secret["name"]))
+        secret["data"][self.secret["key"]] = base64.b64encode(value.encode()).decode()
+        self.store.put(secret)
 
     def log(self, entry: Mapping[str, Any]) -> str:
         kind = entry["kind"]
@@ -3656,7 +3688,12 @@ class Rig:
             stack.enter_context(patch.object(target, "_sleep", self.tick))
             stack.enter_context(patch.object(target, "_clock", self.store.clock))
             stack.enter_context(
-                patch.object(target.kubernetes_objects, "routers", routers, create=True)
+                patch.object(
+                    target.kubernetes_objects,
+                    "routers",
+                    lambda fleet, block, path: routers(fleet, block, path, self.router_selector),
+                    create=True,
+                )
             )
             stack.enter_context(
                 patch.object(target.KubernetesDeployment, "_write_records", _write_records)
@@ -3770,9 +3807,15 @@ def _rbac(request: httpx.Request) -> tuple[str, str, str]:
     return verb, group, resource
 
 
-def routers(fleet: kubernetes_objects.Fleet, block: Mapping[str, Any], fleet_file: str) -> list:
+def routers(
+    fleet: kubernetes_objects.Fleet,
+    block: Mapping[str, Any],
+    fleet_file: str,
+    node_selector: Mapping[str, str] | None = None,
+) -> list:
     """A router pair in the shape step G builds: a headless Service and a StatefulSet of two
-    router pods on `fleet_file`."""
+    router pods on `fleet_file`, on the routers' node or, with `node_selector`, on any node the
+    scheduler finds with those labels."""
     owner = fleet.owner
     selector = kubernetes_objects.labels("router")
     container = {
@@ -3800,7 +3843,14 @@ def routers(fleet: kubernetes_objects.Fleet, block: Mapping[str, Any], fleet_fil
                 "selector": {"matchLabels": selector},
                 "template": {
                     "metadata": {"labels": dict(selector)},
-                    "spec": {"nodeName": "cpu-a", "containers": [container]},
+                    "spec": {
+                        **(
+                            {"nodeSelector": dict(node_selector)}
+                            if node_selector
+                            else {"nodeName": "cpu-a"}
+                        ),
+                        "containers": [container],
+                    },
                 },
             },
         },
