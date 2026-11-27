@@ -15,7 +15,8 @@ from typing import Any, TypeGuard
 from ...contracts import DEPLOYMENT_STATUS, validate_document
 from .exposition import metric_lines
 
-STATES = ("passed", "failed", "running", "cancelled", "timeout", "invalidated")
+# The run record statuses a stage instance can export.
+STATES = ("passed", "failed", "running", "cancelled", "timeout", "invalidated", "interrupted")
 
 
 def read_status(path: Path) -> dict[str, Any] | None:

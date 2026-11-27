@@ -222,7 +222,7 @@ The **Deployment** row reads the status of the last `narwhal deploy run`, which 
 | Panel | Shows |
 | --- | --- |
 | **Stages not passed** | Stage instances of the last run that did not pass, red from 1. A fleet stuck on a failed stage keeps this red until a run passes |
-| **Stage table** | Each of those stage instances with its state: `failed`, `timeout`, `cancelled`, `invalidated` or `running` |
+| **Stage table** | Each of those stage instances with its state: `failed`, `timeout`, `cancelled`, `interrupted`, `invalidated` or `running` |
 | **Deployment age** | Time since the last run that passed every stage, since preflight last qualified the fleet, and since the engines were profiled and the first-token deadline calibrated |
 | **Fabric edges** | Each directed edge's bandwidth from fabric qualification, against the bandwidth its sources' KV handoffs need |
 | **Engine attestation** | Each engine's attested binding digest. A new digest means the engine was attested again |
