@@ -96,6 +96,7 @@ narwhal = ["py.typed", "fleet.example.json"]
   "direct-qwen35-08b-v1.json",
   "direct-ernie45-03b-v1.json",
 ]
+"narwhal.deployment" = ["haproxy.cfg"]
 "narwhal.backends.vllm" = ["icon.png"]
 "narwhal.backends.sglang" = ["icon.png"]
 "narwhal.backends.llamacpp" = ["icon.png"]

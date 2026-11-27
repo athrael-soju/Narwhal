@@ -1,7 +1,8 @@
-"""Turn the Kubernetes launch plans of a fleet's engines into the Helm chart's engine values.
+"""Turn the Kubernetes launch plans of a fleet's engines into the values of their StatefulSet.
 
-The chart runs every engine in one StatefulSet named `engine` whose ordinals start at 1, so
-each pod's name is its engine role, the name the plans' engine and attestation URLs give it.
+`kubernetes_objects.engines` runs every engine in one StatefulSet named `engine` whose ordinals
+start at 1, so each pod's name is its engine role, the name the plans' engine and attestation
+URLs give it.
 Each plan renders its own pod in `kubernetes.json`. The plans differ only where the role does:
 the commands and environment of the engine's steps, the hook files, and the role in the paths
 of the state volume. Everything else must be equal across the plans, or the fleet cannot share
@@ -17,7 +18,8 @@ PID and the environment the plan gives it, which the attestation sidecar binds.
 
 Two pod fields are not carried over. The template lists no container ports, because engines on
 one node listen on different host ports and a template's ports would be every pod's. The
-resource limits, the engine image and the model volume become values of their own.
+resource limits, the engine image and the model volume become values of their own, which
+`kubernetes_objects.engines` sets where the template holds None.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ import copy
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -192,6 +194,52 @@ def _projected(sources: list[tuple[str, str, list[str]]]) -> dict:
 def spec_map(role: str, data: dict[str, str]) -> str:
     """The name of a role's spec ConfigMap, which follows its content as the map is immutable."""
     return f"narwhal-spec-{role}-{json_digest(data)[:12]}"
+
+
+def check(
+    values: Mapping[str, Any],
+    *,
+    namespace: str,
+    state_claim: str,
+    narwhal_image: str,
+    api_key_secret: Mapping[str, str] | None,
+) -> None:
+    """Refuse engine values that cannot run in the fleet they are for.
+
+    The plans fix the engines' namespace, state claim, sidecar image and API key Secret, so
+    each must be the one the fleet names. `api_key_secret` is the fleet's `{"name", "key"}`
+    reference, or None for a fleet without an engine API key.
+    """
+    if values["namespace"] != namespace:
+        raise ValueError(
+            f"the engine URLs name namespace {values['namespace']}; run the fleet there, "
+            f"not in {namespace}"
+        )
+    if values["stateClaim"] != state_claim:
+        raise ValueError(
+            f"the fleet's state claim is {state_claim} and the engine plans name state claim "
+            f"{values['stateClaim']}; prepare the engines with the fleet's state claim"
+        )
+    if values["sidecarImage"] != narwhal_image:
+        raise ValueError(
+            "the engines' attestation sidecars run another Narwhal image than the fleet's; "
+            "prepare the engines with the fleet's Narwhal image"
+        )
+    template = values["podTemplate"]
+    for container in [*template["initContainers"], *template["containers"]]:
+        for item in container.get("env", []):
+            reference = (item.get("valueFrom") or {}).get("secretKeyRef")
+            if reference is None:
+                continue
+            if api_key_secret is None or (reference["name"], reference["key"]) != (
+                api_key_secret["name"],
+                api_key_secret["key"],
+            ):
+                raise ValueError(
+                    f"the engines read their API key from Secret {reference['name']} key "
+                    f"{reference['key']}; set the fleet's engine API key to that Secret and "
+                    "key, so the routers and gate Jobs send it"
+                )
 
 
 def chart_values(runs: Sequence[Path]) -> dict:
