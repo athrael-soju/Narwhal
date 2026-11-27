@@ -8,28 +8,32 @@ Run these commands from the management checkout after discovery. `narwhal deploy
 
 ## Building the deployment package
 
-Each host installs Narwhal from one wheel. Build it from the approved commit with `python -m build --wheel`, or download a release's wheel from PyPI:
+Each host installs Narwhal from one release wheel. Download it from PyPI, or build it with `python -m build --wheel` in a clone at its release tag `v<version>`:
 
 ```bash
 python -m pip download --no-deps --only-binary :all: --dest dist 'narwhal-inference==<version>'
 sha256sum dist/narwhal_inference-<version>-py3-none-any.whl
 ```
 
-Keep the wheel's SHA-256 in the private record.
+`package` refuses a wheel whose version is not `<major>.<minor>.<patch>`, because the router host's tools checkout is the matching release tag. Keep the wheel's SHA-256, and the commit that the tag names, in the private record.
+
+Compile the hash-pinned lock of the wheel's dependencies, as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes, and keep its SHA-256 with the wheel's.
 
 In the management checkout:
 
 1. Load `.env` and `config/deployment.env` from deployment discovery.
 2. Set `NARWHAL_WHEEL` to the path of the wheel, such as `dist/narwhal_inference-<version>-py3-none-any.whl`.
 3. Set `NARWHAL_WHEEL_SHA256` to the wheel's SHA-256 from the private record.
-4. Set management credentials in the workstation environment.
-5. Build the package into a new `--out` directory:
+4. Set `NARWHAL_REQUIREMENTS` to the dependency lock and `NARWHAL_REQUIREMENTS_SHA256` to its SHA-256.
+5. Set `NARWHAL_TOOLS_COMMIT` to the full commit of the tag `v<version>`.
+6. Set management credentials in the workstation environment.
+7. Build the package into a new `--out` directory:
 
     ```bash
     narwhal deploy package --out runs/deployment-env/first-deploy
     ```
 
-`package` refuses a wheel whose SHA-256 differs from `NARWHAL_WHEEL_SHA256`. On success it prints:
+`package` refuses a wheel or lock whose SHA-256 differs from its input. On success it prints:
 
 ```text
 Packaged <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready
@@ -42,6 +46,7 @@ The package holds these files at mode 0600:
 | Path | Content |
 | --- | --- |
 | `narwhal_inference-<version>-py3-none-any.whl` | A copy of the wheel that `NARWHAL_WHEEL` names |
+| `requirements.txt` | A copy of the dependency lock that `NARWHAL_REQUIREMENTS` names |
 | `<host-id>/.env.<role>` | One role environment per role on the host |
 | `<host-id>/engine-launch.engine-<n>.json` | The selected launch record for each engine role |
 | `<host-id>/fleet.local.json` | The fleet configuration from discovery, on the router host |
@@ -51,11 +56,11 @@ The package holds these files at mode 0600:
 
 The manifest records:
 
-- the wheel's file name and SHA-256
+- the wheel's file name and SHA-256, the lock's SHA-256, and `NARWHAL_TOOLS_COMMIT`
 - the role-to-host mapping
 - SHA-256 hashes of the SSH destinations
 - a unique deployment directory under `~/Narwhal-deploy/`
-- SHA-256 hashes for the wheel, the helper snapshots, and the role files
+- SHA-256 hashes for the wheel, the lock, the helper snapshots, and the role files
 
 Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to the wheel's SHA-256, so every launch plan and attestation records the wheel that the host runs.
 
@@ -71,7 +76,7 @@ Engine hosts receive these helper snapshots under `runs/deployment-tools/`. Each
 
 ## Installing engine 1 and the remaining hosts
 
-Each host needs Python 3.11 or later with `venv`, and access to a Python package index for the wheel's dependencies.
+Each host needs Python 3.11 or later with `venv`, coreutils, and access to a Python package index for the locked dependencies.
 
 1. Install the engine 1 host:
 
@@ -86,7 +91,15 @@ Each host needs Python 3.11 or later with `venv`, and access to a Python package
     narwhal deploy install --run runs/deployment-env/first-deploy
     ```
 
-On each host, `install` copies the package into `~/Narwhal-deploy/<id>/package/`, checking each file's SHA-256 after the transfer. It then checks the wheel's SHA-256 again, creates `.venv` in the deployment directory `~/Narwhal-deploy/<id>/`, installs the wheel into it with `pip`, and checks that the installed `narwhal-inference` version matches the wheel. It copies each role file to its working path in the deployment directory.
+On each host, `install` copies the package into `~/Narwhal-deploy/<id>/package/`, checking each file's SHA-256 after the transfer. It then checks the SHA-256 of the wheel and the lock again, creates `.venv` in the deployment directory `~/Narwhal-deploy/<id>/`, and installs them into it:
+
+```bash
+.venv/bin/python -m pip install --no-deps --require-hashes --only-binary :all: -r package/requirements.txt
+.venv/bin/python -m pip install --no-deps --no-index package/narwhal_inference-<version>-py3-none-any.whl
+.venv/bin/python -m pip check
+```
+
+It checks that the installed `narwhal-inference` version matches the wheel, and copies each role file to its working path in the deployment directory.
 
 `install` reuses a finished installation or a matching transferred file. It stops at a host with a transferred file that differs from the manifest, a working file that differs from the package, or an installation of another wheel. On a host with router and engine roles, it installs every role environment together.
 
@@ -96,9 +109,11 @@ If transfer validation fails, compare the packaged hashes with the existing remo
 
 If the installed version differs from the wheel, check that `NARWHAL_WHEEL` named the intended release, then build a new package.
 
+If `pip` cannot find a locked file for the host's platform or Python version, or `pip check` reports a missing dependency, compile the lock again as [Dependency lock](../configuration/04-Deployment-Inputs.md#dependency-lock) describes and build a new package.
+
 If a dependency installation stops early, rerun the same `install --run` until the installed `narwhal-check --help` responds.
 
-If a `.install-lock` remains in the deployment directory, remove it after the installer that created it has exited.
+An installer that was killed can leave `.install-lock` in the deployment directory. `install` then stops with `<path>/.install-lock exists, taken by process <pid> on <host> at <time>`. Check that the process has exited, then remove the directory with `rm -r` and rerun `install`.
 
 ## Opening installed role shells
 
@@ -132,7 +147,15 @@ In the router shell:
     git clone --depth 1 --branch v<version> https://github.com/athrael-soju/Narwhal.git ../tools-<version>
     ```
 
-2. Link the deployment's virtual environment into the clone, so its commands run on the installed wheel:
+2. Check that the clone is at the commit that the package recorded. The router environment holds it as `NARWHAL_TOOLS_COMMIT`:
+
+    ```bash
+    test "$(git -C ../tools-<version> rev-parse HEAD)" = "$NARWHAL_TOOLS_COMMIT"
+    ```
+
+    If the check fails, remove the clone and stop. The tag differs from the commit in the private record.
+
+3. Link the deployment's virtual environment into the clone, so its commands run on the installed wheel:
 
     ```bash
     ln -s "$VIRTUAL_ENV" ../tools-<version>/.venv

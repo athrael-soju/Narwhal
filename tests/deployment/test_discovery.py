@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import inspect
 import io
 import json
@@ -26,7 +27,7 @@ from narwhal.deployment.hosts import load_hosts
 from narwhal.deployment.install import package
 from narwhal.deployment.launch_engine.plan import build, conv_state_layers
 from narwhal.deployment.role_env import select_values
-from tests.deployment.fixtures import synthetic_wheel
+from tests.deployment.fixtures import package_inputs
 
 KNOWN_HOSTS = "host1.invalid ssh-ed25519 synthetic-public-key\n"
 
@@ -421,7 +422,7 @@ class DiscoveryTests(unittest.TestCase):
             self.assertTrue((out / "engine-1-checkpoint.json").is_file())
             self.assertNotIn("engine_contract", fleet)
             self.assertFalse((root / "runs/profiles.json").exists())
-            env.update(synthetic_wheel(root))
+            env.update(package_inputs(root))
             run = root / "packaged"
             package(hosts, env, run)
             for node in (1, 2):
@@ -481,7 +482,7 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(serving["extra_args"], [])
             self.assertEqual(serving["context_length"], 16384)
             hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
-            env.update(synthetic_wheel(root))
+            env.update(package_inputs(root))
             run = root / "packaged"
             package(hosts, env, run)
             limits = json.loads((run / "node-1/profiling-limits.json").read_text())
@@ -772,14 +773,26 @@ class DiscoveryTests(unittest.TestCase):
                     discover(env, root / "discovery")
                 ssh.assert_not_called()
                 self.assertFalse((root / "discovery").exists())
+            # No generated output may replace the known-hosts file.
+            for name in ("NARWHAL_HOSTS", "NARWHAL_FLEET", "NARWHAL_LAUNCH_CONFIG"):
+                with (
+                    self.subTest(name=name),
+                    patch.dict(env, {name: str(trust)}),
+                    patch("narwhal.deployment.discovery.SSH") as ssh,
+                    self.assertRaisesRegex(ValueError, "Select distinct private configuration"),
+                ):
+                    discover(env, root / "discovery")
+                ssh.assert_not_called()
+                self.assertEqual(trust.read_text(), KNOWN_HOSTS)
             with (
                 patch("narwhal.deployment.discovery.SSH", FakeInspectionSSH),
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, root / "discovery")
-            self.assertEqual(trust.read_text(), KNOWN_HOSTS)
             manifest = json.loads((root / "discovery/manifest.json").read_text())
-            self.assertIn(str(trust), manifest["files"])
+            self.assertEqual(
+                manifest["files"][str(trust)], hashlib.sha256(KNOWN_HOSTS.encode()).hexdigest()
+            )
             self.assertNotIn(
                 "NARWHAL_SSH_KNOWN_HOSTS", (root / "config/deployment.env").read_text()
             )

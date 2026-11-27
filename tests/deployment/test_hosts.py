@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.deployment.hosts import (
+    HOST_GRACE_S,
     SSH,
     Host,
     RemoteError,
@@ -23,6 +25,16 @@ from narwhal.deployment.launch_engine import checkpoint
 PASSWORD = "synthetic-management-secret"
 
 
+def askpass_answer(helper):
+    """Return what the askpass helper answers, read without starting a process.
+
+    The tests that patch `subprocess` cannot run the helper; the tests with a fake `ssh` on
+    PATH run it.
+    """
+    command = shlex.split(Path(helper).read_text().splitlines()[1])
+    return Path(command[-1]).read_bytes()
+
+
 class FakeProcess:
     """Stands in for one OpenSSH process, recording how the client started it."""
 
@@ -31,8 +43,8 @@ class FakeProcess:
         self.pid = 0
         self.returncode, self.stdout, self.stderr = result
         test.started.append(self)
-        if args[0] == "sshpass":
-            self.password = os.read(kwargs["pass_fds"][0], 1024)
+        helper = kwargs["env"].get("SSH_ASKPASS")
+        self.password = helper and askpass_answer(helper)
         self.stdin = kwargs["stdin"].read()
 
     def communicate(self, timeout=None):
@@ -67,10 +79,37 @@ class SshTests(unittest.TestCase):
 
     def assert_private_logs(self):
         for path in (self.root / "logs").iterdir():
+            self.assertTrue(path.is_file(), f"{path} remains after the command")
             self.assertNotIn(PASSWORD, path.read_text())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
-    def test_every_command_pins_host_keys_and_passes_the_password_by_descriptor(self):
+    def fake_ssh(self, body):
+        """Put an `ssh` on PATH that checks the askpass password, then runs `body`."""
+        tools = self.root / "bin"
+        tools.mkdir(exist_ok=True)
+        fake = tools / "ssh"
+        fake.write_text(
+            "#!/bin/sh\n"
+            'if test -n "${SSH_ASKPASS:-}"; then\n'
+            f'  test "$("$SSH_ASKPASS" password:)" = {shlex.quote(PASSWORD)} || exit 255\n'
+            "fi\n"
+            "for last; do :; done\n" + body + "\n"
+        )
+        fake.chmod(0o700)
+        return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"})
+
+    def assert_stopped(self, pid_file):
+        child = int(pid_file.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        self.fail("a process of the remote command survived the time limit")
+
+    def test_every_command_pins_host_keys_and_passes_the_password_through_askpass(self):
         payload = self.root / "payload"
         payload.write_bytes(b"synthetic-role-file")
         ssh = SSH(self.env, self.root / "logs")
@@ -80,24 +119,136 @@ class SshTests(unittest.TestCase):
         password, key = self.started
         for process in self.started:
             args = process.args
-            self.assertIn("StrictHostKeyChecking=yes", args)
-            self.assertIn("UpdateHostKeys=no", args)
-            self.assertIn("GlobalKnownHostsFile=/dev/null", args)
-            self.assertIn(f"UserKnownHostsFile={self.known_hosts.resolve()}", args)
+            self.assertEqual(args[0], "ssh")
+            for option in (
+                "StrictHostKeyChecking=yes",
+                "UpdateHostKeys=no",
+                "GlobalKnownHostsFile=/dev/null",
+                f"UserKnownHostsFile={self.known_hosts.resolve()}",
+                "KnownHostsCommand=none",
+                "VerifyHostKeyDNS=no",
+                "ControlMaster=no",
+                "ControlPath=none",
+                "ControlPersist=no",
+                "ProxyJump=none",
+                "ProxyCommand=none",
+                "PermitLocalCommand=no",
+                "RemoteCommand=none",
+                "ForwardAgent=no",
+                "ClearAllForwardings=yes",
+            ):
+                self.assertEqual(args[args.index(option) - 1], "-o", option)
+            self.assertIn("-T", args)
             self.assertNotIn("StrictHostKeyChecking=accept-new", args)
-            self.assertNotIn(PASSWORD, args)
-            self.assertNotIn("NODE_1_PASSWORD", process.kwargs["env"])
+            self.assertNotIn(PASSWORD, " ".join(args))
+            self.assertNotIn(PASSWORD, "".join(process.kwargs["env"].values()))
             self.assertFalse(any(name.startswith("NARWHAL_") for name in process.kwargs["env"]))
             self.assertTrue(process.kwargs["start_new_session"])
             self.assertEqual(process.stdin, payload.read_bytes())
-            self.assertEqual(process.timeout, 1800)
-        self.assertEqual(password.args[0], "sshpass")
+            self.assertEqual(process.timeout, 1800 + HOST_GRACE_S)
+            self.assertEqual(shlex.split(args[-1])[:2], ["sh", "-c"])
+            self.assertIn("\nexec timeout -k 5 1800.000s sh -c cat", shlex.split(args[-1])[2])
         self.assertEqual(password.password, (PASSWORD + "\n").encode())
+        self.assertEqual(password.kwargs["env"]["SSH_ASKPASS_REQUIRE"], "force")
+        self.assertIn("NumberOfPasswordPrompts=1", password.args)
         self.assertNotIn("BatchMode=yes", password.args)
-        self.assertEqual(key.args[0], "ssh")
-        self.assertEqual(key.kwargs["pass_fds"], ())
+        self.assertFalse(Path(password.kwargs["env"]["SSH_ASKPASS"]).exists())
+        self.assertIsNone(key.password)
         self.assertIn("BatchMode=yes", key.args)
         self.assert_private_logs()
+
+    @unittest.skipUnless(shutil.which("ssh"), "needs the OpenSSH client")
+    def test_ssh_config_cannot_weaken_the_host_key_check(self):
+        config = self.root / "ssh_config"
+        config.write_text(
+            "Host *\n"
+            "  KnownHostsCommand /bin/echo synthetic-key\n"
+            "  VerifyHostKeyDNS yes\n"
+            "  ControlMaster auto\n"
+            "  ControlPath /tmp/synthetic-%r@%h:%p\n"
+            "  ControlPersist yes\n"
+            "  ProxyJump unpinned.example.invalid\n"
+            "  StrictHostKeyChecking no\n"
+            "  UserKnownHostsFile /tmp/synthetic-known-hosts\n"
+            "  GlobalKnownHostsFile /tmp/synthetic-global-known-hosts\n"
+            "  UpdateHostKeys yes\n"
+            "  PermitLocalCommand yes\n"
+            "  LocalCommand touch /tmp/synthetic-local-command\n"
+            "  RemoteCommand id\n"
+            "  ForwardAgent yes\n"
+            "  BatchMode no\n"
+        )
+
+        def effective(ssh, host):
+            # `ssh -G` prints the configuration a connection would use, without connecting.
+            args = ssh._arguments(host, ["-T"])
+            output = subprocess.run(
+                ["ssh", "-F", str(config), "-G", *args[1:]],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            return dict(line.split(" ", 1) for line in output.splitlines())
+
+        values = effective(SSH(self.env, self.root / "logs"), self.hosts[1])
+        for name, value in (
+            ("stricthostkeychecking", "true"),
+            ("userknownhostsfile", str(self.known_hosts.resolve())),
+            ("globalknownhostsfile", "/dev/null"),
+            ("verifyhostkeydns", "false"),
+            ("updatehostkeys", "false"),
+            ("controlmaster", "false"),
+            ("controlpersist", "no"),
+            ("permitlocalcommand", "no"),
+            ("forwardagent", "no"),
+            ("batchmode", "yes"),
+        ):
+            self.assertEqual(values[name], value, name)
+        for name in (
+            "knownhostscommand",
+            "controlpath",
+            "proxyjump",
+            "proxycommand",
+            "remotecommand",
+        ):
+            self.assertNotIn(name, values)
+        self.env["NARWHAL_SSH_JUMP"] = "operator@jump.example.invalid"
+        values = effective(SSH(self.env, self.root / "logs"), self.hosts[1])
+        self.assertNotIn("proxyjump", values)
+        hop = shlex.split(values["proxycommand"])
+        self.assertEqual(hop[0], "ssh")
+        self.assertEqual(hop[-3:], ["-W", "[%h]:%p", "operator@jump.example.invalid"])
+        for option in (
+            "StrictHostKeyChecking=yes",
+            f"UserKnownHostsFile={self.known_hosts.resolve()}",
+            "KnownHostsCommand=none",
+            "ControlPath=none",
+            "ProxyJump=none",
+            "ProxyCommand=none",
+            "BatchMode=yes",
+        ):
+            self.assertEqual(hop[hop.index(option) - 1], "-o", option)
+
+    def test_jump_and_known_hosts_inputs_that_openssh_would_misread_are_refused(self):
+        for value in ("-oProxyCommand=x", "jump host", ""):
+            with (
+                self.subTest(value=value),
+                patch.dict(self.env, {"NARWHAL_SSH_JUMP": value}),
+            ):
+                if value:
+                    with self.assertRaisesRegex(ValueError, "NARWHAL_SSH_JUMP must be an SSH"):
+                        SSH(self.env, self.root / "logs")
+                else:
+                    self.assertIn("ProxyCommand=none", SSH(self.env, self.root / "logs").options)
+        for name in ("known hosts", "known%hosts"):
+            store = self.root / name
+            store.write_text(self.known_hosts.read_text())
+            self.env["NARWHAL_SSH_KNOWN_HOSTS"] = str(store)
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(ValueError, "contains whitespace or %; move the file"),
+            ):
+                SSH(self.env, self.root / "logs")
 
     def test_a_missing_known_hosts_file_stops_before_any_login(self):
         for value in ("", str(self.root / "absent")):
@@ -139,35 +290,65 @@ class SshTests(unittest.TestCase):
             ):
                 stage_limit({"NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS": value}, "access")
 
-    def test_a_hung_host_fails_its_stage_and_its_processes_are_killed(self):
-        tools = self.root / "bin"
-        tools.mkdir()
+    def test_the_host_stops_a_command_that_exceeds_its_time_limit(self):
+        # The fake ssh runs the remote command as sshd would, so `timeout` on the "host"
+        # must stop the script's own child process.
         children = self.root / "children"
-        fake = tools / "ssh"
-        fake.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {shlex.quote(str(children))}\nwait\n")
-        fake.chmod(0o700)
         self.env["NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS"] = "0.5"
-        with patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"}):
+        script = f"sleep 30 & echo $! > {shlex.quote(str(children))}; wait"
+        for host in self.hosts:
+            with (
+                self.subTest(host=host.id),
+                self.fake_ssh('exec sh -c "$last"'),
+                patch("narwhal.deployment.hosts.HOST_GRACE_S", 60.0),
+            ):
+                ssh = SSH(self.env, self.root / "logs")
+                started = time.monotonic()
+                with self.assertRaisesRegex(
+                    RemoteTimeout,
+                    f"^{host.id}: management access exceeded the 0.5s access time limit",
+                ) as raised:
+                    ssh.run(host, "access", "management access", script)
+                self.assertLess(time.monotonic() - started, 10)
+                self.assertEqual(raised.exception.stage, "access")
+                self.assertEqual(raised.exception.context["host"], host.id)
+                self.assert_stopped(children)
+                self.assertIn(
+                    "timeout=0.5s; the host stopped the command",
+                    ssh.log(host).read_text(),
+                )
+        self.assert_private_logs()
+
+    def test_a_host_that_stops_answering_is_cut_off_with_the_local_client(self):
+        # The fake ssh never runs the command, as a host that stopped answering would not.
+        children = self.root / "children"
+        self.env["NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS"] = "0.5"
+        body = f"sleep 30 & echo $! > {shlex.quote(str(children))}\nwait"
+        for host in self.hosts:
+            with (
+                self.subTest(host=host.id),
+                self.fake_ssh(body),
+                patch("narwhal.deployment.hosts.HOST_GRACE_S", 0.5),
+            ):
+                ssh = SSH(self.env, self.root / "logs")
+                with self.assertRaisesRegex(RemoteTimeout, f"^{host.id}: management access"):
+                    ssh.run(host, "access", "management access", "hostname")
+                self.assert_stopped(children)
+                self.assertIn("timeout=0.5s; the host did not answer", ssh.log(host).read_text())
+        self.assert_private_logs()
+
+    def test_a_host_without_coreutils_timeout_is_named(self):
+        tools = self.root / "host-bin"
+        tools.mkdir()
+        (tools / "sh").symlink_to(shutil.which("sh"))
+        with self.fake_ssh(f'PATH={shlex.quote(str(tools))} exec {shutil.which("sh")} -c "$last"'):
             ssh = SSH(self.env, self.root / "logs")
-            started = time.monotonic()
             with self.assertRaisesRegex(
-                RemoteTimeout, "^node-2: management access exceeded the 0.5s access time limit"
-            ) as raised:
+                RemoteError,
+                "^node-2: blocked at management access: the host lacks the coreutils timeout "
+                "command; inspect ",
+            ):
                 ssh.run(self.hosts[1], "access", "management access", "hostname")
-        self.assertLess(time.monotonic() - started, 10)
-        self.assertEqual(raised.exception.stage, "access")
-        self.assertEqual(raised.exception.context["host"], "node-2")
-        child = int(children.read_text())
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            self.fail("the remote command's child survived the time limit")
-        self.assertIn("timeout=0.5s", (self.root / "logs/node-2.log").read_text())
 
     def test_a_failed_checkpoint_hash_names_the_reason_the_command_reports(self):
         ssh = SSH(self.env, self.root / "logs")
@@ -219,15 +400,16 @@ class SshTests(unittest.TestCase):
             self.assertNotIn("-t", args)
             self.assertEqual(args[args.index("-L") + 1], "127.0.0.1:18000:127.0.0.1:8000")
             self.assertIn(args[-1], [self.env[h.ssh_env] for h in self.hosts])
-            self.assertNotIn(PASSWORD, args)
-            if args[0] == "sshpass":
-                self.assertEqual(os.read(kwargs["pass_fds"][0], 1024), (PASSWORD + "\n").encode())
+            self.assertNotIn(PASSWORD, " ".join(args))
+            helper = kwargs["env"].get("SSH_ASKPASS")
+            if helper:
+                self.assertEqual(askpass_answer(helper), (PASSWORD + "\n").encode())
             return subprocess.CompletedProcess(args, 0)
 
         with patch("narwhal.deployment.hosts.subprocess.run", side_effect=execute):
             for host in self.hosts:
                 ssh.tunnel(host, ["127.0.0.1:18000:127.0.0.1:8000"])
-        self.assertEqual([args[0] for args in calls], ["sshpass", "ssh"])
+        self.assertEqual([args[0] for args in calls], ["ssh", "ssh"])
         self.assert_private_logs()
         with (
             patch(

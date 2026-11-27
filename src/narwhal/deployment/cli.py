@@ -204,7 +204,7 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
 
 def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
     if args.action in ("shell", "tunnel") and results.json_mode():
-        raise ValueError(f"deploy {args.action} is interactive and writes no command result")
+        raise ValueError(f"deploy {args.action} is interactive; run it without --format json")
     if args.action == "discover":
         return _discover(args, env)
     hosts = _hosts(args, env)

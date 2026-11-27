@@ -91,7 +91,7 @@ class ConfigTests(unittest.TestCase):
     def test_non_loopback_listener_is_refused(self) -> None:
         for host in ("0.0.0.0", "::", "example.invalid"):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as folder:
-                document = {"host": host, "fleet": "f", "hooks": {"restore": {"argv": ["x"]}}}
+                document = {"host": host, "fleet": "/f", "hooks": {"restore": {"argv": ["x"]}}}
                 with self.assertRaisesRegex(ConfigError, "host must be a loopback address"):
                     load_config(self.write(folder, document), {})
         for host in ("127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost"):

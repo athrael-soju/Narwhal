@@ -10,7 +10,9 @@ import shlex
 import signal
 import subprocess
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -21,18 +23,17 @@ ROLE = re.compile(r"router|engine-[1-9][0-9]*")
 STAGE_LIMITS = {"access": 60.0, "discover": 3600.0, "install": 1800.0}
 # Seconds OpenSSH waits for a connection before it gives up, for every command.
 CONNECT_TIMEOUT_S = 30
+# The host sends SIGKILL to a command this many seconds after its time limit's SIGTERM.
+KILL_AFTER_S = 5
+# Seconds past a time limit that the workstation waits for the host to stop the command and
+# answer, before it ends the connection itself.
+HOST_GRACE_S = 30.0
+# Exit statuses of coreutils `timeout` when it stopped the command with SIGTERM or SIGKILL.
+TIMEOUT_STATUSES = (124, 137)
+# The remote scripts start a line with this to name the cause of their failure.
+HOST_CAUSE = "narwhal-host: "
 CLIENT_KEYS = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "LANG",
-        "TERM",
-        "SSH_AUTH_SOCK",
-        "SSH_AGENT_PID",
-        "DISPLAY",
-        "XAUTHORITY",
-        "XDG_RUNTIME_DIR",
-    }
+    {"PATH", "HOME", "LANG", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "XDG_RUNTIME_DIR"}
 )
 # OpenSSH reports a host key that the known-hosts file lacks or contradicts with these lines.
 HOST_KEY_FAILURES = ("Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
@@ -44,6 +45,13 @@ class Host:
     ssh_env: str
     password_env: str | None
     roles: tuple[str, ...]
+
+
+def destination(value: str, name: str) -> str:
+    """Return an SSH destination after checking that OpenSSH cannot read it as options."""
+    if not value or value.startswith("-") or any(c.isspace() for c in value):
+        raise ValueError(f"{name} must be an SSH alias or user@host")
+    return value
 
 
 def load_hosts(path: Path, env: Mapping[str, str]) -> list[Host]:
@@ -63,10 +71,8 @@ def load_hosts(path: Path, env: Mapping[str, str]) -> list[Host]:
                 raise ValueError(f"{host.id}: use environment variable names for access")
             if name is not None and not env.get(name):
                 raise ValueError(f"{host.id}: {name} is unset or empty")
-        destination = env[host.ssh_env]
-        if destination.startswith("-") or any(c.isspace() for c in destination):
-            raise ValueError(f"{host.id}: SSH destination must be an alias or user@host")
-        if destination in destinations:
+        target = destination(env[host.ssh_env], f"{host.id}: {host.ssh_env}")
+        if target in destinations:
             raise ValueError(f"{host.id}: combine roles that use the same management destination")
         for role in host.roles:
             if not ROLE.fullmatch(role) or role in roles:
@@ -74,7 +80,7 @@ def load_hosts(path: Path, env: Mapping[str, str]) -> list[Host]:
             roles.add(role)
         hosts.append(host)
         ids.add(host.id)
-        destinations.add(destination)
+        destinations.add(target)
     if "router" not in roles or not any(role.startswith("engine-") for role in roles):
         raise ValueError("Inventory needs a router and at least one engine role")
     return hosts
@@ -102,6 +108,43 @@ def stage_limit(env: Mapping[str, str], stage: str) -> float:
                 raise ValueError(f"{name} must be finite and positive")
             return value
     return default
+
+
+def trust_options(store: Path) -> list[str]:
+    """Return the OpenSSH options that hold a connection to the host keys in `store`.
+
+    Options on the command line take precedence over ssh_config, so a user or system
+    configuration cannot consult other keys, reuse a connection whose host key nobody checked,
+    route through a host whose key `store` lacks, or run local and remote commands of its own.
+    """
+    values = {
+        "StrictHostKeyChecking": "yes",
+        "UpdateHostKeys": "no",
+        "GlobalKnownHostsFile": "/dev/null",
+        "UserKnownHostsFile": str(store),
+        "KnownHostsCommand": "none",
+        "VerifyHostKeyDNS": "no",
+        "ControlMaster": "no",
+        "ControlPath": "none",
+        "ControlPersist": "no",
+        "ProxyJump": "none",
+        "ProxyCommand": "none",
+        "PermitLocalCommand": "no",
+        "RemoteCommand": "none",
+        "ForwardAgent": "no",
+        "ForwardX11": "no",
+        "ConnectTimeout": str(CONNECT_TIMEOUT_S),
+    }
+    return [argument for name, value in values.items() for argument in ("-o", f"{name}={value}")]
+
+
+def bounded(script: str, limit: float) -> str:
+    """Return a host command that runs `script` under coreutils `timeout` at `limit`."""
+    return (
+        "command -v timeout > /dev/null 2>&1 || "
+        f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
+        f"exec timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)}"
+    )
 
 
 class RemoteError(RuntimeError):
@@ -142,22 +185,31 @@ class SSH:
         store = env.get("NARWHAL_SSH_KNOWN_HOSTS", "")
         if not store or not Path(store).is_file():
             raise ValueError("NARWHAL_SSH_KNOWN_HOSTS must name the supplied known-hosts file")
+        trusted = Path(store).resolve()
+        # OpenSSH splits these option values at whitespace and expands % tokens in them.
+        if any(c.isspace() or c == "%" for c in str(trusted)):
+            raise ValueError(
+                f"NARWHAL_SSH_KNOWN_HOSTS path {trusted} contains whitespace or %; "
+                "move the file to a path without them"
+            )
         self.logs = logs
         self.logs.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # OpenSSH checks the server's key against this file alone before authenticating, and
-        # never writes to it.
-        self.options = [
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            "UpdateHostKeys=no",
-            "-o",
-            "GlobalKnownHostsFile=/dev/null",
-            "-o",
-            f"UserKnownHostsFile={Path(store).resolve()}",
-            "-o",
-            f"ConnectTimeout={CONNECT_TIMEOUT_S}",
-        ]
+        self.options = trust_options(trusted)
+        if jump := env.get("NARWHAL_SSH_JUMP"):
+            # The jump connection holds to the same known-hosts file and authenticates with a
+            # key, because the jump host has no password input.
+            hop = [
+                "ssh",
+                *self.options,
+                "-o",
+                "BatchMode=yes",
+                "-W",
+                "[%h]:%p",
+                destination(jump, "NARWHAL_SSH_JUMP"),
+            ]
+            self.options[self.options.index("ProxyCommand=none")] = "ProxyCommand=" + shlex.join(
+                hop
+            )
 
     def log(self, host: Host) -> Path:
         return self.logs / f"{host.id}.log"
@@ -165,22 +217,36 @@ class SSH:
     def _arguments(self, host: Host, options: list[str], *, prompts: bool = False) -> list[str]:
         args = ["ssh", *self.options, *options]
         if host.password_env:
-            args += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"]
+            args += [
+                "-o",
+                "PreferredAuthentications=password",
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+            ]
         elif not prompts:
             # Key authentication never prompts; a missing key or agent fails the command.
             args += ["-o", "BatchMode=yes"]
         return [*args, self.env[host.ssh_env]]
 
-    def _authenticated(
-        self, host: Host, args: list[str], password: IO[bytes]
-    ) -> tuple[list[str], tuple[int, ...]]:
-        """Return the command and descriptors, passing a password through a private file."""
+    @contextmanager
+    def _client(self, host: Host) -> Iterator[dict[str, str]]:
+        """Yield the client environment, with a private askpass helper for a password host.
+
+        OpenSSH asks the helper for the password, so the password never appears in an argument
+        list or an environment, and `ssh` stays in the process group that a time limit kills.
+        """
         if not host.password_env:
-            return args, ()
-        password.write(self.env[host.password_env].encode() + b"\n")
-        password.flush()
-        password.seek(0)
-        return ["sshpass", "-d", str(password.fileno()), *args], (password.fileno(),)
+            yield dict(self.client_env)
+            return
+        with tempfile.TemporaryDirectory(dir=self.logs, prefix=".askpass-") as folder:
+            secret = Path(folder) / "password"
+            write_private(secret, self.env[host.password_env].encode() + b"\n")
+            helper = Path(folder) / "askpass"
+            write_private(helper, f"#!/bin/sh\nexec cat {shlex.quote(str(secret))}\n".encode())
+            helper.chmod(0o700)
+            yield {**self.client_env, "SSH_ASKPASS": str(helper), "SSH_ASKPASS_REQUIRE": "force"}
 
     def _record(self, host: Host, heading: str) -> IO[str]:
         fd = os.open(self.log(host), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -201,42 +267,48 @@ class SSH:
     ) -> str:
         """Run `script` on `host` within its stage's time limit and return its output.
 
-        The host's log retains the script, exit status and output. With `reason`, a failure
-        quotes the last error output line that starts with it.
+        The host stops the script at the limit with coreutils `timeout`, and the workstation
+        kills `ssh` when the host has not answered `HOST_GRACE_S` later. The host's log retains
+        the script, exit status and output. A failure quotes the last error line that starts
+        with `HOST_CAUSE` or with `reason`.
         """
         limit = stage_limit(self.env, stage)
         log_path = self.log(host)
-        with (
-            self._record(host, f"{stage}: {operation}") as log,
-            tempfile.TemporaryFile() as password,
-        ):
+        command = "sh -c " + shlex.quote(bounded(script, limit))
+        with self._record(host, f"{stage}: {operation}") as log, self._client(host) as client:
             log.write(script + "\n")
             log.flush()
-            args, pass_fds = self._authenticated(
-                host, [*self._arguments(host, []), "sh -c " + shlex.quote(script)], password
-            )
+            args = [*self._arguments(host, ["-T", "-o", "ClearAllForwardings=yes"]), command]
             with payload.open("rb") if payload else open(os.devnull, "rb") as stream:
+                started = time.monotonic()
                 process = subprocess.Popen(
                     args,
                     stdin=stream,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    pass_fds=pass_fds,
-                    env=self.client_env,
+                    env=client,
                     start_new_session=True,
                 )
-                expired = False
+                unanswered = False
                 try:
-                    stdout, stderr = process.communicate(timeout=limit)
+                    stdout, stderr = process.communicate(timeout=limit + HOST_GRACE_S)
                 except subprocess.TimeoutExpired:
-                    expired = True
+                    unanswered = True
                     os.killpg(process.pid, signal.SIGKILL)
                     stdout, stderr = process.communicate()
                 except BaseException:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.communicate()
                     raise
-            log.write(f"timeout={limit:g}s\n" if expired else f"exit={process.returncode}\n")
+            expired = unanswered or (
+                process.returncode in TIMEOUT_STATUSES and time.monotonic() - started >= limit
+            )
+            if unanswered:
+                log.write(f"timeout={limit:g}s; the host did not answer\n")
+            elif expired:
+                log.write(f"timeout={limit:g}s; the host stopped the command\n")
+            else:
+                log.write(f"exit={process.returncode}\n")
             for output in (stdout, stderr):
                 if output:
                     log.write(output.decode(errors="replace"))
@@ -244,7 +316,12 @@ class SSH:
             raise RemoteTimeout(host.id, stage, operation, log_path, limit)
         if process.returncode:
             lines = stderr.decode(errors="replace").splitlines()
-            causes = [line[len(reason) :] for line in lines if reason and line.startswith(reason)]
+            causes = [
+                line[len(prefix) :]
+                for line in lines
+                for prefix in (HOST_CAUSE, reason)
+                if prefix and line.startswith(prefix)
+            ]
             if any(failure in line for line in lines for failure in HOST_KEY_FAILURES):
                 causes.append(
                     "the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it"
@@ -255,17 +332,11 @@ class SSH:
 
     def shell(self, host: Host, script: str) -> None:
         """Run an interactive `script` on `host` in this terminal, with no time limit."""
-        with (
-            self._record(host, "role shell") as log,
-            tempfile.TemporaryFile() as password,
-        ):
+        with self._record(host, "role shell") as log, self._client(host) as client:
             log.write(script + "\n")
             log.flush()
-            args = self._arguments(host, ["-t"], prompts=True)
-            args, pass_fds = self._authenticated(
-                host, [*args, "sh -c " + shlex.quote(script)], password
-            )
-            result = subprocess.run(args, pass_fds=pass_fds, env=self.client_env)
+            args = [*self._arguments(host, ["-t"], prompts=True), "sh -c " + shlex.quote(script)]
+            result = subprocess.run(args, env=client)
             log.write(f"exit={result.returncode}\n")
         if result.returncode:
             raise RemoteError(host.id, "shell", "role shell", self.log(host))
@@ -274,6 +345,7 @@ class SSH:
         """Hold local port forwards to `host` until SSH exits or the operator interrupts."""
         options = [
             "-N",
+            "-T",
             "-o",
             "ExitOnForwardFailure=yes",
             "-o",
@@ -283,15 +355,11 @@ class SSH:
         ]
         for forward in forwards:
             options += ["-L", forward]
-        with (
-            self._record(host, "service tunnel") as log,
-            tempfile.TemporaryFile() as password,
-        ):
+        with self._record(host, "service tunnel") as log, self._client(host) as client:
             log.write(" ".join(forwards) + "\n")
             log.flush()
-            args, pass_fds = self._authenticated(host, self._arguments(host, options), password)
             result = subprocess.run(
-                args, stdin=subprocess.DEVNULL, pass_fds=pass_fds, env=self.client_env
+                self._arguments(host, options), stdin=subprocess.DEVNULL, env=client
             )
             log.write(f"exit={result.returncode}\n")
         if result.returncode:

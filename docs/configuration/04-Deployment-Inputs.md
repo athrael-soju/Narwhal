@@ -14,8 +14,13 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 | --- | --- | --- |
 | `NARWHAL_SSH_KNOWN_HOSTS` | Every `narwhal deploy` subcommand that reaches a host | Known-hosts file with the verified key of every SSH destination, as in [Known-hosts handling](#known-hosts-handling) |
 | `NARWHAL_MODEL_TREE_SHA256` | `narwhal deploy discover`, and `narwhal-engine prepare` through each engine's role environment | The checkpoint's `model_tree_sha256`, computed as in [Staging and identifying the checkpoint](../deploy/01-Discover.md#staging-and-identifying-the-checkpoint). `NARWHAL_NODE_<n>_MODEL_TREE_SHA256` sets it for one engine |
-| `NARWHAL_WHEEL` | `narwhal deploy package` | Path of the `narwhal_inference-<version>-py3-none-any.whl` file that every host installs |
+| `NARWHAL_WHEEL` | `narwhal deploy package` | Path of the release wheel, `narwhal_inference-<major>.<minor>.<patch>-py3-none-any.whl`, that every host installs |
 | `NARWHAL_WHEEL_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that wheel, 64 lowercase hex digits |
+| `NARWHAL_REQUIREMENTS` | `narwhal deploy package`, then `pip` on each host | Hash-checking lock of the wheel's dependencies, as in [Dependency lock](#dependency-lock) |
+| `NARWHAL_REQUIREMENTS_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that lock |
+| `NARWHAL_TOOLS_COMMIT` | `narwhal deploy package`, then the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host) | Full 40-hex commit of the wheel's release tag `v<version>`, from the private record |
+
+`NARWHAL_SSH_JUMP` is optional. It names the one jump host, an alias or `user@host`, through which every connection reaches its destination, as in [Jump host](#jump-host).
 
 Discovery writes one private set of files per fleet at mode 0600:
 
@@ -49,7 +54,24 @@ narwhal deploy package --out <directory>
 | `narwhal deploy package` | A copy of the wheel checked against `NARWHAL_WHEEL_SHA256`, and role files under `<directory>/<host-id>/`      |
 | `narwhal deploy install` | The package, and a virtual environment with the wheel installed, in each selected host's deployment directory |
 
-Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`.
+Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to `NARWHAL_WHEEL_SHA256`, and launch plans record it as `revision`. The router environment also carries `NARWHAL_TOOLS_COMMIT`.
+
+### Dependency lock
+
+Every host installs the same dependency files: `pip` runs in hash-checking mode with `--require-hashes --only-binary :all:`, from the lock that `NARWHAL_REQUIREMENTS` names, and installs the wheel itself with `--no-deps --no-index`. `pip check` then confirms that the lock satisfies every dependency of the wheel. The hosts still download the locked files from their Python package index.
+
+Compile the lock from the wheel with `uv`, for every platform and Python version that the wheel supports, and record its SHA-256 with the wheel's:
+
+```bash
+echo "narwhal-inference @ file://$(realpath "$NARWHAL_WHEEL")" > requirements.in
+uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes \
+  --no-emit-package narwhal-inference -o requirements.lock
+sha256sum requirements.lock
+```
+
+Keep `requirements.lock` with the wheel, and set `NARWHAL_REQUIREMENTS` to its path. Compile it again only to take new dependency releases, and package a new run when you do.
+
+`package` refuses a lock with a line that does not pin one exact version with its `--hash=sha256` values, a lock with pip options such as `--index-url`, and a lock that names `narwhal-inference`.
 
 ### Generated host-side files
 
@@ -154,19 +176,22 @@ narwhal deploy access
 
 ### Known-hosts handling
 
-`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file, such as `config/ssh.known_hosts`, which the publication check keeps out of the repository. Discovery and every later command require it. They check each host's key against this file alone, with OpenSSH `StrictHostKeyChecking=yes`, before they log in, and never write to it. A host whose key is missing from the file or differs from it stops the command at that host. The discovery manifest records the file's SHA-256.
+`NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file, such as `config/ssh.known_hosts`, which the publication check keeps out of the repository. Its path may not contain whitespace or `%`. Discovery and every later command require it. They check each host's key against this file alone, with OpenSSH `StrictHostKeyChecking=yes`, before they log in, and never write to it. A host whose key is missing from the file or differs from it stops the command at that host. The discovery manifest records the file's SHA-256.
+
+Options on the command line take precedence over `~/.ssh/config` and `/etc/ssh/ssh_config`, so every connection also sets `KnownHostsCommand=none`, `VerifyHostKeyDNS=no`, `ControlMaster=no` and `ControlPath=none`, which stop it from consulting other keys or reusing a connection whose host key it did not check. It sets `ProxyJump=none` and `ProxyCommand=none`, so a jump host in your SSH config is ignored, and `PermitLocalCommand=no`, `RemoteCommand=none`, `ForwardAgent=no` and `ForwardX11=no`. Your SSH config still supplies each alias's `HostName`, `User`, `Port` and `IdentityFile`.
 
 Write the file before discovery, with one entry for each SSH destination. Take each key from a source you trust, such as the provider console, and compare fingerprints with `ssh-keygen -lf <file>`. For a destination alias, write the entry for its `HostName`, in `[host]:port` form when the port is not 22.
 
-The workstation needs:
-
-- OpenSSH
-- `sshpass`, for password authentication
+The workstation needs OpenSSH 8.5 or later. For password authentication, OpenSSH reads the password from a private askpass helper that `narwhal deploy` writes for the connection and removes after it.
 
 For key or agent authentication:
 
-1. Put the address, username, identity, and optional `Port` or `ProxyJump` configuration under an alias in the workstation's private SSH config.
+1. Put the address, username, identity, and optional `Port` configuration under an alias in the workstation's private SSH config.
 2. Point `ssh_env` at that alias.
+
+### Jump host
+
+Set `NARWHAL_SSH_JUMP` to reach every host through one jump host. Each connection then runs `ssh -W` to the jump host with the same options, so the jump host's key must also be in `NARWHAL_SSH_KNOWN_HOSTS`. The jump connection authenticates with a key or the SSH agent, never a password.
 
 To replace the key of a changed server:
 
@@ -190,7 +215,7 @@ Each deployment directory at `~/Narwhal-deploy/<run-id>/` holds:
 - `package/`, the transferred wheel and role files
 - `.venv`, with the wheel installed
 - the role files at their working paths under `runs/deployment/`, `runs/deployment-tools/` and `config/`
-- the installation lock `.install-lock`, while `install` runs
+- the installation lock `.install-lock`, while `install` runs, with an `owner` file that names the installer's process, host and start time
 - the `installed` completion marker, which holds the wheel's SHA-256
 
 `<run-id>` is a random 32-hex ID that `package` records in the manifest.

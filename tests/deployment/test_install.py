@@ -15,24 +15,29 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.deployment.cli import forward_ports
-from narwhal.deployment.hosts import Host, RemoteError
+from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError
 from narwhal.deployment.install import install, load_run, package, profiling_limits
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import ENGINE_FIELDS, helpers
 from narwhal.dev.cli import main
-from tests.deployment.fixtures import cuda_engine, launch_document, runtime, synthetic_wheel
+from tests.deployment.fixtures import cuda_engine, launch_document, package_inputs, runtime
 from tools.maintenance.check_publication import private_path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class LocalSSH:
-    """Execute receiver scripts in temporary host directories with a synthetic installer."""
+    """Execute receiver scripts in temporary host directories with a synthetic installer.
 
-    def __init__(self, root, installed_version="0.13.0"):
+    The synthetic `pip` records each installation in the host's `installs` file. `before`
+    runs before each operation, as a host that changes between operations would.
+    """
+
+    def __init__(self, root, installed_version="0.13.0", before=None):
         self.root = root
         self.uploads = []
         self.calls = []
+        self.before = before
         self.bin = root / "bin"
         self.bin.mkdir(exist_ok=True)
         launcher = self.bin / "python3"
@@ -42,13 +47,16 @@ test "$1 $2" = '-m venv'
 mkdir -p "$3/bin"
 cat > "$3/bin/python" <<'SCRIPT'
 #!/bin/sh
-if test "$1" = -c; then
-  printf '%s\\n' {installed_version}
-  exit 0
-fi
-test "$1 $2 $3" = '-m pip install'
-test -f "$4"
-printf 'install %s\\n' "$4" >> "$TEST_COUNTER"
+set -eu
+case "$*" in
+  -c*) printf '%s\\n' {installed_version} ;;
+  '-m pip install --no-deps --require-hashes --only-binary :all: -r '*)
+    test -f "$9"; printf 'lock %s\\n' "$9" >> "$TEST_COUNTER" ;;
+  '-m pip install --no-deps --no-index '*)
+    test -f "$6"; printf 'install %s\\n' "$6" >> "$TEST_COUNTER" ;;
+  '-m pip check') printf 'check\\n' >> "$TEST_COUNTER" ;;
+  *) exit 2 ;;
+esac
 SCRIPT
 cat > "$3/bin/narwhal-check" <<'SCRIPT'
 #!/bin/sh
@@ -61,6 +69,8 @@ chmod +x "$3/bin/python" "$3/bin/narwhal-check"
     def run(self, host, stage, operation, script, payload=None, reason=None):
         home = self.root / host.id
         home.mkdir(exist_ok=True)
+        if self.before:
+            self.before(home, operation)
         self.calls.append((host.id, stage, operation))
         if payload:
             self.uploads.append((host.id, payload.name))
@@ -74,7 +84,13 @@ chmod +x "$3/bin/python" "$3/bin/narwhal-check"
             capture_output=True,
         )
         if result.returncode:
-            raise RemoteError(host.id, stage, operation, home / "log", f": {result.stderr}")
+            causes = [
+                line.removeprefix(HOST_CAUSE)
+                for line in result.stderr.decode().splitlines()
+                if line.startswith(HOST_CAUSE)
+            ]
+            cause = f": {causes[-1]}" if causes else ""
+            raise RemoteError(host.id, stage, operation, home / "log", cause)
         return result.stdout.decode().strip()
 
 
@@ -91,7 +107,7 @@ class PackageTests(unittest.TestCase):
             "NODE_1_SSH": "operator@one.example.invalid",
             "NODE_1_PASSWORD": "synthetic-management-secret",
             "NODE_2_SSH": "operator@two.example.invalid",
-            **synthetic_wheel(self.root),
+            **package_inputs(self.root),
             **{f"NARWHAL_{field}": "synthetic-value" for field in ENGINE_FIELDS},
         }
 
@@ -183,11 +199,17 @@ class PackageTests(unittest.TestCase):
     def test_package_requires_the_named_wheel_and_its_sha256(self):
         wheel = Path(self.env["NARWHAL_WHEEL"])
         for change, message in (
-            ({"NARWHAL_WHEEL": ""}, "Set NARWHAL_WHEEL to a narwhal_inference"),
+            ({"NARWHAL_WHEEL": ""}, "Set NARWHAL_WHEEL to a release wheel"),
             (
                 {"NARWHAL_WHEEL": str(self.root / "other-0.1-py3-none-any.whl")},
-                "a narwhal_inference",
+                "Set NARWHAL_WHEEL to a release wheel",
             ),
+            (
+                {"NARWHAL_WHEEL": str(wheel.with_name(wheel.name.replace("13.0", "13.0.dev1")))},
+                "Set NARWHAL_WHEEL to a release wheel",
+            ),
+            ({"NARWHAL_TOOLS_COMMIT": ""}, "^Set NARWHAL_TOOLS_COMMIT to the commit of"),
+            ({"NARWHAL_TOOLS_COMMIT": "v0.13.0"}, "full 40-hex commit SHA"),
             ({"NARWHAL_WHEEL_SHA256": "A" * 64}, "Set NARWHAL_WHEEL_SHA256"),
             ({"NARWHAL_WHEEL_SHA256": "0" * 64}, "NARWHAL_WHEEL differs from"),
             (
@@ -196,11 +218,50 @@ class PackageTests(unittest.TestCase):
             ),
         ):
             with self.subTest(change=change):
-                self.env.update(synthetic_wheel(self.root))
+                self.env.update(package_inputs(self.root))
                 self.env.update(change)
                 with self.assertRaisesRegex(ValueError, message):
                     self.package_run()
                 self.assertFalse((self.root / "packaged").exists())
+
+    def test_package_names_a_missing_fleet_input(self):
+        with self.assertRaisesRegex(
+            ValueError, "^Set NARWHAL_FLEET to the fleet file that discovery wrote$"
+        ):
+            package(self.hosts, self.env, self.root / "packaged")
+        self.assertFalse((self.root / "packaged").exists())
+
+    def test_package_requires_a_hash_pinned_lock_of_the_dependencies(self):
+        lock = Path(self.env["NARWHAL_REQUIREMENTS"])
+        for text, message in (
+            (None, "^Set NARWHAL_REQUIREMENTS to the hash-pinned lock"),
+            ("fastapi>=0.136 --hash=sha256:" + "a" * 64 + "\n", "line 1: pin one exact version"),
+            ("fastapi==0.136.3\n", "line 1: pin one exact version"),
+            ("--index-url https://example.invalid\n", "line 1: pin one exact version"),
+            ("-e .\n", "line 1: pin one exact version"),
+            ("# no requirements\n", "must lock the wheel's dependencies, not the wheel"),
+            (
+                "narwhal-inference==0.13.0 --hash=sha256:" + "a" * 64 + "\n",
+                "must lock the wheel's dependencies, not the wheel",
+            ),
+        ):
+            with self.subTest(text=text):
+                inputs = package_inputs(self.root)
+                if text is None:
+                    inputs["NARWHAL_REQUIREMENTS"] = ""
+                else:
+                    lock.write_text(text)
+                    inputs["NARWHAL_REQUIREMENTS_SHA256"] = hashlib.sha256(
+                        text.encode()
+                    ).hexdigest()
+                self.env.update(inputs)
+                with self.assertRaisesRegex(ValueError, message):
+                    self.package_run()
+                self.assertFalse((self.root / "packaged").exists())
+        self.env.update(package_inputs(self.root))
+        self.env["NARWHAL_REQUIREMENTS_SHA256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "NARWHAL_REQUIREMENTS differs from"):
+            self.package_run()
 
     def test_engine_hosts_receive_the_helpers_of_the_packaged_wheel(self):
         wheel = Path(self.env["NARWHAL_WHEEL"])
@@ -228,6 +289,13 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((run / wheel.name).stat().st_mode & 0o777, 0o600)
         self.assertNotIn("source.bundle", manifest["hashes"])
         self.assertNotIn("revision", manifest)
+        lock = Path(self.env["NARWHAL_REQUIREMENTS"]).read_bytes()
+        self.assertEqual((run / "requirements.txt").read_bytes(), lock)
+        self.assertEqual(manifest["requirements_sha256"], self.env["NARWHAL_REQUIREMENTS_SHA256"])
+        self.assertIn(
+            f"export NARWHAL_TOOLS_COMMIT={'d' * 40}\n", (run / "node-1/.env.router").read_text()
+        )
+        self.assertNotIn("NARWHAL_TOOLS_COMMIT", (run / "node-2/.env.engine-2").read_text())
         for path in run.glob("node-*/.env.*"):
             self.assertIn(
                 f"export NARWHAL_DEPLOYMENT_REVISION={self.env['NARWHAL_WHEEL_SHA256']}\n",
@@ -259,6 +327,7 @@ class PackageTests(unittest.TestCase):
         wheel = Path(self.env["NARWHAL_WHEEL"]).name
         for host in self.hosts:
             self.assertEqual(transport.uploads.count((host.id, wheel)), 1)
+            self.assertEqual(transport.uploads.count((host.id, "requirements.txt")), 1)
             self.assertEqual(
                 [op for owner, _, op in transport.calls[first:] if owner == host.id],
                 ["verify files", "wheel installation"],
@@ -268,7 +337,7 @@ class PackageTests(unittest.TestCase):
             )
             self.assertEqual(
                 (self.root / host.id / "installs").read_text().splitlines(),
-                [f"install package/{wheel}"],
+                ["lock package/requirements.txt", f"install package/{wheel}", "check"],
             )
         deployment = self.root / "node-1" / manifest["remote_dir"]
         self.assertEqual(
@@ -304,14 +373,60 @@ class PackageTests(unittest.TestCase):
 
     def test_install_refuses_a_wheel_that_differs_on_the_host(self):
         run, manifest = self.package_run()
-        with self.assertRaisesRegex(RemoteError, "node-1: blocked at wheel installation"):
-            install(self.hosts[:1], manifest, run, LocalSSH(self.root, installed_version="0.12.0"))
         deployment = self.root / "node-1" / manifest["remote_dir"]
+        with self.assertRaisesRegex(
+            RemoteError,
+            "^node-1: blocked at wheel installation: the installed narwhal-inference version "
+            "differs from the wheel;",
+        ):
+            install(self.hosts[:1], manifest, run, LocalSSH(self.root, installed_version="0.12.0"))
         self.assertFalse((deployment / "installed").exists())
+        self.assertFalse((deployment / ".install-lock").exists())
         (deployment / "package" / manifest["wheel"]).write_bytes(b"replaced on the host")
-        with self.assertRaisesRegex(RemoteError, "node-1: blocked at verify files"):
+        with self.assertRaisesRegex(RemoteError, "^node-1: blocked at verify files"):
             install(self.hosts[:1], manifest, run, LocalSSH(self.root))
         self.assertFalse((deployment / "installed").exists())
+
+    def test_install_checks_the_wheel_and_lock_again_before_pip_runs(self):
+        run, manifest = self.package_run()
+        for name in (manifest["wheel"], "requirements.txt"):
+            with self.subTest(name=name):
+                home = self.root / f"host-{len(name)}"
+                home.mkdir()
+
+                def replace(host_home, operation, name=name):
+                    # The file changes after the transfer checks and before installation.
+                    if operation == "wheel installation":
+                        path = host_home / manifest["remote_dir"] / "package" / name
+                        path.write_bytes(b"replaced after the transfer")
+
+                with self.assertRaisesRegex(
+                    RemoteError,
+                    f"^node-1: blocked at wheel installation: package/{name} differs from the "
+                    "packaged SHA-256;",
+                ):
+                    install(self.hosts[:1], manifest, run, LocalSSH(home, before=replace))
+                self.assertFalse((home / "node-1/installs").exists())
+                self.assertFalse((home / "node-1" / manifest["remote_dir"] / ".venv").exists())
+
+    def test_a_leftover_install_lock_names_its_owner(self):
+        run, manifest = self.package_run()
+        lock = self.root / "node-1" / manifest["remote_dir"] / ".install-lock"
+        lock.mkdir(parents=True)
+        (lock / "owner").write_text("process 4242 on host-a at 2026-01-01T00:00:00Z\n")
+        with self.assertRaisesRegex(
+            RemoteError,
+            r"^node-1: blocked at wheel installation: \S+/\.install-lock exists, taken by "
+            "process 4242 on host-a at 2026-01-01T00:00:00Z; remove it once that installer "
+            "has exited;",
+        ):
+            install(self.hosts[:1], manifest, run, LocalSSH(self.root))
+        (lock / "owner").unlink()
+        with self.assertRaisesRegex(RemoteError, "taken by an installer that recorded no owner"):
+            install(self.hosts[:1], manifest, run, LocalSSH(self.root))
+        lock.rmdir()
+        install(self.hosts[:1], manifest, run, LocalSSH(self.root))
+        self.assertFalse(lock.exists())
 
     def test_engine_shell_runs_the_packaged_helper_from_the_deployment_directory(self):
         run, manifest = self.package_run()

@@ -20,8 +20,8 @@ narwhal deploy tunnel --forward 18000:8000
 | --- | --- | --- |
 | `discover` | Logs in to every host that the `NARWHAL_NODE_<n>_SSH` and `NARWHAL_ROUTER_SSH` destinations name, inspects the GPUs, the engine image and the checkpoint on each engine host, checks each checkpoint against `NARWHAL_MODEL_TREE_SHA256`, and writes the host inventory, launch records, fleet and `deployment.env`. | [Running discovery and access checks](../deploy/01-Discover.md#running-discovery-and-access-checks) |
 | `access` | Checks the inventory, then logs in once to each host and records its `hostname` output. Prints each host ID with its roles. | [Running discovery and access checks](../deploy/01-Discover.md#running-discovery-and-access-checks) |
-| `package` | Checks the wheel that `NARWHAL_WHEEL` names against `NARWHAL_WHEEL_SHA256`, then writes it, the helper snapshots from it and each host's role files into a new directory with a private manifest. | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
-| `install` | Copies a package to each selected host, checking the SHA-256 of every file, and installs the wheel into a virtual environment in the host's deployment directory. | [Installing engine 1 and the remaining hosts](../deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
+| `package` | Checks the release wheel that `NARWHAL_WHEEL` names and the dependency lock that `NARWHAL_REQUIREMENTS` names against their SHA-256 values, then writes them, the helper snapshots from it and each host's role files into a new directory with a private manifest. | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
+| `install` | Copies a package to each selected host, checking the SHA-256 of every file, and installs the locked dependencies and the wheel into a virtual environment in the host's deployment directory. | [Installing engine 1 and the remaining hosts](../deploy/02-Install.md#installing-engine-1-and-the-remaining-hosts) |
 | `shell` | Opens an interactive login shell on a role's host. With `--run`, the shell starts in the deployment directory with the role environment loaded and `.venv` active. | [Opening installed role shells](../deploy/02-Install.md#opening-installed-role-shells) |
 | `tunnel` | Forwards workstation loopback ports to a role's host until you press Ctrl+C. | [Tunnelling router, Prometheus, and Grafana to the workstation](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) |
 
@@ -29,9 +29,9 @@ narwhal deploy tunnel --forward 18000:8000
 
 ## Host keys and time limits
 
-Every connection checks the host's key against `NARWHAL_SSH_KNOWN_HOSTS` alone, with OpenSSH `StrictHostKeyChecking=yes`, before it authenticates. `narwhal deploy` never adds or replaces a key in that file. A host whose key is missing from the file or differs from it fails with `<host-id>: blocked at <operation>: the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it`.
+Every connection checks the host's key against `NARWHAL_SSH_KNOWN_HOSTS` alone, with OpenSSH `StrictHostKeyChecking=yes`, before it authenticates, whatever your SSH config sets. `narwhal deploy` never adds or replaces a key in that file. A host whose key is missing from the file or differs from it fails with `<host-id>: blocked at <operation>: the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it`. [Known-hosts handling](../configuration/04-Deployment-Inputs.md#known-hosts-handling) lists the options that override your SSH config, and [Jump host](../configuration/04-Deployment-Inputs.md#jump-host) how to reach the hosts through one.
 
-Key authentication runs with OpenSSH `BatchMode=yes`, so a key that needs a passphrase fails instead of prompting. Add it to your SSH agent first. `shell` can prompt.
+Key authentication runs with OpenSSH `BatchMode=yes`, so a key that needs a passphrase fails instead of prompting. Add it to your SSH agent first. `shell` can prompt. Password authentication reads the password from a private askpass helper and needs OpenSSH 8.5 or later, as every connection does.
 
 Each remote command runs under the time limit of its stage:
 
@@ -47,7 +47,7 @@ Each remote command runs under the time limit of its stage:
 NARWHAL_STAGE_DISCOVER_TIMEOUT_SECONDS=7200 narwhal deploy discover --out runs/discovery/first-deploy
 ```
 
-A command that exceeds its limit is killed with every process it started. The error names the host, the operation, the limit and the host's log, as in `node-2: hash checkpoint files exceeded the 3600s discover time limit; inspect runs/discovery/first-deploy/logs/node-2.log`. OpenSSH gives up on a connection after 30 seconds. `shell` and `tunnel` run until you leave them.
+The host runs each command under coreutils `timeout`, which sends SIGTERM to the command and every process it started at the limit, and SIGKILL 5 seconds later. A host without `timeout` fails with `the host lacks the coreutils timeout command`. When the host has not answered 30 seconds after the limit, the workstation kills its `ssh`. The error names the host, the operation, the limit and the host's log, as in `node-2: hash checkpoint files exceeded the 3600s discover time limit; inspect runs/discovery/first-deploy/logs/node-2.log`. OpenSSH gives up on a connection after 30 seconds. `shell` and `tunnel` run until you leave them.
 
 Each host's log holds the scripts that ran there, their exit status or time limit, and their output, at mode 0600. The log directory is `logs/` in the discovery output or the package directory, or `runs/access-<id>/` for `access`, `tunnel`, and `shell` without `--run`.
 

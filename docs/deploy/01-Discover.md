@@ -27,11 +27,11 @@ description: Freeze the deployment inputs and discover the hosts of a Narwhal fl
 
 Set one `NARWHAL_NODE_<n>_SSH` destination for each engine `<n>`. Discovery requires at least two engines. `NARWHAL_ROUTER_SSH` sets the router's destination and defaults to the lowest-numbered engine's destination.
 
-A destination is `user@host` or an OpenSSH alias carrying the username, port, identity, and jump host. Roles that share a destination share one host entry and credential.
+A destination is `user@host` or an OpenSSH alias carrying the username, port, and identity. `narwhal deploy` ignores a jump host in your SSH config; set `NARWHAL_SSH_JUMP` instead, as in [Jump host](../configuration/04-Deployment-Inputs.md#jump-host). Roles that share a destination share one host entry and credential.
 
 For password authentication, set the destination variable with a `_PASSWORD` suffix, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Key authentication uses the configured identity or the SSH agent, and never prompts: load a key that has a passphrase into the agent before discovery.
 
-Set `NARWHAL_SSH_KNOWN_HOSTS` to a known-hosts file that holds the key of every destination. Collect each key from a source you trust, such as the provider console, and check its fingerprint before you add it. Discovery and every later command check each host's key against this file before they log in, and never add or change a key in it.
+Set `NARWHAL_SSH_KNOWN_HOSTS` to a known-hosts file that holds the key of every destination and of the jump host. Collect each key from a source you trust, such as the provider console, and check its fingerprint before you add it. Discovery and every later command check each host's key against this file before they log in, and never add or change a key in it.
 
 Default service URLs use the global address on `NARWHAL_FABRIC_INTERFACE`. The engine listens at `http://<address>:<NARWHAL_ENGINE_PORT>`, and the attestation service at `http://<address>:<NARWHAL_ATTEST_PORT>/v1/attestation`.
 

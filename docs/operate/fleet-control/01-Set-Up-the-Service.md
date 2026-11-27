@@ -23,7 +23,7 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature. The service resolves relative paths from the tools checkout, so give the deployment's files, such as its `runs/deployment/fleet.json`, by absolute path.
+Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature. The service runs from the tools checkout, so give the deployment's files by absolute path. It refuses a relative `fleet`, and the router environment's `NARWHAL_FLEET` is relative, so set `fleet` to the absolute path of the deployment's `runs/deployment/fleet.json`.
 
 The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 

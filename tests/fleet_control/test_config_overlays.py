@@ -138,7 +138,7 @@ class OverlayConfigTests(unittest.TestCase):
     def write(self, folder: str, document: dict[str, Any]) -> Path:
         path = Path(folder) / "fleet-control.local.json"
         path.write_text(
-            json.dumps({"fleet": "f", "hooks": {"restore": {"argv": ["x"]}}, **document})
+            json.dumps({"fleet": "/f", "hooks": {"restore": {"argv": ["x"]}}, **document})
         )
         return path
 
