@@ -788,7 +788,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(ran(self.fleet.run(self.directory, until="access")), set())
         self.assertFalse(leftover.exists())
 
-    def test_a_running_stage_the_graph_no_longer_has_is_recorded_as_failed(self):
+    def test_a_running_stage_the_graph_no_longer_has_is_recorded_as_interrupted(self):
         self.fleet.run(self.directory, until="access")
         record = self.record()
         entry = dict(record["stages"]["access[node-1]"])
@@ -797,7 +797,7 @@ class RunnerTests(unittest.TestCase):
         run_record.write(self.directory, record)
         self.fleet.run(self.directory, until="access")
         retired = self.record()["stages"]["retired"]
-        self.assertEqual(retired["status"], "failed")
+        self.assertEqual(retired["status"], "interrupted")
         self.assertIn("no longer has", retired["failure"]["message"])
         self.assertEqual(retired["failure"]["recovery"], "Deploy.md#rerunning-after-a-change")
 
@@ -1093,7 +1093,7 @@ class RunRecordTests(unittest.TestCase):
     def test_the_record_carries_its_contract_and_is_listed_in_the_manifest(self):
         document = json.loads((self.directory / "run.json").read_text())
         self.assertEqual(
-            (document["schema"], document["schema_version"]), ("narwhal.deployment-run", 1)
+            (document["schema"], document["schema_version"]), ("narwhal.deployment-run", 2)
         )
         self.assertEqual(
             manifest()["contracts"]["deployment_run"]["schema"], "narwhal.deployment-run"
@@ -1102,9 +1102,13 @@ class RunRecordTests(unittest.TestCase):
     def test_a_record_of_another_version_or_shape_is_refused(self):
         path = self.directory / "run.json"
         document = json.loads(path.read_text())
-        path.write_text(json.dumps({**document, "schema_version": 2}))
-        with self.assertRaisesRegex(ContractVersionError, "newer than"):
-            run_record.read(self.directory)
+        for version, relation in ((1, "not readable by"), (3, "newer than")):
+            path.write_text(json.dumps({**document, "schema_version": version}))
+            with (
+                self.subTest(version=version),
+                self.assertRaisesRegex(ContractVersionError, relation),
+            ):
+                run_record.read(self.directory)
         for field, value in (("status", "skipped"), ("directory", "/tmp/elsewhere")):
             changed = json.loads(json.dumps(document))
             changed["stages"]["third"][field] = value

@@ -10,7 +10,7 @@ A run directory holds:
 
 | Path | Contents |
 | --- | --- |
-| `run.json` | The run record, `narwhal.deployment-run` version 1, at mode 0600 |
+| `run.json` | The run record, `narwhal.deployment-run` version 2, at mode 0600 |
 | `run.lock` | The lock one runner holds while it uses the directory |
 | `stages/<stage>/attempt-<n>/` | The files attempt `n` of a stage that runs once per run wrote |
 | `stages/<stage>/<instance>/attempt-<n>/` | The files attempt `n` of one stage instance wrote, such as one engine role |
@@ -23,7 +23,9 @@ The run directory must belong to the user who runs it and give no access to othe
 
 A runner holds an exclusive `flock` on `run.lock` for the whole run and names itself in the record's `lock` field. A second runner on the same directory is refused. The refusal names the owner from `lock` when that owner is a live process on this host. Otherwise the holder has not recorded itself yet, and the refusal says so.
 
-When a runner ends without clearing `lock`, for example after `SIGKILL` or a power loss, the next runner adds the stale lock with its owner to `stale_locks`, and `deploy run` and `dev up` print it, as in `narwhal: deploy run: this run found a stale lock of pid 4242 of operator on workstation (narwhal deploy run --run runs/first-deploy), ...`. With `--format json`, `deploy run` also puts the owner in the result's `data.stale_lock`. It stops any helper processes the interrupted stage left, using the process identities the stage recorded, and records that stage as failed before it continues. If helpers survive, it refuses to run until they are stopped. A recorded owner that still runs on this host without holding `run.lock` is refused too.
+When a runner ends without clearing `lock`, for example after `SIGKILL` or a power loss, the next runner adds the stale lock with its owner to `stale_locks`, and `deploy run` and `dev up` print it, as in `narwhal: deploy run: this run found a stale lock of pid 4242 of operator on workstation (narwhal deploy run --run runs/first-deploy), ...`. With `--format json`, `deploy run` also puts the owner in the result's `data.stale_lock`. It stops any helper processes the interrupted stage left, using the process identities the stage recorded, and records that stage `interrupted` before it continues. If helpers survive, it refuses to run until they are stopped. A recorded owner that still runs on this host without holding `run.lock` is refused too.
+
+An interrupted stage runs a new attempt, unless its action can take over the work the attempt recorded, such as the Jobs in `jobs`. Then the runner resumes the same attempt in its own directory, as long as the stage's `definition` and the `input_digests` the attempt started from still match.
 
 ## Signals
 
@@ -33,7 +35,7 @@ When a runner ends without clearing `lock`, for example after `SIGKILL` or a pow
 
 | Field | Content |
 | --- | --- |
-| `schema`, `schema_version` | `narwhal.deployment-run` and `1` |
+| `schema`, `schema_version` | `narwhal.deployment-run` and `2` |
 | `run_id` | 32 hexadecimal characters, fixed for the life of the run directory |
 | `target` | `dev`, `ssh` or `kubernetes`. A runner for another target refuses the directory |
 | `narwhal_version` | Narwhal version of the last runner |
@@ -51,11 +53,11 @@ Each stage record:
 | Field | Content |
 | --- | --- |
 | `stage`, `scope`, `instance` | Stage name, scope letter from the stage graph, and instance. A stage that runs once per run has the empty instance |
-| `status` | `running`, `passed`, `failed`, `cancelled`, `timeout`, or `invalidated` for a passed stage that must rerun because an output before it changed or, for a stage whose product reruns its other instances, because another instance's product changed |
+| `status` | `running`, `passed`, `failed`, `cancelled`, `timeout`, `interrupted` for an attempt whose runner ended without recording its end, or `invalidated` for a passed stage that must rerun because an output before it changed or, for a stage whose product reruns its other instances, because another instance's product changed |
 | `attempt` | Attempt number in this run directory, from 1 |
 | `directory` | The attempt's directory, relative to the run directory |
 | `definition` | Digest of the stage's place in the graph and the rules that rerun it. A changed definition reruns the stage |
-| `input_digests` | Digest of each fact whose change reruns this stage, as the passed attempt saw it, keyed like `slo` or `engine_identity[engine-2]` |
+| `input_digests` | Digest of each fact whose change reruns this stage, keyed like `slo` or `engine_identity[engine-2]`. A passed attempt records them as it passes. Any other attempt keeps the digests it started from, without the facts the stage produces itself |
 | `outputs` | Each regular file a passed attempt wrote: `path` relative to the run directory, `sha256`, `size` and `mode` |
 | `live_outputs` | Paths, relative to the run directory, of the files and directories in the attempt directory that the stage's processes keep writing, such as their logs. They have no digest, and their changes never rerun the stage |
 | `products` | Each value the stage produces for later stages, such as an engine's binding digest or a process identity. A running or failed attempt keeps the values of the last passed one |
@@ -63,9 +65,12 @@ Each stage record:
 | `command` | `null` for a stage that runs in the runner. For a command stage, `argv`, `cwd`, `exit_code` and `log`, with paths relative to the run directory |
 | `started_at`, `ended_at` | Unix seconds. A running stage has no `ended_at` |
 | `invalidation` | Why an `invalidated` stage must rerun, such as `output of engine-check[engine-1] changed`, or `null` |
+| `jobs` | Names of the Kubernetes Jobs the attempt creates, each written to the record before its Job is created. A resumed attempt keeps them. Empty when the attempt creates no Job |
+| `reasons` | Why the attempt ran, such as `no attempt yet`, `slo changed` or `attempt 1 interrupted`. A resumed attempt keeps the reasons it first ran for |
+| `observed_at` | Unix seconds at which each live product, such as a process identity or a route, was last found to hold. The runner checks a live product again on every run unless the target gives that fact a maximum age and this observation is younger |
 | `failure` | `null` for a running, passed or invalidated stage. Otherwise `message`, `recovery`, the gate section that covers the stage, and `context`, such as the stage timeout and the cleanup of its helper processes |
 
-A stage is skipped when its record shows `passed`, its `definition` and `input_digests` match the current graph and inputs, every file in `outputs` still has its recorded SHA-256, size and mode, and every process or route the stage produced is still there. When an output changes, the runner marks every passed stage after it `invalidated` before it reruns anything, so those stages rerun even if the run stops first.
+A stage is skipped when its record shows `passed`, its `definition` and `input_digests` match the current graph and inputs, every file in `outputs` still has its recorded SHA-256, size and mode, and every process or route the stage produced is still there or was observed within its maximum age. When an output changes, the runner marks every passed stage after it `invalidated` before it reruns anything, so those stages rerun even if the run stops first.
 
 ## Deployment status
 

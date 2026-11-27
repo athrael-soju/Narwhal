@@ -9,6 +9,11 @@ before anything reruns, so a stop before those stages run does not lose them.
 Each attempt writes its outputs to its own directory, `stages/<stage>/[<instance>/]attempt-<n>`,
 so a rerun never meets an earlier attempt's files. SIGINT and SIGTERM end the current stage:
 the stage's own cleanup runs, the record keeps the attempt as cancelled, and the run stops.
+
+A runner that ends during an attempt without recording its end leaves it `running`. The next
+runner records it `interrupted` and resumes it when its action adopts the work it recorded, such
+as its Jobs; otherwise the stage runs a new attempt. A `Stop` ends a pass early from another
+thread, at the next instance boundary or by cancelling the running stage.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from .run_record import (
     CANCELLED,
     FAILED,
     INSTANCE,
+    INTERRUPTED,
     INVALIDATED,
     PASSED,
     RUNNING,
@@ -49,6 +55,8 @@ from .run_record import (
 )
 
 __all__ = [
+    "Adoptable",
+    "Cancelled",
     "Command",
     "Decision",
     "HelpersSurvived",
@@ -64,6 +72,7 @@ __all__ = [
     "StageContext",
     "StageFailed",
     "StaticTopology",
+    "Stop",
     "Topology",
     "Unobserved",
 ]
@@ -143,6 +152,61 @@ class Unobserved:
     value and says it did not observe it; `run` and `inspect` never take it as holding."""
 
     value: Any
+
+
+@dataclass(frozen=True)
+class Adoptable:
+    """A stage action whose interrupted attempt can resume, adopting the work it started.
+
+    `adopt(previous)` receives the interrupted attempt's record and returns whether the work it
+    recorded, such as the Jobs in `jobs`, still exists. The next pass then resumes that attempt
+    in its own directory, when the stage's definition and the digests it started from still
+    match, and the action takes up that work again instead of starting it twice. Any action
+    object with an `adopt` method works the same way.
+    """
+
+    action: Callable[[StageContext], Outcome | None]
+    adopt: Callable[[Mapping[str, Any]], bool]
+
+    def __call__(self, context: StageContext) -> Outcome | None:
+        return self.action(context)
+
+
+class Stop:
+    """Ends one pass early, from another thread.
+
+    `request()` ends the pass at the next stage instance boundary, after the running instance
+    finishes. `cancel(stage, ...)` also asks the running attempt of those stages to stop: its
+    action sees `StageContext.cancelled`, removes what it started and raises `Cancelled`, and
+    the record keeps the attempt `cancelled`. Either way `Runner.run` returns with `stopped`.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._requested = False
+        self._cancelled: set[str] = set()
+
+    def request(self) -> None:
+        with self._lock:
+            self._requested = True
+
+    def cancel(self, *names: str) -> None:
+        with self._lock:
+            self._cancelled.update(names)
+            self._requested = True
+
+    @property
+    def requested(self) -> bool:
+        with self._lock:
+            return self._requested
+
+    def cancelled(self, stage: str) -> bool:
+        with self._lock:
+            return stage in self._cancelled
+
+
+class Cancelled(Exception):
+    """What an action raises once its stage was cancelled and it has removed what it started."""
 
 
 def check_directory(directory: Path) -> None:
@@ -236,6 +300,8 @@ class RunResult:
     stale_lock: Mapping[str, Any] | None
     # What a dry pass assumed, such as a restart whose check only `run` performs.
     notes: tuple[str, ...] = ()
+    # A `Stop` ended the pass before every stage up to `until` was decided.
+    stopped: bool = False
 
 
 class StageFailed(RuntimeError):
@@ -283,6 +349,10 @@ class _Restart(Exception):
     """Decide the graph again, after a `Spent` fact invalidated its producer."""
 
 
+class _Stopped(Exception):
+    """End the pass, after a `Stop` asked for it."""
+
+
 class HelpersSurvived(RuntimeError):
     """Helpers of a stage an earlier runner left running survived their cleanup."""
 
@@ -301,7 +371,9 @@ class StageContext:
 
     `previous` is this instance's record from before the attempt, or None. A stage that starts
     long-lived processes reads the `processes` of an interrupted attempt there, so it can stop
-    or adopt them instead of starting them twice.
+    or adopt them instead of starting them twice. A new attempt after an interrupted one finds
+    that attempt's Jobs in `previous["jobs"]` and removes them first. A resumed attempt has the
+    attempt number of `previous` and keeps its Jobs.
     """
 
     def __init__(
@@ -321,6 +393,25 @@ class StageContext:
         self.run_directory = run.directory
         self.run_id: str = run.record["run_id"]
         self.previous = previous
+
+    @property
+    def resumed(self) -> bool:
+        """Whether this attempt resumes an interrupted one whose work its action adopted."""
+        return self.previous is not None and self.previous["attempt"] == self.attempt
+
+    @property
+    def cancelled(self) -> bool:
+        """Whether the pass's `Stop` cancelled this stage; the action then raises `Cancelled`."""
+        stop = self._run.stop
+        return stop is not None and stop.cancelled(self.stage)
+
+    def record_jobs(self, names: Sequence[str]) -> None:
+        """Record the Jobs this attempt is about to create, before it creates any of them.
+
+        A Job name is derived from the attempt, so a resumed attempt records the same names
+        again and adopts each Job that already exists.
+        """
+        self._run.record_jobs(key(self.stage, self.instance), names)
 
     def product(self, fact: str, instance: str = "") -> Any:
         """The current value of a fact a stage before this one produced."""
@@ -349,7 +440,12 @@ class Runner:
         actions: Mapping[str, Action],
         topology: Topology,
         probes: Mapping[str, Probe],
+        max_age: Mapping[str, float] | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
+        """`max_age` gives, in seconds, how long an observation of a live fact holds: a pass
+        reuses a recorded value observed more recently than that instead of probing again. A
+        live fact it does not name is probed on every pass. `clock` times the observations."""
         if target not in TARGETS:
             raise ValueError(f"target must be one of {', '.join(TARGETS)}")
         if unknown := sorted(set(actions) - set(graph.stages)):
@@ -357,6 +453,11 @@ class Runner:
         live = {name for name, fact in graph.facts.items() if fact.kind == LIVE}
         if set(probes) != live:
             raise ValueError(f"probes must cover exactly the live facts: {', '.join(sorted(live))}")
+        max_age = dict(max_age or {})
+        if unknown := sorted(set(max_age) - live):
+            raise ValueError(f"max_age names facts that are not live: {', '.join(unknown)}")
+        if invalid := sorted(name for name, age in max_age.items() if not 0 < age < float("inf")):
+            raise ValueError(f"max_age must be a positive number of seconds: {', '.join(invalid)}")
         self.graph = graph
         self.directory = directory
         self.target = target
@@ -364,16 +465,24 @@ class Runner:
         self.actions = dict(actions)
         self.topology = topology
         self.probes = dict(probes)
+        self.max_age = max_age
+        self.clock = clock
 
-    def run(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
-        """Run every stage up to and including `until`, or the whole graph."""
+    def run(
+        self, inputs: Mapping[str, Input], *, until: str | None = None, stop: Stop | None = None
+    ) -> RunResult:
+        """Run every stage up to and including `until`, or the whole graph.
+
+        `stop` is checked before each stage instance, and its cancellations by the running
+        action; see `Stop`.
+        """
         order = self._order(until)
         self._check_inputs(inputs)
         with contextlib.suppress(FileExistsError):
             self.directory.mkdir(mode=0o700)
         check_directory(self.directory)
         with run_record.locked(self.directory), stages.cancellation():
-            return _Run(self, inputs, until, order).execute()
+            return _Run(self, inputs, until, order, stop=stop).execute()
 
     def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
         """Decide every stage up to `until` as `run` would, without running or recording one.
@@ -424,7 +533,7 @@ class Runner:
                     elif isinstance(current, Refreshed):
                         checks.append(LiveCheck(fact_key, name, "restarted and checked"))
                         if refresh:
-                            _refresh(entry, fact_key, fact, current.value)
+                            _refresh(entry, fact_key, fact, current.value, self.clock())
                             changed = True
                     elif canonical_digest(current) != canonical_digest(entry["products"][fact]):
                         checks.append(LiveCheck(fact_key, name, "changed"))
@@ -454,11 +563,12 @@ class Runner:
             raise ValueError(f"inputs differ from the graph: missing {absent}; unknown {extra}")
 
 
-def _refresh(entry: dict[str, Any], fact_key: str, fact: str, value: Any) -> None:
+def _refresh(entry: dict[str, Any], fact_key: str, fact: str, value: Any, observed: float) -> None:
     """Record a restarted process's checked identity in place of the identity its stage started."""
     value = json.loads(json.dumps(value))
     old = entry["products"][fact]
     entry["products"][fact] = value
+    entry["observed_at"][fact] = observed
     if fact_key in entry["input_digests"]:
         entry["input_digests"][fact_key] = canonical_digest(value)
     # The process record `down` stops follows the identity, as `Outcome.processes` holds it.
@@ -480,8 +590,13 @@ class _Run:
         order: Sequence[str],
         *,
         dry: bool = False,
+        stop: Stop | None = None,
     ) -> None:
         self.runner = runner
+        self.stop = stop
+        self.stopped = False
+        # Interrupted stage instances whose action adopted the work they recorded.
+        self.adopted: set[str] = set()
         # A dry pass decides each stage without running one or writing the record.
         self.dry = dry
         # In a dry pass, the first instance of each stage that would run, and the facts of
@@ -523,6 +638,9 @@ class _Run:
                     if fact_key in spent:
                         raise RuntimeError(f"{fact_key} was spent twice in one run") from None
                     spent.add(fact_key)
+                except _Stopped:
+                    self.stopped = True
+                    break
         except (StageFailed, RunCancelled, HelpersSurvived) as error:
             error.stale_lock = stale
             if stale is not None:
@@ -539,7 +657,9 @@ class _Run:
         for decision in self.decisions:
             if decision.ran or not decided.get(decision.key, decision).ran:
                 decided[decision.key] = decision
-        return RunResult(self.record["run_id"], tuple(decided.values()), stale)
+        return RunResult(
+            self.record["run_id"], tuple(decided.values()), stale, stopped=self.stopped
+        )
 
     def _plan(self) -> RunResult:
         if (self.directory / run_record.RECORD).exists():
@@ -656,9 +776,13 @@ class _Run:
         return stale
 
     def _recover(self, stale: Mapping[str, Any] | None) -> None:
-        """Stop the helpers of a stage an earlier runner left running, and record it as failed."""
+        """Stop the helpers of a stage an earlier runner left running, record it interrupted,
+        and ask its action whether the work it recorded can be adopted."""
         holder = run_record.describe(stale) if stale else "an earlier runner"
         for name, entry in self.record["stages"].items():
+            if entry["status"] == INTERRUPTED:
+                # A runner that ended before it reached this stage again recorded it already.
+                self._adopt(name, entry)
             if entry["status"] != RUNNING:
                 continue
             cleanups = {}
@@ -678,7 +802,7 @@ class _Run:
             if spec is None:
                 message += ", which the current stage graph no longer has"
             entry.update(
-                status=FAILED,
+                status=INTERRUPTED,
                 ended_at=time.time(),
                 failure={
                     "message": message,
@@ -686,8 +810,23 @@ class _Run:
                     "context": {"owner": dict(stale) if stale else None, "helpers": cleanups},
                 },
             )
+            self._adopt(name, entry)
         with _held():
             run_record.write(self.directory, self.record)
+
+    def _adopt(self, name: str, entry: Mapping[str, Any]) -> None:
+        """Note an interrupted attempt whose action finds the work it recorded still there."""
+        adopt = getattr(self.runner.actions.get(entry["stage"]), "adopt", None)
+        if adopt is None or entry["stage"] not in self.graph.stages:
+            return
+        try:
+            adopted = adopt(json.loads(json.dumps(entry)))
+        except Exception as error:
+            # Starting the work again could run it twice, so the pass stops here.
+            error.add_note(f"adopting the interrupted attempt {entry['attempt']} of {name}")
+            raise
+        if adopted:
+            self.adopted.add(name)
 
     def _instances(self, scope: str) -> tuple[str, ...]:
         if self.graph.scopes[scope].single:
@@ -724,13 +863,20 @@ class _Run:
     def _sweep(self, spec: Stage) -> None:
         instances = self._stage_instances(spec)
         for instance in instances:
+            self._boundary()
             self._stage(spec, instance, first=True)
         if self._reruns_itself(spec):
             # A changed product of this stage invalidated the instances that had not passed in
             # this run, some of them before the change; they rerun once here. Every instance
             # has then passed in this run, so no later change can invalidate one again.
             for instance in instances:
+                self._boundary()
                 self._stage(spec, instance)
+
+    def _boundary(self) -> None:
+        """End the pass here, between two stage instances, when its `Stop` asks for it."""
+        if self.stop is not None and self.stop.requested:
+            raise _Stopped
 
     def _reruns_itself(self, spec: Stage) -> bool:
         return any(
@@ -742,6 +888,10 @@ class _Run:
         name = key(spec.name, instance)
         previous = self.record["stages"].get(name)
         reasons = self._reasons(spec, instance, previous)
+        resume = bool(reasons) and self._resumes(spec, instance, previous)
+        if resume:
+            assert previous is not None
+            reasons = [f"resumes interrupted attempt {previous['attempt']}"]
         if first or reasons:
             unobserved = () if reasons else tuple(self.unobserved.pop(name, ()))
             self.decisions.append(Decision(name, bool(reasons), tuple(reasons), unobserved))
@@ -751,8 +901,19 @@ class _Run:
                 if self.graph.facts[fact].kind != LIVE:
                     self.values[key(fact, instance)] = previous["products"][fact]
             return False
-        self._attempt(spec, instance, previous)
+        self._attempt(spec, instance, previous, reasons, resume=resume)
         return True
+
+    def _resumes(self, spec: Stage, instance: str, previous: Mapping[str, Any] | None) -> bool:
+        """Whether an interrupted attempt resumes: its action adopted its work, and it started
+        from the stage definition and the digests this pass would start a new attempt from."""
+        return (
+            previous is not None
+            and previous["status"] == INTERRUPTED
+            and key(spec.name, instance) in self.adopted
+            and previous["definition"] == self.graph.definition(spec.name)
+            and previous["input_digests"] == self._digests(spec, instance, starting=True)
+        )
 
     def _reasons(self, spec: Stage, instance: str, previous: Mapping[str, Any] | None) -> list[str]:
         if previous is None:
@@ -771,6 +932,10 @@ class _Run:
         for fact in spec.produces:
             if self.graph.facts[fact].kind == LIVE:
                 fact_key = key(fact, instance)
+                if self._fresh(previous, fact):
+                    # Observed recently enough; the recorded value still holds.
+                    self.values[fact_key] = previous["products"][fact]
+                    continue
                 try:
                     current = self.runner.probes[fact](instance, previous["products"][fact])
                 except Exception as error:
@@ -801,8 +966,16 @@ class _Run:
                     else:
                         with _held():
                             entry = self.record["stages"][key(spec.name, instance)]
-                            _refresh(entry, fact_key, fact, current)
+                            _refresh(entry, fact_key, fact, current, self.runner.clock())
                             run_record.write(self.directory, self.record)
+                elif current is not None and not self.dry:
+                    # The record keeps the observation for the next pass; a value other than
+                    # the recorded one is observed again, since the record cannot stand for it.
+                    observed = self.record["stages"][key(spec.name, instance)]["observed_at"]
+                    if canonical_digest(current) == canonical_digest(previous["products"][fact]):
+                        observed[fact] = self.runner.clock()
+                    else:
+                        observed.pop(fact, None)
                 self.values[fact_key] = current
                 if current is None:
                     reasons.append(f"{fact_key} is gone")
@@ -814,6 +987,14 @@ class _Run:
             if current_digests.get(name) != recorded.get(name)
         ]
         return reasons
+
+    def _fresh(self, previous: Mapping[str, Any], fact: str) -> bool:
+        """Whether a live fact's recorded observation is younger than its maximum age."""
+        limit = self.runner.max_age.get(fact)
+        observed = previous["observed_at"].get(fact)
+        if limit is None or observed is None:
+            return False
+        return 0 <= self.runner.clock() - observed < limit
 
     def _invalidate_later(self, spec: Stage, instance: str) -> None:
         """Mark every passed stage after a changed output invalidated, in the record."""
@@ -854,10 +1035,16 @@ class _Run:
                 ):
                     entry.update(status=INVALIDATED, invalidation=f"{fact_key} changed")
 
-    def _digests(self, spec: Stage, instance: str) -> dict[str, str]:
-        """The digest of every fact instance whose change reruns this stage instance."""
+    def _digests(self, spec: Stage, instance: str, *, starting: bool = False) -> dict[str, str]:
+        """The digest of every fact instance whose change reruns this stage instance.
+
+        `starting` leaves out the facts the stage produces itself, which only its attempt
+        decides, as an attempt that has not returned yet records them.
+        """
         digests = {}
         for fact, rerun in self.graph.reruns_of(spec.name):
+            if starting and fact.kind != INPUT and self.graph.producer(fact.name) == spec.name:
+                continue
             for source in self._sources(fact, rerun, spec, instance):
                 fact_key = key(fact.name, source)
                 if self.dry and fact.kind != INPUT and fact_key not in self.values:
@@ -905,9 +1092,17 @@ class _Run:
             and regular_file_digest(path) == output["sha256"]
         )
 
-    def _attempt(self, spec: Stage, instance: str, previous: Mapping[str, Any] | None) -> None:
+    def _attempt(
+        self,
+        spec: Stage,
+        instance: str,
+        previous: Mapping[str, Any] | None,
+        reasons: Sequence[str],
+        *,
+        resume: bool = False,
+    ) -> None:
         name = key(spec.name, instance)
-        attempt = previous["attempt"] + 1 if previous else 1
+        attempt = 1 if previous is None else previous["attempt"] + (0 if resume else 1)
         parts = (spec.name, instance) if instance else (spec.name,)
         relative = Path("stages", *parts, f"attempt-{attempt}")
         entry: dict[str, Any] = {
@@ -918,7 +1113,9 @@ class _Run:
             "attempt": attempt,
             "directory": str(relative),
             "definition": self.graph.definition(spec.name),
-            "input_digests": {},
+            # The digests the attempt starts from; an interrupted attempt resumes only while
+            # they hold. A passed attempt records them again as it passes.
+            "input_digests": self._digests(spec, instance, starting=True),
             "outputs": [],
             "live_outputs": [],
             # Until this attempt returns, the record keeps the products and processes of the
@@ -926,10 +1123,14 @@ class _Run:
             "products": dict(previous["products"]) if previous else {},
             "processes": list(previous["processes"]) if previous else [],
             "command": None,
-            "started_at": time.time(),
+            "started_at": previous["started_at"] if resume and previous else time.time(),
             "ended_at": None,
             "failure": None,
             "invalidation": None,
+            # A resumed attempt keeps its Jobs and the reasons it first ran for.
+            "jobs": list(previous["jobs"]) if resume and previous else [],
+            "reasons": list(previous["reasons"]) if resume and previous else list(reasons),
+            "observed_at": {},
         }
         directory = self.directory / relative
         try:
@@ -940,7 +1141,7 @@ class _Run:
                 self.record["stages"][name] = entry
                 run_record.write(self.directory, self.record)
             directory.parent.mkdir(parents=True, exist_ok=True)
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o700, exist_ok=resume)
             context = StageContext(self, spec.name, instance, attempt, directory, previous)
             outcome = self._execute(self.runner.actions[spec.name], context, entry) or Outcome()
             # The started processes are recorded before anything else can fail or be cancelled.
@@ -963,6 +1164,13 @@ class _Run:
             self._finish(spec, entry, FAILED, error)
             self._spend(error)
             raise _Restart(key(error.fact, error.instance)) from error
+        except Cancelled as error:
+            if self.stop is None or not self.stop.cancelled(spec.name):
+                # Only the pass's Stop cancels a stage; any other is the action's failure.
+                self._finish(spec, entry, FAILED, error)
+                raise StageFailed(name, entry) from error
+            self._finish(spec, entry, CANCELLED, error)
+            raise _Stopped from error
         except Exception as error:
             self._finish(spec, entry, FAILED, error)
             raise StageFailed(name, entry) from error
@@ -980,12 +1188,31 @@ class _Run:
                 ),
                 products=products,
                 input_digests=self._digests(spec, instance),
+                observed_at={
+                    fact: self.runner.clock()
+                    for fact in spec.produces
+                    if self.graph.facts[fact].kind == LIVE
+                },
                 ended_at=time.time(),
             )
             if previous is not None:
                 self._invalidate_others(spec, instance, previous)
             run_record.write(self.directory, self.record)
         self.passed.add(name)
+
+    def record_jobs(self, name: str, jobs: Sequence[str]) -> None:
+        """Add Job names to a running attempt's record, and write it before any is created."""
+        entry = self.record["stages"][name]
+        if entry["status"] != RUNNING:
+            raise ValueError(f"{name} is not running, so it creates no Job")
+        added = [job for job in dict.fromkeys(jobs) if job not in entry["jobs"]]
+        if invalid := [job for job in added if not run_record.JOB.fullmatch(job)]:
+            raise ValueError(f"{name}: Job names must be DNS-1123 labels: {', '.join(invalid)}")
+        if not added:
+            return
+        with _held():
+            entry["jobs"].extend(added)
+            run_record.write(self.directory, self.record)
 
     def _execute(self, action: Action, context: StageContext, entry: dict) -> Outcome | None:
         if not isinstance(action, Command):
