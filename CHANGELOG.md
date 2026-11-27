@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.1](https://github.com/athrael-soju/Narwhal/compare/v0.13.0...v0.13.1) (2026-11-27)
+
+
+### Documentation
+
+* rename the README "Trying it" section to "Try it out" ([#481](https://github.com/athrael-soju/Narwhal/issues/481)) ([741b75a](https://github.com/athrael-soju/Narwhal/commit/741b75a4bf90c420dfd751e82fc400f593655816))
+* state what narwhal dev runs instead of narrating the recording ([#491](https://github.com/athrael-soju/Narwhal/issues/491)) ([652c265](https://github.com/athrael-soju/Narwhal/commit/652c265b63274200ebc002de6c3a5ff9b0374b17))
+* widen the README's evaluation table to the page width ([#483](https://github.com/athrael-soju/Narwhal/issues/483)) ([a33eae9](https://github.com/athrael-soju/Narwhal/commit/a33eae99c25bfbe0429a64566f9dc10112b4b9a8))
+
 ## [0.13.0](https://github.com/athrael-soju/Narwhal/compare/v0.12.0...v0.13.0) (2026-11-26)
 
 
