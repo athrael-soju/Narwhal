@@ -4,6 +4,7 @@ import http.server
 import json
 import os
 import shutil
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -307,6 +308,122 @@ class InformerTests(unittest.TestCase):
 
         self.assertEqual(informer.get(f"{NAMESPACE}/a")["metadata"], job("a", "9")["metadata"])
 
+    def test_a_handler_that_fails_during_a_list_hears_every_change_again(self):
+        api = ScriptedApi([listed("10", job("a", "9"), job("b", "9"))] * 2, [stream()])
+        failures = iter([True])
+        informer = self.informer(api)
+        heard = self.heard
+
+        def handler(event):
+            heard.append((event.type, event.object["metadata"]["name"]))
+            if next(failures, False):
+                raise RuntimeError("handler failed")
+
+        informer._handler = handler
+        with self.assertRaises(RuntimeError):
+            informer.pump()
+        self.assertFalse(informer.synced)
+        self.assertIsNone(informer.get(f"{NAMESPACE}/a"))
+        informer.pump()
+
+        self.assertEqual(heard, [("ADDED", "a"), ("ADDED", "a"), ("ADDED", "b")])
+        self.assertTrue(informer.synced)
+
+    def test_a_handler_that_fails_on_a_watch_event_hears_it_again(self):
+        api = ScriptedApi(
+            [listed("10")],
+            [stream(event("ADDED", "a", "11")), stream(event("ADDED", "a", "11"))],
+        )
+        informer = self.informer(api)
+        failures = iter([True])
+
+        def handler(event):
+            self.heard.append((event.type, event.object["metadata"]["name"]))
+            if next(failures, False):
+                raise RuntimeError("handler failed")
+
+        informer._handler = handler
+        with self.assertRaises(RuntimeError):
+            informer.pump()
+        self.assertIsNone(informer.get(f"{NAMESPACE}/a"))
+        self.assertEqual(informer.resource_version, "10")
+        informer.pump()
+
+        self.assertEqual(self.watched_versions(), ["10", "10"])
+        self.assertEqual(self.heard, [("ADDED", "a"), ("ADDED", "a")])
+        self.assertIsNotNone(informer.get(f"{NAMESPACE}/a"))
+
+    def test_run_survives_handler_and_token_failures_and_lists_again(self):
+        stop = threading.Event()
+        calls = []
+
+        class Source:
+            def list(self, kind, **options):
+                calls.append("list")
+                if len(calls) == 1:
+                    raise k.InClusterConfigError("token unreadable")
+                return k.Listing([job("a", "9")], "10")
+
+            def watch(self, kind, **options):
+                calls.append("watch")
+                if calls.count("watch") == 2:
+                    stop.set()
+                return iter([])
+
+        handled = []
+
+        def handler(event):
+            handled.append(event.type)
+            if len(handled) == 1:
+                raise RuntimeError("handler failed")
+
+        informer = k.Informer(
+            Source(), k.JOB, handler=handler, backoff=k.Backoff(base_s=0.001, cap_s=0.001)
+        )
+        with self.assertLogs("narwhal.kubernetes_api", "ERROR"):
+            informer.run(stop)
+
+        self.assertEqual(calls, ["list", "list", "list", "watch", "watch"])
+        self.assertEqual(handled, ["ADDED", "ADDED"])
+
+    def test_resync_runs_on_its_timer_during_a_quiet_watch_and_during_backoff(self):
+        for mode in ("quiet watch", "backoff"):
+            with self.subTest(mode):
+                stop = threading.Event()
+                synced = threading.Event()
+                release = threading.Event()
+
+                class Source:
+                    def list(self, kind, **options):
+                        return k.Listing([job("a", "9")], "10")
+
+                    def watch(self, kind, mode=mode, release=release, **options):
+                        if mode == "backoff":
+                            raise k.Unavailable(503, "ServiceUnavailable", "down")
+                        release.wait(10)
+                        return iter([])
+
+                def handler(event, synced=synced):
+                    if event.type == "SYNC":
+                        synced.set()
+
+                informer = k.Informer(
+                    Source(),
+                    k.JOB,
+                    handler=handler,
+                    resync_s=0.05,
+                    backoff=k.Backoff(base_s=10.0, cap_s=10.0),
+                )
+                runner = threading.Thread(target=informer.run, args=(stop,))
+                runner.start()
+                try:
+                    self.assertTrue(synced.wait(5))
+                finally:
+                    stop.set()
+                    release.set()
+                    runner.join(10)
+                self.assertFalse(runner.is_alive())
+
     def test_run_backs_off_after_a_failure_and_stops_when_told(self):
         stop = threading.Event()
         calls = []
@@ -366,7 +483,7 @@ class RetryTests(unittest.TestCase):
     def test_a_json_patch_retries_a_429_but_not_a_5xx(self):
         operations = [{"op": "replace", "path": "/spec/x", "value": 1}]
         rig = Rig(lambda request: httpx.Response(503))
-        with self.assertRaises(k.Unavailable):
+        with self.assertRaises(k.OutcomeUnknown):
             rig.client.patch(k.JOB, "a", operations)
         self.assertEqual(len(rig.requests), 1)
 
@@ -375,11 +492,40 @@ class RetryTests(unittest.TestCase):
         rig.client.patch(k.JOB, "a", operations)
         self.assertEqual(len(rig.requests), 2)
 
-    def test_an_apply_retries_a_5xx(self):
-        replies = iter([httpx.Response(504), httpx.Response(200, json=job("a", "2"))])
-        rig = Rig(lambda request: next(replies))
-        rig.client.apply(k.JOB, {"metadata": {"name": "a"}})
-        self.assertEqual(len(rig.requests), 2)
+    def test_a_write_retries_a_5xx_only_with_retry_after(self):
+        writes = {
+            "create": lambda c: c.create(k.LEASE, lease("a")),
+            "replace": lambda c: c.replace(k.LEASE, lease("a", "1")),
+            "delete": lambda c: c.delete(k.JOB, "gate-1"),
+            "apply": lambda c: c.apply(k.JOB, {"metadata": {"name": "a"}}),
+        }
+        for name, write in writes.items():
+            with self.subTest(name):
+                rig = Rig(lambda request: httpx.Response(500))
+                with self.assertRaises(k.OutcomeUnknown):
+                    write(rig.client)
+                self.assertEqual(len(rig.requests), 1)
+
+                replies = iter(
+                    [
+                        httpx.Response(503, headers={"Retry-After": "1"}),
+                        httpx.Response(200, json=lease("a", "2")),
+                    ]
+                )
+                rig = Rig(lambda request, replies=replies: next(replies))
+                write(rig.client)
+                self.assertEqual((len(rig.requests), rig.sleeps), (2, [1.0]))
+
+    def test_a_write_that_landed_before_a_5xx_is_not_reported_as_its_own_conflict(self):
+        for write, second in (
+            (lambda c: c.create(k.LEASE, lease("a")), status(409, "AlreadyExists")),
+            (lambda c: c.delete(k.JOB, "gate-1"), status(404, "NotFound")),
+            (lambda c: c.replace(k.LEASE, lease("a", "1")), status(409, "Conflict")),
+        ):
+            replies = iter([httpx.Response(500), second])
+            rig = Rig(lambda request, replies=replies: next(replies))
+            with self.subTest(second.status_code), self.assertRaises(k.OutcomeUnknown):
+                write(rig.client)
 
     def test_a_request_that_never_connected_is_retried_for_any_verb(self):
         replies = iter([httpx.ConnectError("refused"), httpx.Response(201, json=lease("a", "1"))])
@@ -399,7 +545,7 @@ class RetryTests(unittest.TestCase):
             raise httpx.ReadTimeout("no reply")
 
         rig = Rig(handler)
-        with self.assertRaises(k.Unavailable):
+        with self.assertRaises(k.OutcomeUnknown):
             rig.client.create(k.LEASE, lease("a"))
         self.assertEqual(len(rig.requests), 1)
 
@@ -632,6 +778,20 @@ class InClusterTests(unittest.TestCase):
         client = k.ApiClient(connection, field_manager="narwhal-controller", sleep=sleeps.append)
         self.addCleanup(client.close)
         return client, sleeps
+
+    def test_ssl_environment_variables_add_no_trusted_root(self):
+        port, tokens = self.serve()
+        ca = str(self.certs / "cluster-ca.crt")
+        with patch.dict(os.environ, {"SSL_CERT_FILE": ca, "SSL_CERT_DIR": str(self.certs)}):
+            client = k.ApiClient(
+                k.Connection(f"https://127.0.0.1:{port}", NAMESPACE),
+                field_manager="narwhal-controller",
+                sleep=lambda s: None,
+            )
+            self.addCleanup(client.close)
+            with self.assertRaises(k.Unavailable):
+                client.get(k.LEASE, "a")
+        self.assertEqual(tokens, [])
 
     def test_tls_verifies_against_the_cluster_ca_and_refuses_others_at_once(self):
         port, tokens = self.serve()
@@ -869,6 +1029,127 @@ class WorkQueueTests(unittest.TestCase):
         self.assertEqual(got, ["a", None])
         queue.add("b")
         self.assertIsNone(queue.get(0))
+
+
+class NameTests(unittest.TestCase):
+    def test_a_name_or_namespace_that_could_rewrite_the_path_is_refused_before_any_request(self):
+        rig = Rig(lambda request: self.fail("no request expected"))
+        client = rig.client
+        for bad in ("a/../../../secrets/s", "../s", "A", "a b", "", "a?watch=1", "%2e%2e"):
+            calls = {
+                "get": lambda bad=bad: client.get(k.LEASE, bad),
+                "create": lambda bad=bad: client.create(k.LEASE, {"metadata": {"name": bad}}),
+                "replace": lambda bad=bad: client.replace(
+                    k.LEASE, {"metadata": {"name": bad, "resourceVersion": "1"}}
+                ),
+                "apply": lambda bad=bad: client.apply(k.JOB, {"metadata": {"name": bad}}),
+                "patch": lambda bad=bad: client.patch(k.JOB, bad, []),
+                "delete": lambda bad=bad: client.delete(k.JOB, bad),
+                "log": lambda bad=bad: client.log(bad),
+                "get in namespace": lambda bad=bad: client.get(k.LEASE, "a", namespace=bad),
+                "list": lambda bad=bad: client.list(k.JOB, namespace=bad),
+                "watch": lambda bad=bad: list(
+                    client.watch(k.JOB, resource_version="1", namespace=bad)
+                ),
+                "delete in namespace": lambda bad=bad: client.delete(k.JOB, "a", namespace=bad),
+                "body namespace": lambda bad=bad: client.create(
+                    k.LEASE, {"metadata": {"name": "a", "namespace": bad}}
+                ),
+                "container": lambda bad=bad: client.log("pod-a", container=bad),
+            }
+            for verb, call in calls.items():
+                if bad == "" and verb in (
+                    "get in namespace",
+                    "list",
+                    "watch",
+                    "delete in namespace",
+                ):
+                    continue  # an empty namespace means the client's own
+                with self.subTest(verb=verb, name=bad), self.assertRaises(ValueError):
+                    call()
+        self.assertEqual(rig.requests, [])
+
+    def test_dotted_names_are_allowed(self):
+        rig = Rig(lambda request: status(404, "NotFound"))
+        self.assertIsNone(rig.client.get(k.CONFIG_MAP, "engine-0.hooks"))
+
+
+class LogTests(unittest.TestCase):
+    def test_a_log_comes_back_byte_for_byte(self):
+        content = b"line one\r\nline two\n\xff\xfe not utf-8\nno newline at the end"
+        rig = Rig(lambda request: httpx.Response(200, content=content))
+
+        self.assertEqual(rig.client.log("gate-1-abcde", container="gate"), content)
+        request = rig.requests[0]
+        self.assertEqual(request.url.path, f"/api/v1/namespaces/{NAMESPACE}/pods/gate-1-abcde/log")
+        self.assertEqual(request.url.params["container"], "gate")
+        self.assertEqual(request.url.params["limitBytes"], str(k.LOG_MAX_BYTES + 1))
+
+    def test_a_log_past_its_bound_is_reported_not_cut(self):
+        rig = Rig(lambda request: httpx.Response(200, content=b"x" * 11))
+        self.assertEqual(rig.client.log("pod-a", limit_bytes=11), b"x" * 11)
+        with self.assertRaises(k.LogTooLarge):
+            rig.client.log("pod-a", limit_bytes=10)
+        self.assertEqual(rig.requests[1].url.params["limitBytes"], "11")
+
+    def test_a_missing_pod_raises_not_found(self):
+        rig = Rig(lambda request: status(404, "NotFound"))
+        with self.assertRaises(k.NotFound):
+            rig.client.log("pod-a")
+
+
+class ProxyTests(unittest.TestCase):
+    def test_proxy_variables_are_ignored(self):
+        proxied = []
+        proxy = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(proxy.close)
+
+        def accept():
+            try:
+                connection, _ = proxy.accept()
+            except OSError:
+                return
+            proxied.append(connection.recv(1024))
+            connection.close()
+
+        threading.Thread(target=accept, daemon=True).start()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"log" if self.path.split("?")[0].endswith("/log") else b"{}"
+                if not body.startswith(b"log"):
+                    body = json.dumps(lease("a", "3")).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+
+        address = f"http://127.0.0.1:{proxy.getsockname()[1]}"
+        names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+        with patch.dict(os.environ, dict.fromkeys(names, address)):
+            os.environ.pop("NO_PROXY", None)
+            os.environ.pop("no_proxy", None)
+            client = k.ApiClient(
+                k.Connection(f"http://127.0.0.1:{server.server_address[1]}", NAMESPACE),
+                field_manager="narwhal-controller",
+                backoff=k.Backoff(attempts=1),
+            )
+            self.addCleanup(client.close)
+            self.assertEqual(client.get(k.LEASE, "a")["spec"]["holderIdentity"], "a")
+            self.assertEqual(client.log("pod-a"), b"log")
+
+        self.assertEqual(proxied, [])
 
 
 class KeyTests(unittest.TestCase):

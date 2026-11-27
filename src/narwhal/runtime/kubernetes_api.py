@@ -60,6 +60,8 @@ WATCH_TIMEOUT_S = 300.0
 WATCH_READ_MARGIN_S = 30.0
 # An informer waits this long before it watches again after a watch that ended at once.
 MIN_WATCH_S = 1.0
+# The kubelet rotates a container log at 10 MiB by default, so a whole log fits.
+LOG_MAX_BYTES = 10 * 1024 * 1024
 LIST_CHUNK = 500
 LIST_RESTARTS = 3
 FIELD_MANAGER_MAX = 128
@@ -68,6 +70,7 @@ PROPAGATION = ("Background", "Foreground", "Orphan")
 
 _TOKEN = re.compile(rb"[\x21-\x7e]+")
 _DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
+_DNS_SUBDOMAIN = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
 _SELECTOR_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./-]{0,316}")
 _SELECTOR_VALUE = re.compile(r"[A-Za-z0-9_./-]{0,253}")
 
@@ -98,8 +101,34 @@ class Unavailable(KubernetesError):
     """No response arrived, or a 429 or 5xx outlasted every retry."""
 
 
+class OutcomeUnknown(Unavailable):
+    """A write met a 5xx without Retry-After, or lost its reply: it may have taken effect.
+
+    The write is not repeated, since a repeat could report the write's own success as a 409 or
+    as already gone. Read the object again before deciding. A Lease holder treats its renewal
+    as failed and reads the Lease before the next update.
+    """
+
+
+class LogTooLarge(KubernetesError):
+    """A container log is longer than the bound the caller set."""
+
+
 class InClusterConfigError(ValueError):
     """The pod's ServiceAccount token, CA or namespace cannot be used."""
+
+
+def _object_name(name: object) -> str:
+    """`name` if it is a DNS subdomain, so it cannot add a segment to a request path."""
+    if not isinstance(name, str) or len(name) > 253 or not _DNS_SUBDOMAIN.fullmatch(name):
+        raise ValueError(f"{name!r} is not a DNS subdomain name")
+    return name
+
+
+def _label(value: object, what: str) -> str:
+    if not isinstance(value, str) or not _DNS_LABEL.fullmatch(value):
+        raise ValueError(f"{what} {value!r} is not a DNS label")
+    return value
 
 
 def _error(code: int, reason: str, message: str) -> KubernetesError:
@@ -304,18 +333,23 @@ def _retry_error(request: httpx.Request, exc: httpx.TransportError) -> bool:
     return request.method == "GET"
 
 
-def _retry_status(request: httpx.Request, status: int) -> bool:
+def _retry_status(request: httpx.Request, response: httpx.Response) -> bool:
     """Retry a 429 always: priority and fairness rejects it before it runs.
 
-    A 5xx may follow a write that took effect. Reads, deletes, applies and resourceVersion-bound
-    replaces repeat safely, and a repeated create meets 409, which callers adopt. A JSON or merge
-    patch may not repeat safely, so only its 429 is retried.
+    A read retries any 5xx. A write retries a 5xx only with Retry-After, the server's word that
+    it did not run the write, as client-go does.
     """
-    if status == 429:
+    if response.status_code == 429 or request.method == "GET":
         return True
-    if request.method == "PATCH":
-        return request.headers.get("content-type") == PatchType.APPLY.value
-    return True
+    return _retry_after(response) is not None
+
+
+def _unknown(request: httpx.Request, cause: str) -> OutcomeUnknown:
+    return OutcomeUnknown(
+        0,
+        "OutcomeUnknown",
+        f"{request.method} {request.url.path} {cause}; it may have taken effect, so read it again",
+    )
 
 
 def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
@@ -353,7 +387,10 @@ class _Transport(httpx.BaseTransport):
                 response = self._inner.handle_request(request)
             except httpx.TransportError as exc:
                 failures += 1
-                if failures >= self._backoff.attempts or not _retry_error(request, exc):
+                retry = _retry_error(request, exc)
+                if not retry and request.method != "GET" and not _tls_failure(exc):
+                    raise _unknown(request, f"lost its reply: {exc}") from exc
+                if not retry or failures >= self._backoff.attempts:
                     raise
                 delay = self._backoff.delay(failures - 1)
                 log.warning(
@@ -367,7 +404,10 @@ class _Transport(httpx.BaseTransport):
                     response.close()
                     continue
             status = response.status_code
-            if status in RETRY_STATUSES and _retry_status(request, status):
+            if status in RETRY_STATUSES and not _retry_status(request, response):
+                response.close()
+                raise _unknown(request, f"met {status} without Retry-After")
+            if status in RETRY_STATUSES:
                 failures += 1
                 if failures < self._backoff.attempts:
                     delay = self._backoff.delay(failures - 1, _retry_after(response))
@@ -581,7 +621,7 @@ class ApiClient:
             if namespace:
                 raise ValueError(f"{kind.plural} are cluster-scoped")
             return None
-        return namespace or self.namespace
+        return _label(namespace, "namespace") if namespace else self.namespace
 
     def _body(self, kind: Kind, obj: Mapping[str, Any]) -> tuple[dict[str, Any], str, str | None]:
         """A copy of `obj` with its apiVersion and kind, its name and its namespace."""
@@ -596,11 +636,12 @@ class ApiClient:
         if not isinstance(metadata, dict) or not metadata.get("name"):
             raise ValueError(f"a {kind.kind} needs metadata.name")
         namespace = self._namespace(kind, metadata.get("namespace"))
-        return body, metadata["name"], namespace
+        return body, _object_name(metadata["name"]), namespace
 
     def get(self, kind: Kind, name: str, *, namespace: str | None = None) -> dict[str, Any] | None:
         """The object, or None when it does not exist."""
         resource, _ = _resources(kind)
+        _object_name(name)
         try:
             with _translate():
                 return dict(
@@ -726,6 +767,7 @@ class ApiClient:
         namespace: str | None = None,
     ) -> dict[str, Any]:
         """A JSON patch (a list of operations) or a merge patch (a mapping)."""
+        _object_name(name)
         if patch_type == "json":
             if isinstance(body, Mapping):
                 raise ValueError("a JSON patch is a list of operations")
@@ -763,6 +805,7 @@ class ApiClient:
             raise ValueError(f"propagation must be one of {', '.join(PROPAGATION)}")
         if _is_job(kind) and propagation != "Background":
             raise ValueError("a Job delete propagates in the background, or its pods stay behind")
+        _object_name(name)
         resource, _ = _resources(kind)
         try:
             with _translate():
@@ -776,13 +819,34 @@ class ApiClient:
             return False
         return True
 
-    def log(self, pod: str, *, container: str | None = None, namespace: str | None = None) -> str:
-        """The container's whole log."""
-        with _translate():
-            lines = self._kube.log(
-                pod, namespace=self._namespace(POD, namespace), container=container
-            )
-            return "".join(lines)
+    def log(
+        self,
+        pod: str,
+        *,
+        container: str | None = None,
+        namespace: str | None = None,
+        limit_bytes: int = LOG_MAX_BYTES,
+    ) -> bytes:
+        """The container's whole log, byte for byte, or `LogTooLarge` past `limit_bytes`."""
+        if limit_bytes < 1:
+            raise ValueError("a log bound must be positive")
+        path = f"{POD.path(self._namespace(POD, namespace))}/{_object_name(pod)}/log"
+        # One byte past the bound tells a log at the bound from a longer one.
+        params = {"limitBytes": str(limit_bytes + 1)}
+        if container is not None:
+            params["container"] = _label(container, "container")
+        data = bytearray()
+        with _translate(), self._http.stream("GET", path, params=params) as reply:
+            if not reply.is_success:
+                reply.read()
+                raise _response_error(reply)
+            for chunk in reply.iter_bytes():
+                data += chunk
+                if len(data) > limit_bytes:
+                    raise LogTooLarge(
+                        0, "LogTooLarge", f"pod {pod} logged more than {limit_bytes} bytes"
+                    )
+        return bytes(data)
 
 
 def _response_error(response: httpx.Response) -> KubernetesError:
@@ -821,10 +885,13 @@ class Informer:
     the server ends it. Bookmarks move the resourceVersion forward, so the next watch resumes
     from it. A 410 clears the resourceVersion and lists again; the handler then hears what that
     list changed, including deletions the expired watch never sent. `resync()` replays every
-    cached object as `SYNC` once `resync_s` has passed, without reading the API.
+    cached object as `SYNC` once `resync_s` has passed, without reading the API; `run()` calls
+    it on its own timer, so it does not wait for watch traffic.
 
-    The handler runs under the informer's lock, so it must not block. Objects it and `get` hand
-    out are copies.
+    The handler runs under the informer's lock, so it must not block, and `run()` calls it from
+    two threads. The cache and resourceVersion move only after the handler accepts every change,
+    so a handler that raises hears the same changes again. Objects it and `get` hand out are
+    copies.
     """
 
     def __init__(
@@ -894,21 +961,53 @@ class Informer:
             return
 
     def run(self, stop: threading.Event) -> None:
-        """Pump until `stop` is set, backing off after each failure."""
+        """Pump until `stop` is set, backing off after each failure, and resync on a timer.
+
+        An API failure resumes the watch from the last resourceVersion. Any other failure, such
+        as a handler error or an unreadable token, lists again.
+        """
+        timer = None
+        if self._resync_s is not None:
+            timer = threading.Thread(
+                target=self._resync_loop,
+                args=(stop, self._resync_s),
+                name=f"resync-{self.kind.plural}",
+            )
+            timer.daemon = True
+            timer.start()
         failures = 0
-        while not stop.is_set():
-            started = self._clock()
-            try:
-                self.pump()
-            except KubernetesError as exc:
-                delay = self._backoff.delay(failures, rng=self._rng)
+        try:
+            while not stop.is_set():
+                started = self._clock()
+                try:
+                    self.pump()
+                except KubernetesError as exc:
+                    log.warning("%s informer: %s", self.kind.plural, exc)
+                except Exception:
+                    log.exception("%s informer failed; listing again", self.kind.plural)
+                    with self._lock:
+                        self._version = None
+                else:
+                    failures = 0
+                    if self._clock() - started < MIN_WATCH_S:
+                        stop.wait(MIN_WATCH_S)
+                    continue
+                stop.wait(self._backoff.delay(failures, rng=self._rng))
                 failures += 1
-                log.warning("%s informer: %s; retrying in %.1fs", self.kind.plural, exc, delay)
-                stop.wait(delay)
-                continue
-            failures = 0
-            if self._clock() - started < MIN_WATCH_S:
-                stop.wait(MIN_WATCH_S)
+        finally:
+            if timer is not None:
+                timer.join()
+
+    def _resync_loop(self, stop: threading.Event, interval_s: float) -> None:
+        while True:
+            with self._lock:
+                due = self._last_resync + interval_s - self._clock()
+            if stop.wait(max(due, 0.01) if self._synced else interval_s):
+                return
+            try:
+                self.resync()
+            except Exception:
+                log.exception("%s resync failed", self.kind.plural)
 
     def resync(self) -> bool:
         """Replay every cached object as `SYNC` if `resync_s` has passed since the last time."""
@@ -918,20 +1017,16 @@ class Informer:
             now = self._clock()
             if not self._synced or now - self._last_resync < self._resync_s:
                 return False
-            self._last_resync = now
             for name in sorted(self._store):
                 self._notify("SYNC", self._store[name])
+            self._last_resync = now
         return True
 
     def _relist(self) -> str:
         listing = self._source.list(self.kind, namespace=self.namespace, labels=self.labels)
         fresh = {key(obj): obj for obj in listing.items}
         with self._lock:
-            before, self._store = self._store, fresh
-            self._version = listing.resource_version
-            if not self._synced:
-                self._last_resync = self._clock()
-            self._synced = True
+            before = self._store
             for name in sorted(fresh):
                 old = before.get(name)
                 if old is None:
@@ -940,6 +1035,11 @@ class Informer:
                     self._notify("MODIFIED", fresh[name])
             for name in sorted(before.keys() - fresh.keys()):
                 self._notify("DELETED", before[name])
+            self._store = fresh
+            self._version = listing.resource_version
+            if not self._synced:
+                self._last_resync = self._clock()
+            self._synced = True
         return listing.resource_version
 
     def _follow(self, version: str) -> None:
@@ -953,19 +1053,17 @@ class Informer:
         )
         for event in events:
             self._apply(event)
-            self.resync()
-        self.resync()
 
     def _apply(self, event: WatchEvent) -> None:
         version = _resource_version(event.object)
         with self._lock:
             if event.type != "BOOKMARK":
+                self._notify(event.type, event.object)
                 name = key(event.object)
                 if event.type == "DELETED":
                     self._store.pop(name, None)
                 else:
                     self._store[name] = event.object
-                self._notify(event.type, event.object)
             if version:
                 self._version = version
 
