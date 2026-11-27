@@ -1510,6 +1510,37 @@ class LightkubeTests(StoreTest):
         self.assertEqual(self.store.deletes[-1], Deletion("Job", NS, "gate", "Background"))
 
 
+@unittest.skipUnless(importlib.util.find_spec("lightkube"), "lightkube is not installed")
+class ApiClientTests(StoreTest):
+    """`runtime/kubernetes_api.py` runs on the store through its transport."""
+
+    def test_the_controller_client_lists_watches_applies_and_deletes_on_the_store(self):
+        from narwhal.runtime import kubernetes_api
+
+        connection = kubernetes_api.Connection("https://kubernetes.stub", NS)
+        client = kubernetes_api.ApiClient(
+            connection, field_manager="narwhal-controller", transport=self.store.transport()
+        )
+        self.addCleanup(client.close)
+        listing = client.list(kubernetes_api.CONFIG_MAP)
+        client.apply(kubernetes_api.CONFIG_MAP, config_map("a", {"k": "1"}))
+        self.assertEqual(client.get(kubernetes_api.CONFIG_MAP, "a")["data"], {"k": "1"})
+        events = list(
+            client.watch(kubernetes_api.CONFIG_MAP, resource_version=listing.resource_version)
+        )
+        self.assertEqual([e.type for e in events], ["ADDED", "BOOKMARK"])
+        self.store.compact()
+        with self.assertRaises(kubernetes_api.Gone):
+            list(client.watch(kubernetes_api.CONFIG_MAP, resource_version=listing.resource_version))
+        self.store.create(job("gate"))
+        self.store.settle()
+        self.assertTrue(client.delete(kubernetes_api.JOB, "gate"))
+        self.assertEqual(self.store.deletes[-1], Deletion("Job", NS, "gate", "Background"))
+        self.store.settle()
+        self.drain()
+        self.assertEqual(client.list(kubernetes_api.POD).items, [])
+
+
 class RigTests(unittest.TestCase):
     def test_the_task_18_rig_runs_its_gate_jobs_as_store_jobs(self):
         rig = Rig(Path(tempfile.mkdtemp()))
