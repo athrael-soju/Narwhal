@@ -40,6 +40,7 @@ Interface versions in this release:
 | Command result | `narwhal.command-result` | 1 | `command_result` |
 | Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
+| Deployment run record | `narwhal.deployment-run` | 1 | `deployment_run` |
 
 To compare manifests:
 

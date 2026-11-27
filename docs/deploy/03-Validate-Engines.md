@@ -168,7 +168,7 @@ For the [capacity trial](../measure/03-Load-Trial.md), turn prefix caching off b
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.
 3. Restart each engine.
-4. Repeat the steps that [Rerunning after a change](../Deploy.md#rerunning-after-a-change) lists for an engine restart with a changed attested `launch_digest`.
+4. Repeat the stages that [Rerunning after a change](../Deploy.md#rerunning-after-a-change) lists for an engine process restart and for a changed attested binding digest.
 
 For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env` before discovery, or set `runtime.tokenizer` to `PATH` before preparing the launch plan.
 

@@ -19,14 +19,24 @@ from pathlib import Path
 
 
 def write_evidence(path: Path, record: dict) -> None:
-    """Replace a private stage record while retaining its previous complete state."""
+    """Replace a private record at mode 0600, so a crash leaves the old or the new record whole.
+
+    The record reaches the disk before the rename, and the rename before the function returns.
+    """
     temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}")
     try:
         with os.fdopen(
             os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w"
         ) as output:
             output.write(json.dumps(record, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
         temporary.replace(path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -249,6 +259,34 @@ def recover(path: Path) -> dict:
         recovered_at=time.time(),
     )
     write_evidence(path, record)
+    return cleanup
+
+
+def cancel(child: subprocess.Popen, *, stage: str, evidence: Path) -> dict:
+    """Stop a child started in its own session, and every descendant it left, then record it.
+
+    The cleanup uses the same grace and kill budgets as `run`, and `evidence` gets a cancelled
+    stage record that `recover` and `active` read.
+    """
+    owned: dict[int, int] = {}
+    with _reaper():
+        cleanup = _cleanup(
+            child,
+            owned,
+            seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
+            seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
+        )
+    write_evidence(
+        evidence,
+        {
+            "stage": stage,
+            "pid": child.pid,
+            "processes": owned,
+            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "status": "cancelled",
+            "cleanup": cleanup,
+        },
+    )
     return cleanup
 
 
