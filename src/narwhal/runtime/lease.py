@@ -19,6 +19,12 @@ from ..contracts import LEASE, ContractVersionError, validate_document, versione
 # Seconds between attempts on a held coordination lock. A blocking lock on a network file
 # system waits out the client's retry backoff instead, which can outlast the lease itself.
 LOCK_RETRY_S = 0.01
+# Seconds of relative clock skew between router hosts that a lease reserves before its expiry
+# by default. The deployment's lease check fails a pair whose hosts' clocks differ by more.
+DEFAULT_SAFETY_MARGIN_S = 1.0
+# The file the deployment's lease check leaves in the shared lease directory. A router given
+# it refuses to touch the lease while it is missing, as it is in an unmounted directory.
+WITNESS_NAME = ".narwhal-lease-witness"
 
 
 class LeaseError(RuntimeError):
@@ -48,6 +54,7 @@ class FileLease:
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        witness: Path | None = None,
     ) -> None:
         if not holder:
             raise ValueError("lease holder must not be empty")
@@ -61,6 +68,7 @@ class FileLease:
             raise ValueError("lease safety margin must be nonnegative and less than the ttl")
         self.path = path
         self.lock_path = path.with_suffix(path.suffix + ".lock")
+        self.witness = witness
         self.holder = holder
         self.ttl_s = ttl_s
         self.safety_margin_s = safety_margin_s
@@ -165,7 +173,15 @@ class FileLease:
         """
         if deadline is None:
             deadline = self._monotonic_clock() + self.ttl_s - self.safety_margin_s
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The lease directory is shared storage. A missing one is a missing mount, and creating
+        # it would give this host a lease of its own.
+        if not self.path.parent.is_dir():
+            raise LeaseError(f"lease directory {self.path.parent} does not exist")
+        if self.witness is not None and not self.witness.is_file():
+            raise LeaseError(
+                f"lease witness {self.witness} is missing; the shared lease directory is not "
+                "mounted here"
+            )
         lock = self.lock_path.open("a+")
         try:
             while True:

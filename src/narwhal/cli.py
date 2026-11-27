@@ -15,6 +15,7 @@ import uvicorn
 from .cli_errors import failure
 from .cli_support import add_version_argument
 from .config import FleetConfig
+from .runtime.lease import DEFAULT_SAFETY_MARGIN_S
 from .runtime.listeners import check_http_bind
 from .serving.app import create_app
 
@@ -116,6 +117,12 @@ def serve(argv: list[str] | None = None) -> int:
         help="lease JSON on storage shared by the primary and standby",
     )
     ap.add_argument(
+        "--lease-witness",
+        default="",
+        help="file on the shared lease storage that must exist before the router touches the "
+        "lease, such as the one narwhal deploy's lease check leaves beside it",
+    )
+    ap.add_argument(
         "--router-id",
         default="",
         help="stable router name reported with its unique lease holder token",
@@ -136,7 +143,7 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--lease-safety-margin",
         type=float,
-        default=1.0,
+        default=DEFAULT_SAFETY_MARGIN_S,
         help="finite nonnegative relative clock skew in seconds reserved before expiry "
         "(default: %(default)s)",
     )
@@ -204,7 +211,10 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--standby-of requires --lease-path for fenced takeover")
     if args.first_start_primary and not args.standby_of:
         ap.error("--first-start-primary requires --standby-of")
-    if args.first_start_primary and not Path(args.lease_path).exists():
+    if args.lease_witness and not args.lease_path:
+        ap.error("--lease-witness requires --lease-path")
+    witnessed = not args.lease_witness or Path(args.lease_witness).is_file()
+    if args.first_start_primary and witnessed and not Path(args.lease_path).exists():
         # The first router of a pair claims the free lease; any later start finds the lease
         # file and shadows the router that holds it.
         args.standby_of = ""
@@ -225,6 +235,7 @@ def serve(argv: list[str] | None = None) -> int:
             standby_takeover_after=args.standby_takeover_after,
             standby_max_handoff_age_s=args.standby_max_handoff_age,
             lease_path=args.lease_path or None,
+            lease_witness=args.lease_witness or None,
             router_id=args.router_id or f"{socket.gethostname()}:{args.port}",
             lease_ttl_s=args.lease_ttl,
             lease_renew_interval_s=args.lease_renew_interval,

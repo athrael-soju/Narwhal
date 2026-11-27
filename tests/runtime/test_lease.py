@@ -50,6 +50,26 @@ class LeaseTests(unittest.TestCase):
         self.addCleanup(self.holder_lock.close)
         fcntl.flock(self.holder_lock.fileno(), fcntl.LOCK_EX)
 
+    def test_a_missing_lease_directory_is_an_error_and_never_created(self):
+        # An unmounted shared directory must not become a local lease of this host's own.
+        missing = self.path.parent / "unmounted" / "router.lease"
+        lease = FileLease(missing, "a", 10)
+        with self.assertRaisesRegex(LeaseError, "does not exist"):
+            lease.claim()
+        with self.assertRaisesRegex(LeaseError, "does not exist"):
+            lease.read()
+        self.assertFalse(missing.parent.exists())
+
+    def test_a_missing_witness_refuses_the_lease_until_it_appears(self):
+        witness = self.path.with_name(".narwhal-lease-witness")
+        lease = FileLease(self.path, "a", 10, witness=witness)
+        with self.assertRaisesRegex(LeaseError, "witness"):
+            lease.claim()
+        self.assertFalse(self.path.exists())
+        self.assertFalse(lease.lock_path.exists())
+        witness.write_text("narwhal lease directory\n")
+        self.assertTrue(lease.claim())
+
     def test_constructor_checks_lease_parameters(self):
         """Holder, TTL and safety margin failures identify the invalid setting."""
         for holder, ttl, margin in (("", 10, 0), ("a", 0, 0), ("a", 10, -1), ("a", 10, 10)):

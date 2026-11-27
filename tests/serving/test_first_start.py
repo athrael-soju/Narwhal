@@ -38,6 +38,16 @@ class FirstStartTests(unittest.TestCase):
         standby = self.start("--standby-of", "http://peer:8000/", "--first-start-primary")
         self.assertEqual(standby, "http://peer:8000")
 
+    def test_without_its_witness_the_first_start_shadows_the_peer(self):
+        # An unmounted lease directory holds neither the lease nor the witness; the router
+        # must not take the absent lease for a first start.
+        witness = self.lease.with_name(".narwhal-lease-witness")
+        argv = ("--standby-of", "http://peer:8000", "--first-start-primary")
+        standby = self.start(*argv, "--lease-witness", str(witness))
+        self.assertEqual(standby, "http://peer:8000")
+        witness.write_text("narwhal lease directory\n")
+        self.assertIsNone(self.start(*argv, "--lease-witness", str(witness)))
+
     def test_the_flag_needs_a_peer(self):
         with redirect_stderr(io.StringIO()) as errors, self.assertRaises(SystemExit):
             self.start("--first-start-primary")

@@ -77,6 +77,7 @@ def create_app(
     standby_max_handoff_age_s: float | None = None,
     standby_transport: httpx.AsyncBaseTransport | None = None,
     lease_path: Path | str | None = None,
+    lease_witness: Path | str | None = None,
     router_id: str = "router",
     lease_ttl_s: float = 5.0,
     lease_renew_interval_s: float = 1.0,
@@ -116,6 +117,7 @@ def create_app(
             holder,
             lease_ttl_s,
             safety_margin_s=lease_safety_margin_s,
+            witness=Path(lease_witness) if lease_witness else None,
         )
     journal = RunJournal(
         path=Path(journal_path) if journal_path else cfg.profiles_path.parent / "journal.jsonl"
