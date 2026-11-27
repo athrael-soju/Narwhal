@@ -101,7 +101,7 @@ class DeployTests(unittest.TestCase):
             if target.endswith("runs/deployment/deployment-status.json")
         }
         # One upload for each of the two router hosts.
-        self.assertEqual(self.fleet.calls["upload status"], 2)
+        self.assertEqual(self.fleet.calls["upload deployment-status"], 2)
         (status,) = {json.dumps(document, sort_keys=True) for document in uploaded.values()}
         status = json.loads(status)
         self.assertEqual(status["schema"], "narwhal.deployment-status")
@@ -323,7 +323,7 @@ class DeployTests(unittest.TestCase):
         error = result["errors"][0]
         self.assertEqual(error["stage"], "engine-check[engine-1]")
         # Both router hosts have the package, so each receives the failed run's status.
-        self.assertEqual(self.fleet.calls["upload status"], 2)
+        self.assertEqual(self.fleet.calls["upload deployment-status"], 2)
         status = json.loads((self.run / "deployment-status.json").read_text())
         self.assertIn(
             {"stage": "engine-check", "instance": "engine-1", "state": "failed"}, status["stages"]

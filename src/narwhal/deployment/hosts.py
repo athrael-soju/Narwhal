@@ -52,6 +52,8 @@ STAGE_LIMITS = {
     "load-balancer": 300.0,
     "monitoring": 600.0,
     "down": 300.0,
+    # The upload of the deployment status after a run.
+    "deployment-status": 60.0,
 }
 # The shortest stage limit: `bounded` passes limits to `timeout` in milliseconds, and `timeout`
 # reads a zero duration as no limit at all.

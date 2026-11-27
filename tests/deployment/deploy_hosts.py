@@ -10,22 +10,27 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import hashlib
+import io
 import json
 import re
+import shlex
 import uuid
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 from narwhal.deployment import cli as deploy_cli
-from narwhal.deployment import deploy, remote, supervision
-from narwhal.deployment.hosts import Host, RemoteError, write_private
+from narwhal.deployment import deploy, lease_check, remote, supervision
+from narwhal.deployment.hosts import Host, RemoteError, stage_limit, write_private
 from narwhal.deployment.role_env import write_environment
 from narwhal.deployment.supervision import Observation, Supervisor, SystemdUnit
+from narwhal.runtime.lease import FileLease
 
 REMOTE_DIR = "Narwhal-deploy/" + "b" * 32
 SHA = "c" * 64
@@ -158,6 +163,7 @@ class Fleet:
         self.uploads: dict[str, bytes] = {}
         # Whether the standby router's host reads the probe lease the primary's host claimed.
         self.lease_coherent = True
+        self.lease = ProbeLease(root / "shared")
         self.monitoring_up = False
         self.monitoring_command = ""
         self.overhead_problem: str | None = None
@@ -362,6 +368,8 @@ class Fleet:
         return ""
 
     def upload(self, ssh: Any, host: Host, stage: str, source: Path, target: str) -> None:
+        # As the real SSH does, a remote command of a stage takes that stage's time limit.
+        stage_limit({}, stage)
         self.calls[f"upload {stage}"] += 1
         self.uploads[target] = source.read_bytes()
 
@@ -396,6 +404,7 @@ class Fleet:
                 (deploy.fabric, "observe", self.observe),
                 (deploy.remote, "run", self.step),
                 (deploy.remote, "upload", self.upload),
+                (deploy.remote, "replace", self.upload),
                 (deploy, "SSH", self.ssh),
                 (deploy_cli, "SSH", self.ssh),
                 (deploy, "load_hosts", lambda path, env: deploy.discovery.derive_hosts(env)),
@@ -493,7 +502,7 @@ class _SSH:
         if operation in _LEASE_CHECK:
             if operation == "read the claim" and not fleet.lease_coherent:
                 return "null"
-            return _LEASE_CHECK[operation]
+            return fleet.lease.run(operation, script)
         if operation == "read the monitoring containers":
             if "docker ps" in script:
                 return "p1 prometheus\ng1 grafana\nr1 renderer"
@@ -513,14 +522,58 @@ class _SSH:
         return self.fleet.run_directory / Path(*parts[3:-1])
 
 
-_LEASE_CHECK = {
-    "claim the probe lease": "claimed 1",
-    "read the claim": json.dumps({"holder": "node-1-lease-check", "epoch": 1}),
-    "claim the held lease": "refused",
-    "probe the held lock": "blocked",
-    "claim the expired lease": "claimed 2",
-    "read the takeover": json.dumps({"holder": "node-2-lease-check", "epoch": 2}),
-}
+_LEASE_CHECK = (
+    "claim the probe lease",
+    "read the claim",
+    "claim the held lease",
+    "hold the lease lock",
+    "probe the held lock",
+    "claim the expired lease",
+    "read the takeover",
+)
+
+
+class ProbeLease:
+    """The lease check's host commands, run through `lease_check` on one local directory that
+    stands for the shared mount, on a clock that each SSH session advances as on real hosts."""
+
+    # Seconds an SSH session that starts Python takes, as measured on the router hosts.
+    STEP_S = 2.0
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.now = 1_000_000.0
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def run(self, operation: str, script: str) -> str:
+        self.now += self.STEP_S
+        if operation == "hold the lease lock":
+            # The primary's host holds the lock for 4 seconds in the background.
+            return ""
+        if operation == "probe the held lock":
+            return "blocked"
+        argv = shlex.split(script.split("narwhal.deployment.lease_check", 1)[1])
+        self.directory.mkdir(exist_ok=True)
+        argv[1] = str(self.directory / Path(argv[1]).name)
+        lease = functools.partial(
+            FileLease, wall_clock=self.clock, monotonic_clock=self.clock, sleep=self.sleep
+        )
+        clock = SimpleNamespace(monotonic=self.clock, sleep=self.sleep)
+        output = io.StringIO()
+        with (
+            patch.object(lease_check, "FileLease", lease),
+            patch.object(lease_check, "time", clock),
+            contextlib.redirect_stdout(output),
+        ):
+            assert lease_check.main(argv) == 0
+        return output.getvalue().strip()
+
+
 # Each router host's router origin in `environment`.
 _ROUTER_HOSTS = {"10.0.0.1:8000": "node-1", "10.0.0.2:8000": "node-2"}
 

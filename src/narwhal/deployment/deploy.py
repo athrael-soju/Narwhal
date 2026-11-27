@@ -106,6 +106,9 @@ ROUTER_INPUTS = (
     "NARWHAL_LEASE_PATH",
     "NARWHAL_HAPROXY_IMAGE",
 )
+# The probe lease's TTL in the lease check. Each step between the claim and the standby's
+# refused claim is an SSH session that starts Python, so the lease must outlive several.
+LEASE_CHECK_TTL_S = 30
 MONITORING = (
     "NARWHAL_FLEET_NAME",
     "NARWHAL_ALERTMANAGER_URL",
@@ -1357,7 +1360,7 @@ class Deployment:
             expect(
                 primary,
                 "claim the probe lease",
-                f"{cli} claim {quoted} {first} 3",
+                f"{cli} claim {quoted} {first} {LEASE_CHECK_TTL_S}",
                 "claimed 1",
                 "the primary's host could not claim a new lease",
             )
@@ -1372,7 +1375,7 @@ class Deployment:
             expect(
                 standby,
                 "claim the held lease",
-                f"{cli} claim {quoted} {second} 3",
+                f"{cli} claim {quoted} {second} {LEASE_CHECK_TTL_S}",
                 "refused",
                 "the standby's host claimed a lease the primary's host holds",
             )
@@ -1394,7 +1397,8 @@ class Deployment:
             expect(
                 standby,
                 "claim the expired lease",
-                f"{cli} claim {quoted} {second} 3 --wait 30",
+                f"{cli} claim {quoted} {second} {LEASE_CHECK_TTL_S} "
+                f"--wait {LEASE_CHECK_TTL_S + 15}",
                 "claimed 2",
                 "the standby's host could not claim the expired lease",
             )
@@ -1922,14 +1926,14 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
         for router in Topology(self).instances(ROUTER):
             host = self.host(router)
             try:
-                remote.upload(
+                remote.replace(
                     ssh,
                     host,
-                    "status",
+                    "deployment-status",
                     local,
                     f"{manifest['remote_dir']}/{deployment_status.HOST_PATH}",
                 )
-            except (RemoteError, RemoteTimeout, OSError) as error:
+            except (RemoteError, RemoteTimeout, OSError, ValueError) as error:
                 warnings.append(f"{host.id}: the deployment status was not uploaded: {error}")
         return warnings
 
