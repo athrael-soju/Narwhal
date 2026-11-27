@@ -19,10 +19,11 @@ from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import build, load, prepare
-from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
 from narwhal.dev import template
+from tests.backends.contract import CONTAINER_STARTED_AT, capture_attempt
+from tests.backends.fixtures import vllm as vllm_fixtures
 from tests.deployment.fixtures import (
     cuda_engine,
     launcher_inputs,
@@ -271,7 +272,9 @@ class RuntimeCheckAndStartTests(unittest.TestCase):
             root = Path(folder)
             run, plan, checked = checked_container(root)
             with (
-                patched_docker(side_effect=[CONTAINER_ID, "started"]) as docker,
+                patched_docker(
+                    side_effect=[CONTAINER_ID, "started", CONTAINER_STARTED_AT]
+                ) as docker,
                 contextlib.redirect_stdout(io.StringIO()) as printed,
             ):
                 start(run, load(run))
@@ -362,69 +365,16 @@ class AttestationContractTests(unittest.TestCase):
             root = Path(folder)
             run, plan, _ = checked_container(root)
             with (
-                patched_docker(side_effect=[CONTAINER_ID, "started"]),
+                patched_docker(side_effect=[CONTAINER_ID, "started", CONTAINER_STARTED_AT]),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 start(run, load(run))
             plan = load(run)
-            plan_hash = digest(run / "launch.json")
-            image = plan["image"]
-            tp = int(plan["args"][plan["args"].index("--tensor-parallel-size") + 1])
-            captures = {
-                "model-dimensions.json": {
-                    "plan_sha256": plan_hash,
-                    "image": image,
-                    "model_config_sha256": plan["model_config_sha256"],
-                    "revision": plan["revision"],
-                    "contract": {"kv_heads": 8, "head_size": 64, "hidden_layers": 4},
-                    "model_architecture": "FixtureForCausalLM",
-                },
-                "cache-registration.json": {
-                    "plan_sha256": plan_hash,
-                    "image": image,
-                    "kv_cache_layout": "NHD",
-                    "cross_layers_blocks": False,
-                },
-                "cache-layout.json": {
-                    "plan_sha256": plan_hash,
-                    "image": image,
-                    "model_config_sha256": plan["model_config_sha256"],
-                    "launch_config_sha256": plan["launch_sha256"],
-                    "ranks": [
-                        {
-                            "rank": rank,
-                            "kv_cache_layout": "NHD",
-                            "layers": [{"kind": "FullAttentionSpec"}],
-                        }
-                        for rank in range(tp)
-                    ],
-                },
-                "nixl-connector-version.json": {
-                    "plan_sha256": plan_hash,
-                    "image_id": image,
-                    "container_id": CONTAINER_ID,
-                    "nixl_connector_version": 9,
-                },
-                "transfer-mode.json": {
-                    "plan_sha256": plan_hash,
-                    "image_id": image,
-                    "transfer_mode": "pull",
-                },
-                "handshake-policy.json": {
-                    "plan_sha256": plan_hash,
-                    "image": image,
-                    "connector_config": plan["connector"],
-                    "enforce_handshake_compat": True,
-                },
-                "version.json": {"version": "0.29.0"},
-            }
-            for name, value in captures.items():
-                (run / name).write_text(json.dumps(value) + "\n")
-            (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
-            log = run / "startup.log"
-            log.write_text("Using FLASH_ATTN attention backend.\n")
+            attempt = capture_attempt(run)
+            vllm_fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+            (attempt / "startup.log").write_text("Using FLASH_ATTN attention backend.\n")
             with patch.object(attestation_evidence, "live_container", return_value=CONTAINER_ID):
-                document = engine_document(run, log)
+                document = engine_document(run, attempt)
             document["sources"] = {
                 field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)
                 for field, source in document["sources"].items()

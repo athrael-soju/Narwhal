@@ -20,11 +20,17 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
 from narwhal.backends import EngineBackend, load, names
+from narwhal.deployment.attestation_contract.capture import (
+    PUBLISHED,
+    capture,
+    published_attempt,
+)
 from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine import kubernetes
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.check import check, read_checked
 from narwhal.deployment.launch_engine.plan import load as load_plan
+from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.settings import SWITCHES, mapped_flags
 from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
@@ -38,11 +44,14 @@ from narwhal.types import Role, RoleModel
 from tests.backends.contract import (
     CONTAINER_ID,
     Engines,
+    LiveContainer,
     Stages,
+    capture_attempt,
     fixtures,
     prepared,
     random_ids,
     running_container,
+    started_container,
 )
 from tests.characterization.golden import assert_golden
 from tests.characterization.test_launch import env_lines, placeholders, redacted
@@ -565,18 +574,18 @@ class BackendFlows(Launched, unittest.TestCase):
         self.check(run, plan)
         self.start(run)
         plan = load_plan(run)
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         image = json.loads((run / "checked.json").read_text())["image_id"]
         with running_container(image):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
             self.assertEqual(
                 list(document), ["schema", "schema_version", "contract", "sources", "launch"]
             )
             (Path(plan["model_dir"]) / "config.json").write_text("{}")
             with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
-                engine_document(run, log)
+                engine_document(run, attempt)
 
     def test_the_attested_launch_carries_engine_configuration_files(self):
         launcher = type(self.backend.engine_launcher())
@@ -594,12 +603,12 @@ class BackendFlows(Launched, unittest.TestCase):
         self.check(run, plan)
         self.start(run)
         plan = load_plan(run)
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         image = json.loads((run / "checked.json").read_text())["image_id"]
         with running_container(image):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
         self.assertEqual(document["launch"]["config_files"], added)
 
     def pod(self, run: Path) -> EnginePod:
@@ -740,12 +749,12 @@ class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
         }
 
     def attested(self, run: Path, plan: dict) -> dict:
-        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
-        log = run / "startup.log"
-        log.write_text(self.fixtures.startup_log)
+        attempt = capture_attempt(run)
+        self.fixtures.attestation_evidence(run, attempt, plan, CONTAINER_ID)
+        (attempt / "startup.log").write_text(self.fixtures.startup_log)
         checked = json.loads((run / "checked.json").read_text())
         with running_container(checked["image_id"]):
-            document = engine_document(run, log)
+            document = engine_document(run, attempt)
         document["sources"] = {
             field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)
             for field, source in document["sources"].items()
@@ -771,6 +780,39 @@ class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
 
     def test_attestation_document(self):
         self.golden("attestation", self.launched(False)["attestation"])
+
+    def test_attestation_capture(self):
+        # The captures run against a started container, which answers as the fixtures hold.
+        assert self.launcher is not None
+        run, reference = started_container(self.root, self.name)
+        plan = load_plan(run)
+        self.replacements = {
+            **placeholders(self.root, plan),
+            digest(run / "launch.json"): "<plan_sha256>",
+            **self.replacements,
+        }
+        checked = read_checked(run)
+        answers = self.fixtures.engine_answers(reference)
+        live = LiveContainer(run, checked["image_id"], answers, self.fixtures.startup_log)
+        with live.serving():
+            expected = engine_document(run, reference)
+            live.calls.clear()
+            document = capture(run)
+            self.assertEqual(published_attempt(run), document.parent)
+            captured = json.loads(document.read_text())
+        self.assertEqual(
+            {key: value for key, value in captured.items() if key != "sources"},
+            {key: value for key, value in expected.items() if key != "sources"},
+        )
+        self.assertEqual(captured["sources"].keys(), expected["sources"].keys())
+        self.golden(
+            "capture",
+            {
+                "calls": live.calls,
+                "attempt": sorted(path.name for path in document.parent.iterdir()),
+                "published": sorted(json.loads((run / PUBLISHED).read_text())),
+            },
+        )
 
     def test_kubernetes_engine_pod_and_check(self):
         root = self.root / "kubernetes"
@@ -799,30 +841,6 @@ class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
                 "engine": {"argv": argv, "UCX_NET_DEVICES": devices},
             },
         )
-
-
-def pod_manifests(manifests: dict) -> dict:
-    """A launch's Kubernetes manifests as a golden record holds them.
-
-    ConfigMap data and file digests change with the delivered files, so the record keeps file
-    names and the digest placeholder; a multi-line argument becomes its lines.
-    """
-
-    def shaped(value: object) -> object:
-        if isinstance(value, dict):
-            return {key: shaped(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [shaped(item) for item in value]
-        if isinstance(value, str):
-            value = re.sub(r"\b[0-9a-f]{64}\b", "<sha256>", value)
-            value = re.sub(r"narwhal-pod-[0-9a-f]{12}", "narwhal-pod-<digest>", value)
-            return value.splitlines() if "\n" in value else value
-        return value
-
-    record = copy.deepcopy(manifests)
-    for item in record["configMaps"]:
-        item["data"] = sorted(item["data"])
-    return {key: shaped(value) for key, value in record.items() if key != "plan_sha256"}
 
     async def test_handoff_request_bodies_and_order(self):
         engines = Engines(self.name, self.fixtures.handoff_random_fields)
@@ -898,6 +916,30 @@ def pod_manifests(manifests: dict) -> dict:
             )
             record["restore"] = engines.take()
         self.golden("role_switch", record)
+
+
+def pod_manifests(manifests: dict) -> dict:
+    """A launch's Kubernetes manifests as a golden record holds them.
+
+    ConfigMap data and file digests change with the delivered files, so the record keeps file
+    names and the digest placeholder; a multi-line argument becomes its lines.
+    """
+
+    def shaped(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: shaped(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [shaped(item) for item in value]
+        if isinstance(value, str):
+            value = re.sub(r"\b[0-9a-f]{64}\b", "<sha256>", value)
+            value = re.sub(r"narwhal-pod-[0-9a-f]{12}", "narwhal-pod-<digest>", value)
+            return value.splitlines() if "\n" in value else value
+        return value
+
+    record = copy.deepcopy(manifests)
+    for item in record["configMaps"]:
+        item["data"] = sorted(item["data"])
+    return {key: shaped(value) for key, value in record.items() if key != "plan_sha256"}
 
 
 for _name in names():

@@ -13,7 +13,7 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 - `curl`
 - network reachability from the router host to every engine metrics endpoint
 
-Run these commands in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells), with `runs/deployment/.env.router` loaded and `.venv` active.
+Run these commands in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells), with `runs/deployment/.env.router` loaded and `.venv` active, from the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host).
 
 ## Configuring the monitored deployment
 

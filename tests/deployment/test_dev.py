@@ -575,6 +575,21 @@ class DevTests(unittest.TestCase):
             + [f"attest-{number}" for number in (1, 2, 3, 4)]
             + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
         )
+        run = Path(result["run"])
+        self.assertEqual(
+            [
+                call.args[1:3]
+                for call in command.call_args_list
+                if call.args[3].startswith("attest")
+            ],
+            [
+                (
+                    "narwhal.deployment.attestation_contract.cli",
+                    ["capture", "--run", str(run / f"engine-{number}")],
+                )
+                for number in (1, 2, 3, 4)
+            ],
+        )
         budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
         self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
         start = next(
@@ -906,14 +921,14 @@ class DevTests(unittest.TestCase):
                     "processes": [{"name": "router", "identity": identity}],
                 },
             )
-            terminate = lifecycle.native_engine._terminate
+            terminate = lifecycle.native_engine.terminate
             with patch.object(
                 lifecycle.native_engine,
-                "_terminate",
+                "terminate",
                 side_effect=lambda owned: terminate(owned, grace_seconds=0.05),
             ):
                 self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
-            self.assertEqual(lifecycle.native_engine._group_members(identity), {})
+            self.assertEqual(lifecycle.native_engine.group_members(identity), {})
             self.assertEqual(lifecycle.read(run / "teardown.json")["stopped"], ["router"])
 
     def test_exited_leader_keeps_surviving_workers_visible_in_status_and_down(self):
@@ -945,7 +960,7 @@ class DevTests(unittest.TestCase):
             state = lifecycle.read(self.root / "lifecycle.json")
             self.assertEqual(state["phase"], "degraded")
             self.assertIn(str(worker), state["errors"][0])
-            self.assertIn(worker, lifecycle.native_engine._group_members(identity))
+            self.assertIn(worker, lifecycle.native_engine.group_members(identity))
 
     def test_saved_ready_state_requires_current_kv_evidence(self):
         self.initialize()
@@ -963,7 +978,7 @@ class DevTests(unittest.TestCase):
         lifecycle.write(self.root / "lifecycle.json", state)
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle.httpx, "Client", return_value=httpx.Client(transport=transport)),
             patch.object(
                 lifecycle, "verify_directed_kv_evidence", return_value=["consumer process changed"]
@@ -1068,7 +1083,7 @@ class DevTests(unittest.TestCase):
         )
         client = httpx.Client
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "_run") as preflight,
             patch.object(
@@ -1135,7 +1150,7 @@ class DevTests(unittest.TestCase):
 
         client = httpx.Client
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "_run"),
             patch.object(
@@ -1204,8 +1219,8 @@ class DevTests(unittest.TestCase):
         state.update(phase="degraded", verification_failure=failure)
         lifecycle.write(self.root / "lifecycle.json", state)
         with (
-            patch.object(lifecycle.native_engine, "_group_members", return_value={1: {}}),
-            patch.object(lifecycle.native_engine, "_terminate", side_effect=ValueError("owned")),
+            patch.object(lifecycle.native_engine, "group_members", return_value={1: {}}),
+            patch.object(lifecycle.native_engine, "terminate", side_effect=ValueError("owned")),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 1)
@@ -1213,8 +1228,8 @@ class DevTests(unittest.TestCase):
         self.assertEqual(state["phase"], "degraded")
         self.assertEqual(state["verification_failure"], failure)
         with (
-            patch.object(lifecycle.native_engine, "_group_members", return_value={}),
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=False),
+            patch.object(lifecycle.native_engine, "group_members", return_value={}),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=False),
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 0)
@@ -1276,7 +1291,7 @@ class DevTests(unittest.TestCase):
             )
             with (
                 self.subTest(result=result),
-                patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+                patch.object(lifecycle.native_engine, "owns_process", return_value=True),
                 patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
                 patch.object(lifecycle, "_run"),
                 patch.object(
@@ -1360,9 +1375,9 @@ class DevTests(unittest.TestCase):
                 for action in ("status", "down"):
                     with (
                         self.subTest(location=location, identity=identity, action=action),
-                        patch.object(lifecycle.native_engine, "_owns_process") as owns,
-                        patch.object(lifecycle.native_engine, "_group_members") as groups,
-                        patch.object(lifecycle.native_engine, "_terminate") as terminate,
+                        patch.object(lifecycle.native_engine, "owns_process") as owns,
+                        patch.object(lifecycle.native_engine, "group_members") as groups,
+                        patch.object(lifecycle.native_engine, "terminate") as terminate,
                         contextlib.redirect_stdout(io.StringIO()) as stdout,
                         contextlib.redirect_stderr(io.StringIO()) as stderr,
                     ):

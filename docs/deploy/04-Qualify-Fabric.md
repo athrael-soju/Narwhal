@@ -18,7 +18,15 @@ The `calculate` command sizes the budget from one cache source and these initial
 | Transfer budget               | 1 s   | `--transfer-budget-s 1` |
 | Bandwidth headroom            | 25%   | `--headroom 1.25`       |
 
-On vLLM and TensorRT-LLM, the cache source is `--runtime-layout` with the engine's captured `cache-layout.json`. On SGLang, it is `--transfer-metrics` with the before and after metrics that `measure-transfer` saves. [Calculating the workload budget](../configuration/06-Fabric-and-Operations.md#calculating-the-workload-budget) lists every `calculate` and `measure-transfer` option.
+On vLLM and TensorRT-LLM, the cache source is `--runtime-layout` with the engine's captured `cache-layout.json`. On SGLang, it is `--transfer-record` with the `transfer.json` that the packaged transfer measurement tool writes. [Calculating the workload budget](../configuration/06-Fabric-and-Operations.md#calculating-the-workload-budget) lists every `calculate` and transfer measurement option.
+
+In each engine-role shell, check the packaged helpers against the SHA-256 values in the role environment before you run them:
+
+```bash
+echo "$NARWHAL_FABRIC_BUDGET_SHA256  $NARWHAL_FABRIC_BUDGET_TOOL" | sha256sum -c
+```
+
+On SGLang, check `NARWHAL_TRANSFER_MEASURE_TOOL` against `NARWHAL_TRANSFER_MEASURE_SHA256` the same way.
 
 Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
@@ -39,7 +47,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
     ```bash
     export PREFILL_IP='<this engine fabric address>'
     export DECODE_URL='http://<decode engine address>:<decode engine port>'
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" measure-transfer \
+    python3 "$NARWHAL_TRANSFER_MEASURE_TOOL" \
       --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
       --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
       --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
@@ -47,7 +55,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
       --model-config "$NARWHAL_MODEL_DIR/config.json" \
       --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --transfer-metrics "$FABRIC_RUN/transfer/before.prom" "$FABRIC_RUN/transfer/after.prom" \
+      --transfer-record "$FABRIC_RUN/transfer/transfer.json" \
       --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
       --transfer-budget-s 1 --headroom 1.25 \
       --out "$FABRIC_RUN/budget.json"
@@ -292,7 +300,7 @@ While KV moves, read the HCA port counters, such as `/sys/class/infiniband/<hca>
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs. For every edge, retain:
 
 - The source and destination roles.
-- The source revision.
+- The SHA-256 of the installed wheel.
 - The source and reverse routes.
 - The transport and utility version.
 - The exact command.

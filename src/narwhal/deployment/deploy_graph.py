@@ -73,9 +73,7 @@ RELATIONS = (
 STAGES = (
     _stage("access", HOST, _DISCOVER, _ACCESS),
     _stage("discover", WORKSTATION, _DISCOVER, _ACCESS, ("access",)),
-    _stage(
-        "package", WORKSTATION, _INSTALL, "Building an immutable deployment package", ("discover",)
-    ),
+    _stage("package", WORKSTATION, _INSTALL, "Building the deployment package", ("discover",)),
     _stage("install", HOST, _INSTALL, "Installing engine 1 and the remaining hosts", ("package",)),
     _stage("engine-inspect", ENGINE, _ENGINES, "Inspecting every engine host", ("install",)),
     _stage("engine-prepare", ENGINE, _ENGINES, _RUN_ENGINES, ("engine-inspect",)),
@@ -125,7 +123,7 @@ STAGES = (
         "attest-capture",
         ENGINE,
         _ATTEST,
-        "Capturing the attestation inputs",
+        "Capturing the attestation",
         ("fabric-edge", "fleet-inventory"),
         ("binding", "engine_contract"),
     ),
@@ -141,7 +139,7 @@ STAGES = (
         "sidecar-verify",
         ENGINE,
         _ATTEST,
-        "Verifying the sidecar against the engine",
+        "Verifying the sidecar",
         ("sidecar-start",),
     ),
     _stage("finalize-fleet", ROUTER, _ATTEST, "Finalizing the fleet contract", ("sidecar-verify",)),
@@ -202,8 +200,9 @@ FACTS = (
         "access",
         INPUT,
         WORKSTATION,
-        "SSH credentials or expected host keys",
-        "The password variable names and the SHA-256 of the expected host-key file",
+        "SSH credentials, jump host or expected host keys",
+        "The password variable names, `NARWHAL_SSH_JUMP` and the SHA-256 of "
+        "`NARWHAL_SSH_KNOWN_HOSTS`",
         _reruns("access"),
     ),
     Fact(
@@ -226,8 +225,9 @@ FACTS = (
         "revision",
         INPUT,
         WORKSTATION,
-        "Approved revision",
-        "`NARWHAL_DEPLOYMENT_REVISION` and the SHA-256 of the Narwhal package hosts install",
+        "Approved release",
+        "`NARWHAL_WHEEL_SHA256`, which each role environment records as "
+        "`NARWHAL_DEPLOYMENT_REVISION`, `NARWHAL_REQUIREMENTS_SHA256` and `NARWHAL_TOOLS_COMMIT`",
         (_onward("package"),),
     ),
     Fact(

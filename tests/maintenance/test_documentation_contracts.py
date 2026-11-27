@@ -90,10 +90,11 @@ class DocumentationContractTests(unittest.TestCase):
         sections = {}
         for page in (ROOT / "docs/cli").glob("*.md"):
             content = page.read_text()
-            # A page may title a script's subcommand, such as `narwhal dev`.
+            # A page may title a script's subcommand, such as `narwhal dev`, so one script's
+            # options can span several pages.
             heading = re.search(r"^# `(narwhal(?:-[^` ]+)?)(?: [a-z]+)?`\n", content, re.M)
             self.assertIsNotNone(heading, page)
-            sections[heading.group(1)] = content
+            sections[heading.group(1)] = sections.get(heading.group(1), "") + content
         self.assertEqual(set(sections), set(project["scripts"]))
         for name, entry in project["scripts"].items():
             captured = []

@@ -1,0 +1,16 @@
+(APIServer pid=130752) INFO 10-19 15:59:05 [nixl_utils.py:32] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+(APIServer pid=130752) INFO 10-19 15:59:05 [nixl_utils.py:72] NIXL is available
+(EngineCore pid=131677) INFO 10-19 16:00:07 [cuda.py:538] Using FLASHINFER attention backend out of potential backends: ['FLASHINFER', 'FLASH_ATTN', 'TRITON_ATTN', 'FLEX_ATTENTION'].
+(EngineCore pid=131677) INFO 10-19 16:00:19 [nixl_utils.py:72] NIXL is available
+(EngineCore pid=131677) INFO 10-19 16:00:19 [connector.py:154] NixlConnector setting KV cache layout to LBHNC for better xfer performance.
+(EngineCore pid=131677) INFO 10-19 16:00:19 [utils.py:320] Using LBHNC KV cache layout.
+(EngineCore pid=131677) INFO 10-19 16:00:25 [factory.py:62] Creating v1 connector with name: NixlPullConnector and engine_id: 00000000-0000-4000-8000-000000000001
+(EngineCore pid=131677) WARNING 10-19 16:00:25 [base.py:217] Initializing KVConnectorBase_V1. This API is experimental and subject to change in the future as we iterate the design.
+(EngineCore pid=131677) WARNING 10-19 16:00:25 [connector.py:95] Using kv_role='kv_both' with NixlConnector is deprecated and will be removed in a future release. Please set kv_role='kv_producer' for prefill instances and kv_role='kv_consumer' for decode instances.
+(EngineCore pid=131677) INFO 10-19 16:00:25 [base_worker.py:405] Initializing NIXL wrapper
+(EngineCore pid=131677) INFO 10-19 16:00:25 [base_worker.py:406] Initializing NIXL worker 00000000-0000-4000-8000-000000000001
+(EngineCore pid=131677) 2026-10-19 16:00:26 NIXL INFO    _api.py:407 Backend UCX was instantiated
+(EngineCore pid=131677) INFO 10-19 16:00:26 [base_worker.py:736] Detected kv cache layout LBHNC
+(EngineCore pid=131677) INFO 10-19 16:00:27 [factory.py:62] Creating v1 connector with name: NixlPullConnector and engine_id: 00000000-0000-4000-8000-000000000001
+(EngineCore pid=131677) WARNING 10-19 16:00:27 [base.py:217] Initializing KVConnectorBase_V1. This API is experimental and subject to change in the future as we iterate the design.
+(EngineCore pid=131677) INFO 10-19 16:00:27 [base_scheduler.py:104] Initializing NIXL Scheduler 00000000-0000-4000-8000-000000000001

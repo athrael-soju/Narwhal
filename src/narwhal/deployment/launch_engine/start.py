@@ -75,10 +75,18 @@ def _create_container(run: Path, plan: dict) -> str:
     return cid
 
 
+def record_container_start(run: Path, cid: str, started_at: str) -> None:
+    """Record the container's State.StartedAt; attestation refuses a container started again."""
+    record = {"container_id": cid, "started_at": started_at}
+    write_private(run / "container-start.json", json.dumps(record, indent=2) + "\n")
+
+
 def start(run: Path, plan: dict) -> None:
     cid = _create_container(run, plan)
     write_private(run / "container.id", cid + "\n")
     docker(["start", cid], run, "launch.log")
+    started_at = docker(["inspect", "--format", "{{.State.StartedAt}}", cid], run, "launch.log")
+    record_container_start(run, cid, started_at)
     print("Container started; follow its logs and verify the HTTP endpoints.")
 
 
@@ -306,6 +314,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     or image_id != checked["image_id"]
                 ):
                     raise ValueError(f"{role}: live process, image or arguments differ from plan")
+                record_container_start(run, cid, state["StartedAt"])
                 after = gpu_memory(gpu_uuid)
                 aggregate_delta = after["used_mib"] - baseline_used
                 record.update(

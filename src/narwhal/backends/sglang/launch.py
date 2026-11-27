@@ -5,8 +5,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.launch_engine.backend import EngineLauncher, TransferMeasurement
 from ...deployment.launch_engine.check import CheckContext
 from . import attestation, dev, discovery, probe_reader
 from . import check as runtime_check
@@ -16,8 +17,9 @@ from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
 BOOTSTRAP_HOST_ENV = "NARWHAL_SGLANG_BOOTSTRAP_HOST"
 
 
-class SglangLauncher(EngineLauncher):
+class SglangLauncher(EngineLauncher, TransferMeasurement):
     runtime_script = LAUNCHER
+    transfer_tool = Path(__file__).with_name("transfer_measure.py")
     side_channel = "bootstrap"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES
@@ -78,11 +80,8 @@ class SglangLauncher(EngineLauncher):
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
 
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_server(run)
-
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         return policy.transfer_package(

@@ -338,7 +338,7 @@ class DirectLifecycleTests(DirectInstance):
         self.assertIn("became healthy", state["failure"]["message"])
         self.assertEqual(state["stopped"], ["engine-1"])
         survivor = state["processes"][0]["identity"]
-        self.assertFalse(native_engine._owns_process(survivor))
+        self.assertFalse(native_engine.owns_process(survivor))
         _check_free_ports({first}, "127.0.0.1")
         self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
 
@@ -357,7 +357,7 @@ class DirectLifecycleTests(DirectInstance):
         self.assertIn("verification failed", " ".join(status["problems"]))
         self.assertEqual(lifecycle.verify(self.root)["status"], "ready")
         state = json.loads((self.root / "lifecycle.json").read_text())
-        native_engine._terminate(state["processes"][0]["identity"])
+        native_engine.terminate(state["processes"][0]["identity"])
         status = lifecycle.status(self.root)
         self.assertEqual(status["status"], "degraded")
         self.assertIn("engine-1 process identity expired", status["problems"])

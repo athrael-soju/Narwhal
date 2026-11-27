@@ -27,7 +27,7 @@ Run these steps from the router shell, with the engines reserved for profiling a
 
 4. Compare the line printed for each engine, `<iid>: max_model_len <n>; prefill up to <x>, decode input up to <y>, decode concurrency up to <z>`, with the `max_model_len` and sequence limit in that engine's checked serving plan.
 
-`deploy_hosts.py prepare` writes each engine's `runtime.max_sequences` to `profiling-limits.json`. An SGLang engine without the setting gets 256 and a TensorRT-LLM engine without it gets 64.
+`narwhal deploy package` writes each engine's `runtime.max_sequences` to `profiling-limits.json`. An SGLang engine without the setting gets 256 and a TensorRT-LLM engine without it gets 64.
 
 The profiler fits each sweep to the engine's live `max_model_len`, as [Prefill sweep](../measure/01-Profile.md#prefill-sweep) and [Decode sweep](../measure/01-Profile.md#decode-sweep) define. It ends decode concurrency at the engine's sequence limit.
 

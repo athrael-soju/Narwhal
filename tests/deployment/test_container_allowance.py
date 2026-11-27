@@ -70,7 +70,12 @@ class ContainerAllowanceTests(unittest.TestCase):
                     cid = command[-1]
                     self.assertIn(cid, containers)
                     if command[2] == "{{json .State}}":
-                        return json.dumps({"Running": containers[cid] == "running", "Pid": 1234})
+                        state = {
+                            "Running": containers[cid] == "running",
+                            "Pid": 1234,
+                            "StartedAt": "2026-01-01T00:00:00Z",
+                        }
+                        return json.dumps(state)
                     if command[2] == "{{json .Config.Cmd}}":
                         return json.dumps(plans[run]["args"])
                     if command[2] == "{{.Image}}":

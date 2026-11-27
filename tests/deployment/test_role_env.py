@@ -7,13 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values, write_environment
+from narwhal.deployment.role_env import ENGINE_FIELDS, select_values, write_environment
 
 
 class HostEnvironmentTests(unittest.TestCase):
     def setUp(self):
         self.env = {
-            "NARWHAL_DEPLOYMENT_REVISION": "a" * 40,
             "NARWHAL_NODE_1_URL": "http://engine.example.invalid:8000",
             "NARWHAL_NODE_1_ATTESTATION_URL": "http://engine.example.invalid:8010/v1/attestation",
             "NARWHAL_NODE_2_URL": "http://peer.example.invalid:8000",
@@ -82,6 +81,28 @@ class HostEnvironmentTests(unittest.TestCase):
         engine = select_values("engine", 1, self.fleet, self.env)
         self.assertEqual(engine["NARWHAL_KV_SIDE_CHANNEL_PORT"], "5601")
         self.assertNotIn("NARWHAL_SGLANG_BOOTSTRAP_PORT", engine)
+
+    def test_engine_export_names_the_helper_snapshots_of_its_backend(self):
+        helpers = {
+            None: {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_CACHE_CAPTURE_HOOK"},
+            "trtllm": {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_CACHE_CAPTURE_HOOK"},
+            "sglang": {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_TRANSFER_MEASURE_TOOL"},
+        }
+        for backend, names in helpers.items():
+            with self.subTest(backend=backend):
+                self.fleet["engine"].pop("backend", None)
+                if backend:
+                    self.fleet["engine"]["backend"] = backend
+                engine = select_values("engine", 1, self.fleet, self.env)
+                paths = {
+                    name: engine[name]
+                    for name in engine
+                    if name.endswith(("_TOOL", "_HOOK")) and name.startswith("NARWHAL_")
+                }
+                self.assertEqual(set(paths), names)
+                for path in paths.values():
+                    self.assertRegex(path, r"^runs/deployment-tools/[a-z_]+\.py$")
+                self.assertNotIn("NARWHAL_DEPLOYMENT_REVISION", engine)
 
     def test_node_override_preserves_shared_defaults_for_other_hosts(self):
         self.env["NARWHAL_NODE_2_MODEL_DIR"] = "/synthetic/second-model"

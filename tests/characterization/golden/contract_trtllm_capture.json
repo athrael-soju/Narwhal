@@ -1,0 +1,72 @@
+{
+  "attempt": [
+    "engine-attestation.json",
+    "model-dimensions.json",
+    "server-info.json",
+    "startup.log"
+  ],
+  "calls": [
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "logs",
+        "--since",
+        "2026-01-01T00:00:00.25Z",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 120
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "authorized": true,
+      "request": "GET /version"
+    },
+    {
+      "authorized": true,
+      "request": "GET /server_info"
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{.State.Running}} {{.State.StartedAt}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    },
+    {
+      "command": [
+        "docker",
+        "inspect",
+        "--format",
+        "{{json .}}",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "timeout": 15
+    }
+  ],
+  "published": [
+    "attempt",
+    "document_sha256"
+  ]
+}

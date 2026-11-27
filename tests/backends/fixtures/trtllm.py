@@ -4,7 +4,7 @@ from pathlib import Path
 from narwhal.backends.trtllm.runtime import SETTINGS_TAG
 from narwhal.deployment.attestation_contract.evidence import config_model_dimensions
 from narwhal.deployment.launch_engine.runtime import digest
-from tests.backends.contract import ContractFixtures
+from tests.backends.contract import CONTAINER_STARTED_S, ContractFixtures, EngineAnswers
 
 
 def check_output(plan: dict) -> str:
@@ -12,8 +12,8 @@ def check_output(plan: dict) -> str:
     return "loading\n" + SETTINGS_TAG + json.dumps(record) + "\n"
 
 
-def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
-    config_model_dimensions(run, plan)
+def attestation_evidence(run: Path, attempt: Path, plan: dict, container_id: str) -> None:
+    config_model_dimensions(run, plan, attempt)
     checked = json.loads((run / "checked.json").read_text())
     record = {
         "server": {
@@ -22,12 +22,18 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
             "max_batch_size": 64,
             "kv_cache_hash_algo": "sha256",
         },
-        "process_start_time_seconds": 100.0,
+        "process_start_time_seconds": CONTAINER_STARTED_S,
         "plan_sha256": digest(run / "launch.json"),
         "image_id": checked["image_id"],
         "container_id": container_id,
     }
-    (run / "server-info.json").write_text(json.dumps(record, indent=2) + "\n")
+    (attempt / "server-info.json").write_text(json.dumps(record, indent=2) + "\n")
+
+
+def engine_answers(reference: Path) -> EngineAnswers:
+    server = dict(json.loads((reference / "server-info.json").read_text())["server"])
+    version = server.pop("version")
+    return EngineAnswers(routes={"/version": {"version": version}, "/server_info": server})
 
 
 _LABELS = 'engine_type="pytorch",model_name="m",pid="1"'
@@ -94,6 +100,7 @@ FIXTURES = ContractFixtures(
     check_output=check_output,
     attestation_evidence=attestation_evidence,
     startup_log="TensorRT-LLM version: 1.4.0rc3\n",
+    engine_answers=engine_answers,
     handoff_random_fields=(
         "disaggregated_params.disagg_request_id",
         "disaggregated_params.ctx_request_id",

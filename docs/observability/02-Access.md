@@ -10,12 +10,11 @@ An open [deployment tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-
 
 To open a monitoring tunnel:
 
-1. Open a terminal in the management checkout with the workstation `.env` loaded.
+1. Open a terminal in the management checkout with the workstation `.env` and `config/deployment.env` loaded.
 2. Open the tunnel:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py tunnel --role router \
-      --forward 13000:3000 --forward 19090:9090
+    narwhal deploy tunnel --forward 13000:3000 --forward 19090:9090
     ```
 
 3. Keep the tunnel terminal open.
@@ -45,8 +44,7 @@ The Grafana `Prometheus` datasource and the readiness probes use the Prometheus 
 Tunnel to the `127.0.0.2` listeners:
 
 ```bash
-python3 tools/deployment/deploy_hosts.py tunnel --role router \
-  --remote-address 127.0.0.2 \
+narwhal deploy tunnel --remote-address 127.0.0.2 \
   --forward 13000:3000 --forward 19090:19090
 ```
 

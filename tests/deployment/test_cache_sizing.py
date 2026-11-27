@@ -19,8 +19,8 @@ from narwhal.backends.vllm.runtime import (
     runtime_model_dimensions,
     write_once,
 )
+from narwhal.deployment.fabric_budget import main, runtime_payload
 from tests.deployment.fixtures import VLLM_HOOK, launcher_inputs, patched_docker
-from tools.deployment.fabric_budget import main, runtime_payload
 
 
 def allocation():
@@ -213,7 +213,31 @@ class CacheSizingTests(unittest.TestCase):
                 )
             )
             original = sample.read_bytes()
-            self.assertEqual(main(["compare", "--budget", str(out), "--iperf", str(sample)]), 0)
+            route = root / "route.txt"
+            route.write_text("192.0.2.2 dev fabric0 src 192.0.2.1\n")
+            link = root / "link.json"
+            link_args = [
+                "link",
+                *("--source-role", "engine-1", "--destination-role", "engine-2"),
+                *("--source-address", "192.0.2.1", "--destination-address", "192.0.2.2"),
+                *("--source-interface", "fabric0", "--destination-interface", "fabric0"),
+                *("--source-route", str(route), "--destination-route", str(route)),
+                *("--transport", "ucx_tcp", "--tool-version", "iperf 3.16"),
+                *("--test-parameters", '{"duration_s": 10}', "--out", str(link)),
+            ]
+            self.assertEqual(main(link_args), 0)
+            evidence = root / "edge.json"
+            self.assertEqual(
+                main(
+                    [
+                        "record-edge",
+                        *("--link", str(link), "--budget", str(out)),
+                        *("--sample", str(sample), "--out", str(evidence)),
+                    ]
+                ),
+                0,
+            )
+            self.assertTrue(json.loads(evidence.read_text())["passed"])
             self.assertEqual(sample.read_bytes(), original)
             out.unlink()
             launch.write_text('{"tensor_parallel_size": 8}')

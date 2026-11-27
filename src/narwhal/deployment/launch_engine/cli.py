@@ -16,7 +16,6 @@ from . import kubernetes
 from .backend import (
     CacheCapture,
     CacheMeasurement,
-    CacheRegistration,
     engine_backend,
     plan_launcher,
 )
@@ -38,22 +37,10 @@ CAPTURE_ACTIONS: dict[str, tuple[str, str, type]] = {
         "container only",
         CacheMeasurement,
     ),
-    "handshake-policy": (
-        "Inspect the installed connector compatibility policy using a checked plan; write "
-        "handshake-policy.json",
-        "container and native",
-        CacheRegistration,
-    ),
     "capture-cache": (
         "Capture cache-layout.json from the serving engine of a checked plan",
         "container; native on TensorRT-LLM",
         CacheCapture,
-    ),
-    "cache-registration": (
-        "Resolve cache block grouping from a checked plan and a startup log or runtime "
-        "layout; write cache-registration.json",
-        "container and native",
-        CacheRegistration,
     ),
 }
 
@@ -63,10 +50,8 @@ ACTIONS = (
     "check",
     "measure-cache",
     "model-dimensions",
-    "handshake-policy",
     "start",
     "capture-cache",
-    "cache-registration",
     "start-shared",
     "start-native",
     "stop-native",
@@ -138,22 +123,8 @@ def _main(argv: list[str]) -> int:
         "required for a Kubernetes plan and refused for the others",
     )
     for command in ("check", "model-dimensions", "start", *capture_actions):
-        if command == "cache-registration":
-            continue
         public[command].add_argument(
             "--run", type=Path, required=True, help="prepared launch directory"
-        )
-    if "cache-registration" in public:
-        registration = public["cache-registration"]
-        registration.add_argument(
-            "--run", type=Path, required=True, help="checked launch directory"
-        )
-        source = registration.add_mutually_exclusive_group(required=True)
-        source.add_argument(
-            "--startup-log", type=Path, help="serving log with a resolved KV layout"
-        )
-        source.add_argument(
-            "--runtime-layout", type=Path, help="captured runtime cache layout JSON"
         )
     shared = public["start-shared"]
     shared.add_argument(
@@ -214,8 +185,6 @@ def _main(argv: list[str]) -> int:
             "native-start.json",
             "cache-layout.json",
             "model-dimensions.json",
-            "cache-registration.json",
-            "handshake-policy.json",
         ):
             results.add_artifact(name.removesuffix(".json"), root / name)
     os.umask(0o077)
@@ -265,11 +234,7 @@ def _main(argv: list[str]) -> int:
             native_capture = args.command == "capture-cache" and getattr(
                 plan_launcher(plan), "native_capture", False
             )
-            if (
-                plan.get("backend") == "native"
-                and not native_capture
-                and args.command not in {"check", "cache-registration", "handshake-policy"}
-            ):
+            if plan.get("backend") == "native" and not native_capture and args.command != "check":
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )
@@ -281,16 +246,7 @@ def _main(argv: list[str]) -> int:
                         f"{label} does not support {args.command}; it applies to "
                         f"{', '.join(capturing[args.command])}"
                     )
-                if args.command == "cache-registration":
-                    cast(CacheRegistration, engine).registration_layout(
-                        run,
-                        plan,
-                        args.runtime_layout or args.startup_log,
-                        args.runtime_layout is not None,
-                    )
-                elif args.command == "handshake-policy":
-                    cast(CacheRegistration, engine).handshake_policy(run, plan)
-                elif args.command == "measure-cache":
+                if args.command == "measure-cache":
                     cast(CacheMeasurement, engine).measure_cache(run, plan)
                 else:
                     cast(CacheCapture, engine).capture_cache(run, plan)

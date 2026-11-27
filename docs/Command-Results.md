@@ -4,7 +4,7 @@ description: Machine-readable JSON results and exit codes for automating Narwhal
 
 # Command results for automation
 
-`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, and `narwhal dev` accept `--format json` before or after operation arguments. `narwhal-serve` and `narwhal-attest` do not.
+`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, `narwhal dev`, and `narwhal deploy discover`, `access`, `package` and `install` accept `--format json` before or after operation arguments. `narwhal-serve`, `narwhal-attest`, and `narwhal deploy shell` and `tunnel` do not.
 
 With `--format json`, stdout carries one `narwhal.command-result` version 1 object for every outcome. stderr carries live progress and diagnostics, subprocess stdout and stderr replayed at completion, and the help text for `--format json --help`.
 
@@ -48,6 +48,9 @@ Branch on `status`, the error `code`, and the stage recovery data in the error `
 | Operation | `data` |
 | --- | --- |
 | `narwhal dev` subcommands | `instance` and the returned lifecycle state |
+| `narwhal deploy discover` | `out`, the discovery directory, and `deployment_env`, the derived variables file |
+| `narwhal deploy access` | `logs`, the log directory, and `hosts`, each with its `id` and `roles` |
+| `narwhal deploy package`, `narwhal deploy install` | `run`, the package directory, and `hosts`, the packaged or installed host IDs |
 | `narwhal config` actions | The `narwhal.effective-config` document |
 | `narwhal diagnostics collect` | `bundle`, `manifest`, `collection_status`, and the `sources` count |
 | `narwhal-engine` actions | `runs`, the launch directories |
