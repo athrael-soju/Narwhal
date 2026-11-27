@@ -272,6 +272,9 @@ class AttestationContractTests(unittest.TestCase):
 
         self.assertEqual(arguments(HCA_ENV), ["--hca", "mlx5_0:1"])
         self.assertEqual(arguments(HCA_ENV, "native"), ["--hca", "mlx5_0:1"])
+        rocm = HCA_ENV.replace("cuda_copy", "rocm_copy")
+        self.assertEqual(arguments(rocm), ["--hca", "mlx5_0:1"])
+        self.assertEqual(arguments(rocm.replace("rocm_copy", "rocm_copy,rocm_ipc")), [])
         for change in (
             ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=tcp,sm,self,cuda_copy"),
             ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=rc,sm,self,cuda"),

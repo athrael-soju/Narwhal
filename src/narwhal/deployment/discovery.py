@@ -10,7 +10,6 @@ import posixpath
 import re
 import shlex
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
@@ -18,7 +17,7 @@ from urllib.parse import urlsplit
 
 from ..types import RoleModel
 from .engine_launch import load_launches
-from .hosts import SSH, Host, load_hosts, write_private
+from .hosts import SSH, Host, load_hosts, parallel, write_private
 from .launch_engine import checkpoint as checkpoint_manifest
 from .launch_engine.accelerators import gpu_inventory
 from .launch_engine.backend import ModelFormats, engine_backend
@@ -517,26 +516,25 @@ def discover(env: Mapping[str, str], out: Path) -> Path:
 
     checkpoints = {}
     jobs = list(checkpoint_jobs.values())
-    with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
-        for job, checkpoint in zip(jobs, pool.map(inspect_checkpoint, jobs), strict=True):
-            for role in job[2]:
-                checkpoints[role] = checkpoint
-                observed = observations[role]
-                observed["model_tree_sha256"] = checkpoint["model_tree_sha256"]
-                observed["model_file_count"] = checkpoint["file_count"]
-                relative = model_files[role]
-                if relative is not None:
-                    files = {row["path"]: row["sha256"] for row in checkpoint["files"]}
-                    if relative not in files:
-                        raise ValueError(
-                            f"{role}: NARWHAL_MODEL_PATH names no file in NARWHAL_MODEL_DIR"
-                        )
-                    observed.update(model_file=relative, model_file_sha256=files[relative])
-                write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
-                write_private(
-                    out / f"{role}-checkpoint.json", json.dumps(checkpoint, indent=2).encode()
-                )
-                print(f"{role}: checkpoint files hashed", flush=True)
+    for job, checkpoint in parallel(ssh, inspect_checkpoint, jobs, 6):
+        for role in job[2]:
+            checkpoints[role] = checkpoint
+            observed = observations[role]
+            observed["model_tree_sha256"] = checkpoint["model_tree_sha256"]
+            observed["model_file_count"] = checkpoint["file_count"]
+            relative = model_files[role]
+            if relative is not None:
+                files = {row["path"]: row["sha256"] for row in checkpoint["files"]}
+                if relative not in files:
+                    raise ValueError(
+                        f"{role}: NARWHAL_MODEL_PATH names no file in NARWHAL_MODEL_DIR"
+                    )
+                observed.update(model_file=relative, model_file_sha256=files[relative])
+            write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
+            write_private(
+                out / f"{role}-checkpoint.json", json.dumps(checkpoint, indent=2).encode()
+            )
+            print(f"{role}: checkpoint files hashed", flush=True)
     baseline_role = next(iter(checkpoints))
     baseline = checkpoints[baseline_role]
     baseline_files = {row["path"]: row for row in baseline["files"]}

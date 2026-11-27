@@ -71,7 +71,7 @@ These initial trial values suit a first qualification:
 
 ## Binding each sample to a directed route
 
-Engine roles that share a host, a fabric address and, on `ucx_rdma`, an HCA port send KV through one endpoint, so they share one sample per directed host pair. Engines with their own HCAs on one host get one sample for each pair of HCA ports. Each sample is recorded against the budget of every source role behind it.
+Engine roles that share a host, a fabric address and, on `ucx_rdma`, an HCA port send KV through one endpoint, so they share one sample per directed host pair. Engines with their own HCAs on one host get one sample for each pair of HCA ports. Each sample is recorded against the budget of every source role behind it. On `ucx_tcp`, the roles behind one endpoint need one TP size, because the sample runs one stream per TP rank. The command refuses a host whose engines differ in TP size before it reaches any host.
 
 For each sample, the command checks both hosts before it measures:
 
@@ -82,11 +82,11 @@ For each sample, the command checks both hosts before it measures:
 - Both ends of the sample use one transport.
 - No process listens on the test port on either host.
 
-The destination then runs the server, bound to its fabric address. `iperf3` serves one test and exits. The source runs the client from its fabric address, with one TCP stream per TP rank for 10 seconds after 3 seconds of warm-up, or `ib_write_bw` RDMA writes of 1 MiB for 10 seconds. The server stops on its own, or the command stops it by its recorded process identity. A sample whose `iperf3` streams ran between other addresses, or whose report names another protocol, HCA, link type or GID index, stops the stage. No sample falls back to another transport.
+The destination then runs the server, bound to its fabric address. `iperf3` serves one test and exits. The source runs the client from its fabric address, with one TCP stream per TP rank for 10 seconds after 3 seconds of warm-up, or `ib_write_bw` RDMA writes of 1 MiB for 10 seconds. The server stops on its own, or the command stops it by its recorded process identity, also when it failed to start listening. A sample whose `iperf3` streams ran between other addresses, or whose report names another protocol, HCA, link type or GID index, stops the stage. No sample falls back to another transport.
 
 ## Reusing a retained sample
 
-A retained sample stays valid while its link record is unchanged: both hosts, addresses and interfaces, both routes, the transport, both tool versions and the test parameters. Pass the output of an earlier run with `--retained`. For each sample whose link record and retained sample still match the retained evidence, the command compares the retained rate with the current budgets instead of measuring again. Any change, including a retained sample whose SHA-256 differs from its evidence, measures that edge again.
+A retained sample stays valid while its link record is unchanged: both hosts, addresses and interfaces, both routes, the transport, both tool versions and the test parameters. Pass the output of an earlier run with `--retained`. For each sample that met its budget and whose link record and retained sample still match the retained evidence, the command compares the retained rate with the current budgets instead of measuring again. Any change, including a retained sample whose SHA-256 differs from its evidence, measures that edge again. So does a retained sample below its budget then or below a current budget now, since fixes such as MTU, flow control or cabling do not change the link record.
 
 When the workload or the cache layout changes, run the command again with `--retained`: the budgets are recalculated, and unchanged links keep their samples.
 

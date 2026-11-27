@@ -68,20 +68,37 @@ class InterruptionTests(unittest.TestCase):
             and processes[item["pid"]][0] not in {"Z", "X"}
         }
 
+    def stage_workers(self, root):
+        """The live processes that stage evidence records, the stage workers among them."""
+        processes = stages._processes()
+        recorded = {}
+        for path in root.glob("run-*/**/*.stage.json"):
+            with contextlib.suppress(OSError, ValueError):
+                recorded.update(json.loads(path.read_text()).get("processes", {}))
+        return {
+            int(pid): ticks
+            for pid, ticks in recorded.items()
+            if int(pid) in processes
+            and processes[int(pid)][3] == ticks
+            and processes[int(pid)][0] not in {"Z", "X"}
+        }
+
     def cleanup(self, root, controller):
         if controller.poll() is None:
             controller.kill()
         controller.wait(timeout=3)
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
-            stages._signal(self.live(root), signal.SIGKILL)
+            # A stage worker waits for its release forever once its controller is gone.
+            survivors = {**self.live(root), **self.stage_workers(root)}
+            stages._signal(survivors, signal.SIGKILL)
             for path in (root / "registry").glob("pid-*.json"):
                 with contextlib.suppress(ChildProcessError):
                     os.waitpid(json.loads(path.read_text())["pid"], os.WNOHANG)
-            if not self.live(root):
+            if not survivors:
                 return
             time.sleep(0.02)
-        self.fail(f"harness cleanup survivors: {self.live(root)}")
+        self.fail(f"harness cleanup survivors: {self.live(root)} {self.stage_workers(root)}")
 
     def inspect(self, root, operation):
         result = subprocess.run(

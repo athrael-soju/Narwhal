@@ -18,6 +18,7 @@ from narwhal.contracts import ContractVersionError, manifest
 from narwhal.deployment import run_record, runner
 from narwhal.deployment.deploy_graph import DEPLOY_GRAPH
 from narwhal.deployment.graph import INPUT, LIVE, PRODUCT
+from narwhal.deployment.hosts import RemoteTimeout
 from narwhal.deployment.run_record import key
 from narwhal.deployment.runner import (
     Command,
@@ -883,6 +884,21 @@ class CommandStageTests(unittest.TestCase):
         self.assertTrue(Path(context["evidence"]).exists())
 
 
+class RemoteTimeoutTests(unittest.TestCase):
+    def test_a_host_command_past_its_limit_records_the_stage_as_timed_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "run"
+
+            def hung(context):
+                raise RemoteTimeout("node-1", "second", "management access", Path("log"), 2.0)
+
+            with self.assertRaises(StageFailed):
+                runner_harness.runner(directory, second=hung).run(runner_harness.INPUTS)
+            entry = run_record.read(directory)["stages"]["second[engine-1]"]
+            self.assertEqual(entry["status"], "timeout")
+            self.assertIn("exceeded the 2s second time limit", entry["failure"]["message"])
+
+
 class LockTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -975,6 +991,76 @@ class LockTests(unittest.TestCase):
         run_record.write(self.directory, record)
         with self.assertRaisesRegex(RunLocked, "runs without holding run.lock"):
             runner_harness.runner(self.directory).run(runner_harness.INPUTS)
+
+
+class HeldWriteTests(unittest.TestCase):
+    def test_a_signal_another_thread_receives_during_the_opening_write_leaves_no_stale_lock(self):
+        # The kernel may deliver SIGINT to any thread that leaves it unblocked, and Python then
+        # raises KeyboardInterrupt in the main thread.
+        waiting = threading.Event()
+        bystander = threading.Thread(target=waiting.wait, daemon=True)
+        bystander.start()
+        self.addCleanup(waiting.set)
+        real = run_record.write
+        writes = []
+
+        def write(directory, record):
+            writes.append(record.get("lock"))
+            if len(writes) == 1:
+                signal.pthread_kill(bystander.ident, signal.SIGINT)
+                time.sleep(0.2)
+                sum(range(1000))
+            real(directory, record)
+
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "run"
+            with (
+                patch("narwhal.deployment.run_record.write", write),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                runner_harness.runner(directory).run(runner_harness.INPUTS)
+            self.assertIsNone(run_record.read(directory)["lock"])
+            result = runner_harness.runner(directory).run(runner_harness.INPUTS)
+            self.assertIsNone(result.stale_lock)
+
+
+class HeldHandlerTests(unittest.TestCase):
+    """A signal that lands while `_held()` swaps handlers leaves both handlers restored."""
+
+    def setUp(self):
+        def interrupt(signum, frame):
+            raise KeyboardInterrupt(signal.Signals(signum).name)
+
+        self.handler = interrupt
+        for held in (signal.SIGINT, signal.SIGTERM):
+            self.addCleanup(signal.signal, held, signal.getsignal(held))
+            signal.signal(held, interrupt)
+
+    def held_with_a_signal_after(self, calls, signum):
+        real = signal.signal
+        made = []
+
+        def injecting(held, handler):
+            made.append(held)
+            previous = real(held, handler)
+            if len(made) == calls:
+                os.kill(os.getpid(), signum)
+            return previous
+
+        with (
+            patch.object(signal, "signal", injecting),
+            self.assertRaises(KeyboardInterrupt),
+            runner._held(),
+        ):
+            pass
+        for held in (signal.SIGINT, signal.SIGTERM):
+            self.assertIs(signal.getsignal(held), self.handler, signal.Signals(held).name)
+
+    def test_a_signal_while_the_handlers_are_put_back(self):
+        self.held_with_a_signal_after(3, signal.SIGINT)
+
+    def test_a_signal_while_the_hold_begins(self):
+        self.held_with_a_signal_after(1, signal.SIGTERM)
 
 
 class RunRecordTests(unittest.TestCase):

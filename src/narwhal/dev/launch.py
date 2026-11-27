@@ -47,6 +47,7 @@ from narwhal.deployment.runner import (
     StageContext,
     StageFailed,
     StaticTopology,
+    stale_notice,
 )
 from narwhal.deployment.supervision import ProcessGroup, ProcessGroups, ProcessSpec
 from narwhal.engines.attestation import AttestationDocument, launch_digest
@@ -242,15 +243,18 @@ class _Launch:
             probes=probes,
         )
         try:
-            runner.run(self.inputs())
+            result = runner.run(self.inputs())
         except (StageFailed, RunCancelled) as error:
+            _report_stale(error.stale_lock)
             # The stage's own error is what `up` reports; the run record keeps the stage.
             cause = error.__cause__
             if cause is None:
                 raise
             raise cause from cause.__cause__
         except (HelpersSurvived, RunLocked) as error:
+            _report_stale(getattr(error, "stale_lock", None))
             raise lifecycle.LifecycleOperationError(str(error)) from error
+        _report_stale(result.stale_lock)
 
     def inputs(self) -> dict[str, Input]:
         files: tuple[str, ...] = ("instance.json", "template.json", "fleet.json")
@@ -669,3 +673,8 @@ class _Launch:
 def run(root: Path, run: Path, config: dict, spec: dict, state: dict, resuming: bool) -> None:
     """Run the instance's stage graph in `run`, resuming the stages an earlier `up` left."""
     _Launch(root, run, config, spec, state, resuming).execute()
+
+
+def _report_stale(stale: Mapping[str, Any] | None) -> None:
+    if stale is not None:
+        print(f"narwhal: dev up: {stale_notice(stale)}", file=sys.stderr, flush=True)

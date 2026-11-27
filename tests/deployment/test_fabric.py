@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +15,7 @@ from unittest.mock import patch
 from narwhal.deployment import fabric
 from narwhal.deployment.hosts import RemoteError
 from narwhal.dev.cli import main
-from tests.deployment.fabric_hosts import Fleet, address
+from tests.deployment.fabric_hosts import REMOTE_DIR, Fleet, address
 
 
 class FabricTestCase(unittest.TestCase):
@@ -231,6 +232,21 @@ class EdgeMatrixTests(FabricTestCase):
         ):
             self.load(fleet, [["engine-1", "engine-2"]])
 
+    def test_tcp_roles_of_different_tp_sizes_on_one_host_stop_before_any_host(self):
+        fleet = self.fleet([[1, 2], [3]])
+        for folder in (fleet.run / "node-1", fleet.ssh.home("node-1") / REMOTE_DIR / "config"):
+            path = folder / "engine-launch.engine-2.json"
+            launch = json.loads(path.read_text())
+            launch["tensor_parallel_size"] = 1
+            path.write_text(json.dumps(launch))
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^node-1-to-node-2: engine-1, engine-2 share one TCP fabric endpoint on node-1 but "
+            r"differ in tensor parallel size \(1, 2\)",
+        ):
+            self.load(fleet, [["engine-1", "engine-3"], ["engine-2"]])
+        self.assertEqual(fleet.ssh.calls, [])
+
 
 class ReuseTests(FabricTestCase):
     def test_an_unchanged_link_reuses_the_retained_sample_against_the_current_budget(self):
@@ -252,6 +268,80 @@ class ReuseTests(FabricTestCase):
         _, summary = self.qualify(fleet, groups, retained=second)
         self.assertTrue(all(edge["reused"] for edge in summary["edges"]))
         self.assertEqual(len(self.clients(fleet)), clients)
+
+    def test_a_sample_below_its_budget_is_measured_again_once_the_fabric_is_fixed(self):
+        fleet = self.fleet([[1], [2]])
+        groups = [["engine-1", "engine-2"]]
+        (fleet.ssh.home("node-2") / "rate").write_text("0.000001")
+        failed = self.root / "out-failed"
+        failed.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(fabric.BelowBudget):
+            fabric.qualify(self.load(fleet, groups), fleet.ssh, failed)
+        # The operator fixes the fabric; nothing in the link record changes.
+        (fleet.ssh.home("node-2") / "rate").unlink()
+        clients = len(self.clients(fleet))
+        _, summary = self.qualify(fleet, groups, retained=failed)
+        by_edge = {edge["edge"]: edge for edge in summary["edges"]}
+        self.assertFalse(by_edge["node-2-to-node-1"]["reused"])
+        self.assertTrue(
+            all(verdict["passed"] for verdict in by_edge["node-2-to-node-1"]["roles"].values())
+        )
+        self.assertGreater(len(self.clients(fleet)), clients)
+
+    def test_a_retained_sample_below_the_current_budget_is_measured_again(self):
+        fleet = self.fleet([[1], [2]])
+        groups = [["engine-1", "engine-2"]]
+        for host in ("node-1", "node-2"):
+            (fleet.ssh.home(host) / "rate").write_text("0.01")
+        first, _ = self.qualify(fleet, groups)
+        for host in ("node-1", "node-2"):
+            (fleet.ssh.home(host) / "rate").unlink()
+        clients = len(self.clients(fleet))
+        second, summary = self.qualify(
+            fleet, groups, retained=first, NARWHAL_FABRIC_HANDOFFS_PER_S="10"
+        )
+        self.assertEqual([edge["reused"] for edge in summary["edges"]], [False, False])
+        self.assertEqual(len(self.clients(fleet)), clients + 2)
+        folder = second / "fabric-edge/node-1-to-node-2/engine-1-to-engine-2"
+        self.assertFalse((folder / "engine-1.comparison.json").exists())
+        self.assertFalse((folder / "retained").exists())
+        self.assertTrue(json.loads((folder / "engine-1.evidence.json").read_text())["passed"])
+
+    def test_only_the_newest_sample_of_a_retained_attempt_counts(self):
+        fleet = self.fleet([[1], [2]])
+        groups = [["engine-1", "engine-2"]]
+
+        def rate(value):
+            for host in ("node-1", "node-2"):
+                (fleet.ssh.home(host) / "rate").write_text(value)
+
+        rate("0.01")
+        first, _ = self.qualify(fleet, groups)
+        # A higher budget rejects the retained rate, and the new measurement falls short.
+        rate("0.001")
+        second = self.root / "second"
+        second.mkdir()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(fabric.BelowBudget):
+            plan = self.load(fleet, groups, NARWHAL_FABRIC_HANDOFFS_PER_S="10")
+            fabric.qualify(plan, fleet.ssh, second, first)
+        # The budget is back where the old rate passed, but the newest sample fell short.
+        clients = len(self.clients(fleet))
+        rate("0.01")
+        _, summary = self.qualify(fleet, groups, retained=second)
+        self.assertEqual([edge["reused"] for edge in summary["edges"]], [False, False])
+        self.assertEqual(len(self.clients(fleet)), clients + 2)
+        # The rejected copy is gone, so the attempt holds only the sample it measured.
+        folder = second / "fabric-edge/node-1-to-node-2/engine-1-to-engine-2"
+        self.assertEqual(
+            sorted(path.name for path in folder.iterdir()),
+            [
+                "destination.json",
+                "engine-1.evidence.json",
+                "link.json",
+                "sample.json",
+                "source.json",
+            ],
+        )
 
     def test_a_changed_link_or_a_tampered_sample_is_measured_again(self):
         fleet = self.fleet([[1], [2]])
@@ -412,6 +502,22 @@ class FailureTests(FabricTestCase):
             [edge["edge"] for edge in summary["edges"]], ["node-1-to-node-2", "node-2-to-node-1"]
         )
         self.assertEqual(list(fleet.ssh.home("node-1").glob("listening-*")), [])
+
+    def test_a_server_that_never_listens_is_stopped_and_its_files_removed(self):
+        fleet = self.fleet([[1], [2]])
+        home = fleet.ssh.home("node-2")
+        (home / "silent-server").touch()
+        with patch("narwhal.deployment.fabric.LISTEN_TENTHS", 5):
+            self.fails(fleet, RemoteError, "the iperf3 server did not listen on port 5201")
+        pid = int((home / "server-pid").read_text())
+        deadline = time.monotonic() + 5
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(_alive(pid), "the test server outlived its failed start")
+        operations = [call[2] for call in fleet.ssh.calls]
+        self.assertEqual(operations[-1], "node-1-to-node-2 engine-1-to-engine-2 iperf3 server stop")
+        deployment = home / fleet.manifest["remote_dir"]
+        self.assertEqual(list((deployment / "runs/fabric").iterdir()), [])
 
     def test_a_failed_client_stops_the_server_it_started(self):
         fleet = self.fleet([[1], [2]])
@@ -612,3 +718,12 @@ class TransferMeasurementTests(FabricTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _alive(pid):
+    """Whether `pid` runs and is not a zombie."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return False
+    return state != "Z"

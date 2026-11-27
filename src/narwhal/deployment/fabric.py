@@ -44,7 +44,7 @@ from .fabric_budget import (
     transfer_record,
     write_private,
 )
-from .hosts import HOST_CAUSE, SSH, Host
+from .hosts import HOST_CAUSE, PID_PATTERN, SSH, Host
 from .launch_engine.backend import cache_capture, launcher, transfer_measurement
 from .role_env import read_environment
 
@@ -217,6 +217,16 @@ class Fabric:
                         f"{sample.source.transport} and {sample.destination_roles[0]} over "
                         f"{sample.destination.transport}, so KV between them would leave the "
                         "configured transport; give both one transfer.transport"
+                    )
+                sizes = {self.engines[role].tensor_parallel for role in sample.source_roles}
+                if sample.source.rdma is None and len(sizes) > 1:
+                    # One TCP sample runs one stream per TP rank, so it cannot stand for
+                    # source roles of different TP sizes that share the host's endpoint.
+                    raise ValueError(
+                        f"{name}: {', '.join(sample.source_roles)} share one TCP fabric "
+                        f"endpoint on {source.id} but differ in tensor parallel size "
+                        f"({', '.join(str(size) for size in sorted(sizes))}), so one sample "
+                        "cannot qualify them; give the engines on one host one TP size"
                     )
                 samples.append(sample)
             edges.append(Edge(source, destination, tuple(samples)))
@@ -983,21 +993,30 @@ done
     )
     stop = (
         _prelude(fabric.remote_dir)
-        + f"""test -f {scratch}/server.pid || exit 0
+        + f"""test -d {scratch} || exit 0
+test -f {scratch}/server.pid || {{ rm -rf {scratch}; exit 0; }}
 read -r pid ticks < {scratch}/server.pid
+case "$pid" in {PID_PATTERN}) fail "{scratch}/server.pid holds no usable process ID" ;; esac
 alive() {{
   test -r "/proc/$pid/stat" &&
     test "$(sed 's/^.*) //' "/proc/$pid/stat" | cut -d' ' -f20)" = "$ticks"
 }}
 tries=0
 while alive && test "$tries" -lt {EXIT_TENTHS}; do sleep 0.1; tries=$((tries + 1)); done
-if alive; then kill -TERM "$pid"; fi
+if alive; then
+  kill -TERM "$pid"
+  tries=0
+  while alive && test "$tries" -lt 50; do sleep 0.1; tries=$((tries + 1)); done
+  # Not every timeout sends SIGKILL to its process group after -k.
+  if alive; then kill -s KILL -- "-$pid"; fi
+fi
 cat {scratch}/server.log >&2 || true
 rm -rf {scratch}
 """
     )
-    ssh.run(destination, FABRIC_EDGE, f"{where} {server[0]} server on {destination.id}", start)
     try:
+        # A start that fails or runs out of time may already have left a server running.
+        ssh.run(destination, FABRIC_EDGE, f"{where} {server[0]} server on {destination.id}", start)
         report = ssh.run(
             sample.source.host,
             FABRIC_EDGE,
@@ -1074,7 +1093,13 @@ def _sample_name(sample: Sample) -> str:
 
 
 def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, Path] | None:
-    """Return a retained sample and one of its evidence files that hold for `fingerprint`."""
+    """Return a retained sample and one of its evidence files that hold for `fingerprint`.
+
+    Only the newest verdict of the retained attempt counts: the sample it measured, or else the
+    sample it reused, with every verdict on it passed. A sample below a budget is measured
+    again, since what the operator fixes after it, such as MTU, flow control or cabling, is not
+    in the link record.
+    """
     if folder is None:
         return None
     for root in (folder, folder / "retained"):
@@ -1082,13 +1107,25 @@ def _retained(folder: Path | None, name: str, fingerprint: str) -> tuple[Path, P
         if not sample.is_file():
             continue
         data = sample.read_bytes()
-        for evidence in sorted(root.glob("*.evidence.json")):
-            try:
-                record = json.loads(evidence.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            if retained_evidence(record, fingerprint, data):
-                return sample, evidence
+        verdicts = sorted(root.glob("*.evidence.json"))
+        if root != folder:
+            verdicts += sorted(folder.glob("*.comparison.json"))
+        try:
+            records = [json.loads(path.read_text()) for path in verdicts]
+        except (OSError, json.JSONDecodeError):
+            return None
+        evidence = [
+            (path, record)
+            for path, record in zip(verdicts, records, strict=True)
+            if path.name.endswith(".evidence.json")
+        ]
+        if (
+            evidence
+            and all(record.get("passed") is True for record in records)
+            and all(retained_evidence(record, fingerprint, data) for _, record in evidence)
+        ):
+            return sample, evidence[0][0]
+        return None
     return None
 
 
@@ -1139,7 +1176,14 @@ def qualify_edge(
                     role,
                     folder / f"{role}.comparison.json",
                 )
-        else:
+            if not all(record["passed"] for record in records.values()):
+                # The retained rate falls short of a current budget: measure the link again,
+                # and keep only the new sample's verdicts in this attempt.
+                shutil.rmtree(kept)
+                for role in records:
+                    (folder / f"{role}.comparison.json").unlink()
+                found, records = None, {}
+        if found is None:
             # A runner that starts a sample's server and client itself, as the Kubernetes
             # target does with Jobs, samples it; an SSH host runs both from one session each.
             sampler = getattr(ssh, "sample", None)
