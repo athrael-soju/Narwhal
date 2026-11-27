@@ -84,9 +84,9 @@ class HostEnvironmentTests(unittest.TestCase):
 
     def test_engine_export_names_the_helper_snapshots_of_its_backend(self):
         helpers = {
-            None: {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_CACHE_CAPTURE_HOOK"},
-            "trtllm": {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_CACHE_CAPTURE_HOOK"},
-            "sglang": {"NARWHAL_FABRIC_BUDGET_TOOL", "NARWHAL_TRANSFER_MEASURE_TOOL"},
+            None: {"NARWHAL_CACHE_CAPTURE_HOOK"},
+            "trtllm": {"NARWHAL_CACHE_CAPTURE_HOOK"},
+            "sglang": {"NARWHAL_TRANSFER_MEASURE_TOOL"},
         }
         for backend, names in helpers.items():
             with self.subTest(backend=backend):

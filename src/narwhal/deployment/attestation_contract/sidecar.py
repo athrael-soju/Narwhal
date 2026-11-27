@@ -14,8 +14,8 @@ import httpx
 from ...engines.attestation import AttestationDocument, fetch_engine_identity, verify_attestation
 from ...engines.attestation import main as attest_main
 from ..launch_engine.backend import engine_backend
-from ..launch_engine.plan import launch_headers
-from ..launch_engine.runtime import write_private
+from ..launch_engine.plan import env_file_name, launch_headers, read_env
+from ..launch_engine.runtime import digest, write_private
 from .capture import published_attempt
 from .document import attested
 from .evidence import checked_plan, live_container, live_native, read_json
@@ -57,6 +57,29 @@ def require_live_process_start(run: Path, plan: dict, process_start: float) -> N
         )
 
 
+def hca_arguments(run: Path, plan: dict) -> list[str]:
+    """Return `--hca` when the plan sends KV through its one HCA port, even on its own host.
+
+    UCX then has no shared-memory device and no CUDA IPC, so KV between engines on one host
+    crosses their HCAs, and preflight checks that through the port's transmit counter.
+    """
+    path = run / env_file_name(plan)
+    if digest(path) != plan.get("env_sha256"):
+        raise ValueError(f"{path.name} differs from the serving plan; prepare a fresh launch")
+    env = read_env(path)
+    transports = set(env.get("UCX_TLS", "").split(","))
+    devices = env.get("UCX_NET_DEVICES", "").split(",")
+    if (
+        {"rc", "cuda_copy"} <= transports
+        and not {"cuda", "cuda_ipc"} & transports
+        and env.get("UCX_SHM_DEVICES") == "none"
+        and len(devices) == 1
+        and re.fullmatch(r"[A-Za-z0-9_.-]+:[1-9][0-9]{0,2}", devices[0])
+    ):
+        return ["--hca", devices[0]]
+    return []
+
+
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
     backend = engine_backend(plan.get("engine"))
@@ -87,7 +110,7 @@ def serve(run: Path) -> int:
     ]
     if not backend.identity.reports_process_start:
         arguments += process
-    return attest_main(arguments + residency_arguments(plan, checked))
+    return attest_main(arguments + residency_arguments(plan, checked) + hca_arguments(run, plan))
 
 
 def verify(run: Path) -> Path:

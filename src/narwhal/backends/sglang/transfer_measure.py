@@ -2,7 +2,7 @@
 
 Engine hosts run a copy of this file, checked by its SHA-256, with the host's own Python, so it
 imports only the standard library. The transfer record it writes sizes a fabric budget through
-`fabric_budget.py calculate --transfer-record`.
+`narwhal deploy fabric`.
 """
 
 from __future__ import annotations

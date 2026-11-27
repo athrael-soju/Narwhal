@@ -29,7 +29,11 @@ from narwhal.deployment.attestation_contract.capture import publish
 from narwhal.deployment.attestation_contract.document import engine_document, generate, launch_args
 from narwhal.deployment.attestation_contract.evidence import live_native, read_json
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
-from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
+from narwhal.deployment.attestation_contract.sidecar import (
+    hca_arguments,
+    residency_arguments,
+    serve,
+)
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from tests.backends.contract import ATTEMPT
 from tests.deployment.fixtures import model_file_fields
@@ -39,6 +43,12 @@ ROOT = Path(__file__).resolve().parents[2]
 STARTED_AT = "1970-01-01T00:01:40Z"
 # Files engine_evidence writes into the launch directory rather than the attempt.
 INPUTS = ("model-dimensions.json", "cache-layout.json")
+
+
+# The UCX settings of a ucx_tcp plan's container.env.
+TCP_ENV = "UCX_NET_DEVICES=fabric0\nUCX_TLS=tcp,sm,self,cuda\n"
+# A plan that sends KV through its HCA port, even to engines on its own host.
+HCA_ENV = "UCX_NET_DEVICES=mlx5_0:1\nUCX_SHM_DEVICES=none\nUCX_TLS=rc,sm,self,cuda_copy\n"
 
 
 # Attestation modules that look up `live_container`.
@@ -97,8 +107,10 @@ class AttestationContractTests(unittest.TestCase):
             root, plan_fields={"backend": "native", **(plan_fields or {})}
         )
         plan = read_json(run / "launch.json")
+        (run / "engine.env").write_text("VLLM_API_KEY=test\n")
         plan.update(
             backend="native",
+            env_sha256=hashlib.sha256((run / "engine.env").read_bytes()).hexdigest(),
             image="",
             python_executable=sys.executable,
             model_revision="a" * 40,
@@ -127,7 +139,6 @@ class AttestationContractTests(unittest.TestCase):
                 "process_start_time_seconds": 100.0,
             },
         )
-        (run / "engine.env").write_text("VLLM_API_KEY=test\n")
         for name in (
             "model-dimensions.json",
             "cache-layout.json",
@@ -247,6 +258,39 @@ class AttestationContractTests(unittest.TestCase):
             [],
         )
 
+    def test_sidecar_publishes_the_hca_only_for_a_plan_that_sends_kv_through_it(self):
+        def arguments(env: str, backend: str = "container") -> list[str]:
+            with tempfile.TemporaryDirectory() as folder:
+                run = Path(folder)
+                name = "engine.env" if backend == "native" else "container.env"
+                (run / name).write_text(env)
+                plan = {
+                    "backend": backend,
+                    "env_sha256": hashlib.sha256((run / name).read_bytes()).hexdigest(),
+                }
+                return hca_arguments(run, plan)
+
+        self.assertEqual(arguments(HCA_ENV), ["--hca", "mlx5_0:1"])
+        self.assertEqual(arguments(HCA_ENV, "native"), ["--hca", "mlx5_0:1"])
+        for change in (
+            ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=tcp,sm,self,cuda_copy"),
+            ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=rc,sm,self,cuda"),
+            ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=rc,sm,self,cuda_copy,cuda_ipc"),
+            ("UCX_TLS=rc,sm,self,cuda_copy", "UCX_TLS=rc,sm,self,rocm"),
+            ("UCX_SHM_DEVICES=none\n", ""),
+            ("UCX_SHM_DEVICES=none", "UCX_SHM_DEVICES=memory"),
+            ("mlx5_0:1", "mlx5_0:1,mlx5_1:1"),
+            ("mlx5_0:1", "fabric0"),
+        ):
+            with self.subTest(change=change):
+                self.assertEqual(arguments(HCA_ENV.replace(*change)), [])
+        self.assertEqual(arguments(TCP_ENV), [])
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder)
+            (run / "container.env").write_text(HCA_ENV)
+            with self.assertRaisesRegex(ValueError, "container.env differs from the serving plan"):
+                hca_arguments(run, {"env_sha256": "e" * 64})
+
     def engine_evidence(
         self, root: Path, extra_args: tuple[str, ...] = (), plan_fields: dict | None = None
     ) -> tuple[Path, Path]:
@@ -259,6 +303,7 @@ class AttestationContractTests(unittest.TestCase):
         save(config, {"architectures": ["TestForCausalLM"]})
         image = "sha256:" + "a" * 64
         cid = "b" * 64
+        (run / "container.env").write_text(TCP_ENV + "VLLM_API_KEY=test\n")
         plan = {
             "role": "engine-1",
             "endpoint": "http://192.0.2.11:8000",
@@ -276,7 +321,7 @@ class AttestationContractTests(unittest.TestCase):
                 "auto",
                 *extra_args,
             ],
-            "env_sha256": "e" * 64,
+            "env_sha256": hashlib.sha256((run / "container.env").read_bytes()).hexdigest(),
             "launcher_sha256": "f" * 64,
             "launcher_code_sha256": "f" * 64,
             "cache_capture_code_sha256": "f" * 64,
@@ -298,7 +343,6 @@ class AttestationContractTests(unittest.TestCase):
             },
         )
         (run / "container.id").write_text(cid + "\n")
-        (run / "container.env").write_text("VLLM_API_KEY=test\n")
         # The process start the fixture's metrics report: 100 s after the epoch.
         save(run / "container-start.json", {"container_id": cid, "started_at": STARTED_AT})
         attempt = run / "attestation" / ATTEMPT
@@ -884,6 +928,7 @@ class AttestationContractTests(unittest.TestCase):
                     args = start.call_args.args[0]
                     self.assertEqual(args[args.index("--host") + 1], "192.0.2.11")
                     self.assertEqual(args[args.index("--port") + 1], "8010")
+                    self.assertNotIn("--hca", args)
                     document = attempt / "engine-attestation.json"
                     published = document.read_bytes()
                     record = json.loads(published)

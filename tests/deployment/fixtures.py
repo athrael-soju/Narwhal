@@ -241,7 +241,6 @@ def launcher_inputs(root):
 
 # The engine-host helpers that a deployment package takes from the wheel.
 WHEEL_HELPERS = (
-    "deployment/fabric_budget.py",
     "backends/vllm/cache_capture_hook.py",
     "backends/trtllm/cache_capture_hook.py",
     "backends/sglang/transfer_measure.py",

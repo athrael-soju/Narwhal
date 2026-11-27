@@ -20,7 +20,14 @@ from typing import IO
 ROLE = re.compile(r"router|engine-[1-9][0-9]*")
 # Seconds one remote command of each stage may run. NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS sets
 # one stage's limit and NARWHAL_STAGE_TIMEOUT_SECONDS every stage's, as for local stages.
-STAGE_LIMITS = {"access": 60.0, "discover": 3600.0, "install": 1800.0}
+STAGE_LIMITS = {
+    "access": 60.0,
+    "discover": 3600.0,
+    "install": 1800.0,
+    "transfer-measure": 900.0,
+    "fabric-budget": 300.0,
+    "fabric-edge": 300.0,
+}
 # Seconds OpenSSH waits for a connection before it gives up, for every command.
 CONNECT_TIMEOUT_S = 30
 # The host sends SIGKILL to a command this many seconds after its time limit's SIGTERM.
@@ -97,7 +104,7 @@ def stage_limit(env: Mapping[str, str], stage: str) -> float:
     """Return the seconds one remote command of `stage` may run."""
     default = STAGE_LIMITS[stage]
     for name in (
-        f"NARWHAL_STAGE_{stage.upper()}_TIMEOUT_SECONDS",
+        "NARWHAL_STAGE_" + re.sub(r"[^A-Z0-9]", "_", stage.upper()) + "_TIMEOUT_SECONDS",
         "NARWHAL_STAGE_TIMEOUT_SECONDS",
     ):
         if name in env:
