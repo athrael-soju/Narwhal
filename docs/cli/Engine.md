@@ -64,7 +64,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
-| `start` | container | Checked plan | One serving container and `container.id` |
+| `start` | container | Checked plan | One serving container, `container.id` and `container-start.json` |
 | `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `start-native` | native | One to eight checked plans, each on its own GPU | Running engines and one `native-start.json` per engine |
@@ -115,7 +115,7 @@ Every plan must use the `--backend` you pass and must not have started an engine
 
 The first GPU reading is the baseline. Before each engine starts, `start-shared` requires the GPU's free memory to cover the engine's `gpu_memory_utilization` share of total memory. Once the engine answers `/health` and its identity matches the plan, `start-shared` reads the GPU again. Startup fails when whole-device memory use has grown past `device_allowance` times total memory since the baseline. The reading counts every process on the GPU.
 
-Each engine's `shared-start.json` records the readings in MiB: `gpu_baseline_used_mib`, `gpu_before`, `gpu_after`, `budget_mib`, `device_allowance_mib`, `observed_delta_mib` for this engine and `aggregate_delta_mib` since the baseline. It also records the engine's identity. A container engine records `container_id`, `process_id`, `image_id` and the serving arguments as `engine_args`, and must be running the checked image with the planned arguments. A native engine records `process` with its PID, boot ID and start tick, the engine version as `engine_version`, `process_start_time_seconds`, `model_revision` and the serving arguments. `start-shared` requires a native engine's version to match the checked runtime.
+Each engine's `shared-start.json` records the readings in MiB: `gpu_baseline_used_mib`, `gpu_before`, `gpu_after`, `budget_mib`, `device_allowance_mib`, `observed_delta_mib` for this engine and `aggregate_delta_mib` since the baseline. It also records the engine's identity. A container engine records `container_id`, `process_id`, `image_id` and the serving arguments as `engine_args`, and must be running the checked image with the planned arguments. As `start` does, `start-shared` writes each container engine's `container-start.json` with the container ID and its `State.StartedAt`. The [attestation captures](../deploy/05-Attest.md#capturing-the-attestation) compare it with the live container to detect a restart. A native engine records `process` with its PID, boot ID and start tick, the engine version as `engine_version`, `process_start_time_seconds`, `model_revision` and the serving arguments. `start-shared` requires a native engine's version to match the checked runtime.
 
 ### Startup failures
 

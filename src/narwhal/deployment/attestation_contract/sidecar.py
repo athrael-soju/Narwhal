@@ -16,7 +16,7 @@ from ...engines.attestation import main as attest_main
 from ..launch_engine.backend import engine_backend
 from ..launch_engine.plan import launch_headers
 from ..launch_engine.runtime import write_private
-from .capture import startup_log
+from .capture import published_attempt
 from .document import engine_document
 from .evidence import checked_plan, live_container, live_native, read_json
 
@@ -50,9 +50,10 @@ def serve(run: Path) -> int:
     else:
         process = ["--engine-container", live_container(run, checked)]
     _, host, port = attestation_url(plan)
-    destination = run / "engine-attestation.json"
+    attempt = published_attempt(run)
+    destination = attempt / "engine-attestation.json"
     AttestationDocument.load(destination)
-    if read_json(destination) != engine_document(run, startup_log(run, plan)):
+    if read_json(destination) != engine_document(run, attempt):
         raise ValueError("Attestation document differs from current serving evidence")
     arguments = [
         "--document",
@@ -75,7 +76,7 @@ def verify(run: Path) -> Path:
     """Check the running sidecar against the live engine and the document's contract, keeping
     the sidecar's responses and the live identity in a new attestation-check-* directory."""
     plan = read_json(run / "launch.json")
-    document = AttestationDocument.load(run / "engine-attestation.json")
+    document = AttestationDocument.load(published_attempt(run) / "engine-attestation.json")
     url, _, _ = attestation_url(plan)
     route = url.geturl()
     base = f"{url.scheme}://{url.netloc}"

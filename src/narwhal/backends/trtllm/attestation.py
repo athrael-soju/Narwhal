@@ -26,10 +26,10 @@ SERVER_FIELDS = ("tokens_per_block", "max_batch_size", "kv_cache_hash_algo")
 LAUNCH_VARYING_FLAGS = frozenset(("--host", "--port", "--served_model_name", "--config"))
 
 
-def capture_server(run: Path) -> Path:
+def capture_server(run: Path, out: Path) -> Path:
     plan, checked, plan_hash = checked_plan(run)
     identity = live_identity(run, plan, checked)
-    destination = run / "server-info.json"
+    destination = out / "server-info.json"
     if destination.exists():
         raise ValueError("Server evidence already exists; retain the capture")
     headers = launch_headers(run, plan)
@@ -60,12 +60,13 @@ def capture_server(run: Path) -> Path:
 
 
 def attestation_captures(context: CaptureContext) -> list[Capture]:
-    return [Capture("server-info", "server-info.json", lambda: capture_server(context.run))]
+    run, attempt = context.run, context.attempt
+    return [Capture("server-info", "server-info.json", lambda: capture_server(run, attempt))]
 
 
 def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
     run, plan, checked = context.run, context.plan, context.checked
-    server_path = run / "server-info.json"
+    server_path = context.attempt / "server-info.json"
     captured = read_json(server_path)
     require_binding(
         captured,

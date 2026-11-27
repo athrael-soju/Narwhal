@@ -1174,7 +1174,7 @@ class EngineLauncherTests(unittest.TestCase):
 
                 with patched_docker(side_effect=execute) as docker:
                     if passed:
-                        handshake_policy(run, plan)
+                        handshake_policy(run, plan, run)
                         capture = run / "handshake-policy.json"
                         record = json.loads(capture.read_text())
                         self.assertIs(record["enforce_handshake_compat"], True)
@@ -1185,10 +1185,10 @@ class EngineLauncherTests(unittest.TestCase):
                         )
                         self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
                         with self.assertRaisesRegex(ValueError, "capture exists"):
-                            handshake_policy(run, plan)
+                            handshake_policy(run, plan, run)
                     else:
                         with self.assertRaisesRegex(ValueError, "boolean true"):
-                            handshake_policy(run, plan)
+                            handshake_policy(run, plan, run)
                         self.assertFalse((run / "handshake-policy.json").exists())
                     self.assertEqual(docker.call_count, 1)
 
@@ -1489,7 +1489,9 @@ class SharedEngineStartTests(unittest.TestCase):
                 if command[0] == "start":
                     return "started"
                 if command[2] == "{{json .State}}":
-                    return json.dumps({"Running": True, "Pid": 1234})
+                    return json.dumps(
+                        {"Running": True, "Pid": 1234, "StartedAt": "2026-01-01T00:00:00Z"}
+                    )
                 if command[2] == "{{json .Config.Cmd}}":
                     return json.dumps(dict(selected)[run]["args"])
                 return "sha256:test"
@@ -1524,6 +1526,13 @@ class SharedEngineStartTests(unittest.TestCase):
                 self.assertEqual(record["image_id"], "sha256:test")
                 self.assertEqual(record["engine_args"], plan["args"])
                 self.assertEqual(record["budget_mib"], 6000)
+                self.assertEqual(
+                    json.loads((run / "container-start.json").read_text()),
+                    {
+                        "container_id": (run / "container.id").read_text().strip(),
+                        "started_at": "2026-01-01T00:00:00Z",
+                    },
+                )
 
     def test_pressure_failure_preserves_original_cause_if_sensor_fails(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1546,7 +1555,9 @@ class SharedEngineStartTests(unittest.TestCase):
                 if command[0] in {"start", "rm"}:
                     return "done"
                 if command[2] == "{{json .State}}":
-                    return json.dumps({"Running": True, "Pid": 1234})
+                    return json.dumps(
+                        {"Running": True, "Pid": 1234, "StartedAt": "2026-01-01T00:00:00Z"}
+                    )
                 if command[2] == "{{json .Config.Cmd}}":
                     return json.dumps(dict(selected)[run]["args"])
                 return "sha256:test"

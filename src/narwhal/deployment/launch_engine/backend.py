@@ -143,8 +143,8 @@ class CacheRegistration(ABC):
     """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def registered_layout(self, run: Path) -> str:
-        """The layout name that the engine's attestation capture registered."""
+    def registered_layout(self, attempt: Path) -> str:
+        """The layout name that the attestation capture in `attempt` registered."""
 
 
 class LiveModelDimensions(ABC):
@@ -155,7 +155,8 @@ class LiveModelDimensions(ABC):
         """Write model-dimensions.json from the engine image."""
 
     @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path: ...
+    def capture_model_dimensions(self, run: Path, out: Path) -> Path:
+        """Write model-dimensions.live.json into `out` from the live engine of `run`."""
 
 
 class ModelFormats(ABC):

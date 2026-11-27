@@ -29,25 +29,29 @@ For a vLLM engine that uses another engine's [fabric budget](04-Qualify-Fabric.m
   --representative-layout '<layout name from the representative cache-layout.json>'
 ```
 
-`capture` reads the engine's `ENGINE_RUN` directory: `launch.json`, `checked.json` and the check log, and `container.id`, or the start records of a native engine. A vLLM engine also needs the `cache-layout.json` from [Capturing the live cache layout](03-Validate-Engines.md#capturing-the-live-cache-layout). A vLLM container engine also needs the `version.json` and `metrics.txt` from [Proving the live HTTP process](03-Validate-Engines.md#proving-the-live-http-process).
+`capture` reads the engine's `ENGINE_RUN` directory: `launch.json`, `checked.json` and the check log, and `container.id` and `container-start.json`, or the start records of a native engine. A vLLM engine also needs the `cache-layout.json` from [Capturing the live cache layout](03-Validate-Engines.md#capturing-the-live-cache-layout).
 
-It runs these captures in order and stops at the first that fails:
+Each run of `capture` writes its captures to a new attempt directory, `ENGINE_RUN/attestation/<UTC time>-<id>/`. It runs these captures in order and stops at the first that fails:
 
 | Capture | Engines | Writes or checks |
 | --- | --- | --- |
-| `startup-log` | All | `startup.log` from `docker logs` of the container in `container.id`. A native engine keeps writing its `startup.log`, so the capture copies it to `startup-attestation.log`. |
+| `startup-log` | All | `startup.log`: for a container, `docker logs --since` the container start in `container-start.json`; for a native engine, a copy of the `startup.log` it keeps writing |
 | `model-dimensions` | All | `model-dimensions.live.json` on vLLM, `model-dimensions.json` on SGLang and TensorRT-LLM |
+| `http-identity` | vLLM | `version.json` and `metrics.txt` from the live engine |
 | `connector-version` | vLLM | `nixl-connector-version.json` |
 | `cache-registration` | vLLM | `cache-registration.json` |
 | `transfer-mode` | vLLM | `transfer-mode.json` |
-| `startup-connector` | vLLM | The startup log names the connector class in `transfer-mode.json` |
+| `startup-connector` | vLLM | The attempt's `startup.log` names the connector class in `transfer-mode.json` |
 | `handshake-policy` | vLLM | `handshake-policy.json` |
-| `http-identity` | Native vLLM | `version.json` and `metrics.txt` |
 | `server-info` | SGLang, TensorRT-LLM | `server-info.json` |
 | `representative-layout` | vLLM, with `--representative-layout` | The layout in `cache-registration.json` matches the representative's |
 | `document` | All | `engine-attestation.json` |
 
-On success it prints `Generated private engine attestation in <ENGINE_RUN>/engine-attestation.json`. A failure exits with status 1 and names the capture, its output and the cause, such as `Capture transfer-mode (transfer-mode.json) failed: ...`. No capture replaces evidence that an earlier run wrote, so after you fix the cause, prepare, check and start the engine in a fresh launch directory and capture again.
+When every capture passes, `capture` publishes the attempt: it writes `ENGINE_RUN/published-attestation.json` with the attempt's name and the SHA-256 of its `engine-attestation.json`, and prints `Generated private engine attestation in <attempt>/engine-attestation.json`. `serve` and `verify` read the published attempt. Once an attempt is published, `capture` refuses to run again for that launch directory.
+
+A failure exits with status 1 and names the capture, its output and the cause, such as `Capture transfer-mode (transfer-mode.json) failed: ...`. The attempt directory stays as evidence, with the cause in `capture-failure.json`. Fix the cause and run `capture` again: the next attempt starts from the first capture.
+
+Every capture checks that the container in `container.id` still runs the checked image and that its `State.StartedAt` matches `container-start.json`. When the container has started again since `narwhal-engine` started it, the engine's earlier evidence, such as `cache-layout.json`, describes another process, so prepare, check and start the engine in a fresh launch directory. On vLLM, `http-identity` also requires the process start in `/metrics` to be within 2 seconds of the container start, or to equal the native start record.
 
 `--representative-layout` applies only to vLLM. For an SGLang or TensorRT-LLM engine, `capture` refuses it.
 
@@ -110,7 +114,7 @@ Run the sidecar in the engine's role shell, as the user that started the engine.
 .venv/bin/python -m narwhal.deployment.attestation_contract.cli serve --run "$ENGINE_RUN"
 ```
 
-`serve` refuses to start when `engine-attestation.json` differs from the launch directory's current evidence, and [`narwhal-attest`](../cli/Attest.md) exits when the engine's version differs from the document's. When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
+`serve` refuses to start when the published `engine-attestation.json` differs from the launch directory's current evidence, or the container has started again, and [`narwhal-attest`](../cli/Attest.md) exits when the engine's version differs from the document's. When `checked.json` shows prefix caching on and cache events published, the sidecar serves the [residency routes](../cli/Attest.md#residency).
 
 ### Verifying the sidecar
 
@@ -120,7 +124,7 @@ In a second shell for the same engine role:
 .venv/bin/python -m narwhal.deployment.attestation_contract.cli verify --run "$ENGINE_RUN"
 ```
 
-`verify` requests the sidecar's `/health` and `/v1/attestation` at `NARWHAL_NODE_<n>_ATTESTATION_URL`, reads the live engine's version and process start, and checks the attestation against them and against the contract in `engine-attestation.json`. On SGLang and TensorRT-LLM, which publish no process start, it reads the start from the sidecar's `/v1/process`.
+`verify` requests the sidecar's `/health` and `/v1/attestation` at `NARWHAL_NODE_<n>_ATTESTATION_URL`, reads the live engine's version and process start, and checks the attestation against them and against the contract in the published `engine-attestation.json`. On SGLang and TensorRT-LLM, which publish no process start, it reads the start from the sidecar's `/v1/process`.
 
 It writes a new `attestation-check-XXXXXX` directory in `ENGINE_RUN` with `health.json`, `health.status`, `attestation.json`, `attestation.status` and `identity.json`. On success it prints `Sidecar attestation matches the live engine and contract; captures in <directory>`. It exits with status 1 when a sidecar route returns a status other than HTTP 200, naming the route, or when the attestation fails a check, naming the failed checks.
 
@@ -147,7 +151,7 @@ If the fleet file already has an `engine_contract`, `finalize-fleet` checks it a
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's published `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
 
 Recovery:
 

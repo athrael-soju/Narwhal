@@ -160,7 +160,7 @@ On SGLang and TensorRT-LLM, `head_size` falls back to `hidden_size` divided by `
 
 ### Attestation
 
-The [attestation generator](../deploy/05-Attest.md) writes `engine-attestation.json` into the engine's launch directory.
+The [attestation capture](../deploy/05-Attest.md) writes `engine-attestation.json` into an attempt directory under the engine's launch directory, and `published-attestation.json` names the attempt the sidecar serves.
 
 To fill in the fleet contract, start the sidecars and run [`finalize-fleet`](../deploy/05-Attest.md#finalizing-the-fleet-contract) in the router shell.
 

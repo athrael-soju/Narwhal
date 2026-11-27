@@ -119,11 +119,11 @@ class VllmLauncher(
     def model_dimensions(self, run: Path, plan: dict) -> None:
         captures.model_dimensions(run, plan)
 
-    def registered_layout(self, run: Path) -> str:
-        return read_json(run / "cache-registration.json")["kv_cache_layout"]
+    def registered_layout(self, attempt: Path) -> str:
+        return read_json(attempt / "cache-registration.json")["kv_cache_layout"]
 
-    def capture_model_dimensions(self, run: Path) -> Path:
-        return attestation.capture_model_dimensions(run)
+    def capture_model_dimensions(self, run: Path, out: Path) -> Path:
+        return attestation.capture_model_dimensions(run, out)
 
     def attestation_captures(self, context: CaptureContext) -> list[Capture]:
         return attestation.attestation_captures(context)

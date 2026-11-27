@@ -1,6 +1,7 @@
-"""The attestation capture command: its order per backend, its failures, and its checks."""
+"""The attestation capture command: its attempts, its failures and recovery, and its checks."""
 
 import contextlib
+import dataclasses
 import hashlib
 import io
 import json
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -21,12 +22,25 @@ from narwhal.deployment.attestation_contract import capture as capture_module
 from narwhal.deployment.attestation_contract import cli
 from narwhal.deployment.attestation_contract import sidecar as sidecar_module
 from narwhal.deployment.attestation_contract.capture import (
+    ATTEMPTS,
+    FAILURE,
+    PUBLISHED,
+    Capture,
     CaptureFailed,
     capture,
     match_representative,
+    publish,
+    published_attempt,
     save_startup_log,
 )
+from narwhal.deployment.attestation_contract.document import engine_document
+from narwhal.deployment.launch_engine.check import read_checked
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from tests.backends.contract import (
+    LiveContainer,
+    fixtures,
+    started_container,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 # A vLLM 0.30.0 engine's startup log with NixlConnector, trimmed to its connector lines.
@@ -34,40 +48,231 @@ STARTUP_LOG = ROOT / "tests/data/vllm-0.30.0-nixl-startup.log"
 CONNECTOR = "vllm.distributed.kv_transfer.kv_connector.v1.nixl.connector."
 CONTAINER = "b" * 64
 PROCESS = {"pid": 1234, "boot_id": "boot", "start_ticks": 5678}
-
-VLLM = "narwhal.backends.vllm.attestation"
-CAPTURE = "narwhal.deployment.attestation_contract.capture"
-# The function each capture runs, by capture name.
-LEAVES = {
-    "startup-log": (CAPTURE, "save_startup_log"),
-    "model-dimensions": (CAPTURE, "capture_model_dimensions"),
-    "connector-version": (VLLM, "capture_nixl"),
-    "cache-registration": (VLLM, "registration_layout"),
-    "transfer-mode": (VLLM, "capture_transfer_mode"),
-    "startup-connector": (VLLM, "check_startup_connector"),
-    "handshake-policy": (VLLM, "handshake_policy"),
-    "http-identity": (VLLM, "capture_native_http"),
-    "representative-layout": (CAPTURE, "match_representative"),
-    "document": (CAPTURE, "generate"),
-}
-VLLM_CAPTURES = [
-    "startup-log",
-    "model-dimensions",
-    "connector-version",
-    "cache-registration",
-    "transfer-mode",
-    "startup-connector",
-    "handshake-policy",
-]
-SERVER_CAPTURES = ["startup-log", "model-dimensions", "server-info"]
+# The first HTTP route each backend's captures read.
+FIRST_ROUTE = {"vllm": "/version", "sglang": "/server_info", "trtllm": "/version"}
+FIRST_HTTP_CAPTURE = {"vllm": "http-identity", "sglang": "server-info", "trtllm": "server-info"}
+BACKENDS = tuple(FIRST_ROUTE)
 
 
-def checked_run(root: Path, engine: str, backend: str, **fields: object) -> Path:
-    """A launch directory whose plan and runtime check agree."""
-    run = root / f"{engine}-{backend}"
+class StartedEngine(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.index = 0
+
+    def started(self, name: str, **answers: object) -> tuple[Path, LiveContainer]:
+        """A started container engine that answers its captures as the backend's fixtures hold,
+        with the answer fields in `answers` replaced."""
+        self.index += 1
+        root = self.root / f"{name}-{self.index}"
+        root.mkdir()
+        run, reference = started_container(root, name)
+        fixture = fixtures(name)
+        assert fixture.engine_answers is not None
+        replies = dataclasses.replace(fixture.engine_answers(reference), **answers)
+        live = LiveContainer(run, read_checked(run)["image_id"], replies, fixture.startup_log)
+        return run, live
+
+
+class CaptureRecoveryTests(StartedEngine):
+    def test_a_failed_capture_stays_as_evidence_and_capturing_again_publishes(self):
+        for name in BACKENDS:
+            with self.subTest(backend=name):
+                run, live = self.started(name)
+                live.unavailable.add(FIRST_ROUTE[name])
+                with live.serving():
+                    with self.assertRaises(CaptureFailed) as failed:
+                        capture(run)
+                    self.assertEqual(failed.exception.capture, FIRST_HTTP_CAPTURE[name])
+                    self.assertRegex(
+                        str(failed.exception),
+                        rf"^Capture {FIRST_HTTP_CAPTURE[name]} \(.+\) failed: Server error "
+                        rf"'503 Service Unavailable' for url '.+{FIRST_ROUTE[name]}'",
+                    )
+                    self.assertFalse((run / PUBLISHED).exists())
+                    with self.assertRaisesRegex(ValueError, f"^{PUBLISHED} is missing"):
+                        published_attempt(run)
+                    (first,) = (run / ATTEMPTS).iterdir()
+                    record = json.loads((first / FAILURE).read_text())
+                    self.assertEqual(record["capture"], FIRST_HTTP_CAPTURE[name])
+                    self.assertEqual(record["error"], failed.exception.reason)
+                    self.assertEqual((first / FAILURE).stat().st_mode & 0o777, 0o600)
+                    self.assertFalse((first / "engine-attestation.json").exists())
+
+                    document = capture(run)
+                    second = document.parent
+                    self.assertNotEqual(second, first)
+                    self.assertEqual(published_attempt(run), second)
+                    self.assertEqual(
+                        json.loads((run / PUBLISHED).read_text()),
+                        {
+                            "attempt": second.name,
+                            "document_sha256": hashlib.sha256(document.read_bytes()).hexdigest(),
+                        },
+                    )
+                    self.assertEqual(json.loads(document.read_text()), engine_document(run, second))
+                    # The failed attempt keeps what it captured.
+                    self.assertTrue((first / "startup.log").is_file())
+                    self.assertFalse((second / FAILURE).exists())
+                    self.assertEqual(second.stat().st_mode & 0o777, 0o700)
+
+                    with self.assertRaisesRegex(
+                        ValueError, f"^Attempt {second.name} already published"
+                    ):
+                        capture(run)
+                self.assertEqual(sorted((run / ATTEMPTS).iterdir()), sorted([first, second]))
+
+    def test_the_first_published_attempt_wins(self):
+        run, live = self.started("sglang")
+        with live.serving():
+            document = capture(run)
+        later = run / ATTEMPTS / "later"
+        shutil.copytree(document.parent, later)
+        with self.assertRaisesRegex(ValueError, f"^Attempt {document.parent.name} already"):
+            publish(run, later)
+        self.assertEqual(published_attempt(run), document.parent)
+        self.assertEqual(sorted(path.name for path in run.glob(PUBLISHED + "*")), [PUBLISHED])
+
+    def test_a_published_document_must_match_its_record(self):
+        run, live = self.started("trtllm")
+        with live.serving():
+            document = capture(run)
+        record = json.loads(document.read_text())
+        record["contract"]["engine_version"] = "0.0.0"
+        document.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, f"differs from the document {PUBLISHED} names"):
+            published_attempt(run)
+
+    def test_a_restarted_container_is_refused_at_capture_and_after_publishing(self):
+        for name in BACKENDS:
+            with self.subTest(backend=name):
+                run, live = self.started(name)
+                with live.serving():
+                    document = capture(run)
+                    live.restart("2026-01-01T01:00:00Z", "the engine started again\n")
+                    for refused, arguments in (
+                        (engine_document, (run, document.parent)),
+                        (sidecar_module.serve, (run,)),
+                        (save_startup_log, (run, self.root)),
+                    ):
+                        with self.assertRaisesRegex(ValueError, "^Serving container started again"):
+                            refused(*arguments)
+
+                run, live = self.started(name)
+                live.restart("2026-01-01T01:00:00Z", "the engine started again\n")
+                with live.serving(), self.assertRaises(CaptureFailed) as failed:
+                    capture(run)
+                self.assertEqual(failed.exception.capture, "startup-log")
+                self.assertIn("Serving container started again", failed.exception.reason)
+                (attempt,) = (run / ATTEMPTS).iterdir()
+                self.assertEqual(sorted(path.name for path in attempt.iterdir()), [FAILURE])
+
+    def test_the_startup_log_holds_only_the_recorded_container_start(self):
+        run, live = self.started("vllm")
+        # Lines an earlier start of the container wrote, which `docker logs` also returns.
+        live.logs.insert(0, ("2025-12-31T23:00:00Z", "Creating v1 connector with name: X\n"))
+        with live.serving():
+            document = capture(run)
+        self.assertEqual(
+            (document.parent / "startup.log").read_text(), fixtures("vllm").startup_log
+        )
+
+    def test_a_defect_is_not_reported_as_a_capture_failure(self):
+        run, live = self.started("vllm")
+        with (
+            live.serving(),
+            patch.object(capture_module, "generate", side_effect=RuntimeError("defect")),
+            self.assertRaisesRegex(RuntimeError, "^defect$"),
+        ):
+            capture(run)
+        (attempt,) = (run / ATTEMPTS).iterdir()
+        self.assertFalse((attempt / FAILURE).exists())
+        self.assertTrue((attempt / "handshake-policy.json").is_file())
+        self.assertFalse((run / PUBLISHED).exists())
+
+    def test_a_missing_field_names_the_field(self):
+        step = Capture("transfer-mode", "transfer-mode.json", lambda: None)
+        failed = CaptureFailed(step, KeyError("resolved_connector"))
+        self.assertEqual(
+            str(failed),
+            "Capture transfer-mode (transfer-mode.json) failed: missing field 'resolved_connector'",
+        )
+
+
+class VllmCaptureTests(StartedEngine):
+    def test_the_startup_log_must_create_the_connector_the_check_resolved(self):
+        push = json.dumps({"connector": CONNECTOR + "NixlPushConnector"}) + "\n"
+        run, live = self.started("vllm", check_log=push)
+        with live.serving(), self.assertRaises(CaptureFailed) as failed:
+            capture(run)
+        self.assertEqual(failed.exception.capture, "startup-connector")
+        self.assertEqual(
+            failed.exception.reason,
+            "startup.log records the engine creating NixlPullConnector, "
+            "not the resolved NixlPushConnector",
+        )
+        (attempt,) = (run / ATTEMPTS).iterdir()
+        transfer = json.loads((attempt / "transfer-mode.json").read_text())
+        self.assertEqual(transfer["transfer_mode"], "push")
+        self.assertFalse((attempt / "handshake-policy.json").exists())
+
+    def test_a_representative_layout_must_match_the_registered_layout(self):
+        run, live = self.started("vllm")
+        with live.serving(), self.assertRaises(CaptureFailed) as failed:
+            capture(run, "LBNHC")
+        self.assertEqual(failed.exception.capture, "representative-layout")
+        self.assertEqual(
+            failed.exception.reason, "Resolved layout NHD differs from the representative's LBNHC"
+        )
+        run, live = self.started("vllm")
+        with live.serving():
+            capture(run, "NHD")
+
+    def test_only_vllm_takes_a_representative_layout(self):
+        for name, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
+            with self.subTest(backend=name):
+                run, live = self.started(name)
+                with (
+                    live.serving(),
+                    self.assertRaisesRegex(ValueError, f"^{label} engines register no cache"),
+                ):
+                    capture(run, "LBNHC")
+                self.assertEqual(list((run / ATTEMPTS).iterdir()), [])
+                self.assertEqual(live.calls, [])
+
+
+class CommandTests(StartedEngine):
+    def test_the_command_reports_the_failed_capture(self):
+        run, live = self.started("sglang")
+        live.restart("2026-01-01T01:00:00Z", "")
+        with (
+            live.serving(),
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            self.assertRaises(SystemExit) as exited,
+        ):
+            cli.main(["capture", "--run", str(run)])
+        self.assertEqual(exited.exception.code, 1)
+        self.assertRegex(
+            error.getvalue(),
+            r"^Capture startup-log \(startup\.log\) failed: Serving container started again "
+            r"[^\n]+\n$",
+        )
+
+    def test_the_command_prints_the_published_document(self):
+        run, live = self.started("vllm")
+        with live.serving(), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(cli.main(["capture", "--run", str(run)]), 0)
+        document = published_attempt(run) / "engine-attestation.json"
+        self.assertEqual(output.getvalue(), f"Generated private engine attestation in {document}\n")
+
+
+def checked_run(root: Path, backend: str) -> Path:
+    """A vLLM launch directory whose plan and runtime check agree."""
+    run = root / backend
     run.mkdir()
     plan = {
-        "engine": engine,
+        "engine": "vllm",
         "backend": backend,
         "role": "engine-1",
         "endpoint": "http://engine.invalid:8000",
@@ -75,7 +280,6 @@ def checked_run(root: Path, engine: str, backend: str, **fields: object) -> Path
         "python_executable": sys.executable,
         "expected_packages": {"vllm": "0.30.0"},
         "connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
-        **fields,
     }
     (run / "launch.json").write_text(json.dumps(plan))
     checked = {"plan_sha256": hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()}
@@ -88,176 +292,55 @@ def checked_run(root: Path, engine: str, backend: str, **fields: object) -> Path
     else:
         checked["image_id"] = plan["image"]
     (run / "checked.json").write_text(json.dumps(checked))
+    (run / "container-start.json").write_text(
+        json.dumps({"container_id": CONTAINER, "started_at": "2026-01-01T00:00:00Z"})
+    )
+    attempt = run / ATTEMPTS / "attempt"
+    attempt.mkdir(parents=True)
     return run
 
 
-class CaptureOrderTests(unittest.TestCase):
-    def cases(self):
-        for backend in ("container", "native"):
-            vllm = [*VLLM_CAPTURES, *(["http-identity"] if backend == "native" else [])]
-            yield "vllm", backend, None, [*vllm, "document"]
-            yield "vllm", backend, "LBNHC", [*vllm, "representative-layout", "document"]
-            for engine in ("sglang", "trtllm"):
-                yield engine, backend, None, [*SERVER_CAPTURES, "document"]
-
-    @contextlib.contextmanager
-    def leaves(self, engine: str):
-        """Replace every capture with a mock that records its name."""
-        ran: list[str] = []
-        mocks = {}
-        targets = dict(LEAVES)
-        if engine != "vllm":
-            targets["server-info"] = (f"narwhal.backends.{engine}.attestation", "capture_server")
-        with contextlib.ExitStack() as stack:
-            for name, (module, function) in targets.items():
-                mock = Mock(side_effect=lambda *_, name=name: ran.append(name))
-                mocks[name] = mock
-                stack.enter_context(patch(f"{module}.{function}", mock))
-            yield ran, mocks
-
-    def test_each_backend_runs_every_capture_in_order(self):
-        for engine, backend, layout, expected in self.cases():
-            with (
-                self.subTest(engine=engine, backend=backend, layout=layout),
-                tempfile.TemporaryDirectory() as folder,
-                self.leaves(engine) as (ran, mocks),
-            ):
-                run = checked_run(Path(folder), engine, backend)
-                self.assertEqual(capture(run, layout), run / "engine-attestation.json")
-                self.assertEqual(ran, expected)
-                log = "startup-attestation.log" if backend == "native" else "startup.log"
-                mocks["document"].assert_called_once_with(run, run / log)
-                if layout is not None:
-                    registration = mocks["representative-layout"].call_args.args
-                    self.assertIsInstance(registration[0], VllmLauncher)
-                    self.assertEqual(registration[1:], (run, layout))
-
-    def test_a_failing_capture_is_named_and_stops_the_rest(self):
-        for engine, backend, layout, expected in self.cases():
-            for index, failing in enumerate(expected):
-                with (
-                    self.subTest(engine=engine, backend=backend, layout=layout, capture=failing),
-                    tempfile.TemporaryDirectory() as folder,
-                    self.leaves(engine) as (ran, mocks),
-                ):
-                    run = checked_run(Path(folder), engine, backend)
-
-                    def fail(*_, name=failing):
-                        ran.append(name)
-                        raise ValueError("synthetic cause")
-
-                    mocks[failing].side_effect = fail
-                    with self.assertRaisesRegex(
-                        CaptureFailed, rf"^Capture {failing} \(.+\) failed: synthetic cause$"
-                    ) as failed:
-                        capture(run, layout)
-                    self.assertEqual(failed.exception.capture, failing)
-                    self.assertEqual(ran, expected[: index + 1])
-
-    def test_failures_name_the_output_and_a_missing_field(self):
-        with tempfile.TemporaryDirectory() as folder, self.leaves("vllm") as (_, mocks):
-            run = checked_run(Path(folder), "vllm", "container")
-            mocks["transfer-mode"].side_effect = KeyError("resolved_connector")
-            with self.assertRaisesRegex(
-                CaptureFailed,
-                r"^Capture transfer-mode \(transfer-mode\.json\) failed: "
-                r"missing field 'resolved_connector'$",
-            ):
-                capture(run)
-
-    def test_only_vllm_takes_a_representative_layout(self):
-        for engine, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
-            with (
-                self.subTest(engine=engine),
-                tempfile.TemporaryDirectory() as folder,
-                self.leaves(engine) as (ran, _),
-            ):
-                run = checked_run(Path(folder), engine, "container")
-                with self.assertRaisesRegex(ValueError, f"^{label} engines register no cache"):
-                    capture(run, "LBNHC")
-                self.assertEqual(ran, [])
-
-    def test_the_command_reports_the_failed_capture(self):
-        with tempfile.TemporaryDirectory() as folder, self.leaves("vllm") as (_, mocks):
-            run = checked_run(Path(folder), "vllm", "container")
-            mocks["startup-log"].side_effect = ValueError("docker logs exited 1: no container")
-            with (
-                contextlib.redirect_stderr(io.StringIO()) as error,
-                self.assertRaises(SystemExit) as exited,
-            ):
-                cli.main(["capture", "--run", str(run)])
-            self.assertEqual(exited.exception.code, 1)
-            self.assertEqual(
-                error.getvalue(),
-                "Capture startup-log (startup.log) failed: docker logs exited 1: no container\n",
-            )
-            mocks["model-dimensions"].assert_not_called()
-
-    def test_the_command_prints_the_document(self):
-        with tempfile.TemporaryDirectory() as folder, self.leaves("sglang"):
-            run = checked_run(Path(folder), "sglang", "native")
-            with contextlib.redirect_stdout(io.StringIO()) as output:
-                self.assertEqual(cli.main(["capture", "--run", str(run)]), 0)
-            self.assertEqual(
-                output.getvalue(),
-                f"Generated private engine attestation in {run / 'engine-attestation.json'}\n",
-            )
-
-
 class StartupLogTests(unittest.TestCase):
-    def test_a_container_log_is_saved_once_with_both_streams(self):
-        with tempfile.TemporaryDirectory() as folder:
-            run = checked_run(Path(folder), "vllm", "container")
-            logs = subprocess.CompletedProcess([], 0, stdout=b"stdout line\nstderr line\n")
-            with (
-                patch.object(capture_module, "live_identity", return_value=CONTAINER),
-                patch.object(capture_module.subprocess, "run", return_value=logs) as docker,
-            ):
-                self.assertEqual(save_startup_log(run), run / "startup.log")
-                with self.assertRaises(FileExistsError):
-                    save_startup_log(run)
-            self.assertEqual(docker.call_args.args, (["docker", "logs", CONTAINER],))
-            self.assertEqual(docker.call_args.kwargs["stderr"], subprocess.STDOUT)
-            self.assertEqual((run / "startup.log").read_bytes(), logs.stdout)
-            self.assertEqual((run / "startup.log").stat().st_mode & 0o777, 0o600)
-            self.assertEqual(
-                sorted(path.name for path in run.iterdir() if ".tmp-" in path.name), []
-            )
-
     def test_a_failed_docker_logs_writes_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
-            run = checked_run(Path(folder), "vllm", "container")
+            run = checked_run(Path(folder), "container")
+            attempt = run / ATTEMPTS / "attempt"
             failed = subprocess.CompletedProcess([], 1, stdout=b"Error: No such container\n")
             with (
                 patch.object(capture_module, "live_identity", return_value=CONTAINER),
-                patch.object(capture_module.subprocess, "run", return_value=failed),
+                patch.object(capture_module.subprocess, "run", return_value=failed) as docker,
                 self.assertRaisesRegex(
                     ValueError, "^docker logs exited 1: Error: No such container$"
                 ),
             ):
-                save_startup_log(run)
+                save_startup_log(run, attempt)
             self.assertEqual(
-                sorted(path.name for path in run.iterdir()), ["checked.json", "launch.json"]
+                docker.call_args.args,
+                (["docker", "logs", "--since", "2026-01-01T00:00:00Z", CONTAINER],),
             )
+            self.assertEqual(docker.call_args.kwargs["stderr"], subprocess.STDOUT)
+            self.assertEqual(docker.call_args.kwargs["timeout"], capture_module.DOCKER_LOGS_SECONDS)
+            self.assertEqual(list(attempt.iterdir()), [])
 
     def test_a_native_engine_attests_a_copy_of_its_growing_log(self):
         with tempfile.TemporaryDirectory() as folder:
-            run = checked_run(Path(folder), "vllm", "native")
+            run = checked_run(Path(folder), "native")
+            attempt = run / ATTEMPTS / "attempt"
             (run / "startup.log").write_bytes(STARTUP_LOG.read_bytes())
             with (
                 patch.object(capture_module, "live_identity", return_value=PROCESS),
                 patch.object(capture_module.subprocess, "run") as docker,
             ):
-                snapshot = save_startup_log(run)
+                snapshot = save_startup_log(run, attempt)
             docker.assert_not_called()
-            self.assertEqual(snapshot, run / "startup-attestation.log")
+            self.assertEqual(snapshot, attempt / "startup.log")
             self.assertEqual(snapshot.read_bytes(), STARTUP_LOG.read_bytes())
             self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
 
 
 class TransferModeTests(unittest.TestCase):
     def check_log(self, run: Path, *attempts: tuple[str, list[str]]) -> Path:
-        name = "runtime-check.log" if "native" in run.name else "image-check.log"
+        name = "runtime-check.log" if run.name == "native" else "image-check.log"
         lines = ["startup diagnostic"]
         for plan_hash, classes in attempts:
             lines.append(json.dumps({"check_attempt": "1" * 32, "plan_sha256": plan_hash}))
@@ -276,22 +359,20 @@ class TransferModeTests(unittest.TestCase):
                     self.subTest(backend=backend, connector=name),
                     tempfile.TemporaryDirectory() as folder,
                 ):
-                    run = checked_run(Path(folder), "vllm", backend)
+                    run = checked_run(Path(folder), backend)
+                    attempt = run / ATTEMPTS / "attempt"
                     log = self.check_log(run, (self.plan_hash(run), [name, name]))
                     original = log.read_bytes()
                     with patch.object(vllm_attestation, "live_identity", return_value=identity):
-                        output = vllm_attestation.capture_transfer_mode(run)
-                        retained = output.read_bytes()
-                        with self.assertRaisesRegex(ValueError, "already exists"):
-                            vllm_attestation.capture_transfer_mode(run)
-                    record = json.loads(retained)
+                        output = vllm_attestation.capture_transfer_mode(run, attempt)
                     binding = (
                         {"process": PROCESS}
                         if backend == "native"
                         else {"image_id": "sha256:" + "a" * 64}
                     )
+                    self.assertEqual(output, attempt / "transfer-mode.json")
                     self.assertEqual(
-                        record,
+                        json.loads(output.read_text()),
                         {
                             "transfer_mode": mode,
                             "configured_connector": "NixlConnector",
@@ -304,7 +385,6 @@ class TransferModeTests(unittest.TestCase):
                         },
                     )
                     self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-                    self.assertEqual(output.read_bytes(), retained)
                     self.assertEqual(log.read_bytes(), original)
 
     def test_an_unknown_ambiguous_or_missing_class_is_refused(self):
@@ -314,60 +394,61 @@ class TransferModeTests(unittest.TestCase):
             ([], "holds 0 factory-resolved"),
         ):
             with self.subTest(classes=classes), tempfile.TemporaryDirectory() as folder:
-                run = checked_run(Path(folder), "vllm", "container")
+                run = checked_run(Path(folder), "container")
+                attempt = run / ATTEMPTS / "attempt"
                 self.check_log(run, (self.plan_hash(run), classes))
                 with (
                     patch.object(vllm_attestation, "live_identity", return_value=CONTAINER),
                     self.assertRaisesRegex(ValueError, reason),
                 ):
-                    vllm_attestation.capture_transfer_mode(run)
-                self.assertFalse((run / "transfer-mode.json").exists())
+                    vllm_attestation.capture_transfer_mode(run, attempt)
+                self.assertFalse((attempt / "transfer-mode.json").exists())
 
     def test_only_check_attempts_for_this_plan_count(self):
         with tempfile.TemporaryDirectory() as folder:
-            run = checked_run(Path(folder), "vllm", "container")
+            run = checked_run(Path(folder), "container")
+            attempt = run / ATTEMPTS / "attempt"
             self.check_log(
                 run, ("0" * 64, ["NixlPushConnector"]), (self.plan_hash(run), ["NixlPullConnector"])
             )
             with patch.object(vllm_attestation, "live_identity", return_value=CONTAINER):
-                output = vllm_attestation.capture_transfer_mode(run)
+                output = vllm_attestation.capture_transfer_mode(run, attempt)
             self.assertEqual(json.loads(output.read_text())["transfer_mode"], "pull")
         with tempfile.TemporaryDirectory() as folder:
-            run = checked_run(Path(folder), "vllm", "container")
+            run = checked_run(Path(folder), "container")
             self.check_log(run, ("0" * 64, ["NixlPullConnector"]))
             with (
                 patch.object(vllm_attestation, "live_identity", return_value=CONTAINER),
                 self.assertRaisesRegex(ValueError, "rerun the runtime check"),
             ):
-                vllm_attestation.capture_transfer_mode(run)
+                vllm_attestation.capture_transfer_mode(run, run / ATTEMPTS / "attempt")
 
 
 class StartupConnectorTests(unittest.TestCase):
-    def run_with(self, root: Path, resolved: str, log: str) -> tuple[Path, Path]:
+    def attempt(self, root: Path, resolved: str, log: str) -> Path:
         (root / "transfer-mode.json").write_text(
             json.dumps({"resolved_connector": CONNECTOR + resolved})
         )
-        startup = root / "startup.log"
-        startup.write_text(log)
-        return root, startup
+        (root / "startup.log").write_text(log)
+        return root
 
     def test_a_live_vllm_log_confirms_the_resolved_class(self):
         with tempfile.TemporaryDirectory() as folder:
-            run, startup = self.run_with(Path(folder), "NixlPullConnector", STARTUP_LOG.read_text())
-            vllm_attestation.check_startup_connector(run, startup)
+            attempt = self.attempt(Path(folder), "NixlPullConnector", STARTUP_LOG.read_text())
+            vllm_attestation.check_startup_connector(attempt)
 
-    def test_another_class_or_the_configured_alias_is_refused(self):
+    def test_another_class_is_refused(self):
         # The fixture names NixlConnector in its layout and deprecation lines; only the
         # factory line names the class the engine created.
-        for resolved in ("NixlPushConnector", "NixlConnector"):
-            with self.subTest(resolved=resolved), tempfile.TemporaryDirectory() as folder:
-                run, startup = self.run_with(Path(folder), resolved, STARTUP_LOG.read_text())
-                with self.assertRaisesRegex(
-                    ValueError,
-                    f"^startup.log records the engine creating NixlPullConnector, "
-                    f"not the resolved {resolved}$",
-                ):
-                    vllm_attestation.check_startup_connector(run, startup)
+        self.assertIn("NixlConnector setting KV cache layout", STARTUP_LOG.read_text())
+        with tempfile.TemporaryDirectory() as folder:
+            attempt = self.attempt(Path(folder), "NixlPushConnector", STARTUP_LOG.read_text())
+            with self.assertRaisesRegex(
+                ValueError,
+                "^startup.log records the engine creating NixlPullConnector, "
+                "not the resolved NixlPushConnector$",
+            ):
+                vllm_attestation.check_startup_connector(attempt)
 
     def test_a_log_without_a_created_connector_is_refused(self):
         lines = [
@@ -375,34 +456,35 @@ class StartupConnectorTests(unittest.TestCase):
             for line in STARTUP_LOG.read_text().splitlines(keepends=True)
             if "Creating v1 connector" not in line
         ]
-        self.assertIn("NixlConnector setting KV cache layout", "".join(lines))
         with tempfile.TemporaryDirectory() as folder:
-            run, startup = self.run_with(Path(folder), "NixlPullConnector", "".join(lines))
+            attempt = self.attempt(Path(folder), "NixlPullConnector", "".join(lines))
             with self.assertRaisesRegex(ValueError, "records no connector the engine created"):
-                vllm_attestation.check_startup_connector(run, startup)
+                vllm_attestation.check_startup_connector(attempt)
 
     def test_a_mixed_log_is_refused(self):
         push = STARTUP_LOG.read_text().replace(
             "name: NixlPullConnector and", "name: NixlPushConnector and", 1
         )
         with tempfile.TemporaryDirectory() as folder:
-            run, startup = self.run_with(Path(folder), "NixlPullConnector", push)
+            attempt = self.attempt(Path(folder), "NixlPullConnector", push)
             with self.assertRaisesRegex(
                 ValueError, "creating NixlPullConnector, NixlPushConnector, not the resolved"
             ):
-                vllm_attestation.check_startup_connector(run, startup)
+                vllm_attestation.check_startup_connector(attempt)
 
 
 class RepresentativeLayoutTests(unittest.TestCase):
     def test_the_registered_layout_must_match_the_representative(self):
         with tempfile.TemporaryDirectory() as folder:
-            run = Path(folder)
-            (run / "cache-registration.json").write_text(json.dumps({"kv_cache_layout": "LBNHC"}))
-            match_representative(VllmLauncher(), run, "LBNHC")
+            attempt = Path(folder)
+            (attempt / "cache-registration.json").write_text(
+                json.dumps({"kv_cache_layout": "LBNHC"})
+            )
+            match_representative(VllmLauncher(), attempt, "LBNHC")
             with self.assertRaisesRegex(
                 ValueError, "^Resolved layout LBNHC differs from the representative's BLHNC$"
             ):
-                match_representative(VllmLauncher(), run, "BLHNC")
+                match_representative(VllmLauncher(), attempt, "BLHNC")
 
 
 class VerifyTests(unittest.TestCase):
@@ -416,7 +498,10 @@ class VerifyTests(unittest.TestCase):
         (run / "launch.json").write_text(json.dumps(plan))
         key = {"vllm": "VLLM_API_KEY", "sglang": "NARWHAL_SGLANG_API_KEY"}[engine]
         (run / "container.env").write_text(f"{key}=synthetic-key\n")
-        shutil.copy(self.DOCUMENT, run / "engine-attestation.json")
+        attempt = run / ATTEMPTS / "attempt"
+        attempt.mkdir(parents=True)
+        shutil.copy(self.DOCUMENT, attempt / "engine-attestation.json")
+        publish(run, attempt)
         return run
 
     def verify(self, run: Path, status: int, attested: EngineIdentity, live: EngineIdentity):
@@ -500,6 +585,16 @@ class VerifyTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "NARWHAL_NODE_1_ATTESTATION_URL must name"),
         ):
             sidecar_module.verify(self.launch(Path(folder)))
+
+    def test_verify_needs_a_published_attempt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.launch(Path(folder))
+            (run / PUBLISHED).unlink()
+            with (
+                patch.dict(os.environ, {"NARWHAL_NODE_1_ATTESTATION_URL": self.ROUTE}),
+                self.assertRaisesRegex(ValueError, f"^{PUBLISHED} is missing"),
+            ):
+                sidecar_module.verify(run)
 
 
 if __name__ == "__main__":

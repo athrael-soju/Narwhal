@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...engines.host_process import started_at_seconds
 from ..launch_engine.backend import LiveModelDimensions, plan_launcher
 from ..launch_engine.check import read_checked
 from ..launch_engine.runtime import digest, write_private
@@ -56,14 +57,34 @@ def live_container(run: Path, checked: dict) -> str:
         ["docker", "inspect", "--format", "{{json .}}", cid],
         capture_output=True,
         text=True,
+        timeout=15,
         check=True,
     )
     observed = json.loads(result.stdout)
     if observed.get("Id") != cid or observed.get("Image") != checked["image_id"]:
         raise ValueError("Serving container differs from the checked image or recorded ID")
-    if observed.get("State", {}).get("Running") is not True:
+    state = observed.get("State", {})
+    if state.get("Running") is not True:
         raise ValueError("Serving container must be running before attestation")
+    recorded = container_start(run)
+    if recorded["container_id"] != cid or state.get("StartedAt") != recorded["started_at"]:
+        raise ValueError(
+            "Serving container started again after narwhal-engine started it; its evidence "
+            "describes an earlier process, so prepare, check and start a fresh launch"
+        )
     return cid
+
+
+def container_start(run: Path) -> dict:
+    """The container start that narwhal-engine recorded in container-start.json."""
+    path = run / "container-start.json"
+    if not path.is_file():
+        raise ValueError(
+            "container-start.json is missing; start the engine with this release's narwhal-engine"
+        )
+    record = read_json(path)
+    started_at_seconds(record["started_at"])
+    return record
 
 
 def live_native(run: Path, plan: dict, checked: dict) -> dict:
@@ -160,8 +181,9 @@ def model_contract(config: dict) -> dict[str, Any]:
     return {"contract": values, "model_architecture": architectures[0]}
 
 
-def config_model_dimensions(run: Path, plan: dict) -> Path:
-    destination = run / "model-dimensions.json"
+def config_model_dimensions(run: Path, plan: dict, out: Path) -> Path:
+    """Write model-dimensions.json into `out` from the launch's model configuration."""
+    destination = out / "model-dimensions.json"
     path = Path(plan["model_dir"]) / "config.json"
     if digest(path) != plan["model_config_sha256"]:
         raise ValueError("Model configuration changed after launch preparation")
@@ -187,12 +209,12 @@ def model_dimensions(run: Path, plan: dict) -> None:
         engine.model_dimensions(run, plan)
     else:
         checked_plan(run)
-        config_model_dimensions(run, plan)
+        config_model_dimensions(run, plan, run)
 
 
-def capture_model_dimensions(run: Path) -> Path:
+def capture_model_dimensions(run: Path, out: Path) -> Path:
     plan, _, _ = checked_plan(run)
     engine = plan_launcher(plan)
     if isinstance(engine, LiveModelDimensions):
-        return engine.capture_model_dimensions(run)
-    return config_model_dimensions(run, plan)
+        return engine.capture_model_dimensions(run, out)
+    return config_model_dimensions(run, plan, out)

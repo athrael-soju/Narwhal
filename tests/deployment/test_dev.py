@@ -575,6 +575,21 @@ class DevTests(unittest.TestCase):
             + [f"attest-{number}" for number in (1, 2, 3, 4)]
             + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
         )
+        run = Path(result["run"])
+        self.assertEqual(
+            [
+                call.args[1:3]
+                for call in command.call_args_list
+                if call.args[3].startswith("attest")
+            ],
+            [
+                (
+                    "narwhal.deployment.attestation_contract.cli",
+                    ["capture", "--run", str(run / f"engine-{number}")],
+                )
+                for number in (1, 2, 3, 4)
+            ],
+        )
         budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
         self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
         start = next(

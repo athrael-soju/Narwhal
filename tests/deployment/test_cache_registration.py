@@ -66,9 +66,9 @@ class CacheRegistrationTests(unittest.TestCase):
                     return output.getvalue()
 
                 with patched_docker(side_effect=docker) as called:
-                    registration_layout(run, plan)
+                    registration_layout(run, plan, run)
                     with self.assertRaisesRegex(ValueError, "capture exists"):
-                        registration_layout(run, plan)
+                        registration_layout(run, plan, run)
                 self.assertEqual(called.call_count, 1)
                 capture = run / "cache-registration.json"
                 value = json.loads(capture.read_text())
@@ -104,11 +104,11 @@ class CacheRegistrationTests(unittest.TestCase):
                 ) as docker:
                     if failure:
                         with self.assertRaises(ValueError):
-                            registration_layout(run, plan)
+                            registration_layout(run, plan, run)
                         docker.assert_not_called()
                         self.assertFalse((run / "cache-registration.json").exists())
                     else:
-                        registration_layout(run, plan)
+                        registration_layout(run, plan, run)
                         self.assertEqual(docker.call_count, 1)
 
 

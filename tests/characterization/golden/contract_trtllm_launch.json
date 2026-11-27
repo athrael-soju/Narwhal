@@ -189,6 +189,17 @@
           ],
           "log": "<root>/container/launch/launch.log",
           "stage": "docker-start"
+        },
+        {
+          "command": [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.StartedAt}}",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          ],
+          "log": "<root>/container/launch/launch.log",
+          "stage": "docker-inspect"
         }
       ],
       "printed": "Container started; follow its logs and verify the HTTP endpoints.\n"

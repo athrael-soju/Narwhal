@@ -51,10 +51,15 @@ def model_dimensions(run: Path, plan: dict) -> None:
     print("Model contract dimensions captured in model-dimensions.json.")
 
 
-def registration_layout(run: Path, plan: dict) -> None:
-    """Write cache-registration.json from the live cache layout in cache-layout.json."""
+def inspection_log(run: Path, out: Path, name: str) -> str:
+    """The path of an inspection log in `out`, relative to the launch directory."""
+    return str((out / name).relative_to(run))
+
+
+def registration_layout(run: Path, plan: dict, out: Path) -> None:
+    """Write cache-registration.json into `out` from the live cache layout of `run`."""
     require_checked(run, plan)
-    destination = run / "cache-registration.json"
+    destination = out / "cache-registration.json"
     if destination.exists():
         raise ValueError(
             "cache registration capture exists; retain it and use a fresh inspection plan"
@@ -91,7 +96,9 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
     'module_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
 }))
 """
-    output = run_runtime_script(run, plan, script, [name], "cache-registration.log")
+    output = run_runtime_script(
+        run, plan, script, [name], inspection_log(run, out, "cache-registration.log")
+    )
     prefix = "NARWHAL_CACHE_REGISTRATION="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
@@ -114,9 +121,10 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
     write_private(destination, json.dumps(result, indent=2) + "\n")
 
 
-def handshake_policy(run: Path, plan: dict) -> None:
+def handshake_policy(run: Path, plan: dict, out: Path) -> None:
+    """Write handshake-policy.json into `out` from the installed connector of `run`."""
     require_checked(run, plan)
-    destination = run / "handshake-policy.json"
+    destination = out / "handshake-policy.json"
     if destination.exists():
         raise ValueError(
             "handshake policy capture exists; retain it and use a fresh inspection plan"
@@ -161,7 +169,9 @@ print('NARWHAL_HANDSHAKE_POLICY=' + json.dumps({
     'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
 }))
 """
-    output = run_runtime_script(run, plan, script, [json.dumps(connector)], "handshake-policy.log")
+    output = run_runtime_script(
+        run, plan, script, [json.dumps(connector)], inspection_log(run, out, "handshake-policy.log")
+    )
     prefix = "NARWHAL_HANDSHAKE_POLICY="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)

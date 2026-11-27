@@ -224,6 +224,6 @@ class RuntimeCheckCliTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(FileExistsError, "inspection log already exists"),
             ):
-                handshake_policy(run, plan)
+                handshake_policy(run, plan, run)
             self.assertEqual(log.read_text(), "prior inspection")
             self.assertFalse((run / "handshake-policy.json").exists())

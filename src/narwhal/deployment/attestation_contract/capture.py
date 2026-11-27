@@ -1,10 +1,12 @@
-"""Every attestation capture of one container or native engine, then its document."""
+"""Every attestation capture of one container or native engine, in an attempt directory of its
+own, and the published attempt that the sidecar serves."""
 
 from __future__ import annotations
 
 import functools
 import os
 import subprocess
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,16 +20,33 @@ from ..launch_engine.backend import (
     engine_backend,
     plan_launcher,
 )
-from .document import generate
-from .evidence import capture_model_dimensions, checked_plan, live_identity
+from ..launch_engine.runtime import digest
+from .document import STARTUP_LOG, generate
+from .evidence import (
+    capture_model_dimensions,
+    checked_plan,
+    container_start,
+    live_identity,
+    read_json,
+    write_private_json,
+)
+
+# Each capture attempt is a new directory here; failed attempts stay as evidence.
+ATTEMPTS = "attestation"
+# Names the attempt whose captures passed; the sidecar serves that attempt's document.
+PUBLISHED = "published-attestation.json"
+# Written into an attempt when one of its captures fails.
+FAILURE = "capture-failure.json"
+DOCKER_LOGS_SECONDS = 120
 
 
 @dataclass(frozen=True)
 class CaptureContext:
+    # The launch directory, read for the engine's launch and start evidence.
     run: Path
+    # The attempt directory, which receives every capture.
+    attempt: Path
     plan: dict
-    # The startup log the document attests, saved by the startup-log capture.
-    startup_log: Path
 
 
 @dataclass(frozen=True)
@@ -43,33 +62,25 @@ class CaptureFailed(ValueError):
         reason = f"missing field {cause}" if isinstance(cause, KeyError) else str(cause)
         super().__init__(f"Capture {capture.name} ({capture.output}) failed: {reason}")
         self.capture = capture.name
+        self.reason = reason
 
 
-# Errors a capture raises for its own evidence; anything else is a defect.
-CAPTURE_ERRORS = (
-    OSError,
-    ValueError,
-    KeyError,
-    TypeError,
-    subprocess.SubprocessError,
-    httpx.HTTPError,
-)
+# Errors a capture raises for its evidence or the engine it reads; anything else is a defect.
+CAPTURE_ERRORS = (OSError, ValueError, KeyError, subprocess.SubprocessError, httpx.HTTPError)
 
 
-def startup_log(run: Path, plan: dict) -> Path:
-    """The startup log a document attests: a native engine's snapshot, or the container log."""
-    return run / ("startup-attestation.log" if plan.get("backend") == "native" else "startup.log")
-
-
-def save_startup_log(run: Path) -> Path:
+def save_startup_log(run: Path, attempt: Path) -> Path:
+    """Write the startup log of the live engine's current process into the attempt."""
     plan, checked, _ = checked_plan(run)
     identity = live_identity(run, plan, checked)
-    destination = startup_log(run, plan)
     if isinstance(identity, str):
+        # `docker logs` also returns earlier runs of the container; keep only this one.
+        since = container_start(run)["started_at"]
         result = subprocess.run(
-            ["docker", "logs", identity],
+            ["docker", "logs", "--since", since, identity],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            timeout=DOCKER_LOGS_SECONDS,
             check=False,
         )
         if result.returncode:
@@ -79,61 +90,123 @@ def save_startup_log(run: Path) -> Path:
             )
         data = result.stdout
     else:
-        # The engine keeps appending to startup.log; the document attests a fixed copy.
+        # The engine keeps appending to its startup.log; the document attests a fixed copy.
         data = (run / "startup.log").read_bytes()
-    temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
-    try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(data)
-        os.link(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    destination = attempt / STARTUP_LOG
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
     return destination
 
 
-def match_representative(engine: CacheRegistration, run: Path, expected: str) -> None:
-    actual = engine.registered_layout(run)
+def match_representative(engine: CacheRegistration, attempt: Path, expected: str) -> None:
+    actual = engine.registered_layout(attempt)
     if actual != expected:
         raise ValueError(f"Resolved layout {actual} differs from the representative's {expected}")
 
 
-def captures(run: Path, representative_layout: str | None = None) -> list[Capture]:
-    """The captures of the engine in `run`, in the order `capture` runs them."""
+def captures(run: Path, attempt: Path, representative_layout: str | None = None) -> list[Capture]:
+    """The captures of the engine in `run` into `attempt`, in the order `capture` runs them."""
     plan, _, _ = checked_plan(run)
     engine = plan_launcher(plan)
     registration = engine if isinstance(engine, CacheRegistration) else None
     if representative_layout is not None and registration is None:
         label = engine_backend(plan.get("engine")).label
         raise ValueError(f"{label} engines register no cache layout to match a representative's")
-    log = startup_log(run, plan)
     dimensions = (
         "model-dimensions.live.json"
         if isinstance(engine, LiveModelDimensions)
         else "model-dimensions.json"
     )
     steps = [
-        Capture("startup-log", log.name, lambda: save_startup_log(run)),
-        Capture("model-dimensions", dimensions, lambda: capture_model_dimensions(run)),
-        *engine.attestation_captures(CaptureContext(run, plan, log)),
+        Capture("startup-log", STARTUP_LOG, lambda: save_startup_log(run, attempt)),
+        Capture("model-dimensions", dimensions, lambda: capture_model_dimensions(run, attempt)),
+        *engine.attestation_captures(CaptureContext(run, attempt, plan)),
     ]
     if representative_layout is not None and registration is not None:
         steps.append(
             Capture(
                 "representative-layout",
                 "cache-registration.json",
-                functools.partial(match_representative, registration, run, representative_layout),
+                functools.partial(
+                    match_representative, registration, attempt, representative_layout
+                ),
             )
         )
-    steps.append(Capture("document", "engine-attestation.json", lambda: generate(run, log)))
+    steps.append(Capture("document", "engine-attestation.json", lambda: generate(run, attempt)))
     return steps
 
 
+def published_attempt(run: Path) -> Path:
+    """The attempt directory whose document the launch directory published."""
+    path = run / PUBLISHED
+    if not path.is_file():
+        raise ValueError(f"{PUBLISHED} is missing; capture the engine's attestation first")
+    record = read_json(path)
+    attempt = run / ATTEMPTS / record["attempt"]
+    document = attempt / "engine-attestation.json"
+    if digest(document) != record["document_sha256"]:
+        raise ValueError(f"{document} differs from the document {PUBLISHED} names")
+    return attempt
+
+
+def new_attempt(run: Path) -> Path:
+    attempts = run / ATTEMPTS
+    attempts.mkdir(mode=0o700, exist_ok=True)
+    attempt = attempts / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"
+    attempt.mkdir(mode=0o700)
+    return attempt
+
+
+def refuse_published(run: Path) -> None:
+    if (run / PUBLISHED).exists():
+        attempt = read_json(run / PUBLISHED).get("attempt")
+        raise ValueError(
+            f"Attempt {attempt} already published this engine's attestation; capture again only "
+            "for a fresh launch"
+        )
+
+
+def publish(run: Path, attempt: Path) -> Path:
+    """Name `attempt` in the launch directory, unless another attempt published first."""
+    destination = run / PUBLISHED
+    record = {
+        "attempt": attempt.name,
+        "document_sha256": digest(attempt / "engine-attestation.json"),
+    }
+    temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
+    try:
+        write_private_json(temporary, record)
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            refuse_published(run)
+            raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
 def capture(run: Path, representative_layout: str | None = None) -> Path:
-    """Run every capture of the engine in `run` and write its attestation document."""
-    for step in captures(run, representative_layout):
+    """Run every capture of the engine in `run` in a new attempt directory, and publish the
+    attempt once its document is written. Return the published document."""
+    refuse_published(run)
+    attempt = new_attempt(run)
+    try:
+        steps = captures(run, attempt, representative_layout)
+    except BaseException:
+        # Nothing was captured: a refused input leaves no attempt behind.
+        attempt.rmdir()
+        raise
+    for step in steps:
         try:
             step.action()
         except CAPTURE_ERRORS as error:
-            raise CaptureFailed(step, error) from error
-    return run / "engine-attestation.json"
+            failed = CaptureFailed(step, error)
+            write_private_json(
+                attempt / FAILURE,
+                {"capture": step.name, "output": step.output, "error": failed.reason},
+            )
+            raise failed from error
+    publish(run, attempt)
+    return attempt / "engine-attestation.json"

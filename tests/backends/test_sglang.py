@@ -464,7 +464,7 @@ class LaunchTests(unittest.TestCase):
         (run / "launch.json").write_text(json.dumps({"engine": "sglang"}))
         (run / "checked.json").write_text(json.dumps({"plan_sha256": "0" * 64}))
         with self.assertRaisesRegex(ValueError, "another serving plan"):
-            capture_model_dimensions(run)
+            capture_model_dimensions(run, run)
         self.assertFalse((run / "model-dimensions.json").exists())
 
 
@@ -624,7 +624,7 @@ class EngineDocumentTests(unittest.TestCase):
         fixed = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
         run = self.evidence("native", fixed)
         with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
-            document = engine_document(run, run / "startup.log")
+            document = engine_document(run, run)
         model_config = digest(run / "model/config.json")
         expected = {
             "schema": "narwhal.attestation",
@@ -701,13 +701,13 @@ class EngineDocumentTests(unittest.TestCase):
                 (run / "server-info.json").write_text(json.dumps(record))
                 with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
                     if planned == live:
-                        document = engine_document(run, run / "startup.log")
+                        document = engine_document(run, run)
                         self.assertEqual(document["schema"], "narwhal.attestation")
                         continue
                     with self.assertRaisesRegex(
                         ValueError, "^Live decode attention backend differs from the launch plan"
                     ):
-                        engine_document(run, run / "startup.log")
+                        engine_document(run, run)
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []
@@ -743,10 +743,10 @@ class EngineDocumentTests(unittest.TestCase):
                     patch.object(attestation, start, return_value=100.0) as started,
                     serving,
                 ):
-                    path = attestation.capture_server(run)
+                    path = attestation.capture_server(run, run)
                     with self.assertRaisesRegex(ValueError, "^Server evidence already exists"):
-                        attestation.capture_server(run)
-                    engine_document(run, run / "startup.log")
+                        attestation.capture_server(run, run)
+                    engine_document(run, run)
                     started.assert_called_once_with(PROCESS["pid"] if native else CONTAINER_ID)
                     [request] = requests
                     self.assertEqual(str(request.url), "http://192.0.2.11:8000/server_info")
@@ -769,7 +769,7 @@ class EngineDocumentTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, f"^Server evidence {field} differs from the checked serving"
                     ):
-                        engine_document(run, run / "startup.log")
+                        engine_document(run, run)
 
 
 class RouterRoleTests(unittest.IsolatedAsyncioTestCase):
