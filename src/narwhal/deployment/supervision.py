@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import ClassVar, Generic, Literal, Protocol, TypeVar
 
@@ -28,6 +29,7 @@ from . import native_engine, stages
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 RUN_ID = re.compile(r"[0-9a-f]{32}")
 ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+BOOT_ID = "/proc/sys/kernel/random/boot_id"
 # `Type=exec` and `StandardOutput=append:` need systemd 240.
 SYSTEMD_VERSION = 240
 # Both targets allow a stopped process this long after SIGTERM before they send SIGKILL.
@@ -35,7 +37,22 @@ STOP_GRACE_SECONDS = 10
 COMMAND_TIMEOUT_SECONDS = 60.0
 # Characters that a double-quoted value in a systemd environment file escapes.
 _ENVIRONMENT_ESCAPES = str.maketrans({c: "\\" + c for c in '\\"`$'})
-_UNIT_PROPERTIES = ("LoadState", "ActiveState", "SubState", "InvocationID", "MainPID", "NRestarts")
+_UNIT_PROPERTIES = (
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "Description",
+    "InvocationID",
+    "MainPID",
+    "NRestarts",
+)
+# Writes standard input to a new file at $1, private to the user, refusing any existing
+# path, symbolic links included: mktemp creates the draft exclusively at mode 0600, and
+# ln fails when $1 exists.
+_CREATE_PRIVATE = (
+    'draft=$(mktemp "$1.XXXXXXXX") || exit 1; '
+    'cat > "$draft" && ln "$draft" "$1"; status=$?; rm -f "$draft"; exit $status'
+)
 
 State = Literal["running", "restarted", "pending", "stopped", "mismatch"]
 
@@ -50,7 +67,10 @@ class IdentityMismatch(SupervisionError):
 
 @dataclass(frozen=True)
 class ProcessSpec:
-    """One long-lived process, run from `cwd` with its output appended to `log`.
+    """One long-lived process, run from `cwd` with its output in `log`.
+
+    A process group starts a fresh log. A systemd unit appends to it, so the log keeps
+    the output of every automatic restart.
 
     `environment` adds variables to the target's base environment: the supervising
     process's own for process groups, and the user manager's for systemd units.
@@ -96,27 +116,33 @@ class ProcessGroup:
 class SystemdUnit:
     """One invocation of a transient user unit and its main process.
 
-    `restarts` is the unit's `NRestarts` counter, which tells systemd's automatic
-    restarts apart from a unit that someone stopped and started again.
+    `nonce` is written into the unit's description at start, so it names that unit and
+    no later one of the same name. `restarts` is the unit's `NRestarts` counter, which
+    counts systemd's automatic restarts of it. `environment_file` is the private file the
+    unit reads its environment from.
     """
 
     unit: str
+    nonce: str
     invocation_id: str
     main_pid: int
     start_ticks: int
     boot_id: str
     restarts: int
+    environment_file: str
     kind: ClassVar[str] = "systemd-unit"
 
     def record(self) -> dict[str, int | str]:
         return {
             "kind": self.kind,
             "unit": self.unit,
+            "nonce": self.nonce,
             "invocation_id": self.invocation_id,
             "main_pid": self.main_pid,
             "start_ticks": self.start_ticks,
             "boot_id": self.boot_id,
             "restarts": self.restarts,
+            "environment_file": self.environment_file,
         }
 
 
@@ -144,11 +170,13 @@ def identity_from_record(record: Mapping[str, object]) -> ProcessGroup | Systemd
     if kind == SystemdUnit.kind:
         return SystemdUnit(
             unit=text("unit"),
+            nonce=text("nonce"),
             invocation_id=text("invocation_id"),
             main_pid=count("main_pid", 1),
             start_ticks=count("start_ticks", 0),
             boot_id=text("boot_id"),
             restarts=count("restarts", 0),
+            environment_file=text("environment_file"),
         )
     raise SupervisionError(f"unknown supervised process kind {kind!r}")
 
@@ -185,6 +213,9 @@ class Supervisor(ABC, Generic[Identity]):
     def _terminate(self, recorded: Identity) -> None:
         """Stop a process that `check` found running, restarted or pending."""
 
+    def _release(self, recorded: Identity) -> None:
+        """Remove what the start left beside the process, once nothing runs under it."""
+
     def confirm(self, recorded: Identity, verify: Callable[[Identity], None]) -> Identity:
         """The identity to record now, after `verify` passes for a restarted process.
 
@@ -210,12 +241,13 @@ class Supervisor(ABC, Generic[Identity]):
         the unit or process group.
         """
         observation = self.check(recorded)
-        if observation.state == "stopped":
-            return False
         if observation.state == "mismatch":
             raise IdentityMismatch(observation.detail)
-        self._terminate(recorded)
-        return True
+        running = observation.state != "stopped"
+        if running:
+            self._terminate(recorded)
+        self._release(recorded)
+        return running
 
 
 class ProcessGroups(Supervisor[ProcessGroup]):
@@ -225,32 +257,31 @@ class ProcessGroups(Supervisor[ProcessGroup]):
         self.grace_seconds = grace_seconds
 
     def start(self, spec: ProcessSpec) -> ProcessGroup:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-        try:
-            with os.fdopen(os.open(spec.log, flags, 0o600), "a") as output:
-                child = subprocess.Popen(
-                    spec.argv,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    start_new_session=True,
-                    cwd=spec.cwd,
-                    env={**os.environ, **spec.environment},
-                )
-        except OSError as error:
-            raise SupervisionError(f"{spec.name} could not start: {error}") from error
+        """Start the group with a fresh log, as `narwhal dev` starts its processes.
+
+        A failed start raises the error that stopped it. When the group started but its
+        identity could not be read, its members are stopped and `<name>-spawn.stage.json`
+        beside the log records that cleanup, where `narwhal dev` looks for interrupted
+        helpers.
+        """
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        with os.fdopen(os.open(spec.log, flags, 0o600), "w") as output:
+            # An existing log keeps its mode through open, so it is made private here.
+            os.fchmod(output.fileno(), 0o600)
+            child = subprocess.Popen(
+                spec.argv,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=spec.cwd,
+                env={**os.environ, **spec.environment},
+            )
         try:
             leader = native_engine.process_identity(child.pid)
         except BaseException as error:
-            failure = (
-                SupervisionError(f"{spec.name} exited at start; inspect {spec.log}")
-                if isinstance(error, (OSError, ValueError))
-                else error
-            )
-            self._discard(child, spec.name, failure)
-            if failure is error:
-                raise
-            raise failure from error
+            self._discard(child, spec, error)
+            raise
         return ProcessGroup(
             pid=int(leader["pid"]),
             boot_id=str(leader["boot_id"]),
@@ -258,25 +289,31 @@ class ProcessGroups(Supervisor[ProcessGroup]):
         )
 
     @staticmethod
-    def _discard(child: subprocess.Popen, name: str, error: BaseException) -> None:
+    def _discard(child: subprocess.Popen, spec: ProcessSpec, error: BaseException) -> None:
         # The group has no recorded identity yet, so its members are found as the stage
         # runner finds a helper's.
+        owned: dict[int, int] = {}
         try:
             with stages._reaper():
                 cleanup = stages._cleanup(
                     child,
-                    {},
+                    owned,
                     stages.seconds("NARWHAL_STAGE_CLEANUP_GRACE_SECONDS", 10),
                     stages.seconds("NARWHAL_STAGE_KILL_GRACE_SECONDS", 5),
                 )
-        except (OSError, ValueError) as cleanup_error:
-            error.add_note(f"{name} cleanup: {cleanup_error}")
-            return
-        if cleanup["surviving_processes"]:
-            error.add_note(
-                f"{name}: surviving PIDs {sorted(cleanup['surviving_processes'])} "
-                "require operator inspection"
+            stages.write_evidence(
+                spec.log.parent / f"{spec.name}-spawn.stage.json",
+                {
+                    "stage": spec.name,
+                    "pid": child.pid,
+                    "processes": owned,
+                    "boot_id": Path(BOOT_ID).read_text().strip(),
+                    "status": "cancelled",
+                    "cleanup": cleanup,
+                },
             )
+        except (OSError, ValueError) as cleanup_error:
+            error.add_note(f"{spec.name} cleanup: {cleanup_error}")
 
     def check(self, recorded: ProcessGroup) -> Observation[ProcessGroup]:
         leader = recorded.leader()
@@ -333,6 +370,7 @@ class _UnitState:
     load_state: str
     active_state: str
     sub_state: str
+    description: str
     invocation_id: str
     main_pid: int
     restarts: int
@@ -344,13 +382,18 @@ class _UnitState:
         return f"{self.active_state}/{self.sub_state}"
 
 
+def _description(nonce: str) -> str:
+    return f"narwhal {nonce}"
+
+
 class SystemdUnits(Supervisor[SystemdUnit]):
     """Transient systemd user units on one host, reached through `runner`.
 
-    Each unit is `narwhal-<run_id>-<name>.service`. systemd restarts it on failure and
-    unloads it once it stops or fails. Its environment file sits beside its log as
-    `<name>.env`, private to the user, so that no variable value appears in an argument
-    list.
+    Each unit is `narwhal-<run_id>-<name>.service`, described as `narwhal <nonce>` with a
+    nonce new to each start. systemd restarts it on failure and unloads it once it stops
+    or fails. The unit reads its environment from `<name>.env` beside its log, a file
+    private to the user that the start creates and `stop` removes, so that no variable
+    value appears in an argument list.
     """
 
     def __init__(self, run_id: str, runner: Runner = run_local):
@@ -368,58 +411,74 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         unit = self.unit(spec.name)
         if self._show(unit)["LoadState"] == "loaded":
             raise SupervisionError(f"{unit} is already loaded")
+        nonce = secrets.token_hex(16)
         environment = spec.log.parent / f"{spec.name}.env"
         self._run(
-            ["sh", "-c", 'umask 077 && cat > "$1"', "sh", str(environment)],
-            f"write {environment}",
+            ["sh", "-c", _CREATE_PRIVATE, "sh", str(environment)],
+            f"create {environment}",
             input="".join(
                 f'{key}="{value.translate(_ENVIRONMENT_ESCAPES)}"\n'
                 for key, value in sorted(spec.environment.items())
             ),
         )
-        self._run(
-            [
-                "systemd-run",
-                "--user",
-                "--quiet",
-                "--collect",
-                f"--unit={unit}",
-                f"--working-directory={spec.cwd}",
-                "--property=Type=exec",
-                "--property=Restart=on-failure",
-                f"--property=TimeoutStopSec={STOP_GRACE_SECONDS}",
-                "--property=UMask=0077",
-                f"--property=EnvironmentFile={environment}",
-                f"--property=StandardOutput=append:{spec.log}",
-                f"--property=StandardError=append:{spec.log}",
-                "--",
-                spec.argv[0],
-                # systemd expands $NAME in the arguments after the executable, and $$ is a
-                # literal $.
-                *(argument.replace("$", "$$") for argument in spec.argv[1:]),
-            ],
-            f"start {unit}",
-        )
         try:
+            self._run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--collect",
+                    f"--unit={unit}",
+                    f"--description={_description(nonce)}",
+                    f"--working-directory={spec.cwd}",
+                    "--property=Type=exec",
+                    "--property=Restart=on-failure",
+                    f"--property=TimeoutStopSec={STOP_GRACE_SECONDS}",
+                    "--property=UMask=0077",
+                    f"--property=EnvironmentFile={environment}",
+                    f"--property=StandardOutput=append:{spec.log}",
+                    f"--property=StandardError=append:{spec.log}",
+                    "--",
+                    spec.argv[0],
+                    # systemd expands $NAME in the arguments after the executable, and $$
+                    # is a literal $.
+                    *(argument.replace("$", "$$") for argument in spec.argv[1:]),
+                ],
+                f"start {unit}",
+            )
             state = self._read(unit)
+            if state.description != _description(nonce):
+                raise SupervisionError(f"{unit} is not the unit this start created")
             if state.start_ticks is None or state.restarts:
                 raise SupervisionError(
                     f"{unit} did not keep running after its start ({state.describe()}, "
                     f"{state.restarts} automatic restarts); inspect {spec.log}"
                 )
         except BaseException as error:
-            stopped = self.runner(["systemctl", "--user", "stop", unit])
-            if stopped.returncode:
-                error.add_note(f"stopping {unit}: {_output(stopped)}")
+            self._discard(unit, nonce, environment, error)
             raise
         return SystemdUnit(
             unit=unit,
+            nonce=nonce,
             invocation_id=state.invocation_id,
             main_pid=state.main_pid,
             start_ticks=state.start_ticks,
             boot_id=state.boot_id,
             restarts=state.restarts,
+            environment_file=str(environment),
         )
+
+    def _discard(self, unit: str, nonce: str, environment: Path, error: BaseException) -> None:
+        """Undo a failed start: stop the unit it created, and remove its environment file."""
+        try:
+            values = self._show(unit)
+            if values["LoadState"] == "loaded" and values["Description"] == _description(nonce):
+                self._stop_unit(unit)
+        except SupervisionError as cleanup_error:
+            error.add_note(f"{unit} cleanup: {cleanup_error}")
+        try:
+            self._remove(str(environment))
+        except SupervisionError as cleanup_error:
+            error.add_note(f"{unit} cleanup: {cleanup_error}")
 
     def check(self, recorded: SystemdUnit) -> Observation[SystemdUnit]:
         unit = recorded.unit
@@ -428,6 +487,12 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         state = self._read(unit)
         if state.load_state != "loaded" or state.active_state in {"inactive", "failed"}:
             return Observation("stopped", f"{unit} is not running; its output is in its log")
+        if state.description != _description(recorded.nonce):
+            return Observation(
+                "mismatch",
+                f"{unit} was started again after the record: it is described as "
+                f"{state.description!r}, not {_description(recorded.nonce)!r}",
+            )
         if state.boot_id != recorded.boot_id:
             return Observation(
                 "mismatch",
@@ -451,12 +516,11 @@ class SystemdUnits(Supervisor[SystemdUnit]):
                     f"not the recorded {recorded.main_pid}",
                 )
             return Observation("running", f"{unit} is running", recorded)
-        current = SystemdUnit(
-            unit=unit,
+        current = replace(
+            recorded,
             invocation_id=state.invocation_id,
             main_pid=state.main_pid,
             start_ticks=state.start_ticks,
-            boot_id=state.boot_id,
             restarts=state.restarts,
         )
         return Observation(
@@ -467,12 +531,34 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         )
 
     def _terminate(self, recorded: SystemdUnit) -> None:
-        self._run(["systemctl", "--user", "stop", recorded.unit], f"stop {recorded.unit}")
-        state = self._show(recorded.unit)
-        if state["LoadState"] == "loaded" and state["ActiveState"] not in {"inactive", "failed"}:
+        self._stop_unit(recorded.unit)
+
+    def _release(self, recorded: SystemdUnit) -> None:
+        name = recorded.unit.removeprefix(f"narwhal-{self.run_id}-").removesuffix(".service")
+        path = Path(recorded.environment_file)
+        if not path.is_absolute() or path.name != f"{name}.env":
+            raise SupervisionError(f"{recorded.unit} records {path} as its environment file")
+        self._remove(str(path))
+
+    def _stop_unit(self, unit: str) -> None:
+        """Stop the unit; a unit that unloads first, as `--collect` does, counts as stopped."""
+        stopped = self.runner(["systemctl", "--user", "stop", unit])
+        state = self._show(unit)
+        if state["LoadState"] != "loaded":
+            return
+        if stopped.returncode:
+            raise SupervisionError(f"could not stop {unit}: {_output(stopped)}")
+        if state["ActiveState"] == "failed":
+            reset = self.runner(["systemctl", "--user", "reset-failed", unit])
+            if reset.returncode and self._show(unit)["LoadState"] == "loaded":
+                raise SupervisionError(f"could not reset the failed {unit}: {_output(reset)}")
+        elif state["ActiveState"] != "inactive":
             raise SupervisionError(
-                f"{recorded.unit} is {state['ActiveState']}/{state['SubState']} after its stop"
+                f"{unit} is {state['ActiveState']}/{state['SubState']} after its stop"
             )
+
+    def _remove(self, path: str) -> None:
+        self._run(["rm", "-f", "--", path], f"remove {path}")
 
     def _run(
         self, argv: list[str], action: str, *, input: str | None = None
@@ -499,7 +585,7 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         raises, so the start ticks belong to the reported invocation.
         """
         first = self._show(unit)
-        boot_id = self._run(["cat", "/proc/sys/kernel/random/boot_id"], "read the boot ID")
+        boot_id = self._run(["cat", BOOT_ID], "read the boot ID")
         try:
             main_pid, restarts = int(first["MainPID"]), int(first["NRestarts"])
         except ValueError as error:
@@ -516,6 +602,7 @@ class SystemdUnits(Supervisor[SystemdUnit]):
             load_state=first["LoadState"],
             active_state=first["ActiveState"],
             sub_state=first["SubState"],
+            description=first["Description"],
             invocation_id=first["InvocationID"],
             main_pid=main_pid,
             restarts=restarts,
@@ -524,24 +611,29 @@ class SystemdUnits(Supervisor[SystemdUnit]):
         )
 
 
+def _systemd_version(reported: str) -> int | None:
+    match = re.match(r"(?:systemd )?(\d+)", reported.strip())
+    return int(match.group(1)) if match else None
+
+
 def check_systemd_host(runner: Runner = run_local) -> list[str]:
     """What keeps a host from running supervised units, read-only and without root.
 
-    Each entry names one missing piece: `systemd-run` from systemd 240 or later, a user
-    manager that answers `systemctl --user`, or lingering for the user the commands run
-    as, which keeps that manager and its units running after the session ends. An empty
-    list means the host is ready.
+    Each entry names one missing piece: `systemd-run` and a user manager from systemd 240
+    or later, a user manager that answers `systemctl --user`, or lingering for the user
+    the commands run as, which keeps that manager and its units running after the
+    session ends. An empty list means the host is ready.
     """
     problems = []
-    version = runner(["systemd-run", "--version"])
-    if version.returncode == 127:
+    client = runner(["systemd-run", "--version"])
+    if client.returncode == 127:
         problems.append(f"systemd-run is not installed; install systemd {SYSTEMD_VERSION} or later")
-    elif version.returncode:
-        problems.append(f"systemd-run --version failed: {_output(version)}")
+    elif client.returncode:
+        problems.append(f"systemd-run --version failed: {_output(client)}")
     else:
-        reported = version.stdout.strip().splitlines()[0] if version.stdout.strip() else ""
-        match = re.match(r"systemd (\d+)", reported)
-        if match is None or int(match.group(1)) < SYSTEMD_VERSION:
+        reported = next(iter(client.stdout.strip().splitlines()), "")
+        version = _systemd_version(reported) if reported.startswith("systemd ") else None
+        if version is None or version < SYSTEMD_VERSION:
             problems.append(
                 f"systemd-run reports {reported!r}; supervised units need systemd "
                 f"{SYSTEMD_VERSION} or later"
@@ -555,6 +647,14 @@ def check_systemd_host(runner: Runner = run_local) -> list[str]:
             f"{answer or _output(manager)!r}; the user needs a running systemd user manager, "
             "and a non-interactive SSH session needs XDG_RUNTIME_DIR, which pam_systemd sets"
         )
+    else:
+        shown = runner(["systemctl", "--user", "show", "--property=Version", "--value"])
+        version = _systemd_version(shown.stdout) if shown.returncode == 0 else None
+        if version is None or version < SYSTEMD_VERSION:
+            problems.append(
+                f"user manager reports version {shown.stdout.strip() or _output(shown)!r}; "
+                f"supervised units need systemd {SYSTEMD_VERSION} or later"
+            )
     user = runner(["id", "-un"])
     name = user.stdout.strip()
     if user.returncode or not name:
