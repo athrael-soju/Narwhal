@@ -45,7 +45,7 @@ class EngineLaunchTests(unittest.TestCase):
         transfer["devices"] = ["/dev/infiniband/rdma_cm", "/dev/infiniband/uverbs0"]
         self.assertEqual(
             selected_launch(document, "engine-1", {})["transfer"],
-            {**transfer, "gpu_tls": "rocm"},
+            {**transfer, "gpu_tls": "rocm_copy"},
         )
 
     def test_management_variable_cannot_be_resolved_into_launch_record(self):
@@ -108,6 +108,14 @@ class EngineLaunchTests(unittest.TestCase):
         expose_colocated_gpus(launches, [["engine-1", "engine-2", "engine-3"]])
         visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
         self.assertEqual(visible, {"engine-1": "0,2", "engine-2": "1", "engine-3": "2,0"})
+
+    def test_colocated_engines_without_cuda_ipc_keep_their_own_gpus(self):
+        launches = self.cuda_engines(2)
+        for launch in launches.values():
+            launch["transfer"]["gpu_tls"] = "cuda_copy"
+        expose_colocated_gpus(launches, [["engine-1", "engine-2"]])
+        self.assertEqual(launches["engine-1"]["environment"]["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertEqual(launches["engine-2"]["environment"]["CUDA_VISIBLE_DEVICES"], "1")
 
     def test_engines_on_separate_hosts_keep_their_own_gpus(self):
         launches = self.cuda_engines(2)

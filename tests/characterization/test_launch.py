@@ -54,6 +54,8 @@ SOURCE_DIGESTS = {
     "model_sha256",
     # File status holds inode numbers and change times.
     "model_status_sha256",
+    # The pod steps change with each Narwhal release.
+    "pod_files_sha256",
 }
 
 

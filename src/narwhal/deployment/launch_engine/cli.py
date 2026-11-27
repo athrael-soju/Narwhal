@@ -12,6 +12,7 @@ from ...backends import names
 from ...cli_support import add_version_argument
 from .. import native_engine
 from ..attestation_contract.evidence import model_dimensions
+from . import kubernetes
 from .backend import (
     CacheCapture,
     CacheMeasurement,
@@ -19,7 +20,7 @@ from .backend import (
     plan_launcher,
 )
 from .check import check
-from .plan import load, prepare
+from .plan import BACKENDS, load, prepare
 from .start import READY_SECONDS, start, start_shared
 
 
@@ -69,15 +70,18 @@ def capture_backends(capability: type) -> list[str]:
 
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare, inspect and launch pinned engines with container or native backends."
+        description="Prepare, inspect and launch pinned engines with container, Kubernetes or "
+        "native backends."
     )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     add_version_argument(parser)
     descriptions = {
         "prepare": "Pin launch inputs from NARWHAL_ENGINE_LAUNCH_CONFIG and the deployment "
-        "environment into a fresh directory; supports container and native backends.",
+        "environment into a fresh directory; supports container, Kubernetes and native "
+        "backends, and renders a Kubernetes plan's engine pod into kubernetes.json.",
         "check": "Check the prepared model, tokenizer, runtime packages and connector; "
-        "write checked.json for the plan's container or native backend.",
+        "write checked.json for the plan's container or native backend, or from the records "
+        "of a Kubernetes plan's engine pod.",
         "model-dimensions": "Inspect model dimensions using a checked plan; "
         "write model-dimensions.json (container only).",
         "start": "Start one serving container from a checked plan and record container.id; "
@@ -108,9 +112,15 @@ def _main(argv: list[str]) -> int:
     preparation.add_argument("--out", type=Path, required=True, help="fresh launch directory")
     preparation.add_argument(
         "--backend",
-        choices=("container", "native"),
+        choices=BACKENDS,
         default="container",
         help="launch backend (default: %(default)s)",
+    )
+    public["check"].add_argument(
+        "--pod-evidence",
+        type=Path,
+        help="directory with the engine pod's checkpoint.json and runtime-check.json; "
+        "required for a Kubernetes plan and refused for the others",
     )
     for command in ("check", "model-dimensions", "start", *capture_actions):
         public[command].add_argument(
@@ -166,6 +176,7 @@ def _main(argv: list[str]) -> int:
     for root in roots:
         for name in (
             "launch.json",
+            kubernetes.MANIFESTS,
             "checked.json",
             "runtime-check.log",
             "container.id",
@@ -206,6 +217,20 @@ def _main(argv: list[str]) -> int:
                 if results.json_mode():
                     raise
                 parser.exit(2, f"{context}: load run {run}: {error}\n")
+            pod = plan.get("backend") == "kubernetes"
+            if (args.command == "check") and pod != (args.pod_evidence is not None):
+                raise ValueError(
+                    "--pod-evidence names the records of a Kubernetes plan's engine pod; "
+                    + ("pass it" if pod else "this plan runs its check on this host")
+                )
+            if pod and args.command != "check":
+                raise ValueError(
+                    f"{args.command} does not apply to a Kubernetes plan; the kubelet starts "
+                    "its engine pod"
+                )
+            if pod:
+                kubernetes.check(run, plan, args.pod_evidence.resolve())
+                return 0
             native_capture = args.command == "capture-cache" and getattr(
                 plan_launcher(plan), "native_capture", False
             )

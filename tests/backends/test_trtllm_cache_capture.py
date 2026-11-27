@@ -266,9 +266,7 @@ class CaptureTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        self.run, _, _ = prepared(
-            Path(folder.name), load("trtllm").launcher(), fixtures("trtllm"), native=False
-        )
+        self.run, _, _ = prepared(Path(folder.name), load("trtllm").launcher(), fixtures("trtllm"))
         self.plan = json.loads((self.run / "launch.json").read_text())
         (self.run / "checked.json").write_text(
             json.dumps({"plan_sha256": digest(self.run / "launch.json")})

@@ -5,13 +5,14 @@ import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
     from ..attestation_contract.capture import Capture, CaptureContext
     from ..attestation_contract.document import AttestationContext, AttestationEvidence
-    from .check import CheckContext, ProbeResult
+    from .check import CheckContext
     from .settings import LaunchSettings
 
 
@@ -26,10 +27,13 @@ class EngineLauncher(ABC):
     environment_prefixes: ClassVar[tuple[str, ...]]
     managed_environment: ClassVar[frozenset[str]]
     launch_settings: ClassVar[LaunchSettings]
-    # Runtime check output: the pass summary, the cache line's name and the version label.
+    # Runtime check output: the pass summary and the cache line's name.
     check_summary: ClassVar[str]
     prefix_cache_name: ClassVar[str]
-    version_label: ClassVar[str]
+    # Standalone module that reads the probe's output. It defines VERSION_LABEL and
+    # probe_result(plan, environment, output), and imports only the standard library, so a
+    # Kubernetes engine pod runs it as the offline check does.
+    probe_reader: ClassVar[ModuleType]
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
     # Discovery settings that take one value for the fleet; a NARWHAL_NODE_<n>_ override is
@@ -84,9 +88,6 @@ class EngineLauncher(ABC):
     @abstractmethod
     def runtime_probe(self, context: CheckContext) -> list[str]:
         """Return the interpreter arguments of the in-image probe; raise for a failed input."""
-
-    @abstractmethod
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
 
     @abstractmethod
     def attestation_captures(self, context: CaptureContext) -> list[Capture]:

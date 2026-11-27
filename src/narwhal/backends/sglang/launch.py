@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
 
 from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import EngineLauncher, TransferMeasurement
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, dev, discovery
+from ...deployment.launch_engine.check import CheckContext
+from . import attestation, dev, discovery, probe_reader
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
@@ -27,7 +29,7 @@ class SglangLauncher(EngineLauncher, TransferMeasurement):
     check_summary = "Runtime identity, package pins and server arguments passed."
     prefix_cache_name = "The radix cache"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
-    version_label = "SGLang"
+    probe_reader: ClassVar[ModuleType] = probe_reader
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -77,9 +79,6 @@ class SglangLauncher(EngineLauncher, TransferMeasurement):
 
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
-
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        return runtime_check.result(context, output)
 
     def attestation_captures(self, context: CaptureContext) -> list[Capture]:
         return attestation.attestation_captures(context)

@@ -18,6 +18,7 @@ from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
+from narwhal.backends.vllm.probe_reader import releases_peers
 from narwhal.deployment import native_engine
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
@@ -27,9 +28,9 @@ from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspe
 from narwhal.deployment.launch_engine.plan import (
     build,
     check_model_files,
+    ipc_cache_off,
     load,
     prepare,
-    releases_peers,
     validate_runtime,
 )
 from narwhal.deployment.launch_engine.runtime import digest, regular_file_digest
@@ -765,10 +766,11 @@ class EngineLauncherTests(unittest.TestCase):
                     if "--pid" in plan["common"]
                     else None
                 )
-                self.assertEqual(pid, "host" if shared else None)
+                # Only CUDA IPC needs the engines of one host in one PID namespace.
+                ipc = shared and gpu_tls == "cuda"
+                self.assertEqual(pid, "host" if ipc else None)
                 # CUDA IPC peers with the IPC cache off evict a stopped engine after the TTL.
                 extra = plan["connector"]["kv_connector_extra_config"]
-                ipc = shared and gpu_tls == "cuda"
                 self.assertIs(plan["cuda_ipc_peers"], ipc)
                 self.assertEqual(
                     extra.get("engine_ttl"), ENGINE_TTL_S if ipc and cache == "n" else None
@@ -1045,13 +1047,14 @@ class EngineLauncherTests(unittest.TestCase):
                 self.assertIs(checked["peer_release"], released)
                 self.assertEqual("whole-wave restart" not in printed.getvalue(), released)
                 self.assertEqual("per transfer" in printed.getvalue(), ipc and released)
-        self.assertFalse(releases_peers("1.21.9", "n"))
-        self.assertTrue(releases_peers("1.22.0", "n"))
-        self.assertTrue(releases_peers("2.0", "n"))
-        self.assertFalse(releases_peers("1.22.0", None))
-        self.assertFalse(releases_peers("unknown", "n"))
+        self.assertFalse(releases_peers("1.21.9", True))
+        self.assertTrue(releases_peers("1.22.0", True))
+        self.assertTrue(releases_peers("2.0", True))
+        self.assertFalse(releases_peers("1.22.0", False))
+        self.assertFalse(releases_peers("unknown", True))
+        self.assertFalse(ipc_cache_off(None))
         for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
-            self.assertIs(releases_peers("1.22.0", value), disabled)
+            self.assertIs(ipc_cache_off(value), disabled)
 
     def test_the_shared_budget_and_transports_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:

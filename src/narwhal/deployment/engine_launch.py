@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from narwhal.deployment.launch_engine.backend import launcher
-from narwhal.deployment.launch_engine.plan import check_shared_memory
+from narwhal.deployment.launch_engine.plan import check_shared_memory, gpu_transport
 
 
 def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
@@ -36,11 +36,7 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
     transfer = dict(entry.get("transfer", {}))
     if transfer.get("transport") not in {"ucx_tcp", "ucx_rdma"}:
         raise ValueError(f"{role}: declare ucx_tcp or ucx_rdma transfer")
-    gpu_tls = transfer.get("gpu_tls", "cuda" if visibility == "CUDA_VISIBLE_DEVICES" else "rocm")
-    allowed_gpu_tls = {"cuda", "cuda_copy"} if visibility == "CUDA_VISIBLE_DEVICES" else {"rocm"}
-    if gpu_tls not in allowed_gpu_tls:
-        raise ValueError(f"{role}: transfer.gpu_tls is incompatible with the GPU runtime")
-    transfer["gpu_tls"] = gpu_tls
+    transfer["gpu_tls"] = gpu_transport(role, transfer, visibility)
     net = transfer.get("net_devices", "")
     if not isinstance(net, str):
         raise ValueError(f"{role}: transfer.net_devices must name the UCX devices")
@@ -114,12 +110,13 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
 
 
 def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> None:
+    """Show each CUDA IPC engine the GPUs of the CUDA IPC engines on its host, after its own."""
     for roles in hosts:
         cuda = [
             role
             for role in roles
             if role in launches
-            and launches[role]["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES"
+            and launches[role]["transfer"]["gpu_tls"] == "cuda"
             and "shared_device" not in launches[role]
         ]
         for role in cuda:
