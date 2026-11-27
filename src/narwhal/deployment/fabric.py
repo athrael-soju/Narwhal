@@ -44,7 +44,7 @@ from .fabric_budget import (
     transfer_record,
     write_private,
 )
-from .hosts import HOST_CAUSE, SSH, Host
+from .hosts import HOST_CAUSE, PID_PATTERN, SSH, Host
 from .launch_engine.backend import cache_capture, launcher, transfer_measurement
 from .role_env import read_environment
 
@@ -996,6 +996,7 @@ done
         + f"""test -d {scratch} || exit 0
 test -f {scratch}/server.pid || {{ rm -rf {scratch}; exit 0; }}
 read -r pid ticks < {scratch}/server.pid
+case "$pid" in {PID_PATTERN}) fail "{scratch}/server.pid holds no usable process ID" ;; esac
 alive() {{
   test -r "/proc/$pid/stat" &&
     test "$(sed 's/^.*) //' "/proc/$pid/stat" | cut -d' ' -f20)" = "$ticks"

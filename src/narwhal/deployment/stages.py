@@ -316,6 +316,7 @@ def run(
     stderr_path = log.with_name(f"{log.name}.{token}.stderr")
     result_path = log.with_name(f"{log.name}.{token}.result.json")
     release_path = log.with_name(f"{log.name}.{token}.release")
+    start_path = log.with_name(f"{log.name}.{token}.start")
     context: dict = {
         "stage": stage,
         "supervisor": True,
@@ -351,6 +352,8 @@ def run(
                         str(Path(__file__).with_name("stage_worker.py")),
                         str(result_path),
                         str(release_path),
+                        str(start_path),
+                        str(os.getpid()),
                         *command,
                     ],
                     cwd=cwd,
@@ -363,6 +366,9 @@ def run(
                 _discover(owned, child.pid)
                 context.update(pid=child.pid, processes=owned, status="running")
                 write_evidence(evidence, context)
+                # The worker starts the helper only now that the evidence names it, and exits
+                # on its own when this controller dies before then.
+                start_path.touch(mode=0o600)
                 while child.poll() is None:
                     previous_count = len(owned)
                     _discover(owned, child.pid)

@@ -22,7 +22,7 @@ from narwhal.deployment.role_env import write_environment
 REMOTE_DIR = "Narwhal-deploy/" + "a" * 32
 REAL = (
     "sh", "sed", "cut", "cat", "base64", "mkdir", "rm", "setsid", "timeout", "sleep", "tail",
-    "head", "grep", "tr", "sha256sum", "python3",
+    "head", "grep", "tr", "sha256sum", "python3", "stat", "mv",
 )  # fmt: skip
 TOOLS = ("ip", "ss", "iperf3", "ib_write_bw")
 TRANSFER_TOOL = """import argparse, hashlib, json, os

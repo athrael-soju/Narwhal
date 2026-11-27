@@ -383,6 +383,56 @@ class DockerStageTests(unittest.TestCase):
         self.assertIn("exhausted", report["error"])
 
 
+class OrphanedWorkerTests(unittest.TestCase):
+    """A controller that dies before it records its stage worker leaves nothing running."""
+
+    CONTROLLER = """
+import os, signal, subprocess, sys
+from pathlib import Path
+from narwhal.deployment import stages
+folder = Path(sys.argv[1])
+real = subprocess.Popen
+
+def recorded(*args, **kwargs):
+    process = real(*args, **kwargs)
+    (folder / "worker").write_text(str(process.pid))
+    return process
+
+subprocess.Popen = recorded
+# The controller dies at its first evidence write, before anything records the worker.
+stages.write_evidence = lambda *args, **kwargs: os.kill(os.getpid(), signal.SIGKILL)
+helper = f"open({str(folder / 'helper')!r}, 'w').write(str(__import__('os').getpid()))"
+helper += "; __import__('time').sleep(30)"
+stages.run([sys.executable, "-c", helper], stage="orphan", log=folder / "orphan.log")
+"""
+
+    def test_a_worker_whose_controller_dies_before_recording_it_exits_unstarted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            controller = subprocess.run(
+                [sys.executable, "-c", self.CONTROLLER, str(folder)], timeout=30
+            )
+            self.assertEqual(controller.returncode, -signal.SIGKILL)
+            worker = int((folder / "worker").read_text())
+
+            def stop():
+                # The worker leads its own session; stop what is left of it by its ID.
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(worker, signal.SIGKILL)
+
+            self.addCleanup(stop)
+
+            def running():
+                state = stages._processes().get(worker)
+                return state is not None and state[0] not in {"Z", "X"}
+
+            deadline = time.monotonic() + 5
+            while running() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(running(), "the worker outlived its controller")
+            self.assertFalse((folder / "helper").exists(), "the helper started unrecorded")
+
+
 class StageCancelTests(unittest.TestCase):
     def test_cancel_stops_the_child_and_its_descendants_and_records_them(self):
         with tempfile.TemporaryDirectory() as root:

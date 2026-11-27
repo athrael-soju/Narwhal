@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from narwhal.deployment import hosts, remote
@@ -23,6 +24,7 @@ from narwhal.deployment.hosts import (
     Host,
     RemoteError,
     RemoteTimeout,
+    bounded,
     load_hosts,
     stage_limit,
 )
@@ -536,6 +538,72 @@ class SshTests(unittest.TestCase):
         self.assertFalse(ran.exists(), "the command ran under a process that is not its timeout")
         log = ssh.log(self.hosts[1]).read_text()
         self.assertIn("the parent of the command is not its timeout", log)
+
+    def test_a_recorded_process_id_with_a_leading_zero_kills_no_group(self):
+        # dash reads `kill -- -01` as `kill -- -1`. The fake `timeout` records 01 and reports a
+        # time limit; a shell function stands in for `kill`, so nothing is signalled.
+        tools = self.root / "zero-timeout"
+        tools.mkdir()
+        (tools / "timeout").write_text(
+            "#!/bin/sh\n"
+            'for argument; do case "$argument" in narwhal-*) token=${argument#narwhal-} ;; esac; '
+            "done\n"
+            'echo 01 > "$HOME/.cache/narwhal-commands/$token"\n'
+            "exit 124\n"
+        )
+        (tools / "timeout").chmod(0o700)
+        home = self.root / "host-home"
+        home.mkdir()
+        calls = self.root / "kill-calls"
+        script = f'kill() {{ echo "$*" >> {shlex.quote(str(calls))}; }}\n' + bounded(
+            "true", 1, "0" * 32
+        )
+        result = subprocess.run(
+            ["sh", "-c", script],
+            env={**os.environ, "HOME": str(home), "PATH": f"{tools}:{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertFalse(calls.exists(), calls.read_text() if calls.exists() else "")
+
+    def test_the_command_record_follows_no_symbolic_link(self):
+        token = SimpleNamespace(hex="ab" * 16)
+        records = self.root / "host-home/.cache/narwhal-commands"
+        records.mkdir(parents=True, mode=0o700)
+        victim = self.root / "victim"
+        victim.write_text("untouched\n")
+        (records / token.hex).symlink_to(victim)
+        with self.sshd_like(), patch("narwhal.deployment.hosts.uuid.uuid4", return_value=token):
+            ssh = SSH(self.env, self.root / "logs")
+            self.assertEqual(ssh.run(self.hosts[1], "access", "probe", "echo ran"), "ran")
+        self.assertEqual(victim.read_text(), "untouched\n")
+        self.assertEqual(list(records.iterdir()), [])
+
+    def test_a_record_directory_that_others_can_write_is_refused(self):
+        records = self.root / "host-home/.cache/narwhal-commands"
+        records.mkdir(parents=True)
+        ran = self.root / "ran"
+        for mode in (0o770, 0o707, 0o1777):
+            records.chmod(mode)
+            with self.subTest(mode=oct(mode)), self.sshd_like():
+                ssh = SSH(self.env, self.root / "logs")
+                with self.assertRaisesRegex(
+                    RemoteError,
+                    r"\.cache/narwhal-commands is writable by other users; run chmod go-w on it",
+                ):
+                    ssh.run(self.hosts[1], "access", "probe", f"touch {ran}")
+                self.assertFalse(ran.exists())
+        self.assertEqual(oct(records.stat().st_mode & 0o7777), oct(0o1777))
+        records.rmdir()
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        records.symlink_to(elsewhere)
+        with self.sshd_like():
+            ssh = SSH(self.env, self.root / "logs")
+            with self.assertRaisesRegex(RemoteError, "is a symbolic link or belongs to another"):
+                ssh.run(self.hosts[1], "access", "probe", f"touch {ran}")
+        self.assertFalse(ran.exists())
 
     def test_a_supervisor_input_reaches_standard_input_and_no_log_or_argument_list(self):
         secret = "engine-key-that-must-stay-private"

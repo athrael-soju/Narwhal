@@ -177,6 +177,11 @@ def trust_options(store: Path) -> list[str]:
     return [argument for name, value in values.items() for argument in ("-o", f"{name}={value}")]
 
 
+# The only process IDs a command record may hold: no leading zero, since dash reads
+# `kill -- -01` as `kill -- -1`, and not 1, whose group is every process of the user.
+PID_PATTERN = '"" | *[!0-9]* | 0* | 1'
+
+
 def _marker(token: str) -> str:
     return f'"$HOME"/{COMMANDS_DIRECTORY}/{token}'
 
@@ -194,29 +199,41 @@ def bounded(script: str, limit: float, token: str) -> str:
     default SIGINT and SIGQUIT, which a background job of a shell would lose. Before it starts
     the script, `timeout`'s child checks that its parent is this `timeout`, whose arguments name
     `token`, and leads its process group, and records that process ID under `token` for the
-    group kill and for `stop_script`. When any of that fails, the script does not run, so no
+    group kill and for `stop_script`. It writes the record to a new file, which no symbolic
+    link can redirect, and renames it into place. The record directory must belong to the SSH
+    user and be writable by no one else. When any of that fails, the script does not run, so no
     command runs that the limit could not stop.
     """
     marker = _marker(token)
     directory = f'"$HOME"/{COMMANDS_DIRECTORY}'
+    shown = f"$HOME/{COMMANDS_DIRECTORY}"
+    pending = f'"$HOME"/{COMMANDS_DIRECTORY}/.{token}.$$'
     refuse = f'{{ echo "{HOST_CAUSE}$1" >&2; exit 125; }}'
     start = (
         f"fail() {refuse}\n"
-        'case "$PPID" in "" | *[!0-9]* | 0 | 1) fail "timeout has no process ID" ;; esac\n'
+        f'case "$PPID" in {PID_PATTERN}) fail "timeout has no usable process ID" ;; esac\n'
         f'tr "\\000" " " < /proc/"$PPID"/cmdline 2> /dev/null | grep -q -- narwhal-{token} ||\n'
         '  fail "the parent of the command is not its timeout"\n'
         'group=$(sed "s/^.*) //" /proc/$$/stat | cut -d" " -f3)\n'
         'test "$group" = "$PPID" || fail "timeout did not give the command a process group"\n'
-        f"(umask 077 && printf '%s\\n' \"$PPID\" > {marker}) 2> /dev/null ||\n"
-        f'  fail "cannot record the command in $HOME/{COMMANDS_DIRECTORY}; make it writable"\n'
+        f"(set -C && umask 077 && printf '%s\\n' \"$PPID\" > {pending}) 2> /dev/null &&\n"
+        f"  mv -f {pending} {marker} ||\n"
+        f'  {{ rm -f {pending}; fail "cannot record the command in {shown}; make it writable"; }}\n'
         f'exec sh -c "$1" narwhal-{token}'
     )
     return (
         "command -v timeout > /dev/null 2>&1 || "
         f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
-        f"(umask 077 && mkdir -p {directory}) 2> /dev/null && test -d {directory} && "
-        f'test -w {directory} || {{ echo "{HOST_CAUSE}cannot create $HOME/{COMMANDS_DIRECTORY} '
-        'to record the command; make it writable" >&2; exit 125; }\n'
+        f"(umask 077 && mkdir -p {directory}) 2> /dev/null\n"
+        f'test -d {directory} && test -w {directory} || {{ echo "{HOST_CAUSE}cannot create '
+        f'{shown} to record the command; make it writable" >&2; exit 125; }}\n'
+        f"! test -L {directory} && test -O {directory} || "
+        f'{{ echo "{HOST_CAUSE}{shown} is a symbolic link or belongs to another user" >&2; '
+        "exit 125; }\n"
+        f'case "$(stat -c %a {directory})" in *[2367][0-7] | *[2367])\n'
+        f'  echo "{HOST_CAUSE}{shown} is writable by other users; run chmod go-w on it" >&2\n'
+        "  exit 125 ;;\n"
+        "esac\n"
         f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(start)} narwhal-{token} "
         f"{shlex.quote(script)}\n"
         "status=$?\n"
@@ -225,7 +242,7 @@ def bounded(script: str, limit: float, token: str) -> str:
         f"    pid=$(cat {marker} 2> /dev/null)\n"
         "    # Only a process ID that the command's own timeout recorded names its group.\n"
         '    case "$pid" in\n'
-        '      "" | *[!0-9]* | 0 | 1) ;;\n'
+        f"      {PID_PATTERN}) ;;\n"
         '      *) kill -s KILL -- "-$pid" 2> /dev/null ;;\n'
         "    esac\n"
         "    ;;\n"
@@ -247,7 +264,7 @@ def stop_script(token: str) -> str:
         f"test -f {marker} || {{ echo 'no command is running'; exit 0; }}\n"
         f"pid=$(cat {marker})\n"
         f"rm -f {marker}\n"
-        'case "$pid" in "" | *[!0-9]*) exit 0 ;; esac\n'
+        f'case "$pid" in {PID_PATTERN}) exit 0 ;; esac\n'
         f'tr "\\000" " " < /proc/"$pid"/cmdline 2> /dev/null | grep -q -- narwhal-{token} ||\n'
         "  { echo 'already ended'; exit 0; }\n"
         'kill -s TERM -- "-$pid" 2> /dev/null\n'
