@@ -82,7 +82,7 @@ After each `narwhal deploy run`, passed or failed, the command builds a summary 
 | `schema`, `schema_version` | `narwhal.deployment-status` and `1` |
 | `fleet`, `target`, `run_id` | `NARWHAL_FLEET_NAME`, the deployment target such as `ssh`, and the run's ID |
 | `updated_at` | When a stage of the run last ended, Unix seconds |
-| `last_passed_at` | When the last run that passed every stage up to `monitoring` ended. A failed run keeps the previous value |
+| `last_passed_at` | When the last run that passed every stage up to `monitoring`, or up to `trial` for a run with `--trial`, ended. A failed run keeps the previous value |
 | `qualified_at`, `profiled_at`, `calibrated_at` | When `preflight`, `profile` and `calibrate` last passed, or `null` |
 | `stages` | Each stage instance with `stage`, `instance` and `state`, the stage record's `status` |
 | `fabric` | Each `fabric-edge` instance with `edge`, `measured_gbps`, the lowest bandwidth measured, and `budget_gbps`, the highest that one of its KV handoffs needs |

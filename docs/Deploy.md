@@ -39,7 +39,13 @@ narwhal deploy plan --run runs/deploy/first-deploy
 narwhal deploy run --run runs/deploy/first-deploy
 ```
 
-A failed stage prints its recovery section and evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose result still holds. `narwhal deploy status` shows each stage and checks the processes the run started, and `narwhal deploy down` stops them. [Running the stage graph](cli/Deploy.md#running-the-stage-graph) describes what each stage runs and the inputs it reads. The `monitoring` and `trial` stages still run by hand, as [Serve and measure](deploy/07-Serve-and-Measure.md) describes.
+A failed stage prints its recovery section and evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose result still holds. `narwhal deploy status` shows each stage and checks the processes the run started, and `narwhal deploy down` stops them. [Running the stage graph](cli/Deploy.md#running-the-stage-graph) describes what each stage runs and the inputs it reads.
+
+With `--trial`, `run` continues past the monitoring stack with the [capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) of the workload and thresholds in the trial file:
+
+```bash
+narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.json
+```
 
 On a Kubernetes cluster, the same commands take `--target kubernetes` and run each stage through the Narwhal Helm chart; [Deploying on Kubernetes](deploy/Kubernetes.md) covers its inputs and stages.
 
@@ -134,8 +140,7 @@ An engine whose container stopped or restarted also spends its launch directory,
 | `router-start` | Once for each router host | `preflight`, `lease-check` | [Starting the router pair](deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
 | `load-balancer` | Once per run, on the management workstation, on fleets with a standby router | `router-start` | [Starting the load balancer](deploy/07-Serve-and-Measure.md#starting-the-load-balancer) |
 | `monitoring` | Once per run, on the management workstation | `load-balancer` | [Starting the monitoring stack](deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack) |
-| `tunnel` | Once per run, on the management workstation | `monitoring` | [Tunnelling router, Prometheus, and Grafana to the workstation](deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) |
-| `trial` | Once per run, on the management workstation | `tunnel` | [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) |
+| `trial` | Once per run, on the management workstation | `monitoring` | [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) |
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
@@ -145,13 +150,13 @@ An engine whose container stopped or restarted also spends its launch directory,
 | Approved release | `NARWHAL_WHEEL_SHA256`, which each role environment records as `NARWHAL_DEPLOYMENT_REVISION`, and the SHA-256 of the lock, `NARWHAL_REQUIREMENTS_SHA256` | `package` and every stage after it |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start`, `trial` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start`, `trial` |
-| Profiling sweep or warmup, or a trial rate or request count outside the profiled range | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
+| Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start`, `trial` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start`, `trial` |
 | Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `transfer-measure` on SGLang when the prompt tokens change, `fabric-budget`, `fabric-edge` |
 | Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
 | Router pair settings | Both routers' origins, the load balancer's origin, the lease path and the HAProxy image | `lease-check` on fleets with a standby router, `router-start`, `load-balancer` on fleets with a standby router, `monitoring`, `trial` |
 | Monitoring settings | The Prometheus and Grafana listen addresses | `monitoring` |
-| Trial workload, rate, request count or thresholds, within the profiled range | The trial workload, offered rate, request count and thresholds | `trial` from a drained router |
+| Trial workload, rates, request count or thresholds | The SHA-256 of the `--trial` file | `trial` from a drained router |
 | Launch directory whose engine has stopped | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check`, `engine-start` for that engine |
 | Engine process restarted | The container ID and start time, or the PID, boot ID and start ticks, checked live on every run | `engine-probe`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight`, `router-start` to readmit the engine to a router that still runs |
 | Engine cache geometry | The SHA-256 of `cache-layout.json` | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a host of the engine's group |
@@ -180,7 +185,7 @@ Record these inputs and artifacts in the private deployment record:
 | Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
 | Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |
 | Router | Bind address, model, engine count, and role split | Router env, fleet config, endpoint captures |
-| Capacity trial | Workstation load client, router observability stack, SSH path, fixed runtime and cache policy, workload, and thresholds | Tunnel logs in `runs/access-<id>/`, `runs/load-trial-<id>/` |
+| Capacity trial | Workstation load client, the monitoring stack, SSH forwards, prefix caching off, the trial file's workload and thresholds | `stages/trial/attempt-<n>/` in the run directory |
 
 Recover a failed stage with the steps on its page:
 
@@ -190,7 +195,8 @@ Recover a failed stage with the steps on its page:
 - Attestation: when `capture` fails, fix the cause it names and run `capture` again, as in [Capturing the attestation](deploy/05-Attest.md#capturing-the-attestation). When `verify` or `finalize-fleet` fails, fix the failing engine, restart its sidecar against the checked process, and run `finalize-fleet` again.
 - Profiling: [Reusing or repeating profiles](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles).
 - Preflight: follow the reported engine, transfer leg or budget into [Troubleshooting a fleet](Troubleshoot.md).
-- Router and capacity trial: [Troubleshooting the tunnel](deploy/07-Serve-and-Measure.md#troubleshooting-the-tunnel).
+- Router: [Troubleshooting the tunnel](deploy/07-Serve-and-Measure.md#troubleshooting-the-tunnel).
+- Capacity trial: [Running the initial capacity trial](deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial).
 
 ## Runtime and tooling references
 

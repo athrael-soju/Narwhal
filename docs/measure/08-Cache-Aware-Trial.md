@@ -69,7 +69,7 @@ Before each cache-aware run, confirm:
 Repeated-prefix workload:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py prepare \
+.venv/bin/python -m narwhal.deployment.load_trial prepare \
   --base "$NARWHAL_TRIAL_URL" --out "$TRIAL_DIR/repeated-1" \
   --input-tokens <input-tokens> --output-tokens <output-tokens> \
   --prefix-tokens <prefix-tokens> --families <families> --seed <seed>
@@ -78,7 +78,7 @@ Repeated-prefix workload:
 Cold control:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py prepare \
+.venv/bin/python -m narwhal.deployment.load_trial prepare \
   --base "$NARWHAL_TRIAL_URL" --out "$TRIAL_DIR/control" \
   --input-tokens <input-tokens> --output-tokens <output-tokens> \
   --prefix-tokens <prefix-tokens> --families 0 --seed <seed>
@@ -113,7 +113,7 @@ In each arm:
 Run one point:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py run \
+.venv/bin/python -m narwhal.deployment.load_trial run \
   --base "$NARWHAL_TRIAL_URL" --out "$TRIAL_DIR/<arm>-<point>" \
   --workload "$TRIAL_DIR/<workload>/workload.json" \
   --rate <rate> --requests <requests> --run-seed <run-seed> \

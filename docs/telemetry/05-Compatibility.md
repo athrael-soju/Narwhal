@@ -42,6 +42,7 @@ Interface versions in this release:
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
 | Deployment run record | `narwhal.deployment-run` | 2 | `deployment_run` |
 | Deployment status | `narwhal.deployment-status` | 1 | `deployment_status` |
+| Capacity trial definition | `narwhal.capacity-trial` | 1 | `trial` |
 
 To compare manifests:
 

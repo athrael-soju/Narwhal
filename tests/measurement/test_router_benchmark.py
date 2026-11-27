@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.config import FleetConfig
+from narwhal.deployment import load_trial as trial
 from narwhal.engines.attestation import EngineIdentity
 from narwhal.profiling.generation import (
     generation_problem,
@@ -29,7 +30,6 @@ from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
 from tests.wire import EngineWire
-from tools.measurement import load_trial as trial
 from tools.measurement.router_benchmark import cli as bench_cli
 from tools.measurement.router_benchmark import client as bench_client
 from tools.measurement.router_benchmark import comparison as bench_comparison

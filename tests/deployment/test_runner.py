@@ -81,7 +81,6 @@ ORDER = (
     "router-start",
     "load-balancer",
     "monitoring",
-    "tunnel",
     "trial",
 )
 SERVING = ("preflight", "router-start", "trial")
@@ -755,7 +754,7 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no action for stages: trial"):
             stub.run(self.fleet.inputs)
         self.assertEqual(
-            stub.run(self.fleet.inputs, until="tunnel").run_id, self.record()["run_id"]
+            stub.run(self.fleet.inputs, until="monitoring").run_id, self.record()["run_id"]
         )
         with self.assertRaisesRegex(ValueError, "probes must cover"):
             Runner(

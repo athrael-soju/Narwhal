@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import os
 import re
 import sys
@@ -26,22 +27,25 @@ from . import (
     supervision,
 )
 from . import deploy as stage_run
+from . import trial as capacity
 from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
 from .launch_engine.evidence import CheckFailed
 from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed, stale_notice
 
-# The stages `narwhal deploy run --until` can stop after. Every Kubernetes stage is named as
-# the SSH stage it corresponds to.
-RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.LAST_STAGE) + 1]
+# The stages `narwhal deploy run --until` can stop after, the capacity trial included. Every
+# Kubernetes stage is named as the SSH stage it corresponds to.
+RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.TRIAL_STAGE) + 1]
 # Each target's inputs, deployment and recovery pages.
 TARGETS: dict[str, Any] = {"ssh": stage_run, "kubernetes": kubernetes_target}
 
 DESCRIPTIONS = {
     "plan": "Check every deployment input and each host's systemd user manager, then print "
-    "each stage up to the monitoring stack and whether run would run or skip it, and why.",
-    "run": "Run the stages from host access to a ready router pair in the run directory, skipping "
-    "each stage whose recorded result still holds, and stop at the first stage that fails.",
+    "each stage up to the monitoring stack, or the capacity trial with --trial, and whether run "
+    "would run or skip it, and why.",
+    "run": "Run the stages from host access to a ready router pair in the run directory, and "
+    "with --trial the capacity trial, skipping each stage whose recorded result still holds, and "
+    "stop at the first stage that fails.",
     "status": "Print each stage's state and evidence from the run record, and check whether "
     "each engine, sidecar, router and container the run started still runs or has stopped.",
     "down": "Stop the monitoring stack, load balancer, routers, sidecars and engines the run "
@@ -128,8 +132,16 @@ def add_commands(commands: Any) -> None:
                     "--until",
                     choices=RUN_STAGES,
                     metavar="STAGE",
-                    help=f"stop after this stage (default: {stage_run.LAST_STAGE}, or "
+                    help=f"stop after this stage (default: {stage_run.LAST_STAGE}, "
+                    f"{stage_run.TRIAL_STAGE} with --trial, or "
                     f"{kubernetes_target.LAST_STAGE} with --target kubernetes)",
+                )
+                action.add_argument(
+                    "--trial",
+                    type=Path,
+                    metavar="WORKLOAD",
+                    help="narwhal.capacity-trial file: run the capacity trial of this workload "
+                    "against its thresholds after the monitoring stack, on SSH hosts",
                 )
             continue
         if name not in ("discover", "cache-groups"):
@@ -388,10 +400,36 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
     return 0
 
 
+def _check_trial(args: argparse.Namespace) -> None:
+    """Refuse a trial on Kubernetes, and a run to the trial stage without a trial."""
+    if args.trial is not None and args.target != "ssh":
+        raise ValueError("--trial runs the capacity trial on SSH hosts only")
+    if args.until == stage_run.TRIAL_STAGE and args.trial is None:
+        raise ValueError("--until trial needs --trial with the trial's workload file")
+
+
+def _deployment(args: argparse.Namespace, env: dict[str, str], *, dry: bool = False) -> Any:
+    """The target's deployment of the run directory; on SSH hosts it carries `--trial`."""
+    directory = args.run.resolve()
+    if args.target == "ssh":
+        trial = getattr(args, "trial_snapshot", None)
+        return stage_run.Deployment(directory, env, dry=dry, trial=trial)
+    return TARGETS[args.target].Deployment(directory, env, dry=dry)
+
+
 def _inputs(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any] | None:
     """The run's inputs, or None after reporting every missing or malformed one."""
     try:
-        inputs: dict[str, Any] = TARGETS[args.target].inputs(env)
+        if args.target == "ssh":
+            # The trial's bytes are read once: the trial input is their digest, and the trial
+            # stage runs from them.
+            try:
+                args.trial_snapshot = capacity.snapshot(args.trial) if args.trial else None
+            except ValueError as error:
+                raise stage_run.InputError([str(error)]) from None
+            inputs: dict[str, Any] = stage_run.inputs(env, args.trial_snapshot)
+        else:
+            inputs = TARGETS[args.target].inputs(env)
         return inputs
     except stage_run.InputError as error:
         for problem in error.problems:
@@ -419,6 +457,7 @@ def _decisions(decisions: Any) -> list[dict[str, Any]]:
 
 
 def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
+    _check_trial(args)
     inputs = _inputs(args, env)
     if inputs is None:
         return 2
@@ -435,7 +474,7 @@ def _plan(args: argparse.Namespace, env: dict[str, str]) -> int:
             if found:
                 problems[host.id] = found
     directory = args.run.resolve()
-    deployment = TARGETS[args.target].Deployment(directory, env, dry=True)
+    deployment = _deployment(args, env, dry=True)
     result = deployment.runner().plan(inputs, until=_until(args))
     rows = _decisions(result.decisions)
     notes = [*_topology_notes(args, env), *result.notes]
@@ -477,8 +516,21 @@ def _topology_notes(args: argparse.Namespace, env: dict[str, str]) -> list[str]:
 
 
 def _until(args: argparse.Namespace) -> str:
-    """The last stage to plan or run: `--until`, else the target's last stage."""
-    return str(args.until or TARGETS[args.target].LAST_STAGE)
+    """The last stage to plan or run: `--until`, else the trial with `--trial`, else the
+    target's last stage."""
+    if args.until:
+        return str(args.until)
+    return stage_run.TRIAL_STAGE if args.trial else str(TARGETS[args.target].LAST_STAGE)
+
+
+def _trial_result(directory: Path) -> dict[str, Any] | None:
+    """The trial result of the run's last trial attempt, when it wrote one."""
+    entry = run_record.read(directory)["stages"].get(stage_run.TRIAL_STAGE)
+    path = directory / entry["directory"] / "trial-result.json" if entry else None
+    if path is None or not path.is_file():
+        return None
+    result: dict[str, Any] = json.loads(path.read_text())
+    return result
 
 
 def _publish(deployment: Any) -> None:
@@ -490,6 +542,7 @@ def _publish(deployment: Any) -> None:
 
 
 def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
+    _check_trial(args)
     inputs = _inputs(args, env)
     if inputs is None:
         return 2
@@ -497,7 +550,7 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     results.add_artifact("run_record", directory / "run.json")
     target = TARGETS[args.target]
-    deployment = target.Deployment(directory, env)
+    deployment = _deployment(args, env)
     runner = deployment.runner()
     for note in _topology_notes(args, env):
         print(f"Note: {note}")
@@ -515,9 +568,10 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         failure = error.record["failure"]
         recovery = target.recovery_url(failure["recovery"])
         status, code, exit_code = _stage_failure(error)
-        results.set_data(
-            {"run": str(directory), "failed_stage": error.key, **stale(error.stale_lock)}
-        )
+        failed: dict[str, Any] = {"run": str(directory), "failed_stage": error.key}
+        if error.key == stage_run.TRIAL_STAGE and (found := _trial_result(directory)):
+            failed["trial"] = found
+        results.set_data({**failed, **stale(error.stale_lock)})
         results.record_error(
             code,
             failure["message"],
@@ -543,9 +597,10 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
         return 130
     _publish(deployment)
     ran = [decision.key for decision in result.decisions if decision.ran]
-    results.set_data(
-        {"run": str(directory), "run_id": result.run_id, "ran": ran, **stale(result.stale_lock)}
-    )
+    data: dict[str, Any] = {"run": str(directory), "run_id": result.run_id, "ran": ran}
+    if _until(args) == stage_run.TRIAL_STAGE and (found := _trial_result(directory)):
+        data["trial"] = found
+    results.set_data({**data, **stale(result.stale_lock)})
     print(f"Run {result.run_id} reached {_until(args)}; {len(ran)} stage instances ran.")
     return 0
 

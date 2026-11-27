@@ -4,6 +4,8 @@ description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen 
 
 # Synthetic load trial
 
+`narwhal deploy run --trial` runs this trial as its [`trial` stage](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial), with the rates and thresholds of a trial file. This page describes the load client and how to run it by hand.
+
 ## Running the synthetic deployment trial
 
 1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
@@ -40,7 +42,7 @@ mkdir -p runs
 
 TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 
-.venv/bin/python tools/measurement/load_trial.py prepare \
+.venv/bin/python -m narwhal.deployment.load_trial prepare \
   --base "$NARWHAL_TRIAL_URL" \
   --input-tokens 8192 \
   --output-tokens 128 \
@@ -74,6 +76,8 @@ Each run manifest records:
 
 The client limits concurrent requests with `--max-inflight` (default 64) and scheduling lag with `--max-lag` (default 0.05 s).
 
+`--unix-socket <path>` sends every request through a Unix socket, such as an SSH forward's. `--base` then sets only the scheme, the `Host` header and the path, for example `--base http://localhost`.
+
 An offer over either limit becomes a terminal `client_schedule_miss` record with `client_schedule_valid: false` in the summary.
 
 Check client CPU and scheduling lag before raising either limit.
@@ -83,7 +87,7 @@ Check client CPU and scheduling lag before raising either limit.
 Run the first rate:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py run \
+.venv/bin/python -m narwhal.deployment.load_trial run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 0.5 \
@@ -94,7 +98,7 @@ Run the first rate:
   --out "$TRIAL_DIR/rate-0.5"
 ```
 
-`load_trial.py run` exits with one of these codes:
+`load_trial run` exits with one of these codes:
 
 | Exit  | Meaning                                                | Required action                                          |
 | :---: | ------------------------------------------------------ | -------------------------------------------------------- |
@@ -124,7 +128,7 @@ A drain wait longer than `--timeout` (default 120 s) exits `1` with a drain-dead
 Run the second rate:
 
 ```bash
-.venv/bin/python tools/measurement/load_trial.py run \
+.venv/bin/python -m narwhal.deployment.load_trial run \
   --base "$NARWHAL_TRIAL_URL" \
   --workload "$TRIAL_DIR/workload/workload.json" \
   --rate 1 \

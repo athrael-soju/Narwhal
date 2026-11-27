@@ -4,7 +4,7 @@ description: Start the Narwhal router and validate fleet capacity through the pr
 
 # Serve and measure
 
-`narwhal deploy run` starts a router pair after preflight: the primary router on the router host, its standby on the standby router host, HAProxy in front of both, and the monitoring stack. The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair).
+`narwhal deploy run` starts a router pair after preflight: the primary router on the router host, its standby on the standby router host, HAProxy in front of both, and the monitoring stack. With `--trial`, it then runs the [capacity trial](#running-the-initial-capacity-trial). The pair's inputs are in [Deployment inputs](../configuration/04-Deployment-Inputs.md#router-pair).
 
 A fleet without `NARWHAL_STANDBY_ROUTER_SSH` runs one router instead, with no router failover. `lease-check` and `load-balancer` do not run. `router-start` starts the router at `NARWHAL_ROUTER_URL` without `--standby-of`, `--lease-path` or `--first-start-primary`, waits for it to control the fleet and measures its overhead as below. Monitoring scrapes that router and reads its targets from it.
 
@@ -107,7 +107,7 @@ The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the 
     http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator
     ```
 
-6. Point the workload client at `$NARWHAL_TRIAL_URL`.
+6. To run a load client by hand, as the [measurement pages](../Measure.md) do, point it at `$NARWHAL_TRIAL_URL`.
 7. Record:
 
     - The router role assignment.
@@ -130,41 +130,76 @@ If a service listens on an address other than the router's `127.0.0.1`, pass one
 
 ## Running the initial capacity trial
 
-The trial requires the [capacity-trial prefix-caching setting](03-Validate-Engines.md#preparing-checking-and-starting-each-engine) on every engine.
+`narwhal deploy run --trial <workload>` runs the capacity trial after the monitoring stack, as the `trial` stage. `<workload>` is a trial file that holds the [synthetic load trial](../measure/03-Load-Trial.md)'s workload, its offered rates and the thresholds each rate must meet:
 
-Run the trial:
+```bash
+narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.json
+```
 
-1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
-2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#freezing-the-deployment-under-test) under a new deployment identifier.
-3. Attach the passing preflight result to the deployment evidence.
-4. Retain the monitoring startup output and the router and engine scrape evidence.
-5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md#running-the-synthetic-deployment-trial) through `$NARWHAL_TRIAL_URL`, against its TTFT, TPOT, and attainment thresholds.
-6. Retain the workload definition, the request-level records, and the summaries.
-7. Capture the client CPU, memory, network, and scheduler behaviour.
-8. Confirm the drained, idle router state in `state-after.json`.
-9. [Reconcile](../measure/04-Reconcile-and-Accept.md) every offer against the client and router terminal classes.
-10. Query the engine, request, token, role, and pool-load series in Grafana.
-11. Run the post-load KV ring on the router:
+```json
+{
+  "schema": "narwhal.capacity-trial",
+  "schema_version": 1,
+  "input_tokens": 8192,
+  "output_tokens": 128,
+  "seed": 1729,
+  "requests": 200,
+  "rates_rps": [0.5, 1],
+  "ttft_s": 2.0,
+  "tpot_s": 0.0333,
+  "attainment": 0.95
+}
+```
+
+| Field | Value |
+| --- | --- |
+| `schema`, `schema_version` | `narwhal.capacity-trial` and `1` |
+| `input_tokens`, `output_tokens` | Prompt and output tokens of every request, integers of at least 1 |
+| `seed` | Seed of the synthetic prompts, an integer of at least 0 |
+| `requests` | Requests offered at each rate, an integer of at least 1 |
+| `rates_rps` | Offered rates in requests per second, in increasing order. The trial stops at the first rate that fails |
+| `ttft_s`, `tpot_s` | The time to first token and time per output token that a request must meet, positive seconds |
+| `attainment` | The fraction of offered requests that must meet both limits, above 0 and at most 1 |
+| `max_inflight`, `max_lag_s`, `timeout_s` | Optional client limits: concurrent requests, default `64`, scheduling lag, default `0.05`, and the per-request and drain timeout, default `120` |
+
+`plan` and `run` read the file once and name every problem in it before they reach a host. The run's `trial` input is the SHA-256 of those bytes, and the stage runs the trial they hold, so an edit to the file after `run` starts changes neither. They also refuse `--trial` while an engine's inputs leave prefix caching on: set `NARWHAL_PREFIX_CACHING=false` before discovery, as in [Preparing, checking, and starting each engine](03-Validate-Engines.md#preparing-checking-and-starting-each-engine), and unset any `NARWHAL_NODE_<n>_PREFIX_CACHING` that turns it on again.
+
+The load client runs on the workstation from the installed wheel. For the length of the stage, SSH forwards reach the load balancer, or the router of a fleet with one router, each router, and Prometheus on the primary router's host. Each forward listens on a Unix socket in a directory that only your user can open, which the stage removes when it ends. The stage fails when a forward's `ssh` exits. The stage then:
+
+1. Refuses to run when an engine's `checked.json` shows `prefix_caching` other than `false`, and when the workload leaves an engine's profiled domain: a prompt outside the profile's `prefill_min_tokens` to `prefill_max_tokens`, an output outside `decode_min_output_tokens` to `decode_max_output_tokens`, or one request's tokens above `decode_max_kv_tokens`.
+2. Prepares the workload from the router's served model with `load_trial prepare`.
+3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees. The state reads also give the router that controls the fleet, with its lease epoch and holder. A rate fails as well when no single router reported control before or after it, or when control moved or the lease epoch changed during it, as in a failover.
+4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query. A series must hold a sample for every 5-second scrape of the window, less one, so a series that stopped partway fails. The `role` and `pool-load` checks read only the controlling router, the one whose `narwhal_router_role{role="active"}` was 1 at every scrape of the window:
+
+    | Series | Passes when |
+    | --- | --- |
+    | `engine` | Every engine's scrape target was up at every scrape of the trial, and scraped throughout |
+    | `request` | `narwhal_served_total` grew |
+    | `token` | `narwhal_decode_tokens_observed_total` grew, and the engines computed prompt tokens and generated output tokens |
+    | `role` | The controlling router reported every engine in a pool, as `narwhal_instance_role` shows, at every scrape. An engine that changed pool passes |
+    | `pool-load` | The controlling router reported `narwhal_pool_load` for the prefill and the decode pool at every scrape. A pool whose engines run at their idle pace reports 0, which passes |
+
+5. Runs the post-load KV ring on the primary router's host, with the fleet that `fleet-limits` wrote:
 
     ```bash
-    .venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
+    narwhal-check --fleet <fleet-limits fleet> --ring --format json
     ```
 
-The trial passes when steps 5 to 11 succeed.
+The trial passes when every rate, every series and the KV ring pass. Every other request to the routers during the trial breaks the reconciliation, so keep other clients off the fleet. With `--format json`, the result's `data.trial` holds the trial result.
 
-Close the trial:
+The stage keeps its evidence in `stages/trial/attempt-<n>/` of the run directory:
 
-1. Retain with the private deployment record:
+| Path | Contents |
+| --- | --- |
+| `trial.json` | The trial file, as `run` read it |
+| `prefix-caching.json` | Each engine's `prefix_caching` from its `checked.json` |
+| `workload/` | The prepared `workload.json`, `seed-response.json` and `manifest.json` |
+| `rate-<rate>/` | The [client's records](../measure/04-Reconcile-and-Accept.md) of the rate, with `samples.json`, the router reads before and after it, `journal-rows.json`, the routers' journal rows of its offers, and `reconcile.json` |
+| `series.json` | Each series query, the samples Prometheus returned and its verdict |
+| `host/ring.json` | The KV ring's command result |
+| `trial-result.json` | Each rate's counts, attainment, verdicts and the router that held control before and after it, each series verdict, the ring, and the failure of a failed trial |
+| `workload.log`, `rate-<rate>.log`, `logs/` | The load client's output and the SSH logs |
 
-    - The service locations.
-    - The SHA-256 of the installed wheel.
-    - The fleet configuration.
-    - The profiles.
-    - The router journal.
-    - The monitoring endpoints.
+A failed check fails the stage's gate. Fix the cause and run `run --trial` again. A trial that passed is skipped while its file and the inputs that the [rerun table](../Deploy.md#rerunning-after-a-change) names for `trial` are unchanged, so give a changed file, such as another `seed`, to repeat it.
 
-2. Save the client records and the post-load KV ring output.
-3. Stop the client.
-4. Press Ctrl+C in the tunnel terminal when private access ends.
-5. Leave the engines, attestation sidecars, router, and monitoring stack running until a planned drain or shutdown in [Operating Narwhal](../Operate.md).
-6. Record the final gate against the [evidence and recovery index](../Deploy.md#evidence-and-recovery-index).
+After the trial, archive the run directory with the private deployment record. Leave the engines, attestation sidecars, routers and monitoring stack running until a planned drain or shutdown in [Operating Narwhal](../Operate.md).

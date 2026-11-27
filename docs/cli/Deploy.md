@@ -4,11 +4,12 @@ description: Subcommands, options, host-key checks, time limits and exit codes o
 
 # `narwhal deploy`
 
-`narwhal deploy` [deploys a fleet](../Deploy.md) to SSH hosts. `run` runs every stage from host access to a ready router pair behind HAProxy with the monitoring stack running, and resumes at the stage that failed. Run it with `.env` loaded, from the directory that holds `config/`:
+`narwhal deploy` [deploys a fleet](../Deploy.md) to SSH hosts. `run` runs every stage from host access to a ready router pair behind HAProxy with the monitoring stack running, and with `--trial` the capacity trial after it, and resumes at the stage that failed. Run it with `.env` loaded, from the directory that holds `config/`:
 
 ```bash
 narwhal deploy plan --run runs/deploy/first-deploy
 narwhal deploy run --run runs/deploy/first-deploy
+narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.json
 narwhal deploy status --run runs/deploy/first-deploy
 narwhal deploy down --run runs/deploy/first-deploy
 ```
@@ -34,7 +35,7 @@ narwhal deploy tunnel --forward 18000:8000
 
 | Subcommand | Operation | Procedure |
 | --- | --- | --- |
-| `plan` | Checks every input, each host's systemd user manager and Docker Compose on the primary router's host, then prints each stage instance up to `--until` with whether `run` would run it, and why. Reaches each host once, and runs no stage. | [Running the stage graph](#running-the-stage-graph) |
+| `plan` | Checks every input and the `--trial` file, each host's systemd user manager and Docker Compose on the primary router's host, then prints each stage instance up to `--until` with whether `run` would run it, and why. Reaches each host once, and runs no stage. | [Running the stage graph](#running-the-stage-graph) |
 | `run` | Runs every stage up to `--until`, skipping each stage whose recorded result still holds, and stops at the first stage that fails. | [Running the stage graph](#running-the-stage-graph) |
 | `status` | Prints each stage's state, attempt and evidence directory from the run record, with the recovery section of a failed stage, then checks each engine, sidecar, router and fabric route the run recorded. | [Running the stage graph](#running-the-stage-graph) |
 | `down` | Stops the router, then the sidecars, then the engine containers the run started, each only while its recorded identity still matches. | [Running the stage graph](#running-the-stage-graph) |
@@ -73,6 +74,7 @@ Each stage runs on its hosts:
 | `lease-check` | Checks the lease path on both router hosts with the router's lease code, as [Checking the shared lease path](../deploy/07-Serve-and-Measure.md#checking-the-shared-lease-path) describes. |
 | `router-start` | Starts each router of the pair as a systemd user unit, the primary first, and measures the router overhead, as [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) describes. |
 | `load-balancer`, `monitoring` | Starts HAProxy from `deploy/ha/haproxy.cfg` on the load balancer's host, or the monitoring stack on the primary router's host, as [Serve and measure](../deploy/07-Serve-and-Measure.md#starting-the-load-balancer) describes. |
+| `trial` | With `--trial`, runs the load client from the workstation through SSH forwards, reconciles each rate with the router journals and counters, checks the engine, request, token, role and pool-load series in Prometheus and runs the KV ring, as [Running the initial capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) describes. |
 | `fleet-limits` | Writes the SLO, `engine.first_token_timeout_s` as the calibrated candidate plus `NARWHAL_FIRST_TOKEN_MARGIN_S`, and the calibration path into the router's fleet. |
 
 When `router-start` reruns only because an engine restarted, and the router still runs on an unchanged fleet, it keeps the router. The router that holds the lease waits up to 120 seconds for the router to serve each restarted engine again. The router finds the new process itself, as [Detect process replacement](../operate/03-Restart-Engines.md#detect-process-replacement) describes, and its recovery returns the engine to placement. An engine the router holds `blocked` or `drained` is readmitted with its own `POST /narwhal/lifecycle/readmit`. An engine counts as back once it is `active`, accepts new requests, and the router's accepted process start differs from the one it held before the restart. A refused readmission, or an active whole-wave restart, fails the stage with the router's reason.
@@ -89,7 +91,9 @@ Evidence: runs/deploy/first-deploy/stages/engine-check/engine-1/attempt-1
 
 Fix the cause and run `run` again. It resumes at the failed stage. `down` stops each process only while its recorded identity matches, so it never stops a process another run started.
 
-Only container engines run on SSH hosts. The `tunnel` and `trial` stages run by hand, as [Serve and measure](../deploy/07-Serve-and-Measure.md) describes. `down` removes the monitoring and HAProxy containers too, and keeps the monitoring volumes.
+Only container engines run on SSH hosts. `down` removes the monitoring and HAProxy containers too, and keeps the monitoring volumes.
+
+`run --trial` takes the stages to `trial`, and `plan --trial` decides them. Without `--trial`, `run` stops at `monitoring` and leaves a recorded trial as it is. `--trial` needs the default SSH target, and `--until trial` needs `--trial`; both refusals exit with code `2`.
 
 ## Host keys and time limits
 
@@ -115,6 +119,7 @@ Each remote command runs under the time limit of its stage:
 | `attest-capture` | The attestation capture and publication | 900 s |
 | `preflight` | `narwhal-check` | 3,600 s |
 | `profile`, `calibrate` | `narwhal-profile`, or the first-token calibration | 7,200 s |
+| `trial` | Each load client run, router journal read and the KV ring | 3,600 s |
 
 `NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS` sets the limit of one stage, with `-` written as `_`, as in `NARWHAL_STAGE_FABRIC_EDGE_TIMEOUT_SECONDS`, and `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the limit of every stage, in seconds from 0.001, including the [`narwhal dev` stages](../Dev-Runtime.md#stage-deadlines-and-recovery). For example, a checkpoint that takes longer than an hour to hash on an engine host needs:
 
@@ -160,7 +165,7 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 
 ## Options
 
-`--format` applies to every subcommand except `shell` and `tunnel`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
+`--format` applies to every subcommand except `shell` and `tunnel`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` and `--trial` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -171,7 +176,8 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 | `--transfer-record` | None | `ROLE=PATH`: the `transfer.json` that `transfer-measure` wrote for the role, with `before.prom` and `after.prom` beside it. Repeatable, once for each engine whose handoffs are measured. | An `engine-<n>` role of the launch records |
 | `--run` | Required for every subcommand that takes it except `shell`, none for `shell` | For `plan`, `run`, `status` and `down`, the run directory that holds the run record; `run` creates it at mode 0700, and `run`, `status` and `down` refuse one another user owns or may enter. For the others, the package directory that `package` wrote. `transfer-measure`, `cache-groups` and `fabric` read the engines' packaged launch records from it, and `transfer-measure` and `fabric` their role files. | |
 | `--target` | `ssh` | Where `plan`, `run`, `status` and `down` run the fleet: on SSH hosts, or on a Kubernetes cluster through `helm` and `kubectl`. A run directory keeps the target it started with. | `ssh` or `kubernetes` |
-| `--until` | `monitoring`, or `router-start` with `--target kubernetes` | The last stage `plan` decides or `run` runs. | A stage of the [stage table](../Deploy.md#rerunning-after-a-change) up to `monitoring` |
+| `--until` | `monitoring`, `trial` with `--trial`, or `router-start` with `--target kubernetes` | The last stage `plan` decides or `run` runs. | A stage of the [stage table](../Deploy.md#rerunning-after-a-change) up to `trial`, which needs `--trial` |
+| `--trial` | None | A `narwhal.capacity-trial` file with the [capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial)'s workload, rates and thresholds. Its SHA-256 is the run's `trial` input. | A readable file, on the `ssh` target |
 | `--groups` | Required | The `cache-groups.json` that `cache-groups` derived from the same package. `fabric` takes each group and its representative from it, and sizes each budget from the cache layout or transfer record the groups were derived from. | A file whose packaged launch digests and geometry-source digests still match |
 | `--retained` | None | Earlier `fabric` output whose samples to reuse while their link records hold. | A directory with `fabric.json` |
 | `--host` | Every inventory host | Host to install, by inventory ID. Repeatable. Excludes `--role`. | An inventory host ID |

@@ -266,6 +266,9 @@ Import each name from the subpackage module that defines it.
 | `deployment/fabric_budget.py`                                                | Fabric workload budgets, link records and edge evidence                  |
 | `deployment/fabric.py`                                                       | Fabric qualification: transfer measurement, budgets and directed edges   |
 | `deployment/cli.py`                                                          | `narwhal deploy`                                                         |
+| `deployment/trial.py`                                                        | The capacity trial's definition, prerequisites and Prometheus series checks |
+| `deployment/load_trial.py`                                                   | Synthetic load client of the capacity trial and the measurement tools    |
+| `deployment/reconcile.py`                                                    | Join of client offers to router journals and counters                    |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
 | `deployment/launch_engine/accelerators.py`                                   | GPU inventory, also run by discovery on engine hosts                     |
