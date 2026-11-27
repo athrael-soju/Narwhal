@@ -73,17 +73,17 @@ Each launch record holds these allocation and transport fields:
 | `accelerator_devices`  | Host device paths mapped into the container. On ROCm they include `/dev/kfd` and the DRI render device of each allocated GPU.                                                                      |
 | `network_mode`         | `host`.                                                                                                                                                                                            |
 | `transfer.transport`   | `ucx_tcp` or `ucx_rdma`.                                                                                                                                                                           |
-| `transfer.net_devices` | Ethernet interface names for `ucx_tcp`, or `HCA:port` names for `ucx_rdma`.                                                                                                                        |
+| `transfer.net_devices` | Ethernet interface names for `ucx_tcp`, or `HCA:port` names for `ucx_rdma`. A Kubernetes plan takes one `HCA:port` and keeps only its port; the engine pod uses the HCA it is allocated. |
 | `transfer.devices`     | Transport device paths mapped into the container, required for `ucx_rdma`.                                                                                                                         |
-| `transfer.gpu_tls`     | UCX GPU transport. On CUDA, `cuda`, the default, or `cuda_copy` for `ucx_tcp`, and `cuda_copy` for `ucx_rdma`. On ROCm, `rocm`. |
+| `transfer.gpu_tls`     | UCX GPU transport. For `ucx_tcp`, `cuda`, the default, or `cuda_copy` on CUDA, and `rocm` on ROCm. For `ucx_rdma`, `cuda_copy` on CUDA and `rocm_copy` on ROCm. |
 | `shared_device`        | Optional allocation that shares one GPU with other engines, with the fields of the fleet's [`shared_device`](01-Fleet-Schema.md#shared-device-allocation). It requires one CUDA GPU and TP size 1. |
 | `sources`              | Allocation, device, transfer and runtime definitions that produced the record.                                                                                                                     |
 
 `deploy_hosts.py prepare` adds the record's `environment`, which sets the visible GPUs and `UCX_NET_DEVICES`. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
 
-On a host with several CUDA engines, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other dedicated-GPU engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. Under the container backend, an engine that can see another engine's GPUs and every `shared_device` engine run in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
+On a host with several engines whose `transfer.gpu_tls` is `cuda`, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other such engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. An engine with `cuda_copy` sees only its own GPUs. Under the container backend, an engine with `cuda` that can see another engine's GPUs, or that sets `shared_device`, runs in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
 
-With `ucx_rdma`, the launcher sets `UCX_SHM_DEVICES=none` and the CUDA transport is `cuda_copy`, which leaves CUDA IPC out of `UCX_TLS`. Engines on one host then send KV to each other over their HCAs.
+With `ucx_rdma`, the launcher sets `UCX_SHM_DEVICES=none` and the GPU transport is `cuda_copy` or `rocm_copy`, which leaves GPU IPC out of `UCX_TLS`. Engines on one host then send KV to each other over their HCAs.
 
 On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`.
 
@@ -218,15 +218,27 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 | `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off                         |
 | `ucx_version`       | vLLM only: version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
 | `peer_release`      | vLLM only: `false` when this engine keeps a stopped CUDA IPC peer's GPU memory mapped                         |
-| `image_id`          | Local image ID for the container backend, or `sha256:` and the digest of `NARWHAL_ENGINE_IMAGE` for the Kubernetes backend |
+| `image_id`          | Local image ID, for the container backend                                                                     |
+| `planned_image`     | `NARWHAL_ENGINE_IMAGE` as the plan names it, for the Kubernetes backend. The check does not observe the image the pod ran |
 | `backend`           | `native` or `kubernetes`, for those backends                                                                  |
 | `python_executable` | The launch plan's Python interpreter, for the native backend                                                  |
 | `expected_packages` | The launch plan's pinned package versions, for the native backend                                             |
 | `pod_uid`           | The engine pod's UID, for the Kubernetes backend                                                              |
 | `node`              | The node that ran the engine pod, for the Kubernetes backend                                                  |
-| `transfer_device`   | The HCA the RDMA device plugin allocated, for the Kubernetes backend: `verbs_device`, `hca`, `port` and `ucx_net_devices` |
+| `transfer_device`   | The HCA the RDMA device plugin allocated, for the Kubernetes backend, as [`transfer_device`](#transfer-device) describes |
 
 A Kubernetes plan's check runs in its engine pod, as [Kubernetes plans](../cli/Engine.md#kubernetes-plans) describes.
+
+### Transfer device
+
+`transfer_device` names the HCA that the engine pod sends KV through. The pod's runtime check reads it, the engine starts only on the same HCA, and the stages that measure an engine's KV path take the device to measure from it. The check records the device but does not measure it.
+
+| Key               | Value                                                                       |
+| ----------------- | --------------------------------------------------------------------------- |
+| `verbs_device`    | The verbs device under `/dev/infiniband` in the pod, such as `uverbs0`      |
+| `hca`             | The HCA name that `/sys/class/infiniband_verbs/<verbs_device>/ibdev` gives  |
+| `port`            | The HCA port, the plan's `kubernetes.hca_port`                              |
+| `ucx_net_devices` | `<hca>:<port>`, the `UCX_NET_DEVICES` value the engine runs with            |
 
 When `peer_release` is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 

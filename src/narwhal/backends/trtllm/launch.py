@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
 
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import CacheCapture, EngineLauncher
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, captures, dev, discovery
+from ...deployment.launch_engine.check import CheckContext
+from . import attestation, captures, dev, discovery, probe_reader
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import API_KEY_ENV, LAUNCHER
@@ -28,7 +30,7 @@ class TrtllmLauncher(EngineLauncher, CacheCapture):
     check_summary = "Runtime identity, package pins and server configuration passed."
     prefix_cache_name = "KV block reuse"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
-    version_label = "TensorRT-LLM"
+    probe_reader: ClassVar[ModuleType] = probe_reader
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -77,9 +79,6 @@ class TrtllmLauncher(EngineLauncher, CacheCapture):
 
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
-
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        return runtime_check.result(context, output)
 
     def capture_cache(self, run: Path, plan: dict) -> None:
         captures.capture_cache(run, plan)

@@ -4,10 +4,9 @@ import inspect
 import json
 from pathlib import Path
 
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
+from ...deployment.launch_engine.check import CheckContext
 from ...deployment.launch_engine.plan import (
     model_conv_state_layers,
-    releases_peers,
     requires_remote_code,
 )
 from .dev import gguf_plugin_digests
@@ -103,58 +102,3 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         json.dumps(engine_arguments(plan)),
         json.dumps(plan.get("runtime_pins", {})),
     ]
-
-
-def result(context: CheckContext, output: str) -> ProbeResult:
-    plan = context.plan
-    prefix = "NARWHAL_IMAGE_RUNTIME="
-    records = [
-        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
-    ]
-    if len(records) != 1:
-        raise context.failure("runtime check requires one runtime version record")
-    if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
-        raise context.failure("runtime check requires one tokenizer confirmation")
-    if plan.get("runtime_pins"):
-        prefix = "NARWHAL_GGUF_PLUGIN="
-        plugin = [
-            json.loads(line[len(prefix) :])
-            for line in output.splitlines()
-            if line.startswith(prefix)
-        ]
-        if plugin != [plan["runtime_pins"]]:
-            raise context.failure("GGUF plugin files differ from the pinned digests")
-    ucx = records[0].get("ucx_version")
-    if ucx is not None and not isinstance(ucx, str):
-        raise context.failure("runtime check returned an invalid UCX version")
-    prefix = "NARWHAL_CACHE_SETTINGS="
-    settings = [
-        json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
-    ]
-    if len(settings) != 1:
-        raise context.failure("runtime check requires one resolved cache setting")
-    ipc_cache = context.environment.get("UCX_CUDA_IPC_CACHE")
-    ipc_peers = plan.get(
-        "cuda_ipc_peers", "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
-    )
-    peer_release = not ipc_peers or releases_peers(ucx, ipc_cache)
-    notes = []
-    if ipc_peers and peer_release:
-        notes.append(
-            "UCX_CUDA_IPC_CACHE is off: peers release a stopped engine's GPU memory, "
-            "transfers from a restarted or idle-evicted producer map its KV memory per transfer, "
-            "and transfers and decoding slow as the engine serves until it restarts."
-        )
-    if not peer_release:
-        notes.append(
-            f"UCX {ucx or 'version unknown'} with UCX_CUDA_IPC_CACHE={ipc_cache or 'y'} keeps "
-            "a stopped CUDA IPC peer's GPU memory mapped; recover a crashed engine with a "
-            "whole-wave restart."
-        )
-    return ProbeResult(
-        version=records[0].get("vllm_api_version"),
-        prefix_caching=settings[0].get("prefix_caching"),
-        kv_events=settings[0].get("kv_events"),
-        fields={"ucx_version": ucx, "peer_release": peer_release},
-        notes=tuple(notes),
-    )

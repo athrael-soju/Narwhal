@@ -1,14 +1,16 @@
 """Run the steps of a Kubernetes engine pod with the Python of the unmodified engine image.
 
-The launch delivers this module and checkpoint.py to the pod in a ConfigMap, so both import only
-the standard library. Before it runs this module in isolated mode, the pod's bootstrap checks
-every delivered file against its SHA-256 in the launch's pod specification.
+The launch delivers this module to the pod in a ConfigMap, with checkpoint.py, verdict.py and
+the engine backend's probe reader as probe_reader.py, so all of them import only the standard
+library. Before it runs this module in isolated mode, the pod's bootstrap checks every delivered
+file against its SHA-256 in the launch's pod specification.
 
 Each step takes its arguments after its name:
 
 - `checkpoint` hashes the model files the pod serves and records the tree digest.
-- `runtime-check <seconds> <probe arguments>` runs the runtime probe within that budget and
-  records its output, with UCX_NET_DEVICES set to the HCA the device plugin allocated.
+- `runtime-check <seconds> <probe arguments>` runs the runtime probe within that budget, with
+  UCX_NET_DEVICES set to the HCA the device plugin allocated, and records its output with the
+  verdict on it that `narwhal-engine check` gives.
 - `serve <engine arguments>` replaces itself with the engine once both records pass for this
   launch plan, this pod and this HCA.
 
@@ -27,16 +29,15 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-# The pod's paths below lie under this root, which a test moves to a directory of its own.
-ROOT = Path("/")
+# The pod's paths below lie under the directory that holds the pod-step directory: / in the
+# pod, and a directory of its own when a test runs the steps.
+ROOT = Path(__file__).parent.parent
 HOOKS = Path("/narwhal-hooks")
 TOOLS = Path("/narwhal-pod")
 STATE = Path("/narwhal-state")
 MODEL = Path("/model")
 VERBS_DEVICES = Path("/dev/infiniband")
 VERBS_CLASS = Path("/sys/class/infiniband_verbs")
-# The engine sends KV through this port of its HCA.
-HCA_PORT = 1
 CHECKPOINT_RECORD = "checkpoint.json"
 RUNTIME_RECORD = "runtime-check.json"
 # The pod specification sets both from the downward API.
@@ -98,8 +99,8 @@ def write_record(name: str, record: dict) -> None:
     os.replace(pending, local(STATE) / name)
 
 
-def transfer_device() -> dict:
-    """Return the one HCA the RDMA device plugin allocated to this container."""
+def transfer_device(plan: dict) -> dict:
+    """Return the HCA the RDMA device plugin allocated to this container, at the plan's port."""
     names = sorted(path.name for path in local(VERBS_DEVICES).glob("uverbs*"))
     if len(names) != 1:
         raise StepFailure(
@@ -112,17 +113,14 @@ def transfer_device() -> dict:
         raise StepFailure(f"the HCA of {names[0]} is unreadable: {error}") from error
     if not hca:
         raise StepFailure(f"{VERBS_CLASS / names[0] / 'ibdev'} names no HCA")
-    return {
-        "verbs_device": names[0],
-        "hca": hca,
-        "port": HCA_PORT,
-        "ucx_net_devices": f"{hca}:{HCA_PORT}",
-    }
+    port = plan["kubernetes"]["hca_port"]
+    return {"verbs_device": names[0], "hca": hca, "port": port, "ucx_net_devices": f"{hca}:{port}"}
 
 
-def load_checkpoint_module() -> ModuleType:
-    path = Path(__file__).with_name("checkpoint.py")
-    spec = importlib.util.spec_from_file_location("narwhal_pod_checkpoint", path)
+def delivered_module(name: str) -> ModuleType:
+    """Load a module of the pod-step directory."""
+    path = local(TOOLS) / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"narwhal_pod_{name}", path)
     if spec is None or spec.loader is None:
         raise StepFailure(f"{path} is not a Python module")
     module = importlib.util.module_from_spec(spec)
@@ -139,7 +137,7 @@ def checkpoint() -> int:
     plan, plan_sha256 = launch_plan()
     header = record_header(plan_sha256)
     try:
-        manifest = load_checkpoint_module().inspect_checkpoint(local(MODEL), contained=True)
+        manifest = delivered_module("checkpoint").inspect_checkpoint(local(MODEL), contained=True)
     except (OSError, ValueError, StepFailure) as error:
         message = f"checkpoint inspection failed: {error}"
         write_record(CHECKPOINT_RECORD, {**header, "error": message})
@@ -159,10 +157,10 @@ def checkpoint() -> int:
 
 
 def runtime_check(seconds: float, probe: list[str]) -> int:
-    _, plan_sha256 = launch_plan()
+    plan, plan_sha256 = launch_plan()
     header = record_header(plan_sha256)
     try:
-        device = transfer_device()
+        device = transfer_device(plan)
     except StepFailure as error:
         write_record(RUNTIME_RECORD, {**header, "error": str(error)})
         return fail(str(error))
@@ -188,19 +186,27 @@ def runtime_check(seconds: float, probe: list[str]) -> int:
             },
         )
         return fail(message)
-    write_record(
-        RUNTIME_RECORD,
-        {
-            **header,
-            "transfer_device": device,
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-        },
-    )
+    record = {
+        **header,
+        "transfer_device": device,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
-    return fail(f"the runtime check exited {result.returncode}") if result.returncode else 0
+    if result.returncode:
+        write_record(RUNTIME_RECORD, record)
+        return fail(f"the runtime check exited {result.returncode}")
+    try:
+        judged = delivered_module("verdict").verdict(
+            delivered_module("probe_reader"), plan, environment, result.stdout
+        )
+    except ValueError as error:
+        write_record(RUNTIME_RECORD, {**record, "error": str(error)})
+        return fail(str(error))
+    write_record(RUNTIME_RECORD, {**record, "verdict": judged})
+    return 0
 
 
 def _text(output: str | bytes | None) -> str:
@@ -226,9 +232,10 @@ def passed_records(plan: dict, plan_sha256: str) -> dict:
         records[name] = record
     if records[CHECKPOINT_RECORD].get("model_tree_sha256") != plan["model_tree_sha256"]:
         raise StepFailure("the checked model files differ from the launch plan's tree digest")
-    if records[RUNTIME_RECORD].get("returncode") != 0:
+    runtime = records[RUNTIME_RECORD]
+    if runtime.get("returncode") != 0 or not isinstance(runtime.get("verdict"), dict):
         raise StepFailure("the runtime check did not pass")
-    return records[RUNTIME_RECORD]
+    return runtime
 
 
 def serve(arguments: list[str]) -> int:
@@ -237,7 +244,7 @@ def serve(arguments: list[str]) -> int:
         return fail("the engine arguments differ from the launch plan")
     try:
         checked = passed_records(plan, plan_sha256)
-        device = transfer_device()
+        device = transfer_device(plan)
     except StepFailure as error:
         return fail(str(error))
     if device != checked.get("transfer_device"):

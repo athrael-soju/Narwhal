@@ -258,6 +258,7 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
+| `deployment/launch_engine/verdict.py`                                        | Verdict on runtime probe output, also run in a Kubernetes engine pod     |
 | `deployment/launch_engine/backend.py`                                        | Launcher, cache capture and model dimension interfaces for backends      |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |

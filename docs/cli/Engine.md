@@ -113,7 +113,7 @@ narwhal-engine check --run runs/engine-1 --pod-evidence runs/engine-1-pod
 
 The device plugins choose the pod's GPUs and HCA, so the plan differs from a container plan:
 
-- It requests as many GPUs as the record's `gpu_ids` lists, under `NARWHAL_KUBERNETES_GPU_RESOURCE`, and one HCA under `NARWHAL_KUBERNETES_RDMA_RESOURCE`. It ignores the record's device paths and the HCA name in `transfer.net_devices`.
+- It requests as many GPUs as the record's `gpu_ids` lists, under `NARWHAL_KUBERNETES_GPU_RESOURCE`, and one HCA under `NARWHAL_KUBERNETES_RDMA_RESOURCE`. It ignores the record's device paths. `transfer.net_devices` must name one `<HCA>:<port>`: the plan keeps the port as `kubernetes.hca_port` and ignores the HCA name.
 - It sets neither the GPU visibility variable nor `UCX_NET_DEVICES`. The pod sets `UCX_NET_DEVICES` from the HCA it receives.
 - Each variable that carries `NARWHAL_NODE_<n>_IP` on a host, such as `NIXL_HOST_IP` on vLLM, holds `$(NARWHAL_POD_IP)` instead. Kubernetes fills it with the pod's address, which is the node's address under host networking. Kubernetes passes every other value unchanged, because `kubernetes.json` writes each `$` as `$$`.
 - It records no model file status. The pod hashes the model files it serves.
@@ -121,17 +121,17 @@ The device plugins choose the pod's GPUs and HCA, so the plan differs from a con
 
 ### The engine pod
 
-`kubernetes.json` holds `plan_sha256`, two immutable ConfigMaps under `configMaps`, and the engine pod's specification under `podSpec`. The ConfigMap `<plan name>-hooks` holds the hook directory: `launch.json`, `launch_engine.py`, the cache-capture hook and the engine configuration files. The ConfigMap `narwhal-pod-<digest>` holds the pod steps, `pod.py` and `checkpoint.py`. Its name follows its content, so plans prepared by one Narwhal release share it.
+`kubernetes.json` holds `plan_sha256`, two immutable ConfigMaps under `configMaps`, and the engine pod's specification under `podSpec`. The ConfigMap `<plan name>-hooks` holds the hook directory: `launch.json`, `launch_engine.py`, the cache-capture hook and the engine configuration files. The ConfigMap `narwhal-pod-<digest>` holds the pod steps: `pod.py`, `checkpoint.py`, `verdict.py`, and the engine backend's probe reader as `probe_reader.py`. Its name follows its content, so plans of one engine backend prepared by one Narwhal release share it.
 
 Every container runs in the unmodified engine image:
 
 | Container | Kind | Step |
 | --- | --- | --- |
 | `checkpoint` | Init | Hashes the files under `/model` and fails when their tree digest differs from `model_tree_sha256` in `launch.json` |
-| `runtime-check` | Init | Runs the runtime probe that `check` runs in Docker, with the engine's environment, devices and mounts |
-| `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan and this pod |
+| `runtime-check` | Init | Runs the runtime probe that `check` runs in Docker, with the engine's environment, devices and mounts, and judges its output as `check` does. It fails on a probe that exits nonzero or an output that fails the check |
+| `engine` | Main | Starts the engine with `python3` and the plan's arguments, once both init containers have recorded a pass for this plan, this pod and its HCA |
 
-Each container's command first runs a bootstrap under `python3 -I`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
+Each container's command first runs a bootstrap under `python3 -I -B`. The bootstrap checks every file in `/narwhal-hooks` and `/narwhal-pod` against the SHA-256 the pod specification pins, and fails on a missing, extra or changed file. It skips the entries whose names start with `..`, which the kubelet adds to a ConfigMap volume. Isolated mode keeps the hook directory, which the engine's `PYTHONPATH` names, off the bootstrap's import path, and `-B` keeps the pod steps from writing bytecode. The `engine` container's step replaces itself with the engine, which keeps the container's first process ID.
 
 The specification sets:
 
@@ -142,17 +142,17 @@ The specification sets:
 | Volumes | The model volume read-only at `/model`; the ConfigMaps read-only at `/narwhal-hooks` and `/narwhal-pod`; the state claim at `/narwhal-state`; empty directories at `/root/.cache`, in memory at `/dev/shm`, and at `/narwhal-kv-events` while the engine publishes cache events |
 | Ports | The engine port as `http` and the KV side-channel port as `kv-side-channel` |
 | Credential | The engine credential from the Secret that `NARWHAL_KUBERNETES_API_KEY_SECRET` names |
-| Seccomp | `Unconfined` on ROCm, as the container backend runs ROCm engines |
+| Security context | `IPC_LOCK` added to `runtime-check` and `engine`, so they can lock the memory that RDMA registers, as the container backend's unlimited `memlock` allows. On ROCm, also seccomp `Unconfined`, as the container backend runs ROCm engines |
 
 The state claim mounts at the subdirectory `engines/<role>/<pod UID>`, writable for the init containers and read-only for `engine`.
 
 ### Allocated HCA
 
-`runtime-check` and `engine` each read the one `/dev/infiniband/uverbs*` device the RDMA device plugin allocated, take its HCA from `/sys/class/infiniband_verbs/<device>/ibdev`, and set `UCX_NET_DEVICES` to `<hca>:1`. Either container fails when it holds no verbs device or more than one. `engine` also fails when its HCA differs from the one `runtime-check` recorded.
+`runtime-check` and `engine` each read the one `/dev/infiniband/uverbs*` device the RDMA device plugin allocated, take its HCA from `/sys/class/infiniband_verbs/<device>/ibdev`, and set `UCX_NET_DEVICES` to `<hca>:<port>` with the plan's `kubernetes.hca_port`. Either container fails when it holds no verbs device or more than one. `engine` also fails when its HCA differs from the one `runtime-check` recorded.
 
 ### Pod records
 
-The init containers write `checkpoint.json` and `runtime-check.json` to `/narwhal-state`. Both hold `plan_sha256`, `pod_uid`, `node`, and under `files` the SHA-256 of every delivered file. `checkpoint.json` adds `model_tree_sha256`, `file_count` and `bytes_verified`. `runtime-check.json` adds the allocated HCA as `transfer_device`, and the probe's `returncode`, `stdout` and `stderr`. A step that fails records `error`. An init container that runs again in the same pod replaces its record.
+The init containers write `checkpoint.json` and `runtime-check.json` to `/narwhal-state`. Both hold `plan_sha256`, `pod_uid`, `node`, and under `files` the SHA-256 of every delivered file. `checkpoint.json` adds `model_tree_sha256`, `file_count` and `bytes_verified`. `runtime-check.json` adds the allocated HCA as `transfer_device`, the probe's `returncode`, `stdout` and `stderr`, and for a passing probe the verdict as `verdict`: the evidence that `check` records and the notes it prints. A step that fails records `error`. An init container that runs again in the same pod replaces its record.
 
 The runtime probe has `NARWHAL_STAGE_POD_RUNTIME_CHECK_TIMEOUT_SECONDS` to finish, or `NARWHAL_STAGE_TIMEOUT_SECONDS` when that is unset, 300 seconds by default. `prepare` reads them and pins the budget in the plan.
 
@@ -160,12 +160,14 @@ The runtime probe has `NARWHAL_STAGE_POD_RUNTIME_CHECK_TIMEOUT_SECONDS` to finis
 
 Copy the pod's directory `engines/<role>/<pod UID>/` from the state volume, and pass the copy to `check` as `--pod-evidence`. `check` refuses records that:
 
-- name another plan, or come from two pods or two nodes
+- name no pod UID or another plan, or come from two pods or two nodes
 - list delivered files other than the plan's
 - record an error, a model tree digest other than the plan's, or a probe that exited nonzero
-- name no allocated HCA
+- name no allocated HCA, or an HCA port other than the plan's
 
-It then checks the probe output as the Docker check does, and writes `checked.json` with `backend` set to `kubernetes`, `image_id`, `pod_uid`, `node` and `transfer_device`. `image_id` is `sha256:` and the digest of `NARWHAL_ENGINE_IMAGE`, the digest by which the kubelet pulls the image. `check` keeps each record it reads under `pods/<pod UID>/`, named by the record and its SHA-256.
+It then checks the probe output as the Docker check does, and fails when the pod's `verdict` differs from its own. It writes `checked.json` with `backend` set to `kubernetes`, `planned_image`, `pod_uid`, `node` and `transfer_device`. `planned_image` is `NARWHAL_ENGINE_IMAGE` as the plan names it; `check` does not observe the image the kubelet ran. `check` keeps each record of the plan it reads under `pods/<pod UID>/`, named by the record and its SHA-256.
+
+`check` reads records, not the pod. It accepts the records of any pod that ran the plan, including one that has since stopped or been replaced.
 
 A launch directory holds the check of one pod. To check a replacement pod of the same plan, copy `launch.json`, `container.env`, `hook/` and `kubernetes.json` into a new directory and check the new pod there.
 

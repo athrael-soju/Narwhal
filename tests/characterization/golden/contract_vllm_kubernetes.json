@@ -3,7 +3,6 @@
     "checked": {
       "backend": "kubernetes",
       "engine_version": "0.29.0",
-      "image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "kv_events": {
         "endpoint": "ipc:///narwhal-kv-events/events.sock",
         "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock"
@@ -11,6 +10,7 @@
       "node": "gpu-node-a",
       "peer_release": true,
       "plan_sha256": "<sha256>",
+      "planned_image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "pod_uid": "<uuid>",
       "prefix_caching": true,
       "transfer_device": {
@@ -85,7 +85,9 @@
           "apiVersion": "v1",
           "data": [
             "checkpoint.py",
-            "pod.py"
+            "pod.py",
+            "probe_reader.py",
+            "verdict.py"
           ],
           "immutable": true,
           "kind": "ConfigMap",
@@ -100,6 +102,7 @@
             "command": [
               "python3",
               "-I",
+              "-B",
               "-c",
               [
                 "import hashlib, json, os, runpy, sys",
@@ -116,7 +119,7 @@
                 "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
                 "runpy.run_path(sys.argv[0], run_name='__main__')"
               ],
-              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\"}}",
+              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
               "serve",
               "-m",
               "vllm.entrypoints.openai.api_server",
@@ -229,6 +232,13 @@
                 "rdma.example.com/hca": "1"
               }
             },
+            "securityContext": {
+              "capabilities": {
+                "add": [
+                  "IPC_LOCK"
+                ]
+              }
+            },
             "volumeMounts": [
               {
                 "mountPath": "/narwhal-hooks",
@@ -274,6 +284,7 @@
             "command": [
               "python3",
               "-I",
+              "-B",
               "-c",
               [
                 "import hashlib, json, os, runpy, sys",
@@ -290,7 +301,7 @@
                 "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
                 "runpy.run_path(sys.argv[0], run_name='__main__')"
               ],
-              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\"}}",
+              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
               "checkpoint"
             ],
             "env": [
@@ -348,6 +359,7 @@
             "command": [
               "python3",
               "-I",
+              "-B",
               "-c",
               [
                 "import hashlib, json, os, runpy, sys",
@@ -364,7 +376,7 @@
                 "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
                 "runpy.run_path(sys.argv[0], run_name='__main__')"
               ],
-              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\"}}",
+              "{\"/narwhal-hooks\": {\"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
               "runtime-check",
               "300",
               "-c",
@@ -551,6 +563,13 @@
                 "rdma.example.com/hca": "1"
               }
             },
+            "securityContext": {
+              "capabilities": {
+                "add": [
+                  "IPC_LOCK"
+                ]
+              }
+            },
             "volumeMounts": [
               {
                 "mountPath": "/narwhal-hooks",
@@ -692,6 +711,7 @@
         },
         "gpu_resource": "gpu.example.com/gpu",
         "gpus": 2,
+        "hca_port": 1,
         "model_volume": {
           "persistentVolumeClaim": {
             "claimName": "models",

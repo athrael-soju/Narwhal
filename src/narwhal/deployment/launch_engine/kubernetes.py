@@ -1,10 +1,11 @@
 """Render a Kubernetes launch plan into its engine pod, and check the pod's records.
 
 `prepare --backend kubernetes` writes `kubernetes.json`: two immutable ConfigMaps, one with the
-launch's hook files and one with the pod steps in pod.py, and the engine pod's specification.
-The pod runs every step in the unmodified engine image. An init container hashes the served
-model, a second one runs the runtime probe, and the engine container starts once both pass.
-`check` reads the records they leave on the state volume and writes checked.json.
+launch's hook files and one with the pod steps, and the engine pod's specification. The pod runs
+every step in the unmodified engine image. An init container hashes the served model, a second
+one runs the runtime probe and judges its output as the offline check does, and the engine
+container starts once both pass. `check` reads the records they leave on the state volume,
+judges the probe output again and writes checked.json.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from urllib.parse import urlsplit
 from .. import stages
 from . import checkpoint as checkpoint_module
 from . import pod
+from . import verdict as verdict_module
 from .backend import plan_launcher
-from .check import check_context, finish_check, require_checked
+from .check import check_context, finish_check, judge, require_checked
 from .checkpoint import json_digest
 from .plan import (
     HOOK_MOUNT,
@@ -38,8 +40,13 @@ STATE_CLAIM_ENV = "NARWHAL_KUBERNETES_STATE_CLAIM"
 API_KEY_SECRET_ENV = "NARWHAL_KUBERNETES_API_KEY_SECRET"
 # Volume sources that serve a staged checkpoint to the pod.
 MODEL_VOLUME_SOURCES = ("persistentVolumeClaim", "hostPath", "nfs", "csi")
-# The pod steps, by file name in the pod-step ConfigMap.
-POD_FILES = {"pod.py": Path(pod.__file__), "checkpoint.py": Path(checkpoint_module.__file__)}
+# The pod steps, by file name in the pod-step ConfigMap; the engine's probe reader joins them.
+POD_FILES = {
+    "pod.py": Path(pod.__file__),
+    "checkpoint.py": Path(checkpoint_module.__file__),
+    "verdict.py": Path(verdict_module.__file__),
+}
+PROBE_READER = "probe_reader.py"
 RUNTIME_CHECK_STAGE = "pod-runtime-check"
 MANIFESTS = "kubernetes.json"
 # The pod's records, copied into the launch directory by pod UID.
@@ -51,7 +58,8 @@ DOWNWARD_ENV = (
 )
 # Runs first in each pod container. It checks every delivered file against the SHA-256 the pod
 # specification pins, then runs the pod steps. Isolated mode keeps the hook directory, which
-# the engine's PYTHONPATH names, off its import path.
+# the engine's PYTHONPATH names, off its import path, and -B keeps the pod steps from writing
+# bytecode beside the files they check.
 BOOTSTRAP = f"""import hashlib, json, os, runpy, sys
 pins = json.loads(sys.argv[1])
 for root, files in sorted(pins.items()):
@@ -121,8 +129,31 @@ def api_key_secret(env: dict[str, str]) -> dict | None:
     return {"name": name, "key": key}
 
 
-def pod_settings(env: dict[str, str], record: dict) -> dict:
-    """Return the plan's pod section from the deployment inputs and the launch record."""
+def pod_files(plan: dict) -> dict[str, Path]:
+    """Return the source of each file in the pod-step ConfigMap, by file name."""
+    source = plan_launcher(plan).probe_reader.__file__
+    if source is None:
+        raise ValueError("the engine backend's probe reader has no source file")
+    return {**POD_FILES, PROBE_READER: Path(source)}
+
+
+def hca_port(record: dict) -> int:
+    """Return the HCA port from the launch record's one `<HCA>:<port>` transfer device.
+
+    The pod sends KV through the HCA the device plugin allocates, at this port.
+    """
+    net = record["transfer"]["net_devices"]
+    match = re.fullmatch(r"[^,:]+:([1-9][0-9]{0,2})", net)
+    if match is None:
+        raise ValueError(
+            f"{record['role']}: a Kubernetes engine's transfer.net_devices names one HCA and its "
+            "port, <HCA>:<port>"
+        )
+    return int(match[1])
+
+
+def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
+    """Return the plan's pod section from the deployment inputs, the launch record and the plan."""
     gpu, rdma = resource_name(env, GPU_RESOURCE_ENV), resource_name(env, RDMA_RESOURCE_ENV)
     if gpu == rdma:
         raise ValueError(f"{GPU_RESOURCE_ENV} and {RDMA_RESOURCE_ENV} must name two resources")
@@ -138,13 +169,14 @@ def pod_settings(env: dict[str, str], record: dict) -> dict:
         "gpu_resource": gpu,
         "gpus": len(record["gpu_ids"]),
         "rdma_resource": rdma,
+        "hca_port": hca_port(record),
         "model_volume": model_volume(env),
         "state_claim": claim,
         **({"api_key_secret": secret} if secret is not None else {}),
         # Docker's ROCm launch runs the engine without a seccomp filter, as this pod does.
         "seccomp_unconfined": record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES",
         "runtime_check_seconds": budget,
-        "pod_files_sha256": {name: digest(path) for name, path in POD_FILES.items()},
+        "pod_files_sha256": {name: digest(path) for name, path in pod_files(plan).items()},
     }
 
 
@@ -210,7 +242,7 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
     pins = json.dumps(delivered_files(plan, digest(run / "launch.json")), sort_keys=True)
 
     def command(step: str, *arguments: str) -> list[str]:
-        return [literal(part) for part in ("python3", "-I", "-c", BOOTSTRAP, pins, step)] + [
+        return [literal(part) for part in ("python3", "-I", "-B", "-c", BOOTSTRAP, pins, step)] + [
             literal(argument) for argument in arguments
         ]
 
@@ -241,11 +273,15 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
     resources = {
         "limits": {settings["gpu_resource"]: str(settings["gpus"]), settings["rdma_resource"]: "1"}
     }
-    security = (
-        {"securityContext": {"seccompProfile": {"type": "Unconfined"}}}
-        if settings["seccomp_unconfined"]
-        else {}
-    )
+    security = {
+        "securityContext": {
+            # Docker lifts the engine's locked-memory limit; RDMA memory registration needs it.
+            "capabilities": {"add": ["IPC_LOCK"]},
+            **(
+                {"seccompProfile": {"type": "Unconfined"}} if settings["seccomp_unconfined"] else {}
+            ),
+        }
+    }
     hooks_map, steps_map = maps
     return {
         "hostNetwork": True,
@@ -306,7 +342,7 @@ def write_manifests(run: Path, plan: dict, probe: list[str]) -> None:
     """Write kubernetes.json from a prepared launch directory."""
     plan_sha256 = digest(run / "launch.json")
     hooks = {path.name: path.read_text() for path in sorted((run / "hook").iterdir())}
-    steps = {name: path.read_text() for name, path in sorted(POD_FILES.items())}
+    steps = {name: path.read_text() for name, path in sorted(pod_files(plan).items())}
     pinned = delivered_files(plan, plan_sha256)
     for root, data in ((HOOK_MOUNT, hooks), (str(pod.TOOLS), steps)):
         observed = {name: hashlib.sha256(text.encode()).hexdigest() for name, text in data.items()}
@@ -335,17 +371,27 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
 
     `evidence` holds the records of one pod, as its directory on the state volume holds them.
     A failed init container runs again in the same pod and replaces its record, so the check
-    keeps each record it reads under pods/<pod UID>/, named by its SHA-256.
+    keeps each record of this plan it reads under pods/<pod UID>/, named by its SHA-256. The
+    check reads records, not the pod: it accepts the records of a pod that ran this plan and
+    has since stopped.
     """
     if (run / "checked.json").exists():
         require_checked(run, plan)
     names = (pod.CHECKPOINT_RECORD, pod.RUNTIME_RECORD)
     read = {name: read_record(evidence / name) for name in names}
     records = {name: record for name, (_, record) in read.items()}
-    pods = {record.get("pod_uid") for record in records.values()}
-    uid = next(iter(pods))
-    if len(pods) != 1 or not isinstance(uid, str) or not re.fullmatch(UID, uid):
+    plan_sha256 = digest(run / "launch.json")
+    uids = set()
+    for name, record in records.items():
+        uid = record.get("pod_uid")
+        if not isinstance(uid, str) or not re.fullmatch(UID, uid):
+            raise ValueError(f"{evidence / name} names no pod UID")
+        if record.get("plan_sha256") != plan_sha256:
+            raise ValueError(f"the engine pod ran another launch plan; inspect {evidence / name}")
+        uids.add(uid)
+    if len(uids) != 1:
         raise ValueError(f"the records in {evidence} come from more than one pod")
+    [uid] = uids
     directory = run / POD_RECORDS / uid
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     kept = {}
@@ -353,12 +399,9 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
         stem = name.removesuffix(".json")
         kept[name] = directory / f"{stem}-{hashlib.sha256(text.encode()).hexdigest()[:16]}.json"
         write_once(kept[name], text, f"{kept[name]} differs from its own digest")
-    plan_sha256 = digest(run / "launch.json")
     files = delivered_files(plan, plan_sha256)
     for name, record in records.items():
         where = f"inspect {kept[name]}"
-        if record.get("plan_sha256") != plan_sha256:
-            raise ValueError(f"the engine pod ran another launch plan; {where}")
         if record.get("files") != files:
             raise ValueError(f"the engine pod's delivered files differ from the plan; {where}")
         if "error" in record:
@@ -387,15 +430,24 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
         or device["ucx_net_devices"] != f"{device['hca']}:{device['port']}"
     ):
         raise ValueError(f"the runtime record names no allocated HCA; inspect {run / log}")
+    if device["port"] != plan["kubernetes"]["hca_port"]:
+        raise ValueError(
+            f"the runtime record's HCA port differs from the plan; inspect {run / log}"
+        )
     context = check_context(
         run, plan, str(log), read_env(run / "container.env"), model_metadata=False
     )
+    judged = judge(context, runtime["stdout"])
+    if runtime.get("verdict") != judged:
+        raise ValueError(
+            f"the engine pod's verdict differs from this check of its output; inspect {run / log}"
+        )
     identity = {
         "backend": "kubernetes",
-        # The kubelet pulls the image by this digest and reports it as the container's image ID.
-        "image_id": "sha256:" + plan["image"].rsplit("@sha256:", 1)[1],
+        # The image the pod specification names; the check does not observe the running image.
+        "planned_image": plan["image"],
         "pod_uid": uid,
         "node": node,
         "transfer_device": device,
     }
-    finish_check(context, runtime["stdout"], identity)
+    finish_check(context, judged, identity)

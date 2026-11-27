@@ -621,15 +621,18 @@ class BackendFlows(Launched, unittest.TestCase):
         self.assertIn(self.launcher.check_summary, printed.getvalue())
         checked = read_checked(run)
         self.assertEqual(
-            {name: checked[name] for name in ("backend", "image_id", "pod_uid", "node")},
+            {name: checked[name] for name in ("backend", "planned_image", "pod_uid", "node")},
             {
                 "backend": "kubernetes",
-                "image_id": "sha256:" + "e" * 64,
+                "planned_image": plan["image"],
                 "pod_uid": POD_UID,
                 "node": NODE,
             },
         )
         self.assertEqual(checked["transfer_device"]["ucx_net_devices"], "hca0:1")
+        # The runtime-check init container gave the verdict this check recorded.
+        verdict = json.loads((engine.state / "runtime-check.json").read_text())["verdict"]
+        self.assertEqual({name: checked[name] for name in verdict["evidence"]}, verdict["evidence"])
         kept = sorted((run / "pods" / POD_UID).iterdir())
         self.assertEqual(
             [path.read_text() for path in kept],

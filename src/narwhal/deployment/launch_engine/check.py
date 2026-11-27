@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import stages
@@ -23,6 +23,7 @@ from .plan import (
     requires_remote_code,
 )
 from .runtime import digest, write_once
+from .verdict import verdict
 
 CONTAINER_LAUNCHER = f"{HOOK_MOUNT}/launch_engine.py"
 
@@ -47,17 +48,6 @@ class CheckContext:
 
     def failure(self, message: str) -> ValueError:
         return ValueError(f"{message}; inspect {self.run / self.log}")
-
-
-@dataclass(frozen=True)
-class ProbeResult:
-    version: object
-    prefix_caching: object
-    kv_events: object
-    # Engine-specific evidence, recorded after the shared fields.
-    fields: dict = field(default_factory=dict)
-    # Lines printed between the summary and the cache line.
-    notes: tuple[str, ...] = ()
 
 
 def check_context(
@@ -125,39 +115,33 @@ def check(run: Path, plan: dict) -> None:
             log,
         )
         identity = {"image_id": inspection["Id"]}
-    finish_check(context, output, identity)
+    finish_check(context, judge(context, output), identity)
 
 
-def finish_check(context: CheckContext, output: str, identity: dict) -> None:
-    """Check the probe output against the plan, and write checked.json with its identity.
+def judge(context: CheckContext, output: str) -> dict:
+    """Return the verdict on the probe output, the evidence and notes of a passing probe."""
+    try:
+        return verdict(
+            plan_launcher(context.plan).probe_reader, context.plan, context.environment, output
+        )
+    except ValueError as error:
+        raise context.failure(str(error)) from None
 
-    `identity` holds the fields that name what ran the probe, recorded after the probe's.
+
+def finish_check(context: CheckContext, judged: dict, identity: dict) -> None:
+    """Write checked.json from a passing verdict and the identity of what ran the probe.
+
+    The identity fields follow the probe's evidence.
     """
     run, plan = context.run, context.plan
     engine = plan_launcher(plan)
-    result = engine.probe_result(context, output)
-    if not isinstance(result.version, str) or not result.version.strip():
-        raise context.failure(f"runtime check returned an invalid {engine.version_label} version")
-    if type(result.prefix_caching) is not bool:
-        raise context.failure("runtime check requires one resolved cache setting")
-    planned = plan.get("kv_events")
-    expected = (
-        None if planned is None else {key: planned[key] for key in ("endpoint", "replay_endpoint")}
-    )
-    if result.kv_events != expected:
-        raise context.failure("runtime cache-event endpoints differ from the launch plan")
-    evidence = {
-        "engine_version": result.version,
-        "prefix_caching": result.prefix_caching,
-        "kv_events": result.kv_events,
-        **result.fields,
-    }
-    write_checked(run, evidence, identity)
+    write_checked(run, judged["evidence"], identity)
     print(engine.check_summary)
-    for note in result.notes:
+    for note in judged["notes"]:
         print(note)
     cache = engine.prefix_cache_name
-    if not result.prefix_caching:
+    planned = plan.get("kv_events")
+    if not judged["evidence"]["prefix_caching"]:
         print(f"{cache} is off; the engine publishes no cache events.")
     elif planned is None:
         print(f"{cache} is on; cache-event publication is disabled.")

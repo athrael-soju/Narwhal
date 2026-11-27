@@ -110,12 +110,13 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
 
 
 def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> None:
+    """Show each CUDA IPC engine the GPUs of the CUDA IPC engines on its host, after its own."""
     for roles in hosts:
         cuda = [
             role
             for role in roles
             if role in launches
-            and launches[role]["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES"
+            and launches[role]["transfer"]["gpu_tls"] == "cuda"
             and "shared_device" not in launches[role]
         ]
         for role in cuda:

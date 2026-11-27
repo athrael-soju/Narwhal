@@ -6,6 +6,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,6 +38,10 @@ SECRET_VALUE = "engine-only-secret"
 EXPANSION = re.compile(r"\$\$|\$\(([A-Za-z_][A-Za-z0-9_]*)\)")
 
 
+# The kubelet's name for the snapshot of a ConfigMap volume's data.
+SNAPSHOT = "..2026_01_01_00_00_00.000000001"
+
+
 class Executed(Exception):
     """The engine container's step replaced its process with the engine."""
 
@@ -57,8 +63,12 @@ def expand(value: str, defined: dict[str, str]) -> str:
 class EnginePod:
     """An engine pod's mounts under `root`, filled from a launch's kubernetes.json.
 
+    Each ConfigMap volume takes the kubelet's layout: the files lie in a snapshot directory,
+    `..data` links to it, and each file name links through `..data`.
+
     `run` runs one container's pod step in this process, as the bootstrap would after its
-    digest check, with the container's environment and an HCA from `allocate`.
+    digest check, with the container's environment and an HCA from `allocate`. `execute` runs
+    the container's command, bootstrap included, in a process of its own.
     """
 
     def __init__(self, root: Path, run: Path, *, hcas: tuple[str, ...] = ("hca0",)) -> None:
@@ -76,9 +86,11 @@ class EnginePod:
         for volume in spec["volumes"]:
             if "configMap" in volume:
                 target = self.path(mounts[volume["name"]])
-                target.mkdir(parents=True)
+                (target / SNAPSHOT).mkdir(parents=True)
+                (target / "..data").symlink_to(SNAPSHOT)
                 for name, text in data[volume["configMap"]["name"]].items():
-                    (target / name).write_text(text)
+                    (target / SNAPSHOT / name).write_text(text)
+                    (target / name).symlink_to(Path("..data") / name)
         plan = json.loads((run / "launch.json").read_text())
         shutil.copytree(plan["model_dir"], self.path(pod.MODEL), symlinks=True)
         self.state.mkdir(parents=True)
@@ -124,8 +136,8 @@ class EnginePod:
     def run(self, name: str, *, probe: list[str] | None = None) -> int:
         """Run a container's step; `probe` stands in for the runtime probe's arguments."""
         command = self.command(name)
-        assert command[:3] == ["python3", "-I", "-c"], command[:3]
-        arguments = command[5:]
+        assert command[:4] == ["python3", "-I", "-B", "-c"], command[:4]
+        arguments = command[6:]
         if probe is not None:
             arguments = [*arguments[:2], *probe]
 
@@ -136,6 +148,7 @@ class EnginePod:
         self.stderr = io.StringIO()
         with (
             patch.object(pod, "ROOT", self.root),
+            patch.object(sys, "dont_write_bytecode", True),
             patch.dict(os.environ, self.environment(name), clear=True),
             patch("os.execv", side_effect=execv),
             contextlib.redirect_stdout(io.StringIO()),
@@ -145,6 +158,29 @@ class EnginePod:
                 return pod.main(arguments)
             except Executed:
                 return 0
+
+    def execute(self, name: str, *, probe: list[str] | None = None) -> subprocess.CompletedProcess:
+        """Run a container's command in a process of its own, with the pod's mounts under root.
+
+        The bootstrap's pins and its path to pod.py move under root; pod.py places the pod's
+        other paths beside its own directory. `probe` stands in for the probe's arguments.
+        """
+        command = self.command(name)
+        assert command[:4] == ["python3", "-I", "-B", "-c"], command[:4]
+        bootstrap, pins, step, *arguments = command[4:]
+        tools = str(pod.TOOLS / "pod.py")
+        assert repr(tools) in bootstrap
+        bootstrap = bootstrap.replace(repr(tools), repr(str(self.path(tools))))
+        pins = json.dumps({str(self.path(root)): files for root, files in json.loads(pins).items()})
+        if probe is not None:
+            arguments = [*arguments[:1], *probe]
+        return subprocess.run(
+            [sys.executable, *command[1:4], bootstrap, pins, step, *arguments],
+            env=self.environment(name),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
     def start(self, probe_output: str) -> None:
         """Run both init containers and the engine container, each of which must pass."""

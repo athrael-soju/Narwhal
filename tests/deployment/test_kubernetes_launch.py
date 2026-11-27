@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from narwhal.backends import load as load_backend
 from narwhal.deployment.engine_launch import selected_launch
@@ -22,6 +23,7 @@ from tests.deployment.fixtures import launch_document, launcher_inputs
 from tests.deployment.pod_fixtures import (
     POD_IP,
     RDMA_TRANSFER,
+    SNAPSHOT,
     EnginePod,
     kubernetes_env,
     printing,
@@ -180,6 +182,116 @@ class KubernetesLaunchTests(unittest.TestCase):
         self.assertEqual((refused.returncode, refused.stdout), (1, ""))
         self.assertIn("launch.json differs from its pinned SHA-256", refused.stderr)
 
+    def test_the_rendered_commands_run_from_kubelet_config_map_volumes(self):
+        run, plan = self.prepared()
+        engine = self.pod(run)
+        tools = engine.path(pod.TOOLS)
+        delivered = sorted(path.name for path in tools.iterdir())
+        self.assertEqual(
+            delivered,
+            sorted(
+                ["..data", SNAPSHOT, "checkpoint.py", "pod.py", "probe_reader.py", "verdict.py"]
+            ),
+        )
+        checkpoint = engine.execute("checkpoint")
+        self.assertEqual(checkpoint.returncode, 0, checkpoint.stderr)
+        record = json.loads((engine.state / pod.CHECKPOINT_RECORD).read_text())
+        self.assertEqual(record["model_tree_sha256"], plan["model_tree_sha256"])
+        self.assertEqual(record["files"], kubernetes.delivered_files(plan, plan_digest(run)))
+        output = self.fixtures.check_output(plan)
+        runtime = engine.execute("runtime-check", probe=printing(output))
+        self.assertEqual(runtime.returncode, 0, runtime.stderr)
+        record = json.loads((engine.state / pod.RUNTIME_RECORD).read_text())
+        self.assertEqual(record["transfer_device"]["ucx_net_devices"], "hca0:1")
+        self.assertIn("evidence", record["verdict"])
+        # The engine step replaces itself with the planned engine command, which finds no engine
+        # outside the image.
+        served = engine.execute("engine")
+        self.assertEqual(served.returncode, 1)
+        self.assertEqual(plan["args"][0], "-m")
+        self.assertIn(f"module specification for {plan['args'][1]!r}", served.stderr)
+        self.assertEqual(sorted(path.name for path in tools.iterdir()), delivered)
+        self.check(run, plan, engine)
+        self.assertEqual(read_checked(run)["transfer_device"], record["transfer_device"])
+        (tools / SNAPSHOT / "verdict.py").write_text("def verdict(*arguments): return {}\n")
+        refused = engine.execute("engine")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("verdict.py differs from its pinned SHA-256", refused.stderr)
+
+    def test_the_runtime_and_engine_containers_may_lock_memory(self):
+        run, plan = self.prepared()
+        engine = self.pod(run)
+        locked = {"capabilities": {"add": ["IPC_LOCK"]}}
+        self.assertNotIn("securityContext", engine.containers["checkpoint"])
+        for name in ("runtime-check", "engine"):
+            self.assertEqual(engine.containers[name]["securityContext"], locked)
+        # A ROCm engine also runs without a seccomp filter, as its Docker launch does.
+        record = {**launch_record(self.fixtures.launch_runtime, None, dict(RDMA_TRANSFER))}
+        rocm = {**record, "gpu_visibility_env": "ROCR_VISIBLE_DEVICES"}
+        env = kubernetes_env(launcher_inputs(self.root)[1])
+        self.assertTrue(kubernetes.pod_settings(env, rocm, plan)["seccomp_unconfined"])
+        self.assertFalse(kubernetes.pod_settings(env, record, plan)["seccomp_unconfined"])
+        plan["kubernetes"]["seccomp_unconfined"] = True
+        manifests = json.loads((run / kubernetes.MANIFESTS).read_text())
+        maps = tuple(item["metadata"]["name"] for item in manifests["configMaps"])
+        spec = kubernetes.pod_spec(run, plan, [], maps)
+        for container in (spec["initContainers"][1], spec["containers"][0]):
+            self.assertEqual(
+                container["securityContext"],
+                {**locked, "seccompProfile": {"type": "Unconfined"}},
+            )
+
+    def test_the_pod_uses_its_allocated_hca_at_the_planned_port(self):
+        run, plan = self.prepared()
+        env = kubernetes_env(launcher_inputs(self.root)[1])
+        for net, port in (("hca0:2", 2), ("hca0:1,hca1:1", None), ("hca0:0", None)):
+            with self.subTest(net=net):
+                transfer = {**RDMA_TRANSFER, "net_devices": net}
+                record = launch_record(self.fixtures.launch_runtime, None, transfer)
+                if port is None:
+                    with self.assertRaisesRegex(ValueError, "names one HCA and its port"):
+                        kubernetes.pod_settings(env, record, plan)
+                else:
+                    self.assertEqual(kubernetes.pod_settings(env, record, plan)["hca_port"], port)
+        engine = self.pod(run, hcas=("mlx5_3",))
+        with patch.object(pod, "ROOT", engine.root):
+            device = pod.transfer_device({"kubernetes": {"hca_port": 2}})
+        self.assertEqual(
+            device,
+            {"verbs_device": "uverbs0", "hca": "mlx5_3", "port": 2, "ucx_net_devices": "mlx5_3:2"},
+        )
+
+    def test_the_runtime_check_judges_the_probe_output_in_the_pod(self):
+        run, plan = self.prepared()
+        engine = self.pod(run)
+        self.assertEqual(engine.run("checkpoint"), 0)
+        output = self.fixtures.check_output(plan)
+        failing = output.replace("NARWHAL_TOKENIZER_READY=1\n", "")
+        self.assertNotEqual(failing, output)
+        self.assertEqual(engine.run("runtime-check", probe=printing(failing)), 1)
+        self.assertIn("one tokenizer confirmation", engine.stderr.getvalue())
+        record = json.loads((engine.state / pod.RUNTIME_RECORD).read_text())
+        self.assertEqual((record["returncode"], "verdict" in record), (0, False))
+        self.assertEqual(engine.run("engine"), 1)
+        self.assertIn("records a failure", engine.stderr.getvalue())
+        with self.assertRaisesRegex(ValueError, "runtime-check: .*one tokenizer confirmation"):
+            self.check(run, plan, engine)
+        self.assertEqual(engine.run("runtime-check", probe=printing(output)), 0)
+        record = json.loads((engine.state / pod.RUNTIME_RECORD).read_text())
+        changed = copy.deepcopy(record)
+        changed["verdict"]["evidence"]["prefix_caching"] = False
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(changed))
+        with self.assertRaisesRegex(ValueError, "pod's verdict differs from this check"):
+            self.check(run, plan, engine)
+        del changed["verdict"]
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(changed))
+        self.assertEqual(engine.run("engine"), 1)
+        self.assertIn("the runtime check did not pass", engine.stderr.getvalue())
+        self.assertEqual(engine.executed, [])
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(record))
+        self.assertEqual(engine.run("engine"), 0)
+        self.check(run, plan, engine)
+
     def test_the_check_records_the_pod_and_its_allocated_hca(self):
         run, plan, engine = self.started()
         printed = self.check(run, plan, engine)
@@ -248,7 +360,7 @@ class KubernetesLaunchTests(unittest.TestCase):
             ValueError, "^engine pod runtime check exited 3: boom; inspect"
         ):
             self.check(run, plan, engine)
-        engine.containers["runtime-check"]["command"][6] = "0.2"
+        engine.containers["runtime-check"]["command"][7] = "0.2"
         stalled = ["-c", "import time; time.sleep(30)"]
         self.assertEqual(engine.run("runtime-check", probe=stalled), 1)
         with self.assertRaisesRegex(ValueError, "exceeded 0.2 seconds"):
@@ -259,6 +371,8 @@ class KubernetesLaunchTests(unittest.TestCase):
         other, other_plan = self.prepared("other")
         with self.assertRaisesRegex(ValueError, "^the engine pod ran another launch plan"):
             self.check(other, other_plan, engine)
+        # The check keeps no record of another plan.
+        self.assertFalse((other / "pods").exists())
         record = json.loads((engine.state / pod.RUNTIME_RECORD).read_text())
         record["files"][str(pod.TOOLS)]["pod.py"] = "0" * 64
         (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(record))
@@ -267,6 +381,16 @@ class KubernetesLaunchTests(unittest.TestCase):
         record["pod_uid"] = "00000000-0000-4000-8000-000000000000"
         (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(record))
         with self.assertRaisesRegex(ValueError, "come from more than one pod"):
+            self.check(run, plan, engine)
+        for uid in (None, 7, ["uid"], "not-a-uid"):
+            with self.subTest(uid=uid):
+                record["pod_uid"] = uid
+                (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(record))
+                with self.assertRaisesRegex(ValueError, "runtime-check.json names no pod UID"):
+                    self.check(run, plan, engine)
+        del record["pod_uid"]
+        (engine.state / pod.RUNTIME_RECORD).write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, "runtime-check.json names no pod UID"):
             self.check(run, plan, engine)
         self.assertFalse((run / "checked.json").exists())
 
@@ -330,6 +454,22 @@ class RdmaTransportTests(unittest.TestCase):
             selected["runtime"]["environment"] = {"UCX_SHM_DEVICES": "posix"}
             with self.assertRaisesRegex(ValueError, "UCX_SHM_DEVICES"):
                 build(selected, env, Path(folder) / "managed")
+
+    def test_rocm_rdma_plans_take_the_rocm_copy_transport(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            document = launch_document()
+            entry = document["engines"]["engine-1"]
+            entry["transfer"] = dict(RDMA_TRANSFER)
+            selected = selected_launch(document, "engine-1", {})
+            self.assertEqual(selected["transfer"]["gpu_tls"], "rocm_copy")
+            selected["runtime"] = record["runtime"]
+            plan, values = build(selected, env, Path(folder) / "launch")
+            self.assertEqual(plan["ucx_tls"], "rc,sm,self,rocm_copy")
+            self.assertEqual(values["UCX_SHM_DEVICES"], "none")
+            entry["transfer"]["gpu_tls"] = "rocm"
+            with self.assertRaisesRegex(ValueError, "gpu_tls is incompatible.*use rocm_copy"):
+                selected_launch(document, "engine-1", {})
 
     def test_tcp_plans_keep_shared_memory(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -38,8 +38,6 @@ POD_ADDRESS = f"$({POD_ADDRESS_ENV})"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
 MAX_SOCKET_PATH_BYTES = 107
-# First UCX release that unmaps CUDA IPC rkeys when the transfer library removes a remote agent.
-UCX_PEER_RELEASE = (1, 22)
 SECRET_WORDS = ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH")
 MAX_DISCOVERED_CONTEXT = 16384
 # Files the launch itself writes into the hook directory.
@@ -137,18 +135,17 @@ def discovered_launch_settings(setting: Callable[[str, str], str]) -> dict:
 
 
 def gpu_transport(role: str, transfer: Mapping, visibility: str) -> str:
-    """Return the UCX GPU transport of a launch record, `cuda` or `rocm` when it names none.
+    """Return the UCX GPU transport of a launch record, or its default when it names none.
 
-    On CUDA, `ucx_rdma` takes `cuda_copy`: without CUDA IPC, and with the shared-memory devices
-    off, engines on one host move KV over their HCAs.
+    `ucx_rdma` takes the GPU runtime's copy transport, `cuda_copy` or `rocm_copy`: without GPU
+    IPC, and with the shared-memory devices off, engines on one host move KV over their HCAs.
     """
+    rocm = visibility == "ROCR_VISIBLE_DEVICES"
     allowed: tuple[str, ...]
-    if visibility == "ROCR_VISIBLE_DEVICES":
-        allowed = ("rocm",)
-    elif transfer.get("transport") == "ucx_rdma":
-        allowed = ("cuda_copy",)
+    if transfer.get("transport") == "ucx_rdma":
+        allowed = ("rocm_copy",) if rocm else ("cuda_copy",)
     else:
-        allowed = ("cuda", "cuda_copy")
+        allowed = ("rocm",) if rocm else ("cuda", "cuda_copy")
     value = transfer.get("gpu_tls", allowed[0])
     if value not in allowed:
         raise ValueError(
@@ -160,14 +157,6 @@ def gpu_transport(role: str, transfer: Mapping, visibility: str) -> str:
 
 def ipc_cache_off(ipc_cache: str | None) -> bool:
     return ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
-
-
-def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
-    try:
-        version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
-    except ValueError:
-        return False
-    return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
 
 
 def publishes_kv_events(engine: EngineLauncher, runtime: dict) -> bool:
@@ -427,6 +416,11 @@ def build(
         socket_dir,
         KV_EVENTS_MOUNT if in_image else str(socket_dir),
     )
+    # CUDA IPC peers keep this engine's KV memory mapped until the engine evicts it.
+    ipc_peers = gpu_tls == "cuda" and (
+        record.get("shared_device") is not None
+        or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
+    )
     common = []
     if backend == "container":
         common = [
@@ -453,16 +447,10 @@ def build(
             common.extend(["--gpus", "all"])
             # UCX CUDA IPC reaches a colocated engine only from the same PID namespace, and tells
             # peers apart by host PID. In separate namespaces, UCX 1.23 sends KV over TCP.
-            visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
-            if len(visible) > len(record["gpu_ids"]) or record.get("shared_device") is not None:
+            if ipc_peers:
                 common.extend(["--pid", "host"])
         else:
             common.extend(["--security-opt", "seccomp=unconfined"])
-    # CUDA IPC peers keep this engine's KV memory mapped until the engine evicts it.
-    ipc_peers = gpu_tls == "cuda" and (
-        record.get("shared_device") is not None
-        or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
-    )
     # With the UCX IPC cache off, eviction releases a stopped peer's memory.
     evict_peers = ipc_peers and ipc_cache_off(values.get("UCX_CUDA_IPC_CACHE"))
     args, connector = engine.serve(
@@ -585,7 +573,7 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         # The engine pod serves its own copy of the model, which an init container hashes.
         from . import kubernetes
 
-        plan["kubernetes"] = kubernetes.pod_settings(env, record)
+        plan["kubernetes"] = kubernetes.pod_settings(env, record, plan)
         probe = kubernetes.runtime_probe(output.resolve(), plan, values)
     else:
         # Later stages compare file status instead of reading the model files again.

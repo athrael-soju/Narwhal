@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
 
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import (
@@ -12,8 +14,8 @@ from ...deployment.launch_engine.backend import (
     LiveModelDimensions,
     ModelFormats,
 )
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, captures, dev, discovery
+from ...deployment.launch_engine.check import CheckContext
+from . import attestation, captures, dev, discovery, probe_reader
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import LAUNCHER
@@ -40,7 +42,7 @@ class VllmLauncher(
     prefix_cache_name = "Prefix caching"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     fleet_settings = discovery.FLEET_SETTINGS
-    version_label = "API"
+    probe_reader: ClassVar[ModuleType] = probe_reader
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -104,9 +106,6 @@ class VllmLauncher(
 
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
-
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        return runtime_check.result(context, output)
 
     def measure_cache(self, run: Path, plan: dict) -> None:
         captures.measure_cache(run, plan)
