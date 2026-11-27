@@ -47,6 +47,7 @@ class StageGraphTests(unittest.TestCase):
             [
                 "engine-probe",
                 "cache-capture",
+                "transfer-measure",
                 "attest-capture",
                 "sidecar-start",
                 "sidecar-verify",
@@ -70,6 +71,15 @@ class StageGraphTests(unittest.TestCase):
         self.assertIn("vLLM", labels)
         self.assertIn("TensorRT-LLM", labels)
         self.assertNotIn("SGLang", labels)
+
+    def test_measured_handoffs_rerun_what_a_captured_layout_reruns(self):
+        spec = DEPLOY_GRAPH.stages["transfer-measure"]
+        self.assertEqual(spec.capability, "transfer_measurement")
+        self.assertEqual(spec.produces, ("handoff_geometry",))
+        self.assertEqual(
+            DEPLOY_GRAPH.reruns("handoff_geometry"), DEPLOY_GRAPH.reruns("cache_geometry")
+        )
+        self.assertIn("transfer-measure", DEPLOY_GRAPH.stages["cache-groups"].after)
 
     def test_onward_rules_expand_to_every_later_stage(self):
         reruns = [rerun.stage for rerun in DEPLOY_GRAPH.reruns("discovery")]

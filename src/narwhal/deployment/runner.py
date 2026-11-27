@@ -318,11 +318,15 @@ class _Run:
         self.decisions: list[Decision] = []
         self.scopes: dict[str, tuple[str, ...]] = {}
         self.stage_instances: dict[str, tuple[str, ...]] = {}
+        # Stage instances that passed in this run, with this run's inputs.
+        self.passed: set[str] = set()
         self.record: dict[str, Any] = {}
+        self.opened = False
 
     def execute(self) -> RunResult:
-        stale = self._open()
+        stale = None
         try:
+            stale = self._open()
             self._recover(stale)
             for name in self.order:
                 self._sweep(self.graph.stages[name])
@@ -332,9 +336,11 @@ class _Run:
                 error.add_note(f"this run found a stale lock of {run_record.describe(stale)}")
             raise
         finally:
-            with _held():
-                self.record.update(lock=None, updated_at=time.time())
-                run_record.write(self.directory, self.record)
+            # Once the record names this runner, every way out clears it again.
+            if self.opened:
+                with _held():
+                    self.record.update(lock=None, updated_at=time.time())
+                    run_record.write(self.directory, self.record)
         return RunResult(self.record["run_id"], tuple(self.decisions), stale)
 
     def _open(self) -> dict[str, Any] | None:
@@ -381,6 +387,7 @@ class _Run:
         self.record = record
         with _held():
             run_record.write(self.directory, record)
+            self.opened = True
         return stale
 
     def _recover(self, stale: Mapping[str, Any] | None) -> None:
@@ -453,14 +460,12 @@ class _Run:
         instances = self._stage_instances(spec)
         for instance in instances:
             self._stage(spec, instance, first=True)
-        if not self._reruns_itself(spec):
-            return
-        # A product that reruns the other instances of its own stage marks them invalidated
-        # when it changes; they rerun here, until no instance's product changes.
-        for _ in instances:
-            if not [instance for instance in instances if self._stage(spec, instance)]:
-                return
-        raise ValueError(f"the products of {spec.name} still change after every instance reran")
+        if self._reruns_itself(spec):
+            # A changed product of this stage invalidated the instances that had not passed in
+            # this run, some of them before the change; they rerun once here. Every instance
+            # has then passed in this run, so no later change can invalidate one again.
+            for instance in instances:
+                self._stage(spec, instance)
 
     def _reruns_itself(self, spec: Stage) -> bool:
         return any(
@@ -544,8 +549,15 @@ class _Run:
             ) == canonical_digest(self.values[fact_key]):
                 continue
             for other in self._stage_instances(spec):
-                entry = self.record["stages"].get(key(spec.name, other))
-                if other != instance and entry is not None and entry["status"] == PASSED:
+                name = key(spec.name, other)
+                entry = self.record["stages"].get(name)
+                # An instance that passed in this run already holds this run's result.
+                if (
+                    other != instance
+                    and name not in self.passed
+                    and entry is not None
+                    and entry["status"] == PASSED
+                ):
                     entry.update(status=INVALIDATED, invalidation=f"{fact_key} changed")
 
     def _digests(self, spec: Stage, instance: str) -> dict[str, str]:
@@ -666,6 +678,7 @@ class _Run:
             if previous is not None:
                 self._invalidate_others(spec, instance, previous)
             run_record.write(self.directory, self.record)
+        self.passed.add(name)
 
     def _execute(self, action: Action, context: StageContext, entry: dict) -> Outcome | None:
         if not isinstance(action, Command):

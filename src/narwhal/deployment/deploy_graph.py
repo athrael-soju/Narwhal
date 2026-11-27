@@ -15,8 +15,16 @@ GROUP = "G"
 EDGE = "X"
 ROUTER = "R"
 
-# Engines whose backend captures the live cache layout through its launcher.
+# Engine capabilities, each named as the `launch_engine.backend` function that finds it on a
+# backend's launcher: engines that capture the live cache layout, and engines whose KV
+# handoffs are measured instead.
 CACHE_CAPTURE = "cache_capture"
+TRANSFER_MEASUREMENT = "transfer_measurement"
+# What each capability means where no installed backend names it.
+CAPABILITIES = {
+    CACHE_CAPTURE: "backends that capture the live cache layout",
+    TRANSFER_MEASUREMENT: "backends whose KV handoffs are measured",
+}
 
 _DISCOVER = "deploy/01-Discover.md"
 _INSTALL = "deploy/02-Install.md"
@@ -83,13 +91,24 @@ STAGES = (
         ("cache_geometry",),
         capability=CACHE_CAPTURE,
     ),
-    # Groups follow the captured layouts, so a group whose engines differ in geometry splits.
+    # An engine without a captured layout sizes its budget from measured handoffs.
+    _stage(
+        "transfer-measure",
+        ENGINE,
+        _FABRIC,
+        "Building the source budget",
+        ("engine-probe",),
+        ("handoff_geometry",),
+        capability=TRANSFER_MEASUREMENT,
+    ),
+    # Groups follow the captured layouts and measured handoffs, so a group whose engines differ
+    # in geometry splits.
     _stage(
         "cache-groups",
         WORKSTATION,
         _ENGINES,
         "Deriving cache-equivalence groups",
-        ("discover", "cache-capture"),
+        ("discover", "cache-capture", "transfer-measure"),
     ),
     _stage("fabric-budget", GROUP, _FABRIC, "Building the source budget", ("cache-groups",)),
     _stage(
@@ -171,6 +190,12 @@ def _onward(name: str) -> Rerun:
 
 
 _SERVING = ("preflight", "router-start", "trial")
+# A changed cache geometry, captured or measured, re-derives the groups and the fabric budget.
+_GEOMETRY_RERUNS = (
+    Rerun("cache-groups"),
+    Rerun("fabric-budget", via="group"),
+    Rerun("fabric-edge", via="group_edges"),
+)
 
 FACTS = (
     Fact(
@@ -286,6 +311,7 @@ FACTS = (
         _reruns(
             "engine-probe",
             "cache-capture",
+            "transfer-measure",
             "attest-capture",
             "sidecar-start",
             "sidecar-verify",
@@ -299,11 +325,15 @@ FACTS = (
         ENGINE,
         "Engine cache geometry",
         "The SHA-256 of `cache-layout.json`",
-        (
-            Rerun("cache-groups"),
-            Rerun("fabric-budget", via="group"),
-            Rerun("fabric-edge", via="group_edges"),
-        ),
+        _GEOMETRY_RERUNS,
+    ),
+    Fact(
+        "handoff_geometry",
+        PRODUCT,
+        ENGINE,
+        "Measured KV handoff size of an engine",
+        "The SHA-256 of the engine's `transfer.json` handoff measurement",
+        _GEOMETRY_RERUNS,
     ),
     Fact(
         "link",

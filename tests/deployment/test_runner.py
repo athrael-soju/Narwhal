@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,8 +44,8 @@ TOPOLOGY = StaticTopology(
         "group": {"engine-1": ("group-1",), "engine-2": ("group-2",)},
         "group_edges": {"engine-1": ("node-1-to-node-2",), "engine-2": ("node-2-to-node-1",)},
     },
-    # Only engine-1's backend captures a cache layout.
-    capabilities={"cache_capture": ("engine-1",)},
+    # engine-1's backend captures a cache layout; engine-2's handoffs are measured.
+    capabilities={"cache_capture": ("engine-1",), "transfer_measurement": ("engine-2",)},
 )
 
 ORDER = (
@@ -58,6 +59,7 @@ ORDER = (
     "engine-start",
     "engine-probe",
     "cache-capture",
+    "transfer-measure",
     "cache-groups",
     "fabric-budget",
     "fabric-edge",
@@ -98,6 +100,7 @@ ROWS = {
         "same": (
             "engine-probe",
             "cache-capture",
+            "transfer-measure",
             "attest-capture",
             "sidecar-start",
             "sidecar-verify",
@@ -105,6 +108,11 @@ ROWS = {
         "all": ("finalize-fleet", "preflight"),
     },
     "cache_geometry": {
+        "all": ("cache-groups",),
+        "group": ("fabric-budget",),
+        "group_edges": ("fabric-edge",),
+    },
+    "handoff_geometry": {
         "all": ("cache-groups",),
         "group": ("fabric-budget",),
         "group_edges": ("fabric-edge",),
@@ -164,6 +172,11 @@ def expected(fact, instance=""):
 
 def ran(result):
     return {decision.key for decision in result.decisions if decision.ran}
+
+
+def runs(result):
+    """How many times each stage instance ran."""
+    return Counter(decision.key for decision in result.decisions if decision.ran)
 
 
 class Fleet:
@@ -294,15 +307,16 @@ class RunnerTests(unittest.TestCase):
         self.baseline()
         for fact in facts(PRODUCT):
             producer = DEPLOY_GRAPH.producer(fact)
-            with self.subTest(fact=fact):
+            engine = instances(producer)[0]
+            with self.subTest(fact=fact, engine=engine):
                 # An engine restart reruns the producer, which then reports a changed value.
-                restart = expected("engine_identity", "engine-1")
-                self.assertIn(key(producer, "engine-1"), restart)
-                self.fleet.live[("engine_identity", "engine-1")] = {"restarted": fact}
-                self.fleet.products[(fact, "engine-1")] = {"generation": fact}
-                self.assertEqual(
-                    ran(self.fleet.run(self.directory)), restart | expected(fact, "engine-1")
-                )
+                restart = expected("engine_identity", engine)
+                self.assertIn(key(producer, engine), restart)
+                self.fleet.live[("engine_identity", engine)] = {"restarted": fact}
+                self.fleet.products[(fact, engine)] = {"generation": fact}
+                result = self.fleet.run(self.directory)
+                self.assertEqual(ran(result), restart | expected(fact, engine))
+                self.assertEqual(max(runs(result).values()), 1)
                 self.assertEqual(ran(self.fleet.run(self.directory)), set())
 
     def test_a_later_engines_contract_change_reattests_the_engines_before_it(self):
@@ -317,6 +331,18 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("attest-capture[engine-1]", ran(result))
         decision = [d for d in result.decisions if d.key == "attest-capture[engine-1]"][-1]
         self.assertEqual(decision.reasons, ("engine_contract[engine-2] changed",))
+        self.assertEqual(ran(self.fleet.run(self.directory)), set())
+
+    def test_an_upgrade_of_every_engine_attests_each_once(self):
+        self.baseline()
+        for engine in TOPOLOGY.instances("E"):
+            self.fleet.live[("engine_identity", engine)] = {"restarted": engine}
+            self.fleet.products[("engine_contract", engine)] = {"generation": 1}
+        result = self.fleet.run(self.directory)
+        counts = runs(result)
+        self.assertEqual(counts["attest-capture[engine-1]"], 1)
+        self.assertEqual(counts["attest-capture[engine-2]"], 1)
+        self.assertEqual(max(counts.values()), 1)
         self.assertEqual(ran(self.fleet.run(self.directory)), set())
 
     def test_an_interrupted_reattestation_resumes_on_the_next_run(self):
@@ -339,6 +365,7 @@ class RunnerTests(unittest.TestCase):
             ran(self.fleet.run(self.directory)),
             {
                 "engine-probe[engine-2]",
+                "transfer-measure[engine-2]",
                 "attest-capture[engine-2]",
                 "sidecar-start[engine-2]",
                 "sidecar-verify[engine-2]",
@@ -484,6 +511,20 @@ class RunnerTests(unittest.TestCase):
         result = self.fleet.run(self.directory)
         self.assertNotIn("engine-check[engine-1]", ran(result))
         self.assertIn("engine-check[engine-2]", ran(result))
+
+    def test_a_signal_during_the_opening_write_leaves_no_stale_lock(self):
+        def opening(body):
+            return body["lock"] is not None and not body["stages"]
+
+        with (
+            self.signal_during_write(signal.SIGTERM, opening),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.fleet.run(self.directory, until="access")
+        self.assertIsNone(self.record()["lock"])
+        result = self.fleet.run(self.directory, until="access")
+        self.assertIsNone(result.stale_lock)
+        self.assertEqual(self.record()["stale_locks"], [])
 
     def test_a_signal_during_the_closing_write_leaves_an_unlocked_record(self):
         with (

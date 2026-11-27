@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 from narwhal import backends
-from narwhal.deployment.deploy_graph import CACHE_CAPTURE, DEPLOY_GRAPH
-from narwhal.deployment.launch_engine.backend import cache_capture
+from narwhal.deployment.deploy_graph import CAPABILITIES, DEPLOY_GRAPH
+from narwhal.deployment.launch_engine import backend as launch_backend
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / "docs/Deploy.md"
@@ -24,15 +24,26 @@ END = "<!-- End of the generated stage tables. -->"
 
 
 def capabilities() -> dict[str, str]:
-    """Where each capability-limited stage runs: the labels of the backends that have it."""
-    capturing = [
-        backend.label
-        for backend in map(backends.load, backends.names())
-        if backend.launcher is not None and cache_capture(backend.engine_launcher()) is not None
-    ]
-    if not capturing:
-        raise ValueError("no installed backend captures a cache layout")
-    return {CACHE_CAPTURE: " or ".join(capturing)}
+    """Where each capability-limited stage runs: the backends whose launcher has it.
+
+    A capability is named as the `launch_engine.backend` function that finds it on a launcher.
+    While this build has no such function, or no backend has the capability, the page gives
+    the capability's meaning from the graph instead of backend names.
+    """
+    labels = {}
+    for capability, meaning in CAPABILITIES.items():
+        finder = getattr(launch_backend, capability, None)
+        names = (
+            []
+            if finder is None
+            else [
+                backend.label
+                for backend in map(backends.load, backends.names())
+                if backend.launcher is not None and finder(backend.engine_launcher()) is not None
+            ]
+        )
+        labels[capability] = " or ".join(names) if names else meaning
+    return labels
 
 
 def render(text: str) -> str:
