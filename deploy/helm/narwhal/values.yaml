@@ -1,0 +1,47 @@
+# Every value without a default is a deployment input; values.schema.json refuses a release
+# that leaves one out. Keep a filled values file in the ignored config/helm/ directory.
+
+images:
+  # The Narwhal image by registry digest, <repository>@sha256:<hex>. The routers, the gate
+  # Jobs and the engines' attestation sidecars run it.
+  narwhal: ""
+  # The HAProxy image by registry digest.
+  haproxy: ""
+  # The image the fabric Jobs run ib_write_bw from, by registry digest. Required with fabric
+  # gates.
+  fabric: ""
+
+# The engines, as chart_values derives them from every engine's Kubernetes launch directory.
+engines: {}
+
+# The state volume: the fleet file, profiles, calibration and every stage's evidence. The
+# engine pods, the routers and the gate Jobs on different nodes share it.
+state:
+  storageClassName: ""
+  size: ""
+
+# The router pair's lease volume. It must support flock, coherent reads and atomic rename
+# across nodes.
+lease:
+  storageClassName: ""
+  size: ""
+
+routers:
+  # The fleet file's path on the state volume.
+  fleet: ""
+  # Each router's own volume, for its journal and state handoff.
+  storageClassName: ""
+  size: ""
+  # More narwhal-serve options, such as ["--lease-ttl", "6"].
+  args: []
+
+haproxy:
+  replicas: 1
+  clusterDomain: cluster.local
+
+# The engines' API credential, which the routers and the gate Jobs that reach engines read
+# from a Secret: {"env": <variable>, "secretName": <name>, "key": <key>}.
+credentials: {}
+
+# The gate Jobs of the current deployment stage. narwhal deploy --target kubernetes sets them.
+gates: []

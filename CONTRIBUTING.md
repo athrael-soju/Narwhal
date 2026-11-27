@@ -59,6 +59,7 @@ These targets run the checks:
 | `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                                                |
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
 | `make test`                | Runs the unit suite                                                                                                                            |
+| `make chart-check`         | Installs the pinned helm and kubeconform into `local/bin`, then lints the Helm chart, validates its manifests and runs the chart tests          |
 
 Stage new files with `git add` before running `make publication`.
 
@@ -83,6 +84,7 @@ To run the remote CI on a pull request, tick **Run CI** in its description. The 
 On the GitHub-hosted runners, the suite covers:
 
 - `make check`
+- `make chart-check`
 - the unit suite and installed-wheel checks on Python 3.11, 3.12, and 3.13
 - the documentation build and unit suite from an extracted source distribution on Python 3.12
 
@@ -95,6 +97,8 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 `make coverage` runs the unit suite with package and tool coverage, writing HTML branch annotations, JSON and XML reports, and the test log to a fresh `runs/coverage/run-*` directory. Set the output path with `COVERAGE_ARGS='--out runs/coverage/review'`.
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
+
+Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg` or to the Kubernetes launch backend. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
 
 `tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
@@ -277,6 +281,7 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
 | `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |
+| `deployment/launch_engine/engine_set.py`                                     | The Helm chart's engine values, from every engine's Kubernetes launch plan |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
@@ -346,6 +351,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Fleet control configurations and hooks    | The ignored `config/fleet-control.*.json` pattern                                                |
 | Fleet control action log and run records  | `runs/fleet-control/`                                                                            |
 | Benchmark plans and evidence output       | `runs/`                                                            |
+| Helm values files of a deployment         | The ignored `config/helm/` directory                                                             |
 
 The plan's `evidence.identity` holds the engine image reference and the host and GPU map (`gpu_allocation`), and the collector copies it into the point's `evidence.json`. A benchmark point's `summary.shareable.json` is the one evidence file meant for publication. The collector builds it from a fixed list of fields, so it holds no URLs, credentials, private file paths or request failure text. It names engines `engine-1`, `engine-2` and onward in order of first appearance, replaces the engine image reference and GPU allocation with SHA-256 digests, and keeps `narwhal_revision`, `model_id`, `benchmark_client_version`, `engine_version`, `checkpoint_revision` and `gpu_shape` exactly as supplied in the plan. Review those labels for sensitive data before you publish the file.
 
