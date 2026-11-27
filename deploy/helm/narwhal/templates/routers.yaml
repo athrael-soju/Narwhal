@@ -86,7 +86,7 @@ spec:
       volumes:
         - name: narwhal-state
           persistentVolumeClaim:
-            claimName: {{ .Values.engines.stateClaim }}
+            claimName: {{ include "narwhal.stateClaim" . }}
             readOnly: true
         - name: narwhal-lease
           persistentVolumeClaim:

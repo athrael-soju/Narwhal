@@ -14,6 +14,11 @@ images:
 # The engines, as chart_values derives them from every engine's Kubernetes launch directory.
 engines: {}
 
+# Engines that start directly from their image, as narwhal dev starts them on a host, with no
+# launch plan or attestation; direct_values derives them. They serve on CPUs, for a chart test
+# or a development cluster. Their fleet has no engine_contract, so set either engines or these.
+directEngines: {}
+
 # The state volume: the fleet file, profiles, calibration and every stage's evidence. The
 # engine pods, the routers and the gate Jobs on different nodes share it.
 state:

@@ -11,8 +11,6 @@ import sys
 import tempfile
 import time
 import uuid
-from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -21,7 +19,7 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.loading import load as load_fleet
-from narwhal.deployment.direct_start import DirectStart, NominalFigures
+from narwhal.deployment.direct_start import DirectStart
 from narwhal.deployment.launch_engine.runtime import write_private
 
 from . import lifecycle
@@ -277,51 +275,6 @@ def materialize(
             shutil.rmtree(output, ignore_errors=True)
         raise
     return output
-
-
-def _measure(start: DirectStart, fleet: dict, runtime: dict) -> dict[str, NominalFigures]:
-    """Each engine's figures with every engine serving its full number of requests.
-
-    The engines share one device, so an engine measured alone reports a speed it loses as
-    soon as its neighbours serve.
-    """
-    endpoint, body = start.probe(fleet["model"])
-    each = start.probe_requests(runtime)
-    if each < 1:
-        raise ValueError("an engine is measured with at least one request")
-    engines = [engine for engine in fleet["engines"] for _ in range(each)]
-
-    def one(engine: dict) -> NominalFigures:
-        reply = client.post(engine["url"] + endpoint, json=body)
-        reply.raise_for_status()
-        return start.figures(reply.json(), runtime)
-
-    client = httpx.Client(
-        timeout=PROBE_TIMEOUT_S,
-        trust_env=False,
-        limits=httpx.Limits(max_connections=len(engines)),
-    )
-    pool = ThreadPoolExecutor(max_workers=len(engines))
-    try:
-        pending = [pool.submit(one, engine) for engine in engines]
-        wait(pending, return_when=FIRST_EXCEPTION)
-        # A failed request raises here while the others may still be in flight.
-        measured = [future.result() for future in pending if future.done()]
-        if len(measured) != len(pending):
-            raise ValueError("an engine measurement ended early")
-    finally:
-        # Closing the client ends requests still in flight, so a hung engine holds nothing.
-        pool.shutdown(wait=False, cancel_futures=True)
-        client.close()
-    figures = {}
-    for index, engine in enumerate(fleet["engines"]):
-        own = measured[index * each : (index + 1) * each]
-        figures[engine["iid"]] = replace(
-            own[0],
-            prefill_token_s=sum(f.prefill_token_s for f in own) / each,
-            token_interval_s=sum(f.token_interval_s for f in own) / each,
-        )
-    return figures
 
 
 def verify(root: Path, config: dict) -> dict:

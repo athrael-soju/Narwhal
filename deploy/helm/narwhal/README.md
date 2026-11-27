@@ -2,7 +2,7 @@
 
 The chart runs one Narwhal fleet in one namespace:
 
-- the engines, one pod each in the StatefulSet `engine`, with the attestation sidecar in each pod
+- the engines, one pod each in the StatefulSet `engine`, with the attestation sidecar in each pod, or [direct engines](#direct-engines) that run on CPUs without attestation
 - the headless Service the engine URLs name
 - the state PersistentVolumeClaim and the router pair's lease claim
 - the router pair, the StatefulSet `router`, each started as a standby of the other
@@ -20,6 +20,12 @@ Each plan renders its engine pod into `kubernetes.json`. The StatefulSet's ordin
 
 `chart_values` refuses plans that differ in more than the role: the engine image, GPU count, resource names, model volume, state claim, service account, RuntimeClass, security settings and namespace must be equal. Engines on one node listen on different ports, so the pod template lists no container ports. The StatefulSet uses `updateStrategy: OnDelete`: only a drain and readmission replaces an engine pod.
 
+## Direct engines
+
+`directEngines` runs engines that start straight from their image, as `narwhal dev` starts them on a host, in place of `engines`. They run on CPUs and take no launch plan, no attestation and no gate Jobs, so the fleet that routes over them has no `engine_contract`. The router admits them as it admits the engines of `narwhal dev`. Use them to test the chart or a cluster without GPUs. A production fleet needs attested engines from `engines`.
+
+`narwhal.deployment.direct_engine_set.direct_values` derives the values from a backend's direct start, which only the llama.cpp backend has. Each pod runs the command that start renders, listening on port 8080 at its pod address, with the model volume read-only at `/model` and the claim `narwhal-engine-shared` at `/narwhal-shared`. Every engine shares that ReadWriteMany claim for the slot files of its KV handoff. The engine's thread count follows its whole-CPU limit. The fleet file's engines, with their URLs `http://engine-<n>.<service>.<namespace>.svc.<cluster domain>:8080`, come from `direct_engine_set.fleet_engines`, and its profiles are nominal, measured as `narwhal dev up` measures them.
+
 ## Values
 
 Keep a filled values file in the ignored `config/helm/` directory. `values.schema.json` refuses a release that leaves out any value without a default.
@@ -30,6 +36,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | `images.haproxy` | The HAProxy image by registry digest |
 | `images.fabric` | The image the fabric Jobs run `ib_write_bw` from, by registry digest. Required when a fabric gate runs |
 | `engines` | The engines, from `chart_values` |
+| `directEngines` | Engines that start directly, from `direct_values`, in place of `engines`. The chart then refuses `gates` |
 | `state.storageClassName`, `state.size` | The state claim's ReadWriteMany storage class and size. The claim takes the name the plans give `NARWHAL_KUBERNETES_STATE_CLAIM` |
 | `lease.storageClassName`, `lease.size` | The lease claim `narwhal-lease` |
 | `routers.fleet` | The fleet file's path on the state volume |
@@ -46,6 +53,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | Workload | State volume | Other volumes |
 | --- | --- | --- |
 | Engine pod | Its own directory, `engines/<role>/<pod UID>/`, at `/narwhal-state`. The engine container mounts it read-only. The sidecar also mounts the launch directory that checked the pod, `engines/<role>/launches/<pod UID>/`, read-only | The model volume, read-only |
+| Direct engine pod | None | The model volume, read-only, and `narwhal-engine-shared` |
 | Router | The whole volume, read-only, at `/narwhal-state` | The lease at `/narwhal-lease/router.lease`, its own claim at `/narwhal-router` |
 | Gate Job | The whole volume, writable, at `/narwhal-state` | A discovery Job mounts the model volume read-only at `/model` |
 
@@ -107,4 +115,6 @@ Prometheus keeps 30 days of samples, as under `make observe`. A changed configur
 
 ## Checking the chart
 
-`make chart-check` installs the pinned helm and kubeconform into `local/bin`, renders the chart for a synthetic two-engine fleet, validates the manifests against the Kubernetes API schemas and runs `tests/deployment/test_helm_chart.py`.
+`make chart-check` installs the pinned helm and kubeconform into `local/bin`, renders the chart for a synthetic two-engine fleet of each kind, validates the manifests against the Kubernetes API schemas and runs `tests/deployment/test_helm_chart.py`.
+
+`make chart-e2e` installs the pinned kind and kubectl as well, and runs the chart on a one-node kind cluster with two llama.cpp direct engines. It builds the Narwhal image from the repository's `Dockerfile` and downloads the default `narwhal dev` template's model into `local/cache/chart-e2e/`. A Job measures the engines' nominal profiles and writes the fleet file, which stands in for the gate Jobs. The test then checks a completion through the Service `haproxy`. Under a steady stream of completions it deletes the router pod that holds the lease, and it fails unless the other router takes the lease, every request succeeds and no request waits longer than the 10 seconds HAProxy holds one. It needs Docker and about 6 GB of free memory, takes a few minutes, and deletes its cluster and image at the end.

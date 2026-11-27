@@ -78,6 +78,33 @@ class ChartToolsTests(unittest.TestCase):
             self.install()
         self.assertFalse((self.directory / "tool").exists())
 
+    def test_a_plain_binary_is_installed_only_with_e2e_and_only_on_its_pin(self):
+        plain = b"plain tool"
+        tool = {
+            "version": "v2.0.0",
+            "url": "https://tools.example/plain-{version}-{arch}",
+            "member": None,
+            "binary_sha256": {"amd64": hashlib.sha256(plain).hexdigest()},
+        }
+        with patch.object(chart_tools, "E2E_TOOLS", {"plain": tool}):
+            self.install()
+            self.assertFalse((self.directory / "plain").exists())
+            served = {"data": b"tampered plain tool"}
+
+            def urlopen(url, timeout):
+                return io.BytesIO(served["data"] if "plain" in url else self.archive)
+
+            with (
+                patch.object(chart_tools.urllib.request, "urlopen", urlopen),
+                self.assertRaisesRegex(SystemExit, "differs from the pinned binary"),
+            ):
+                chart_tools.install(self.directory, e2e=True)
+            self.assertFalse((self.directory / "plain").exists())
+            served["data"] = plain
+            with patch.object(chart_tools.urllib.request, "urlopen", urlopen):
+                chart_tools.install(self.directory, e2e=True)
+        self.assertEqual((self.directory / "plain").read_bytes(), plain)
+
 
 if __name__ == "__main__":
     unittest.main()

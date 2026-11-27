@@ -28,7 +28,7 @@ from narwhal.deployment import native_engine
 from narwhal.deployment.attestation_contract.capture import PUBLISHED, published_attempt
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.dev_graph import DIRECT_GRAPH, ENGINE, LAUNCHED_GRAPH
-from narwhal.deployment.direct_start import DirectEngine
+from narwhal.deployment.direct_start import DirectEngine, measure
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.graph import StageGraph
 from narwhal.deployment.launch_engine.backend import cache_capture, launcher
@@ -654,7 +654,7 @@ class _Launch:
         fleet = lifecycle.read(context.outputs("package") / "fleet.json")
         store = ProfileStore(context.directory / "profiles.json")
         start = direct._direct_start(self.spec)
-        for iid, figures in direct._measure(start, fleet, self.spec["runtime"]).items():
+        for iid, figures in measure(start, fleet, self.spec["runtime"]).items():
             store.put(
                 nominal_profile(
                     iid,

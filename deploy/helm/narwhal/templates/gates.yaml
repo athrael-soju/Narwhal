@@ -74,7 +74,7 @@ spec:
       volumes:
         - name: narwhal-state
           persistentVolumeClaim:
-            claimName: {{ $.Values.engines.stateClaim }}
+            claimName: {{ include "narwhal.stateClaim" $ }}
         {{- if eq .kind "discovery" }}
         - name: model
           {{- toYaml $.Values.engines.modelVolume | nindent 10 }}

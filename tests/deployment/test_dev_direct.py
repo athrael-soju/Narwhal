@@ -20,7 +20,7 @@ import httpx
 from narwhal.backends import load
 from narwhal.backends.llamacpp.dev import PROBE_OUTPUT_TOKENS, LlamacppDirect
 from narwhal.deployment import native_engine
-from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures
+from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures, measure
 from narwhal.dev import direct, lifecycle, template
 from narwhal.dev.template import _check_free_ports, _read_template
 from narwhal.profiling.store import ProfileStore
@@ -291,7 +291,7 @@ class DirectLifecycleTests(DirectInstance):
         fleet = {"model": "m", "engines": [{"iid": f"n{i}", "url": f"http://e{i}"} for i in (1, 2)]}
         client = httpx.Client(transport=httpx.MockTransport(handle))
         with patch.object(direct.httpx, "Client", return_value=client) as built:
-            figures = direct._measure(Loaded(), fleet, self.spec["runtime"])
+            figures = measure(Loaded(), fleet, self.spec["runtime"])
         self.assertEqual(built.call_args.kwargs["limits"].max_connections, 4)
         self.assertEqual(served, {"e1": 2, "e2": 2})
         self.assertAlmostEqual(figures["n1"].prefill_token_s, 0.002)
@@ -317,7 +317,7 @@ class DirectLifecycleTests(DirectInstance):
             patch.object(direct.httpx, "Client", return_value=client),
             self.assertRaises(httpx.HTTPStatusError),
         ):
-            direct._measure(Simulated(), fleet, self.spec["runtime"])
+            measure(Simulated(), fleet, self.spec["runtime"])
         self.assertLess(time.monotonic() - started, 2)
 
         class Idle(Simulated):
@@ -325,7 +325,7 @@ class DirectLifecycleTests(DirectInstance):
                 return 0
 
         with self.assertRaisesRegex(ValueError, "at least one request"):
-            direct._measure(Idle(), fleet, self.spec["runtime"])
+            measure(Idle(), fleet, self.spec["runtime"])
 
     def test_an_engine_that_exits_fails_up_and_stops_the_engine_that_started(self):
         self.init()
@@ -346,7 +346,7 @@ class DirectLifecycleTests(DirectInstance):
     def test_a_failed_up_resumes_at_the_stage_that_failed(self):
         self.init()
         with (
-            patch.object(direct, "_measure", side_effect=ValueError("measurement failed")),
+            patch("narwhal.dev.launch.measure", side_effect=ValueError("measurement failed")),
             self.assertRaisesRegex(ValueError, "measurement failed"),
         ):
             lifecycle.up(self.root)

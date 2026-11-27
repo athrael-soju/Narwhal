@@ -10,7 +10,7 @@ TEST_ARGS ?=
 DOCS_PORT ?= 8000
 
 .PHONY: setup sync test unit lint format types links publication versions boundary check docs-build observe
-.PHONY: chart-tools chart-check
+.PHONY: chart-tools chart-check chart-e2e-tools chart-e2e
 .PHONY: coverage
 .PHONY: docs-setup docs-serve
 .PHONY: help fix
@@ -47,6 +47,7 @@ help:
 	  '  docs-build   Build documentation in strict mode' \
 	  '  chart-tools  Install the pinned helm and kubeconform into local/bin' \
 	  '  chart-check  Lint, render and validate the Helm chart, and run its tests' \
+	  '  chart-e2e    Run the chart on a kind cluster with CPU engines and fail over its routers' \
 	  '  observe      Start provisioned Prometheus and Grafana services' \
 	  '  help         Show this command list without setting up an environment' \
 	  '' \
@@ -125,9 +126,20 @@ chart-tools:
 
 chart-check: $(BOOTSTRAP) chart-tools
 	mkdir -p $(CHART_OUT)
-	$(VENV_PYTHON) -m tests.deployment.chart_fixtures $(CHART_OUT)/values.json
-	$(HELM) lint --strict $(CHART) --namespace example -f $(CHART_OUT)/values.json
-	$(HELM) template narwhal $(CHART) --namespace example --kube-version $(CHART_KUBE_VERSION) \
-	  -f $(CHART_OUT)/values.json > $(CHART_OUT)/manifests.yaml
-	$(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) $(CHART_OUT)/manifests.yaml
+	$(VENV_PYTHON) -m tests.deployment.chart_fixtures $(CHART_OUT)/values.json \
+	  $(CHART_OUT)/direct-values.json
+	for fleet in values direct-values; do \
+	  $(HELM) lint --strict $(CHART) --namespace example -f $(CHART_OUT)/$$fleet.json && \
+	  $(HELM) template narwhal $(CHART) --namespace example --kube-version $(CHART_KUBE_VERSION) \
+	    -f $(CHART_OUT)/$$fleet.json > $(CHART_OUT)/$$fleet.manifests.yaml && \
+	  $(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) \
+	    $(CHART_OUT)/$$fleet.manifests.yaml || exit 1; \
+	done
 	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart
+
+chart-e2e-tools:
+	$(PYTHON) tools/maintenance/chart_tools.py --e2e $(CHART_TOOLS)
+
+# Needs Docker and about 6 GB of memory; creates and deletes its own kind cluster.
+chart-e2e: $(BOOTSTRAP) chart-e2e-tools
+	$(VENV_PYTHON) tools/maintenance/chart_e2e.py --tools $(CHART_TOOLS)

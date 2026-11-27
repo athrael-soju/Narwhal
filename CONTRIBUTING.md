@@ -60,6 +60,7 @@ These targets run the checks:
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
 | `make test`                | Runs the unit suite                                                                                                                            |
 | `make chart-check`         | Installs the pinned helm and kubeconform into `local/bin`, then lints the Helm chart, validates its manifests and runs the chart tests          |
+| `make chart-e2e`           | Installs the pinned kind and kubectl too, then runs the chart on a kind cluster with CPU engines and fails over its router pair                 |
 
 Stage new files with `git add` before running `make publication`.
 
@@ -98,7 +99,7 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `tools/observability` or to the Kubernetes launch backend. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
+Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `tools/observability` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the chart's routers, HAProxy or direct engines, or to the router lease. It needs Docker and about 6 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
 
 `tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
@@ -282,6 +283,7 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
 | `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |
 | `deployment/launch_engine/engine_set.py`                                     | The Helm chart's engine values, from every engine's Kubernetes launch plan |
+| `deployment/direct_engine_set.py`                                            | The Helm chart's direct engine values, from a backend's direct start         |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
