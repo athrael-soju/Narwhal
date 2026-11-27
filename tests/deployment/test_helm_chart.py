@@ -357,15 +357,39 @@ class ChartTests(unittest.TestCase):
         self.assertIn("resolvers kubernetes", lines)
         self.assertIn("    parse-resolv-conf", lines)
 
-    def test_each_router_stands_by_for_the_other(self):
+    def test_router_0_starts_primary_until_it_holds_a_handoff(self):
         router = self.find("StatefulSet", "router")
         self.assertEqual(router["spec"]["replicas"], 2)
-        [container] = router["spec"]["template"]["spec"]["containers"]
+        spec = router["spec"]["template"]["spec"]
+        [container] = spec["containers"]
+        self.assertEqual(container["workingDir"], "/narwhal-router")
         variables = defined(container, "router-0")
         variables["NARWHAL_POD_IP"] = POD_IP
         argv = [expand(part, variables) for part in container["command"]]
-        for name, peer in (("router-0", "router-1"), ("router-1", "router-0")):
-            with self.subTest(name):
+        self.assertEqual(argv[argv.index("--fleet") + 1], "/narwhal-state/fleet.json")
+        folder = Path(tempfile.mkdtemp(dir=self.root))
+        handoff = folder / "router-state.json"
+        fleet = folder / "fleet.json"
+        fleet.write_text(json.dumps({"recovery": {"state_path": str(handoff)}}))
+        argv[argv.index("--fleet") + 1] = str(fleet)
+        lease = folder / "router.lease"
+        argv[argv.index("--lease-path") + 1] = str(lease)
+        domain = "routers.example.svc.cluster.local:8000"
+        first, second = f"http://router-1.{domain}", f"http://router-0.{domain}"
+        # Each case: the router, the files that exist, and the standby options it starts with.
+        cases = (
+            ("router-0", (), []),
+            ("router-1", (), ["--standby-of", second]),
+            ("router-0", (lease,), ["--standby-of", first]),
+            ("router-0", (handoff,), ["--standby-of", first]),
+            ("router-1", (handoff, lease), ["--standby-of", second]),
+        )
+        for name, present, standby in cases:
+            with self.subTest(name=name, present=[path.name for path in present]):
+                for path in (handoff, lease):
+                    path.unlink(missing_ok=True)
+                for path in present:
+                    path.write_text("{}")
                 executed: list[list[str]] = []
                 environment = {**variables, "NARWHAL_POD_NAME": name}
                 with (
@@ -377,15 +401,9 @@ class ChartTests(unittest.TestCase):
                     exec(argv[3], {"__name__": "__main__"})
                 [args] = executed
                 self.assertEqual(args[:5], ["python3", "-I", "-m", "narwhal.cli", "--fleet"])
-                self.assertEqual(
-                    args[-4:],
-                    [
-                        "--router-id",
-                        name,
-                        "--standby-of",
-                        f"http://{peer}.routers.example.svc.cluster.local:8000",
-                    ],
-                )
+                tail = ["--router-id", name, *standby]
+                self.assertEqual(args[-len(tail) :], tail)
+                self.assertEqual(args.count("--standby-of"), len(standby) // 2)
                 self.assertIn("--lease-path", args)
                 self.assertEqual(args[args.index("--host") + 1], POD_IP)
 
@@ -444,6 +462,27 @@ class ChartTests(unittest.TestCase):
         self.assertIn("another Narwhal image", self.helm(other).stderr)
         fabric = {**self.values, "images": {**self.values["images"], "fabric": ""}}
         self.assertIn("needs images.fabric", self.helm(fabric).stderr)
+        credentials = copy.deepcopy(self.values)
+        del credentials["credentials"]
+        self.assertIn("set credentials.engineApiKey", self.helm(credentials).stderr)
+        credentials["credentials"] = {
+            "engineApiKey": {"env": "KEY", "secretName": "other", "key": "api-key"}
+        }
+        self.assertIn("set credentials.engineApiKey", self.helm(credentials).stderr)
+
+    def test_gate_keys_and_the_fleet_path_must_be_names(self):
+        for field, key in (("env", "A: b"), ("resources", "cpu x")):
+            with self.subTest(field):
+                values = copy.deepcopy(self.values)
+                values["gates"][2][field] = {key: "1"}
+                result = self.helm(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"invalid propertyName '{key}'", result.stderr)
+        for fleet in ("../fleet.json", "/fleet.json", "a/../../fleet.json", "fleet.json\nx"):
+            with self.subTest(fleet):
+                values = copy.deepcopy(self.values)
+                values["routers"]["fleet"] = fleet
+                self.assertNotEqual(self.helm(values).returncode, 0)
 
 
 if __name__ == "__main__":

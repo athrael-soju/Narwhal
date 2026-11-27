@@ -38,21 +38,15 @@ spec:
       containers:
         - name: router
           image: {{ .Values.images.narwhal }}
-          # Each router starts as a standby of the other, router-0 of router-1 and router-1 of
-          # router-0, and the first to find the lease free takes it.
+          # files/router-start.py decides whether this router starts as the primary or as a
+          # standby of the other.
           command:
             - python3
             - -I
             - -c
-            - |
-              import os, sys
-              name = os.environ["NARWHAL_POD_NAME"]
-              base, _, index = name.rpartition("-")
-              peer = "http://%s-%d.%s:8000" % (base, 1 - int(index), os.environ["NARWHAL_ROUTERS_DOMAIN"])
-              argv = [sys.executable, "-I", "-m", "narwhal.cli", *sys.argv[1:]]
-              os.execv(sys.executable, [*argv, "--router-id", name, "--standby-of", peer])
+            - {{ .Files.Get "files/router-start.py" | quote }}
             - --fleet
-            - /narwhal-state/{{ .Values.routers.fleet }}
+            - {{ printf "/narwhal-state/%s" .Values.routers.fleet | quote }}
             - --host
             - $(NARWHAL_POD_IP)
             - --port
@@ -76,6 +70,8 @@ spec:
             - name: NARWHAL_ROUTERS_DOMAIN
               value: {{ $domain }}
             {{- include "narwhal.credentials" . | nindent 12 }}
+          # A relative recovery.state_path lies on the router's own volume.
+          workingDir: /narwhal-router
           ports:
             - name: http
               containerPort: 8000

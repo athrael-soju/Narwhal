@@ -23,6 +23,16 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 {{- if eq $e.serviceName "routers" -}}
 {{- fail "the engines' headless Service may not be named routers, the router pair's Service" -}}
 {{- end -}}
+{{- $key := .Values.credentials.engineApiKey -}}
+{{- range $c := concat $e.podTemplate.initContainers $e.podTemplate.containers -}}
+{{- range $c.env -}}
+{{- with (.valueFrom | default dict).secretKeyRef -}}
+{{- if or (not $key) (ne .name $key.secretName) (ne .key $key.key) -}}
+{{- fail (printf "the engines read their API key from Secret %s key %s; set credentials.engineApiKey to that Secret and key, so the routers and gate Jobs send it" .name .key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range .Values.gates -}}
 {{- if and (hasPrefix "fabric-" .kind) (not $.Values.images.fabric) -}}
 {{- fail (printf "gate %s needs images.fabric, the image with ib_write_bw" .name) -}}

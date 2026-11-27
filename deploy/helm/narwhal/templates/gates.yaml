@@ -42,7 +42,7 @@ spec:
           {{- if or .env $.Values.credentials.engineApiKey }}
           env:
             {{- range $name, $value := .env }}
-            - name: {{ $name }}
+            - name: {{ $name | quote }}
               value: {{ $value | quote }}
             {{- end }}
             {{- include "narwhal.credentials" $ | nindent 12 }}
@@ -51,10 +51,10 @@ spec:
           resources:
             limits:
               {{- if $fabric }}
-              {{ $.Values.engines.rdmaResource }}: "1"
+              {{ $.Values.engines.rdmaResource | quote }}: "1"
               {{- end }}
               {{- range $name, $quantity := .resources }}
-              {{ $name }}: {{ $quantity | quote }}
+              {{ $name | quote }}: {{ $quantity | quote }}
               {{- end }}
           {{- end }}
           {{- if $fabric }}
