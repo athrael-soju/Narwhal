@@ -33,8 +33,11 @@ async def gate_hca(
 
     The sidecar publishes the port only for a launch with no shared-memory device and no CUDA
     IPC, so the consume gate can check that KV between engines of one host crossed the HCA.
+    Only such a pair needs the transmit counter. An engine whose counter is unreadable fails
+    when it has a live peer on its host, by boot ID, that it can send KV to or take KV from.
+    Returns the readings with a counter.
     """
-    ports: dict[str, Mapping[str, Any]] = {}
+    readings: dict[str, Mapping[str, Any]] = {}
     lines: list[tuple[bool, str]] = []
     for spec in cfg.engines:
         if spec.iid not in live or not spec.attestation_url:
@@ -47,8 +50,32 @@ async def gate_hca(
             lines.append((False, f"{spec.iid} HCA counters: {exc}"))
             continue
         if reading is not None:
-            ports[spec.iid] = reading
-            lines.append((True, f"{spec.iid} sends KV through HCA {_port(reading)}"))
+            readings[spec.iid] = reading
+    by_id = {spec.iid: spec for spec in cfg.engines}
+    pairs = validation_pairs([by_id[iid] for iid in readings], mesh=True)
+    for iid, published in readings.items():
+        peers = sorted(
+            {dst if src == iid else src for src, dst in pairs if iid in (src, dst)}
+            & {other for other in readings if other != iid and _same_boot(readings, iid, other)}
+        )
+        if published["port_xmit_data"] is not None:
+            lines.append((True, f"{iid} sends KV through HCA {_port(published)}"))
+        elif peers:
+            lines.append(
+                (
+                    False,
+                    f"{iid} HCA {_port(published)} counters are unreadable, and its same-host "
+                    f"KV with {', '.join(peers)} needs them: {published['counter_error']}",
+                )
+            )
+        else:
+            lines.append(
+                (
+                    True,
+                    f"{iid} sends KV through HCA {_port(published)} and has no same-host peer; "
+                    "the same-host HCA check does not apply",
+                )
+            )
     if lines:
         print("hca")
     for passed, line in lines:
@@ -56,7 +83,11 @@ async def gate_hca(
             rep.ok(line)
         else:
             rep.fail(line)
-    return ports
+    return {iid: r for iid, r in readings.items() if r["port_xmit_data"] is not None}
+
+
+def _same_boot(readings: Mapping[str, Mapping[str, Any]], a: str, b: str) -> bool:
+    return readings[a]["boot_id"] == readings[b]["boot_id"]
 
 
 def _port(reading: Mapping[str, Any]) -> str:

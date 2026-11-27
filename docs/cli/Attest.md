@@ -54,11 +54,11 @@ While the engine's version or process start time differs from startup, or cannot
 | `GET /health`                      | `{"status": "ok"}` once the identity check passes                                                                         |
 | `GET /v1/attestation`              | The [attestation](../configuration/01-Fleet-Schema.md#attestation) for the engine's current identity                      |
 | `GET /v1/process`                  | `process_start_time_seconds`, the engine process start time read on the host, with `--engine-container`, `--engine-pid` or `--engine-pod-container` |
-| `GET /v1/hca`                      | `device`, `port`, the host's `boot_id` and the port's `port_xmit_data` counter, with `--hca`                              |
+| `GET /v1/hca`                      | `device`, `port`, the host's `boot_id` and the port's `port_xmit_data` counter, with `--hca`; a null counter with its `counter_error` when the counter is unreadable |
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
 
-`/v1/hca` reads `/sys/class/infiniband/<device>/ports/<port>/counters/port_xmit_data`, which the kernel counts in words of 4 octets, and `/proc/sys/kernel/random/boot_id` on every request. It returns HTTP 503 when either is unreadable and HTTP 404 while `--hca` is unset. [Preflight](Check.md#preflight) reads it to check that KV between engines of one host crosses the HCA.
+`/v1/hca` reads `/sys/class/infiniband/<device>/ports/<port>/counters/port_xmit_data`, which the kernel counts in words of 4 octets, and `/proc/sys/kernel/random/boot_id` on every request. When the counter is unreadable, it returns `port_xmit_data` as `null` and the reason in `counter_error`. It returns HTTP 503 when the boot ID is unreadable and HTTP 404 while `--hca` is unset. [Preflight](Check.md#preflight) reads it to check that KV between engines of one host crosses the HCA.
 
 The router and `narwhal-check` read the process start of a llama.cpp, SGLang or TensorRT-LLM engine from `/v1/process`. With `--engine-pid`, the sidecar takes the process start from the engine's start ticks and a boot-time record under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`.
 

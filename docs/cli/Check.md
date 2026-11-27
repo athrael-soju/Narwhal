@@ -82,6 +82,14 @@ A probe passes when the consumer produces at least one token within `serving.req
 
 Before `produce`, preflight reads [`GET /v1/hca`](Attest.md#routes) from each live engine's attestation sidecar. A sidecar serves it for an engine whose launch sends KV through its HCA even to engines on its own host, and answers HTTP 404 for any other engine. The `hca` gate prints one `ok` line per engine that publishes its HCA, and fails an engine whose sidecar returns any other error. It prints nothing when no sidecar publishes an HCA.
 
+Only engines on one host need the transmit counter. When a sidecar cannot read it, preflight fails that engine only if another live engine reports its `boot_id` and the two can send KV to each other:
+
+```text
+  FAIL  n1 HCA mlx5_0:1 counters are unreadable, and its same-host KV with n2 needs them: /sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: [Errno 2] No such file or directory
+```
+
+An engine without such a peer passes with `n1 sends KV through HCA mlx5_0:1 and has no same-host peer; the same-host HCA check does not apply`. A container that sees the host's RDMA devices from its own network namespace, under the kernel's shared RDMA namespace mode, has no port counters.
+
 Two engines that publish an HCA and report the same `boot_id` share a host. For each such pair that `consume` probes, preflight reads the producer's `port_xmit_data` before and after the transfer. The pair passes when the counter grew, and prints the bytes sent, four times the counter's growth:
 
 ```text

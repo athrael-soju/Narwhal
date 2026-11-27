@@ -293,15 +293,36 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                             transport=httpx.ASGITransport(app=apps["none"]),
                         )
                     )
+                    # Without the counter, as for a device another network namespace sees,
+                    # the port and host still publish, with the reason.
                     (counters / "port_xmit_data").unlink()
                     unreadable = await client.get("/v1/hca")
-                    self.assertEqual(unreadable.status_code, 503)
-                    self.assertIn("HCA counters unreadable", unreadable.json()["detail"])
-                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA counters unreadable"):
+                    self.assertEqual(unreadable.status_code, 200)
+                    reading = await read_hca_counters(
+                        "http://sidecar/v1/attestation",
+                        transport=httpx.ASGITransport(app=apps["hca"]),
+                    )
+                    assert reading is not None
+                    self.assertEqual(
+                        {k: reading[k] for k in ("device", "port", "boot_id", "port_xmit_data")},
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": None,
+                        },
+                    )
+                    self.assertIn("counters/port_xmit_data", reading["counter_error"])
+                    boot.write_text("")
+                    blank = await client.get("/v1/hca")
+                    self.assertEqual(blank.status_code, 503)
+                    self.assertIn("HCA port unreadable", blank.json()["detail"])
+                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA port unreadable"):
                         await read_hca_counters(
                             "http://sidecar/v1/attestation",
                             transport=httpx.ASGITransport(app=apps["hca"]),
                         )
+                    boot.write_text("boot-a\n")
                     (counters / "port_xmit_data").write_text("4096\n")
                     start = 101
                     self.assertEqual((await client.get("/v1/hca")).status_code, 503)

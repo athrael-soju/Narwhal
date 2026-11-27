@@ -266,7 +266,11 @@ async def read_hca_counters(
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any] | None:
-    """The engine's HCA port counters from its sidecar, or None when it sends KV through none."""
+    """The engine's HCA port counters from its sidecar, or None when it sends KV through none.
+
+    A reading whose counter the sidecar could not read has a null `port_xmit_data` and its
+    `counter_error`.
+    """
     url = httpx.URL(attestation_url).copy_with(path=HCA_PATH, query=None)
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
         response = await client.get(url)
@@ -287,8 +291,14 @@ async def read_hca_counters(
         or type(payload.get("port")) is not int
         or not isinstance(payload.get("boot_id"), str)
         or not payload["boot_id"]
-        or type(payload.get("port_xmit_data")) is not int
-        or payload["port_xmit_data"] < 0
+        or not (
+            (type(payload.get("port_xmit_data")) is int and payload["port_xmit_data"] >= 0)
+            or (
+                payload.get("port_xmit_data") is None
+                and isinstance(payload.get("counter_error"), str)
+                and payload["counter_error"]
+            )
+        )
     ):
         raise ValueError(f"{url} returned no HCA counters")
     return payload
@@ -468,20 +478,28 @@ class HcaPort:
         return cls(match[1], int(match[2]))
 
     def counters(self) -> dict[str, Any]:
-        """The port's transmit counter, in the kernel's 4-octet words, and the host's boot ID."""
-        counter = INFINIBAND / self.device / "ports" / str(self.port) / "counters/port_xmit_data"
-        words = counter.read_text().strip()
-        if not words.isdigit():
-            raise ValueError(f"{counter} holds no counter value")
+        """The port's transmit counter, in the kernel's 4-octet words, and the host's boot ID.
+
+        A counter that cannot be read leaves `port_xmit_data` null and names the reason in
+        `counter_error`; the port and boot ID still tell which engines share the host. An RDMA
+        device that a network namespace other than the host's sees has no port counters.
+        """
         boot_id = BOOT_ID.read_text().strip()
         if not boot_id:
             raise ValueError(f"{BOOT_ID} is empty")
-        return {
-            "device": self.device,
-            "port": self.port,
-            "boot_id": boot_id,
-            "port_xmit_data": int(words),
-        }
+        counter = INFINIBAND / self.device / "ports" / str(self.port) / "counters/port_xmit_data"
+        reading: dict[str, Any] = {"device": self.device, "port": self.port, "boot_id": boot_id}
+        try:
+            words = counter.read_text().strip()
+        except OSError as exc:
+            return {**reading, "port_xmit_data": None, "counter_error": f"{counter}: {exc}"}
+        if not words.isdigit():
+            return {
+                **reading,
+                "port_xmit_data": None,
+                "counter_error": f"{counter} holds no counter value",
+            }
+        return {**reading, "port_xmit_data": int(words)}
 
 
 def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
@@ -558,7 +576,7 @@ def build_app(
         try:
             return await asyncio.to_thread(hca.counters)
         except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=503, detail=f"HCA counters unreadable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"HCA port unreadable: {exc}") from exc
 
     def require_residency() -> ResidencyIndex:
         if residency is None:

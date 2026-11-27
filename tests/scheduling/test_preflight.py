@@ -814,7 +814,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.url.path, "/v1/hca")
             code = status[request.url.host]
             if code != 200:
-                return httpx.Response(code, json={"detail": "HCA counters unreadable: gone"})
+                return httpx.Response(code, json={"detail": "HCA port unreadable: gone"})
             reading = {"device": "mlx5_0", "port": 1, "boot_id": "a", "port_xmit_data": 7}
             return httpx.Response(200, json=reading)
 
@@ -831,8 +831,43 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(set(ports), {"e0"})
         self.assertEqual(len(report.failed), 1)
-        self.assertRegex(
-            report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA counters unreadable"
+        self.assertRegex(report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA port unreadable")
+
+    async def test_hca_gate_needs_the_counters_only_for_an_engine_with_a_same_host_peer(self):
+        missing = "/sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: missing"
+        boots = {"engine-0.invalid": "a", "engine-3.invalid": "b"}
+
+        def sidecar(request):
+            host = request.url.host
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": boots[host]}
+            if host == "engine-0.invalid":
+                reading.update(port_xmit_data=None, counter_error=missing)
+            else:
+                reading["port_xmit_data"] = 7
+            return httpx.Response(200, json=reading)
+
+        transport = httpx.MockTransport(sidecar)
+        report = Report()
+        with redirect_stdout(io.StringIO()) as printed:
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual((set(ports), report.failed), ({"e3"}, []))
+        self.assertIn(
+            "e0 sends KV through HCA mlx5_0:1 and has no same-host peer; the same-host HCA "
+            "check does not apply",
+            printed.getvalue(),
+        )
+        # On one host the pair's KV must be seen crossing the HCA, so the counter is needed.
+        boots["engine-3.invalid"] = "a"
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual(set(ports), {"e3"})
+        self.assertEqual(
+            report.failed,
+            [
+                "e0 HCA mlx5_0:1 counters are unreadable, and its same-host KV with e3 needs "
+                f"them: {missing}"
+            ],
         )
 
     async def test_consume_requires_same_host_kv_to_cross_the_producer_hca(self):
