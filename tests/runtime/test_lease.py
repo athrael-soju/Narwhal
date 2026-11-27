@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,44 @@ class LeaseTests(unittest.TestCase):
         self.mono = 50.0
         self.a = self.lease("a")
         self.b = self.lease("b")
+
+    def test_orphaned_temporary_files_of_this_lease_alone_are_removed(self):
+        # At 1000 s on the wall clock with a 10 s TTL, a file last modified before 900 s is an
+        # orphan.
+        self.wall = 1000.0
+        directory = self.path.parent
+        token = "0123456789abcdef" * 2
+        orphan = directory / f".router.lease.4242.{token}.tmp"
+        kept = [
+            # A write in progress.
+            directory / f".router.lease.4243.{token}.tmp",
+            # Old, but not this lease's temporary file name.
+            directory / f".other.lease.4242.{token}.tmp",
+            directory / f".router.lease.4242.{token.upper()}.tmp",
+            directory / f".router.lease.4242.{token}.tmp.keep",
+            directory / f"router.lease.4242.{token}.tmp",
+            directory / f".router.lease.x.{token}.tmp",
+            directory / "router.lease.lock",
+            directory / ".narwhal-lease-witness",
+            self.path,
+        ]
+        for path in (orphan, *kept):
+            path.write_text("{}")
+            os.utime(path, (10.0, 10.0))
+        os.utime(kept[0], (999.0, 999.0))
+        # Old, matching names that are not regular files.
+        linked = directory / f".router.lease.4244.{token}.tmp"
+        linked.symlink_to(self.path)
+        folder = directory / f".router.lease.4245.{token}.tmp"
+        folder.mkdir()
+        self.assertEqual(self.a.remove_orphans(), [orphan])
+        self.assertFalse(orphan.exists())
+        for path in (*kept, linked, folder):
+            self.assertTrue(path.exists() or path.is_symlink(), path)
+
+    def test_orphan_removal_without_the_lease_directory_removes_nothing(self):
+        missing = FileLease(self.path.parent / "absent" / "router.lease", "a", 5.0)
+        self.assertEqual(missing.remove_orphans(), [])
 
     def lease(self, holder):
         """Give a holder the shared file and the current test clocks."""

@@ -7,6 +7,8 @@ import fcntl
 import json
 import math
 import os
+import re
+import stat
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -25,6 +27,9 @@ DEFAULT_SAFETY_MARGIN_S = 1.0
 # The file the deployment's lease check leaves in the shared lease directory. A router given
 # it refuses to touch the lease while it is missing, as it is in an unmounted directory.
 WITNESS_NAME = ".narwhal-lease-witness"
+# A lease temporary file older than this many lease TTLs lost its writer mid-write: a live
+# writer renames its temporary file within one write.
+ORPHAN_TTLS = 10
 
 
 class LeaseError(RuntimeError):
@@ -87,6 +92,33 @@ class FileLease:
     def valid(self) -> bool:
         """Return whether local ownership remains inside its monotonic deadline."""
         return self._owned and self._monotonic_clock() < self._valid_until
+
+    def remove_orphans(self) -> list[Path]:
+        """Remove this lease's temporary files that a writer left when it died mid-write.
+
+        Only regular files named as `_write_unlocked` names them, for this lease file, and last
+        modified more than `ORPHAN_TTLS` lease TTLs ago, are removed. Nothing else in the
+        directory is touched.
+        """
+        name = re.compile(rf"\.{re.escape(self.path.name)}\.[0-9]+\.[0-9a-f]{{32}}\.tmp")
+        cutoff = self._wall_clock() - ORPHAN_TTLS * self.ttl_s
+        removed: list[Path] = []
+        try:
+            entries = sorted(self.path.parent.iterdir())
+        except OSError:
+            return removed
+        for entry in entries:
+            if not name.fullmatch(entry.name):
+                continue
+            try:
+                info = entry.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
+                    continue
+                entry.unlink()
+            except FileNotFoundError:
+                continue
+            removed.append(entry)
+        return removed
 
     def read(self) -> LeaseRecord | None:
         """Read the shared record while holding the coordination lock."""
@@ -245,6 +277,7 @@ class FileLease:
             },
         )
         temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        # `remove_orphans` matches exactly this name.
         try:
             temporary.write_text(json.dumps(document, sort_keys=True) + "\n")
             os.replace(temporary, self.path)

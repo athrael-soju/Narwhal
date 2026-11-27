@@ -119,6 +119,13 @@ def create_app(
             safety_margin_s=lease_safety_margin_s,
             witness=Path(lease_witness) if lease_witness else None,
         )
+        try:
+            orphans = lease.remove_orphans()
+        except OSError as exc:
+            log.warning("could not remove orphaned lease temporary files: %s", exc)
+            orphans = []
+        for orphan in orphans:
+            log.info("removed the orphaned lease temporary file %s", orphan)
     journal = RunJournal(
         path=Path(journal_path) if journal_path else cfg.profiles_path.parent / "journal.jsonl"
     )

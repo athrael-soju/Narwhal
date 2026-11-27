@@ -1,6 +1,7 @@
 """Validate failover timings before application construction or lease writes."""
 
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -60,6 +61,16 @@ class FailoverControlTests(unittest.TestCase):
                     construct.assert_not_called()
                     server.assert_not_called()
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_the_router_start_removes_orphaned_lease_temporary_files(self):
+        orphan = self.root / f".lease.json.4242.{'ab' * 16}.tmp"
+        other = self.root / "unrelated.tmp"
+        for path in (orphan, other):
+            path.write_text("{}")
+            os.utime(path, (1.0, 1.0))
+        create_app(self.cfg, lease_path=self.lease_path)
+        self.assertFalse(orphan.exists())
+        self.assertTrue(other.exists())
 
     def test_direct_application_rejects_nonfinite_timings(self):
         """Application construction rejects all five timings before creating a lease."""
