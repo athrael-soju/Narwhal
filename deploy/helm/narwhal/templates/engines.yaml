@@ -1,0 +1,51 @@
+{{- include "narwhal.checks" . -}}
+{{- $e := .Values.engines }}
+{{- range $e.configMaps }}
+---
+{{ toYaml . }}
+{{- end }}
+---
+{{ toYaml $e.access.serviceAccount }}
+---
+{{ toYaml $e.access.role }}
+---
+{{ toYaml $e.access.roleBinding }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $e.serviceName }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "engine") | nindent 4 }}
+spec:
+  clusterIP: None
+  # The gate Jobs and routers reach an engine by its pod name before the engine is ready.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "narwhal.selector" (dict "root" . "component" "engine") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  # The pods are engine-1 onwards, the names of the engine roles.
+  name: engine
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "engine") | nindent 4 }}
+spec:
+  serviceName: {{ $e.serviceName }}
+  replicas: {{ $e.count }}
+  ordinals:
+    start: 1
+  podManagementPolicy: Parallel
+  # Only a drain and readmission replaces an engine.
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" . "component" "engine") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" . "component" "engine") | nindent 8 }}
+    spec:
+      {{- include "narwhal.enginePod" . | nindent 6 }}

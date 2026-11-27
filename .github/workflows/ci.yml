@@ -30,6 +30,8 @@ jobs:
         run: |
           docker pull "$(sed -n 's/^ *image: *\(prom\/prometheus:.*\)$/\1/p' tools/observability/compose.yml)"
       - run: make check VENV_PYTHON=python
+      - name: Lint, render and validate the Helm chart with the pinned helm and kubeconform
+        run: make chart-check VENV_PYTHON=python
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
         run: python tools/maintenance/release.py check --release

@@ -1,0 +1,82 @@
+{{- /*
+One Job per entry of `gates`, which `narwhal deploy --target kubernetes` sets for the stage it
+runs. Every gate Job mounts the whole state volume writable at /narwhal-state; it is the only
+workload that may write the engines' records there. A Job runs once, within its stage's time
+limit, and the runner reruns a failed stage itself.
+*/ -}}
+{{- range .Values.gates }}
+{{- $fabric := hasPrefix "fabric-" .kind }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" $ "component" "gate") | nindent 4 }}
+    narwhal.io/gate: {{ .kind }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .deadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" $ "component" "gate") | nindent 8 }}
+        narwhal.io/gate: {{ .kind }}
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- with .node }}
+      nodeName: {{ . }}
+      {{- end }}
+      {{- if $fabric }}
+      # The fabric sample runs on the host's fabric interface, as KV does.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      containers:
+        - name: gate
+          image: {{ ternary $.Values.images.fabric $.Values.images.narwhal $fabric }}
+          command:
+            {{- toYaml .command | nindent 12 }}
+          {{- if or .env $.Values.credentials.engineApiKey }}
+          env:
+            {{- range $name, $value := .env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- include "narwhal.credentials" $ | nindent 12 }}
+          {{- end }}
+          {{- if or $fabric .resources }}
+          resources:
+            limits:
+              {{- if $fabric }}
+              {{ $.Values.engines.rdmaResource }}: "1"
+              {{- end }}
+              {{- range $name, $quantity := .resources }}
+              {{ $name }}: {{ $quantity | quote }}
+              {{- end }}
+          {{- end }}
+          {{- if $fabric }}
+          securityContext:
+            capabilities:
+              # RDMA memory registration locks memory.
+              add: [IPC_LOCK]
+          {{- end }}
+          volumeMounts:
+            - name: narwhal-state
+              mountPath: /narwhal-state
+            {{- if eq .kind "discovery" }}
+            - name: model
+              mountPath: /model
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: narwhal-state
+          persistentVolumeClaim:
+            claimName: {{ $.Values.engines.stateClaim }}
+        {{- if eq .kind "discovery" }}
+        - name: model
+          {{- toYaml $.Values.engines.modelVolume | nindent 10 }}
+        {{- end }}
+{{- end }}

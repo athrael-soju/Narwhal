@@ -1,0 +1,81 @@
+{{- $domain := printf "routers.%s.svc.%s" .Release.Namespace .Values.haproxy.clusterDomain }}
+{{- $config := .Files.Get "files/haproxy.cfg" }}
+{{- range $server, $pod := dict "a" "router-0" "b" "router-1" }}
+{{- $placeholder := printf "server router-%s ROUTER_%s_ADDRESS:8000" $server (upper $server) }}
+{{- if not (contains $placeholder $config) }}
+{{- fail (printf "deploy/ha/haproxy.cfg has no line %q" $placeholder) }}
+{{- end }}
+{{- $address := printf "server router-%s %s.%s:8000 resolvers kubernetes init-addr none" $server $pod $domain }}
+{{- $config = replace $placeholder $address $config }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "haproxy") | nindent 4 }}
+data:
+  # deploy/ha/haproxy.cfg, with each router found by its pod's DNS name. A replaced router pod
+  # is found at its new address within a second.
+  haproxy.cfg: |
+    {{- $config | nindent 4 }}
+    resolvers kubernetes
+        parse-resolv-conf
+        resolve_retries 3
+        timeout resolve 1s
+        timeout retry 1s
+        hold valid 1s
+        hold obsolete 1s
+        hold nx 1s
+        hold refused 1s
+        hold timeout 1s
+        hold other 1s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "haproxy") | nindent 4 }}
+spec:
+  replicas: {{ .Values.haproxy.replicas }}
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" . "component" "haproxy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" . "component" "haproxy") | nindent 8 }}
+      annotations:
+        narwhal.io/config-sha256: {{ $config | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      containers:
+        - name: haproxy
+          image: {{ .Values.images.haproxy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: haproxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "haproxy") | nindent 4 }}
+spec:
+  selector:
+    {{- include "narwhal.selector" (dict "root" . "component" "haproxy") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

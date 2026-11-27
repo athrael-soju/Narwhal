@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.engines.stateClaim }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "state") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .Values.state.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.state.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: narwhal-lease
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "lease") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .Values.lease.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.lease.size }}

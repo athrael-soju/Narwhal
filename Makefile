@@ -10,6 +10,7 @@ TEST_ARGS ?=
 DOCS_PORT ?= 8000
 
 .PHONY: setup sync test unit lint format types links publication versions boundary check docs-build observe
+.PHONY: chart-tools chart-check
 .PHONY: coverage
 .PHONY: docs-setup docs-serve
 .PHONY: help fix
@@ -44,6 +45,8 @@ help:
 	  '  docs-setup   Install constrained documentation dependencies' \
 	  '  docs-serve   Preview docs at http://127.0.0.1:8000/Narwhal/' \
 	  '  docs-build   Build documentation in strict mode' \
+	  '  chart-tools  Install the pinned helm and kubeconform into local/bin' \
+	  '  chart-check  Lint, render and validate the Helm chart, and run its tests' \
 	  '  observe      Start provisioned Prometheus and Grafana services' \
 	  '  help         Show this command list without setting up an environment' \
 	  '' \
@@ -52,7 +55,9 @@ help:
 	  '  VENV_PYTHON    Existing Python for package targets (.venv/bin/python)' \
 	  '  TEST_ARGS      unittest discovery options for test only (empty)' \
 	  '  DOCS_PORT      Loopback preview port for docs-serve (8000)' \
-	  '  COVERAGE_ARGS  Arguments for the coverage runner (empty)'
+	  '  COVERAGE_ARGS  Arguments for the coverage runner (empty)' \
+	  '  HELM           helm for chart-check (local/bin/helm)' \
+	  '  KUBECONFORM    kubeconform for chart-check (local/bin/kubeconform)'
 
 test: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m unittest discover -s tests -t . $(TEST_ARGS)
@@ -105,3 +110,24 @@ docs-build: $(BOOTSTRAP)
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m tools.observability.start.cli
+
+# The Helm chart, rendered for the synthetic fleet of the chart tests and validated against the
+# Kubernetes API schemas of CHART_KUBE_VERSION.
+CHART := deploy/helm/narwhal
+CHART_TOOLS := local/bin
+CHART_OUT := runs/chart
+CHART_KUBE_VERSION ?= 1.31.0
+HELM ?= $(CHART_TOOLS)/helm
+KUBECONFORM ?= $(CHART_TOOLS)/kubeconform
+
+chart-tools:
+	$(PYTHON) tools/maintenance/chart_tools.py $(CHART_TOOLS)
+
+chart-check: $(BOOTSTRAP) chart-tools
+	mkdir -p $(CHART_OUT)
+	$(VENV_PYTHON) -m tests.deployment.chart_fixtures $(CHART_OUT)/values.json
+	$(HELM) lint --strict $(CHART) --namespace example -f $(CHART_OUT)/values.json
+	$(HELM) template narwhal $(CHART) --namespace example --kube-version $(CHART_KUBE_VERSION) \
+	  -f $(CHART_OUT)/values.json > $(CHART_OUT)/manifests.yaml
+	$(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) $(CHART_OUT)/manifests.yaml
+	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart
