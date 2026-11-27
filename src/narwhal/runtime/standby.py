@@ -237,7 +237,7 @@ async def _shadow(
                         if claimed:
                             if doc is None:
                                 router.failover_blocked = "no handoff after lease claim"
-                                lease.release()
+                                await asyncio.to_thread(lease.release)
                                 return
                             previous_epoch = int(doc.get("epoch", 0))
                             if previous_epoch != lease.epoch - 1:
@@ -245,7 +245,7 @@ async def _shadow(
                                     f"handoff epoch {previous_epoch} cannot precede "
                                     f"claimed epoch {lease.epoch}"
                                 )
-                                lease.release()
+                                await asyncio.to_thread(lease.release)
                                 return
                             try:
                                 if delay := lease.serving_delay():
@@ -310,5 +310,5 @@ async def _shadow(
                                 return
                             finally:
                                 if router.standby:
-                                    lease.release()
+                                    await asyncio.to_thread(lease.release)
             await asyncio.sleep(probe_interval_s)

@@ -293,6 +293,60 @@ class ReleaseTests(LeaseCase):
         self.assertTrue(b.lease.valid())
 
 
+class EditTests(LeaseCase):
+    """Writes by something other than the routers never let two of them serve."""
+
+    def test_a_lease_patched_free_at_the_same_epoch_is_no_release(self):
+        a, b = self.router("a", 0.0), self.router("b", 23.0)
+        self.holding(a)
+        b.lease.read()
+        # As `kubectl patch lease narwhal-router -p '{"spec":{"holderIdentity":""}}'` does.
+        self.store.patch(LEASE, NS, NAME, {"spec": {"holderIdentity": ""}}, patch_type="merge")
+        self.assertEqual(self.stored()["spec"]["leaseTransitions"], 1)
+        a.down = True
+        self.assertTrue(b.lease.claim())
+        self.assertFalse(b.lease.valid())
+        for _ in range(int(2 * TTL / 0.25)):
+            self.step(0.25, a.lease.renew, b.lease.renew)
+        self.assertTrue(b.lease.valid())
+
+    def test_a_release_mark_left_from_an_earlier_term_is_no_release(self):
+        a, b, c = self.router("a", 0.0), self.router("b", 5.0), self.router("c", 9.0)
+        self.holding(a)
+        b.lease.read()
+        a.lease.release()
+        self.assertEqual(self.stored()["metadata"]["annotations"]["narwhal.io/released-by"], "1/a")
+        self.assertTrue(b.lease.claim())
+        self.assertNotIn("narwhal.io/released-by", self.stored()["metadata"].get("annotations", {}))
+        self.live(b, for_s=2)
+        c.lease.read()
+        b.down = True
+        self.store.patch(LEASE, NS, NAME, {"spec": {"holderIdentity": ""}}, patch_type="merge")
+        self.assertTrue(c.lease.claim())
+        self.assertFalse(c.lease.valid())
+        for _ in range(int(2 * TTL / 0.25)):
+            self.step(0.25, b.lease.renew, c.lease.renew)
+        self.assertTrue(c.lease.valid())
+
+    def test_a_lease_edited_back_to_this_routers_identity_is_not_taken_at_once(self):
+        a, b = self.router("a", 0.0), self.router("b", 41.0)
+        self.holding(b)
+        a.lease.read()
+        self.step(TTL + 0.1)
+        self.assertTrue(a.lease.claim())
+        self.live(a, for_s=1)
+        # Someone writes B's old identity back while A still holds the Lease.
+        a.down = True
+        lease = self.stored()
+        lease["spec"].update(holderIdentity="b", renewTime="2030-01-01T00:00:00.000000Z")
+        self.store.replace(lease)
+        self.assertFalse(b.lease.claim())
+        for _ in range(int(2 * TTL / 0.25)):
+            self.step(0.25, a.lease.renew, b.lease.claim, b.lease.renew)
+        self.assertTrue(b.lease.valid())
+        self.assertEqual(b.lease.epoch, 3)
+
+
 class ConflictTests(LeaseCase):
     def test_a_takeover_that_meets_a_landed_renewal_loses_and_waits_again(self):
         a, b = self.router("a", 0.0), self.router("b", 31.0)
@@ -769,7 +823,7 @@ class RouterAppTests(FleetCase):
         )
         async with app.router.lifespan_context(app):
             self.assertTrue(primary.valid())
-            app.state.yield_control()
+            await app.state.yield_control()
             self.assertFalse(primary.valid())
             # The standby saw the Lease held, then freed: it serves at once.
             self.assertTrue(standby.claim())

@@ -309,10 +309,10 @@ def create_app(
                 with contextlib.suppress(OSError):
                     handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
             if lease is not None:
-                lease.release()
+                await asyncio.to_thread(lease.release)
             journal.close()
 
-    def yield_control() -> None:
+    async def yield_control() -> None:
         """Release a held lease as shutdown starts, before in-flight requests drain.
 
         The standby takes over while this process finishes its open streams. Without a lease,
@@ -324,7 +324,8 @@ def create_app(
         router.failover_blocked = "shutting down"
         with contextlib.suppress(OSError):
             handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
-        lease.release()
+        # Off the event loop: the drain's open streams keep running while the store answers.
+        await asyncio.to_thread(lease.release)
         log.info("released the lease at epoch %d for shutdown", router.lease_epoch)
 
     def begin_shutdown() -> None:

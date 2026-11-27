@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import math
 import socket
@@ -349,7 +350,8 @@ class YieldingServer(uvicorn.Server):
         for connection in list(self.server_state.connections):
             connection.shutdown()
         await asyncio.sleep(0.1)
-        yield_control()
+        if inspect.isawaitable(handed := yield_control()):
+            await handed
         try:
             await asyncio.wait_for(
                 self._wait_tasks_to_complete(), timeout=self.config.timeout_graceful_shutdown

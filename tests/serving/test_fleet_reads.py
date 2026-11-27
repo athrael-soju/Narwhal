@@ -125,7 +125,7 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
             transport=httpx.ASGITransport(app=app), base_url="http://router"
         ) as client:
             self.assertEqual((await client.get("/narwhal/engines")).status_code, 200)
-            app.state.yield_control()
+            await app.state.yield_control()
             for path in FLEET_READS:
                 with self.subTest(path=path):
                     self.assert_refused(await client.get(path), "shutting down")

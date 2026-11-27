@@ -290,7 +290,7 @@ class YieldControlTests(FleetCase):
             router = app.state.router
             self.assertTrue(lease.owned)
             router.served = 5
-            app.state.yield_control()
+            await app.state.yield_control()
             self.assertTrue(router.standby)
             self.assertEqual(router.failover_blocked, "shutting down")
             self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 5)
@@ -305,7 +305,7 @@ class YieldControlTests(FleetCase):
     async def test_a_router_without_a_lease_keeps_control_through_the_drain(self):
         app = create_app(self.cfg)
         async with app.router.lifespan_context(app):
-            app.state.yield_control()
+            await app.state.yield_control()
             self.assertFalse(app.state.router.standby)
             app.state.router.served = 3
         self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 3)

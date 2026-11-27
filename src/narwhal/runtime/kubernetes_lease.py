@@ -10,8 +10,10 @@ or with the API server's:
   resourceVersion, stay unchanged for a lease duration on its own monotonic clock, and only by
   an update conditional on that version. Every write the holder lands is a new version, so the
   holder's deadline passes at least `safety_margin_s` before such a takeover.
-- A release this router watched, the same Lease held and then freed at the same epoch, can be
-  taken at once: the holder stopped controlling the fleet before it sent the release.
+- A release this router watched can be taken at once: the holder stopped controlling the fleet
+  before it sent the release. A release is the same Lease, held and then freed at the same
+  epoch, carrying the `RELEASED` annotation that names that holder and epoch. Any other free
+  Lease, such as one an operator patched free, may hide a live holder.
 - A Lease this router has to create, or a free Lease it never saw released, may hide a holder
   this router never saw. Such a claim holds the Lease at once and becomes valid one lease
   duration later.
@@ -30,6 +32,7 @@ import math
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,6 +47,10 @@ FIELD_MANAGER = "narwhal-router"
 # One quick retry. A request that waits out a long backoff only delays a fence it cannot prevent.
 BACKOFF = k.Backoff(base_s=0.1, cap_s=0.5, attempts=2)
 MAX_DURATION_S = 2**31 - 1
+# The annotation a release writes, `<epoch>/<holder>`, and every claim removes.
+RELEASED = "narwhal.io/released-by"
+# Recent renewTime stamps this process wrote, to recognise its own write after a lost reply.
+STAMPS_KEPT = 32
 _NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
 
 
@@ -69,6 +76,8 @@ class _Seen:
     epoch: int
     duration_s: float
     at: float
+    stamp: str
+    released_by: str
 
 
 def check_settings(name: str, ttl_s: float, safety_margin_s: float) -> None:
@@ -130,6 +139,7 @@ class KubernetesLease:
         # The (uid, resourceVersion) of a release this router saw happen.
         self._released: tuple[str, str] | None = None
         self._stamp_us = 0
+        self._stamps: deque[str] = deque(maxlen=STAMPS_KEPT)
 
     @classmethod
     def in_cluster(
@@ -207,12 +217,25 @@ class KubernetesLease:
         seen = self._seen
         if seen is not None and (seen.uid, seen.version) == version:
             return seen
-        released = seen is not None and seen.uid == version[0] and bool(seen.holder)
-        if not holder and released and seen is not None and seen.epoch == epoch:
+        released_by = str((meta.get("annotations") or {}).get(RELEASED) or "")
+        if (
+            not holder
+            and seen is not None
+            and seen.uid == version[0]
+            and seen.holder
+            and seen.epoch == epoch
+            and released_by == f"{epoch}/{seen.holder}"
+        ):
             self._released = version
         # The holder's own duration counts when it is longer than this router's.
         self._seen = _Seen(
-            *version, holder, epoch, max(float(duration), self.ttl_s), self._monotonic_clock()
+            *version,
+            holder,
+            epoch,
+            max(float(duration), self.ttl_s),
+            self._monotonic_clock(),
+            str(spec.get("renewTime") or ""),
+            released_by,
         )
         return self._seen
 
@@ -232,9 +255,10 @@ class KubernetesLease:
         now = self._monotonic_clock()
         if found is None:
             # A deleted Lease's holder may still be inside its renew deadline.
-            return self._create(not_before=now + self.ttl_s)
+            longest = max(self.ttl_s, self._seen.duration_s if self._seen else 0.0)
+            return self._create(not_before=now + longest)
         lease, seen = found
-        if seen.holder == self.holder:
+        if seen.holder == self.holder and seen.stamp in self._stamps:
             # This router's own write, whose reply was lost.
             return self._take(lease, seen.epoch, not_before=-math.inf)
         if seen.holder:
@@ -277,6 +301,10 @@ class KubernetesLease:
     def _take(self, lease: Mapping[str, Any], epoch: int, *, not_before: float) -> bool:
         stamp = self._next_stamp()
         body = copy.deepcopy(dict(lease))
+        # A held Lease carries no release mark, so a later free version without one is no release.
+        annotations = (body.get("metadata") or {}).get("annotations")
+        if isinstance(annotations, dict):
+            annotations.pop(RELEASED, None)
         acquired = (body.get("spec") or {}).get("holderIdentity") != self.holder
         body["spec"] = {**(body.get("spec") or {}), **self._spec(epoch, stamp, acquired=acquired)}
         sent = self._monotonic_clock()
@@ -347,8 +375,11 @@ class KubernetesLease:
                     log.warning("Lease %s renewal failed: %s", self.name, exc)
                     return self._live()
                 self._object = written
-                self._observe(written)
                 self._valid_until = sent + self.ttl_s - self.safety_margin_s
+                try:
+                    self._observe(written)
+                except LeaseError as exc:
+                    log.warning("%s", exc)
                 return True
             return self._live()
 
@@ -365,6 +396,8 @@ class KubernetesLease:
                 spec = body.setdefault("spec", {})
                 spec["holderIdentity"] = ""
                 spec["renewTime"] = self._next_stamp()
+                annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
+                annotations[RELEASED] = f"{self.epoch}/{self.holder}"
                 try:
                     self._observe(self._client.replace(k.LEASE, body))
                     return
@@ -447,4 +480,6 @@ class KubernetesLease:
     def _next_stamp(self) -> str:
         """A MicroTime after every one this router wrote, so each write is a new version."""
         self._stamp_us = max(int(self._wall_clock() * 1_000_000), self._stamp_us + 1)
-        return _micro_time(self._stamp_us)
+        stamp = _micro_time(self._stamp_us)
+        self._stamps.append(stamp)
+        return stamp
