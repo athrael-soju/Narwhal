@@ -1,8 +1,9 @@
 """The Kubernetes objects the fleet controller derives from a `NarwhalFleet`.
 
 Each builder returns complete objects for server-side apply: the engines' StatefulSet, Service
-and hook ConfigMaps, a gate Job and its inputs ConfigMap, and HAProxy. They carry the pod specs
-the chart's templates rendered before the controller took them over.
+and hook ConfigMaps, a gate Job and its inputs ConfigMap, HAProxy, and the router pair's
+StatefulSet and Service. They carry the pod specs the chart's templates rendered before the
+controller took them over. The routers' ServiceAccount and its Lease Role stay in the chart.
 
 Every object names the fleet as its controlling owner, so deleting the fleet leaves its removal
 to the garbage collector. The owner reference sets no `blockOwnerDeletion`: nothing waits on a
@@ -38,6 +39,7 @@ from .fleet_resource import (
     ENGINE_SERVICE,
     GROUP,
     KIND,
+    MAX_ROUTER_ARGS,
     PLACEMENT_GATE,
 )
 from .launch_engine import engine_set
@@ -371,6 +373,11 @@ class Fleet:
         _name(self.cluster_domain, "the cluster domain")
         if self.engine_account is not None:
             _name(self.engine_account, "the engines' ServiceAccount")
+            # The routers' ServiceAccount may take over the router Lease.
+            if self.engine_account == ROUTER_ACCOUNT:
+                raise ValueError(
+                    f"the engines' ServiceAccount may not be {ROUTER_ACCOUNT}, the routers'"
+                )
         if self.rdma_resource is not None and not RESOURCE_NAME.fullmatch(self.rdma_resource):
             raise ValueError(f"{self.rdma_resource!r} is not a resource name")
         if self.model_volume is not None:
@@ -812,6 +819,264 @@ def haproxy(fleet: Fleet) -> list[dict[str, Any]]:
             "spec": {
                 "selector": selector,
                 "ports": [{"name": "http", "port": HAPROXY_PORT, "targetPort": "http"}],
+            },
+        },
+    ]
+    return [_finished(document) for document in documents]
+
+
+# Routers.
+
+ROUTER = "router"
+# The router pair's StatefulSet: its pods are ROUTER_PODS.
+ROUTER_SET = "router"
+# The chart makes this ServiceAccount, with a Role that may read, renew, take over and create
+# the Lease of the same name and nothing else. The controller has no RBAC or ServiceAccount
+# verbs, and RBAC lets an identity grant only what it holds, so it cannot make them itself.
+ROUTER_ACCOUNT = "narwhal-router"
+ROUTER_LEASE = "narwhal-router"
+ROUTER_PORT = 8000
+# Each router's own volume, for its journal and state handoff.
+ROUTER_HOME = "/narwhal-router"
+ROUTER_VOLUME = "router-state"
+API_VOLUME = "narwhal-api"
+TOKEN_MOUNT = "/var/run/secrets/kubernetes.io/serviceaccount"
+TOKEN_SECONDS = 3600
+# A fleet file on the state volume: relative, with no hidden or parent part.
+ROUTER_FLEET = re.compile(r"([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.json")
+ROUTER_ARG_LENGTH = 256
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# The narwhal-serve options `routers` and ROUTER_START set, and the file lease's, which more
+# options may not set again: argparse takes the last value, so a repeated --kubernetes-lease
+# or a --lease-path would move a router off the Lease that fences the pair.
+ROUTER_OPTIONS = (
+    "--fleet",
+    "--host",
+    "--port",
+    "--journal",
+    "--kubernetes-lease",
+    "--lease-path",
+    "--lease-witness",
+    "--router-id",
+    "--standby-of",
+    "--first-start-primary",
+)
+
+# The router container's command: python3 -I -c ROUTER_START <narwhal-serve arguments>.
+ROUTER_START = """\
+# Start one router of the pair, router-0 or router-1, with the narwhal-serve arguments after
+# its own. The routers elect the primary through the Kubernetes Lease. On the first install,
+# router-0 finds no handoff at its state path and starts with --first-start-primary: it claims
+# the Lease while the Lease is absent or free, and otherwise shadows the other router. Every
+# other start is a standby of the other router, as a supervisor restarts a router of the pair.
+import json
+import os
+import sys
+
+name = os.environ["NARWHAL_POD_NAME"]
+base, _, index = name.rpartition("-")
+peer = f"http://{base}-{1 - int(index)}.{os.environ['NARWHAL_ROUTERS_DOMAIN']}:8000"
+arguments = sys.argv[1:]
+with open(arguments[arguments.index("--fleet") + 1]) as stream:
+    recovery = json.load(stream).get("recovery") or {}
+saved = os.path.exists(recovery.get("state_path", "runs/state.json"))
+standby = ["--standby-of", peer]
+if index == "0" and not saved:
+    standby.append("--first-start-primary")
+argv = [sys.executable, "-I", "-m", "narwhal.cli", *arguments, "--router-id", name, *standby]
+os.execv(sys.executable, argv)  # noqa: S606 - the router replaces this process
+"""
+
+
+def _reserved(argument: str) -> str | None:
+    """The option of ROUTER_OPTIONS an argument sets, also as `--name=value` or as a prefix
+    argparse would expand."""
+    if not argument.startswith("--") or argument == "--":
+        return None
+    option = argument.split("=", 1)[0]
+    for reserved in ROUTER_OPTIONS:
+        if reserved.startswith(option):
+            return reserved
+    return None
+
+
+@dataclass(frozen=True)
+class Routers:
+    """The router pair's settings: the fleet file on the state volume, each router's own
+    volume, and more narwhal-serve options."""
+
+    fleet_file: str
+    storage_class: str
+    size: str
+    args: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fleet_file, str) or not ROUTER_FLEET.fullmatch(self.fleet_file):
+            raise ValueError(
+                "the routers' fleet file must be a .json path on the state volume, with no "
+                f"hidden or parent part, not {self.fleet_file!r}"
+            )
+        _name(self.storage_class, "the routers' storage class")
+        if not isinstance(self.size, str) or not QUANTITY.fullmatch(self.size):
+            raise ValueError(f"the routers' volume size {self.size!r} is not a quantity")
+        if not isinstance(self.args, tuple) or len(self.args) > MAX_ROUTER_ARGS:
+            raise ValueError(f"the routers take a tuple of at most {MAX_ROUTER_ARGS} options")
+        for argument in self.args:
+            if (
+                not isinstance(argument, str)
+                or len(argument) > ROUTER_ARG_LENGTH
+                or CONTROL.search(argument)
+            ):
+                raise ValueError(f"the router option {argument!r} is not a printable string")
+            reserved = _reserved(argument)
+            if reserved is not None:
+                raise ValueError(f"the router option {argument} sets {reserved}, the pair's own")
+
+    @classmethod
+    def of(cls, spec: Mapping[str, Any], fleet_file: str) -> Routers:
+        """The settings in a fleet's `spec.routers`, around the fleet file fleet-limits wrote."""
+        return cls(
+            fleet_file,
+            spec.get("storageClassName", ""),
+            spec.get("size", ""),
+            tuple(spec.get("args") or ()),
+        )
+
+
+def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
+    """The router pair's headless Service and StatefulSet.
+
+    The pods run as ROUTER_ACCOUNT and elect the primary through ROUTER_LEASE. Only the router
+    container mounts a ServiceAccount token, a projected one of an hour. The pods never share
+    a node while another node can take one.
+    """
+    owner = fleet.owner
+    domain = f"{ROUTER_SERVICE}.{owner.namespace}.svc.{fleet.cluster_domain}"
+    selector = labels(ROUTER)
+    command = [
+        "python3",
+        "-I",
+        "-c",
+        ROUTER_START,
+        "--fleet",
+        f"{STATE_MOUNT}/{settings.fleet_file}",
+        "--host",
+        "$(NARWHAL_POD_IP)",
+        "--port",
+        str(ROUTER_PORT),
+        "--journal",
+        f"{ROUTER_HOME}/journal.jsonl",
+        "--kubernetes-lease",
+        ROUTER_LEASE,
+        # The kubelet expands $(NAME) in a command; a fleet's option stays as written.
+        *(engine_set.escape(argument) for argument in settings.args),
+    ]
+    env: list[dict[str, Any]] = [
+        {"name": "NARWHAL_POD_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
+        {"name": "NARWHAL_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+        {"name": "NARWHAL_ROUTERS_DOMAIN", "value": domain},
+    ]
+    if fleet.api_key:
+        env.append(fleet.api_key.variable())
+    container = {
+        "name": ROUTER,
+        "image": fleet.narwhal_image,
+        # ROUTER_START decides whether this router starts as the primary or as a standby.
+        "command": command,
+        "env": env,
+        # A relative recovery.state_path lies on the router's own volume.
+        "workingDir": ROUTER_HOME,
+        "ports": [{"name": "http", "containerPort": ROUTER_PORT}],
+        "volumeMounts": [
+            {"name": STATE_VOLUME, "mountPath": STATE_MOUNT, "readOnly": True},
+            {"name": API_VOLUME, "mountPath": TOKEN_MOUNT, "readOnly": True},
+            {"name": ROUTER_VOLUME, "mountPath": ROUTER_HOME},
+        ],
+    }
+    token = {
+        "name": API_VOLUME,
+        "projected": {
+            "defaultMode": 0o444,
+            "sources": [
+                {"serviceAccountToken": {"path": "token", "expirationSeconds": TOKEN_SECONDS}},
+                {
+                    "configMap": {
+                        "name": "kube-root-ca.crt",
+                        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                    }
+                },
+                {
+                    "downwardAPI": {
+                        "items": [
+                            {
+                                "path": "namespace",
+                                "fieldRef": {"fieldPath": "metadata.namespace"},
+                            }
+                        ]
+                    }
+                },
+            ],
+        },
+    }
+    spec = {
+        "enableServiceLinks": False,
+        # Only the router container mounts the token, for the router Lease.
+        "serviceAccountName": ROUTER_ACCOUNT,
+        "automountServiceAccountToken": False,
+        # On several nodes the two routers never share one, so losing a node leaves a router.
+        # On one node both still schedule. Tainted nodes the routers cannot run on do not count.
+        "topologySpreadConstraints": [
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                "nodeTaintsPolicy": "Honor",
+                "labelSelector": {"matchLabels": dict(selector)},
+            }
+        ],
+        "containers": [container],
+        "volumes": [
+            {
+                "name": STATE_VOLUME,
+                "persistentVolumeClaim": {"claimName": fleet.state_claim, "readOnly": True},
+            },
+            token,
+        ],
+    }
+    documents = [
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": metadata(owner, ROUTER_SERVICE, ROUTER),
+            "spec": {
+                "clusterIP": "None",
+                # A standby answers /ready with 503 and must still resolve, for its peer and
+                # for HAProxy.
+                "publishNotReadyAddresses": True,
+                "selector": selector,
+                "ports": [{"name": "http", "port": ROUTER_PORT}],
+            },
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": metadata(owner, ROUTER_SET, ROUTER),
+            "spec": {
+                "serviceName": ROUTER_SERVICE,
+                "replicas": len(ROUTER_PODS),
+                "podManagementPolicy": "Parallel",
+                "selector": {"matchLabels": selector},
+                "template": {"metadata": {"labels": dict(selector)}, "spec": spec},
+                "volumeClaimTemplates": [
+                    {
+                        "metadata": {"name": ROUTER_VOLUME},
+                        "spec": {
+                            "accessModes": ["ReadWriteOnce"],
+                            "storageClassName": settings.storage_class,
+                            "resources": {"requests": {"storage": settings.size}},
+                        },
+                    }
+                ],
             },
         },
     ]

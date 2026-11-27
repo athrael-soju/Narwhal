@@ -3,17 +3,21 @@ labels from the allow-list only, deterministic Job names and pruning.
 
 `golden/kubernetes_objects.json` holds `helm template` output of the chart's engine, gate and
 HAProxy templates before the builders replaced them, with the values it was rendered from.
+`golden/kubernetes_routers.json` holds the same of the chart's router templates.
 """
 
 import base64
 import copy
 import hashlib
 import json
+import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.kubernetes_objects import (
@@ -22,15 +26,21 @@ from narwhal.deployment.kubernetes_objects import (
     Fleet,
     GateJob,
     Owner,
+    Routers,
 )
+from narwhal.deployment.kubernetes_target import ROUTER_HOME, ROUTERS
 from narwhal.deployment.launch_engine import engine_set
 from tests.deployment import chart_fixtures
+from tests.deployment.pod_fixtures import POD_IP, SECRET_VALUE, expand
 from tests.deployment.test_helm_chart import Comparison
 
 ROOT = Path(__file__).resolve().parents[2]
 GROUP = objects.GROUP
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "kubernetes_objects.json").read_text())
 INPUTS = GOLDEN["inputs"]
+ROUTER_GOLDEN = json.loads(
+    (Path(__file__).parent / "golden" / "kubernetes_routers.json").read_text()
+)
 OWNER = Owner("fleet", "0b6f4c1e-5d1a-4c55-9f7e-3a1f0f5e9a11", chart_fixtures.NAMESPACE)
 OTHER = Owner("fleet", "6a3c2b9d-1e8f-4f70-8b2a-5c4d3e2f1a00", chart_fixtures.NAMESPACE)
 CHART_PLACEMENT = "narwhal.io/placement"
@@ -94,7 +104,43 @@ def everything(target: Fleet | None = None) -> list[dict]:
         for item in INPUTS["gates"]
         if item.get("inputs")
     ]
-    return documents + objects.haproxy(target)
+    return documents + objects.haproxy(target) + objects.routers(target, router_settings())
+
+
+def router_settings(**overrides: Any) -> Routers:
+    """The router settings the router golden's values describe."""
+    values = ROUTER_GOLDEN["inputs"]["routers"]
+    settings: dict[str, Any] = {
+        "fleet_file": values["fleet"],
+        "storage_class": values["storageClassName"],
+        "size": values["size"],
+        "args": tuple(values["args"]),
+    }
+    settings.update(overrides)
+    return Routers(**settings)
+
+
+def router_fleet(**overrides: Any) -> Fleet:
+    """The fleet the router golden's values describe."""
+    inputs = ROUTER_GOLDEN["inputs"]
+    key = inputs["credentials"]["engineApiKey"]
+    settings: dict[str, Any] = {
+        "narwhal_image": inputs["images"]["narwhal"],
+        "state_claim": inputs["stateClaim"],
+        "api_key": ApiKey(key["env"], key["secretName"], key["key"]),
+        "cluster_domain": inputs["haproxy"]["clusterDomain"],
+    }
+    settings.update(overrides)
+    return fleet(**settings)
+
+
+def router_set(target: Fleet | None = None, settings: Routers | None = None) -> dict:
+    [found] = [
+        d
+        for d in objects.routers(target or router_fleet(), settings or router_settings())
+        if d["kind"] == "StatefulSet"
+    ]
+    return found
 
 
 def metadata_blocks(document: Any) -> list[dict]:
@@ -742,6 +788,253 @@ def named(
         owner=owner,
         **meta,
     )
+
+
+def without_release(document: dict) -> dict:
+    """An object without what differs by design, as `spec_only`, and without the release in
+    the routers' spread constraint."""
+    document = spec_only(document)
+    for constraint in (
+        document["spec"].get("template", {}).get("spec", {}).get("topologySpreadConstraints", [])
+    ):
+        constraint["labelSelector"]["matchLabels"].pop("app.kubernetes.io/instance", None)
+    return document
+
+
+class RouterTests(unittest.TestCase):
+    """The router pair the chart ran on the Lease: its Service and StatefulSet."""
+
+    def test_the_router_pair_matches_the_chart(self):
+        built = by_name(objects.routers(router_fleet(), router_settings()))
+        rendered = by_name(ROUTER_GOLDEN["rendered"])
+        self.assertEqual(sorted(built), [("Service", "routers"), ("StatefulSet", "router")])
+        self.assertEqual(sorted(built), sorted(rendered))
+        for key, document in rendered.items():
+            with self.subTest(kind=key[0], name=key[1]):
+                self.assertEqual(without_release(built[key]), without_release(document))
+        # The script is the chart's files/router-start.py, byte for byte.
+        [container] = template(rendered[("StatefulSet", "router")])["containers"]
+        self.assertEqual(container["command"][3], objects.ROUTER_START)
+
+    def test_the_routers_names_agree_with_haproxy_the_target_and_the_chart(self):
+        statefulset = router_set()
+        names = tuple(f"{statefulset['metadata']['name']}-{n}" for n in range(2))
+        self.assertEqual(statefulset["spec"]["replicas"], 2)
+        self.assertNotIn("ordinals", statefulset["spec"])
+        self.assertEqual(names, objects.ROUTER_PODS)
+        self.assertEqual(names, ROUTERS)
+        self.assertEqual(objects.ROUTER_HOME, ROUTER_HOME)
+        self.assertEqual(statefulset["spec"]["serviceName"], objects.ROUTER_SERVICE)
+        config = objects.haproxy_config(chart_fixtures.NAMESPACE, "cluster.example")
+        for pod in names:
+            self.assertIn(
+                f"{pod}.routers.{chart_fixtures.NAMESPACE}.svc.cluster.example:8000", config
+            )
+        # The chart's Role grants the routers' ServiceAccount the Lease of the same name.
+        helpers = (ROOT / "deploy/helm/narwhal/templates/_helpers.tpl").read_text()
+        [name] = re.findall(r'define "narwhal.routerName" -}}\n(\S+)\n', helpers)
+        self.assertEqual(name, objects.ROUTER_ACCOUNT)
+        self.assertEqual(objects.ROUTER_LEASE, objects.ROUTER_ACCOUNT)
+
+    def test_router_0_claims_the_lease_first_until_it_holds_a_handoff(self):
+        [container] = template(router_set())["containers"]
+        self.assertEqual(container["workingDir"], "/narwhal-router")
+        variables = {
+            "NARWHAL_POD_IP": POD_IP,
+            "NARWHAL_ROUTERS_DOMAIN": container["env"][2]["value"],
+        }
+        argv = [expand(part, variables) for part in container["command"]]
+        self.assertEqual(
+            argv[argv.index("--fleet") + 1],
+            "/narwhal-state/deploy/run-1/stages/fleet-limits/fleet.json",
+        )
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        folder = Path(scratch.name)
+        handoff = folder / "router-state.json"
+        fleet_file = folder / "fleet.json"
+        fleet_file.write_text(json.dumps({"recovery": {"state_path": str(handoff)}}))
+        argv[argv.index("--fleet") + 1] = str(fleet_file)
+        domain = f"routers.{chart_fixtures.NAMESPACE}.svc.cluster.example:8000"
+        first, second = f"http://router-1.{domain}", f"http://router-0.{domain}"
+        # Each case: the router, whether its handoff exists, and the standby options it takes.
+        cases = (
+            ("router-0", False, ["--standby-of", first, "--first-start-primary"]),
+            ("router-1", False, ["--standby-of", second]),
+            ("router-0", True, ["--standby-of", first]),
+            ("router-1", True, ["--standby-of", second]),
+        )
+        for name, saved, standby in cases:
+            with self.subTest(name=name, saved=saved):
+                handoff.unlink(missing_ok=True)
+                if saved:
+                    handoff.write_text("{}")
+                executed: list[list[str]] = []
+                environment = {**variables, "NARWHAL_POD_NAME": name}
+                with (
+                    patch.dict(os.environ, environment),
+                    patch.object(sys, "argv", ["-c", *argv[4:]]),
+                    patch.object(sys, "executable", "python3"),
+                    patch("os.execv", lambda path, args, found=executed: found.append(args)),
+                ):
+                    exec(argv[3], {"__name__": "__main__"})
+                [args] = executed
+                self.assertEqual(args[:5], ["python3", "-I", "-m", "narwhal.cli", "--fleet"])
+                tail = ["--router-id", name, *standby]
+                self.assertEqual(args[-len(tail) :], tail)
+                self.assertEqual(args[args.index("--kubernetes-lease") + 1], "narwhal-router")
+                self.assertNotIn("--lease-path", args)
+                self.assertEqual(args[args.index("--host") + 1], POD_IP)
+                self.assertEqual(args[args.index("--lease-ttl") + 1], "6")
+
+    def test_only_the_router_container_holds_the_lease_token(self):
+        spec = template(router_set())
+        self.assertEqual(spec["serviceAccountName"], "narwhal-router")
+        self.assertFalse(spec["automountServiceAccountToken"])
+        [api] = [volume for volume in spec["volumes"] if volume["name"] == "narwhal-api"]
+        sources = api["projected"]["sources"]
+        self.assertEqual(
+            sources[0], {"serviceAccountToken": {"path": "token", "expirationSeconds": 3600}}
+        )
+        self.assertEqual(sources[1]["configMap"]["name"], "kube-root-ca.crt")
+        self.assertEqual(
+            sources[2]["downwardAPI"]["items"][0]["fieldRef"]["fieldPath"], "metadata.namespace"
+        )
+        self.assertNotIn("initContainers", spec)
+        [container] = spec["containers"]
+        [mount] = [m for m in container["volumeMounts"] if m["name"] == "narwhal-api"]
+        self.assertEqual(mount["mountPath"], "/var/run/secrets/kubernetes.io/serviceaccount")
+        self.assertTrue(mount["readOnly"])
+        claims = [v for v in spec["volumes"] if "persistentVolumeClaim" in v]
+        self.assertEqual(
+            [v["persistentVolumeClaim"] for v in claims],
+            [{"claimName": "narwhal-state", "readOnly": True}],
+        )
+        state = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
+        self.assertEqual(
+            state, [{"name": "narwhal-state", "mountPath": "/narwhal-state", "readOnly": True}]
+        )
+        # No other derived object runs as the routers' ServiceAccount.
+        for document in everything():
+            if document["kind"] in ("StatefulSet", "Deployment", "Job"):
+                with self.subTest(kind=document["kind"], name=document["metadata"]["name"]):
+                    account = template(document).get("serviceAccountName")
+                    self.assertEqual(
+                        account == "narwhal-router", document["metadata"]["name"] == "router"
+                    )
+
+    def test_the_engines_may_not_run_as_the_routers_service_account(self):
+        with self.assertRaisesRegex(ValueError, "may not be narwhal-router"):
+            fleet(engine_account="narwhal-router")
+
+    def test_the_routers_never_share_a_node_while_another_can_take_one(self):
+        statefulset = router_set()
+        [constraint] = template(statefulset)["topologySpreadConstraints"]
+        self.assertEqual(
+            constraint,
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                # A tainted node the routers cannot run on is not a node to spread over.
+                "nodeTaintsPolicy": "Honor",
+                "labelSelector": {"matchLabels": statefulset["spec"]["selector"]["matchLabels"]},
+            },
+        )
+        self.assertEqual(
+            statefulset["spec"]["selector"]["matchLabels"],
+            {"app.kubernetes.io/name": "narwhal", "app.kubernetes.io/component": "router"},
+        )
+
+    def test_only_the_router_container_gets_the_engine_key(self):
+        [container] = template(router_set())["containers"]
+        self.assertEqual(
+            container["env"][-1],
+            {
+                "name": "NARWHAL_ENGINE_API_KEY",
+                "valueFrom": {"secretKeyRef": {"name": "engine-credential", "key": "api-key"}},
+            },
+        )
+        [bare] = template(router_set(router_fleet(api_key=None)))["containers"]
+        self.assertNotIn("secretKeyRef", json.dumps(bare))
+        self.assertNotIn(
+            SECRET_VALUE, json.dumps(objects.routers(router_fleet(), router_settings()))
+        )
+
+    def test_a_fleets_router_option_reaches_narwhal_serve_as_written(self):
+        written = ("--log-level", "$(NARWHAL_ENGINE_API_KEY)", "$$x")
+        [container] = template(router_set(settings=router_settings(args=written)))["containers"]
+        variables = {"NARWHAL_ENGINE_API_KEY": SECRET_VALUE, "NARWHAL_POD_IP": POD_IP}
+        argv = [expand(part, variables) for part in container["command"]]
+        self.assertEqual(tuple(argv[-3:]), written)
+        self.assertNotIn(SECRET_VALUE, argv)
+
+    def test_router_settings_come_from_the_fleet_spec(self):
+        spec = {"storageClassName": "local-path", "size": "2Gi", "args": ["--lease-ttl", "6"]}
+        self.assertEqual(
+            Routers.of(spec, "deploy/run-1/fleet.json"),
+            Routers("deploy/run-1/fleet.json", "local-path", "2Gi", ("--lease-ttl", "6")),
+        )
+        self.assertEqual(Routers.of({"storageClassName": "a", "size": "1Gi"}, "f.json").args, ())
+
+    def test_router_settings_that_cannot_run_the_pair_are_refused(self):
+        for fleet_file in (
+            "../fleet.json",
+            "/fleet.json",
+            "a/../../fleet.json",
+            "fleet.json\nx",
+            ".hidden/fleet.json",
+            "fleet.yaml",
+            "a//fleet.json",
+        ):
+            with (
+                self.subTest(fleet_file=fleet_file),
+                self.assertRaisesRegex(ValueError, "fleet file"),
+            ):
+                router_settings(fleet_file=fleet_file)
+        with self.assertRaisesRegex(ValueError, "storage class"):
+            router_settings(storage_class="Local_Path")
+        with self.assertRaisesRegex(ValueError, "quantity"):
+            router_settings(size="2 GiB")
+        with self.assertRaisesRegex(ValueError, "at most 32"):
+            router_settings(args=("--log-level", "info") * 17)
+        with self.assertRaisesRegex(ValueError, "at most 32"):
+            router_settings(args=["--log-level", "info"])
+        for argument in ("x\ny", "\x1b[2J", "a" * 257):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, "printable"):
+                router_settings(args=(argument,))
+        # An option of the pair's own, whole, with its value, or as a prefix argparse expands.
+        for argument, reserved in (
+            ("--kubernetes-lease", "--kubernetes-lease"),
+            ("--kubernetes-lease=other", "--kubernetes-lease"),
+            ("--kube", "--kubernetes-lease"),
+            ("--lease-path", "--lease-path"),
+            ("--lease-witness=/w", "--lease-witness"),
+            ("--standby-of", "--standby-of"),
+            ("--first-start-primary", "--first-start-primary"),
+            ("--router-id", "--router-id"),
+            ("--fleet=/etc/fleet.json", "--fleet"),
+            ("--journal", "--journal"),
+            ("--host", "--host"),
+            ("--port", "--port"),
+        ):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, reserved):
+                router_settings(args=(argument, "x"))
+        router_settings(args=("--lease-ttl", "6", "--lease-safety-margin", "1", "--", "-x"))
+
+    def test_stopping_deletes_the_routers_and_keeps_their_volumes(self):
+        live = [
+            named(d["kind"], d["metadata"]["name"])
+            for d in objects.routers(router_fleet(), router_settings())
+        ]
+        live.append(named("PersistentVolumeClaim", "router-state-router-0", owner=None))
+        deletions = objects.prune(OWNER, [], live)
+        self.assertEqual(
+            [(d.kind, d.name) for d in deletions],
+            [("StatefulSet", "router"), ("Service", "routers")],
+        )
+        for deletion in deletions:
+            self.assertEqual(deletion.options()["propagationPolicy"], "Background")
 
 
 class PruneTests(unittest.TestCase):
