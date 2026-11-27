@@ -104,10 +104,11 @@ GATE_KINDS = (
     "preflight",
     "router-check",
 )
-# The gates that call engines, or prepare the launch whose checks read the key, get the key.
+# The gates that call engines get the key. Preparing a launch names the key's Secret and calls
+# no engine, so no launch file holds the key.
 CREDENTIAL_KINDS = (
-    "prepare",
     "transfer-measure",
+    "sidecar-verify",
     "finalize-fleet",
     "profile",
     "calibrate",

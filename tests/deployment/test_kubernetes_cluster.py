@@ -10,6 +10,7 @@ from typing import ClassVar
 
 import httpx
 
+from narwhal.deployment import kubernetes_objects, kubernetes_target
 from tests.deployment.kubernetes_cluster import (
     CONFIG_MAP,
     CONFIG_MAP_BYTES,
@@ -1542,29 +1543,27 @@ class ApiClientTests(StoreTest):
 
 
 class RigTests(unittest.TestCase):
-    def test_the_task_18_rig_runs_its_gate_jobs_as_store_jobs(self):
+    def test_the_rig_runs_the_targets_gate_jobs_as_store_jobs(self):
         rig = Rig(Path(tempfile.mkdtemp()))
         cluster = rig.cluster(rig.env, rig.root / "logs")
-        values = json.loads(Path(rig.env["NARWHAL_KUBERNETES_VALUES"]).read_text())
-        values["state"]["claimName"] = "narwhal-state"
-        entry = {
-            "name": "probe",
-            "kind": "fabric-probe",
-            "command": ["ip"],
-            "deadlineSeconds": 1,
-            "node": "gpu-a",
-            "keep": "deploy/x/jobs/probe",
-        }
-        values.update(engines={}, gates=[entry], placement={})
-        values["routers"]["enabled"] = False
-        cluster.upgrade(Path("chart"), values)
+        deployment = kubernetes_target.KubernetesDeployment(rig.root / "run", rig.env)
+        gate = kubernetes_objects.GateJob(
+            name="probe",
+            kind="fabric-probe",
+            command=["ip"],
+            deadline_seconds=1,
+            keep="deploy/x/jobs/probe",
+            node="gpu-a",
+        )
+        cluster.create(JOB, kubernetes_objects.job(deployment.fleet(), gate))
+        rig.settle()
         stored = rig.store.get(JOB, "fleet", "probe")
         self.assertEqual(condition(stored, "Complete")["status"], "True")
-        [probe] = cluster.items("pod", "job-name=probe")
+        [probe] = cluster.list(POD, {"job-name": "probe"})
         self.assertEqual(probe["spec"]["nodeName"], "gpu-a")
         self.assertEqual(probe["metadata"]["ownerReferences"][0]["uid"], stored["metadata"]["uid"])
-        self.assertIn("narwhal-interfaces", cluster.logs("probe"))
-        self.assertEqual(rig.jobs["probe"]["entry"], entry)
+        self.assertIn(b"narwhal-interfaces", cluster.log(probe["metadata"]["name"], "gate"))
+        self.assertEqual(rig.jobs["probe"]["entry"]["kind"], "fabric-probe")
         # Gate pods are the Jobs', not the workloads the tests count.
         self.assertEqual(list(rig.pods), [])
 

@@ -60,9 +60,10 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
-| Kubernetes context, namespace, release or tool paths | `NARWHAL_KUBERNETES_CONTEXT`, `NARWHAL_KUBERNETES_NAMESPACE`, `NARWHAL_KUBERNETES_RELEASE`, `NARWHAL_KUBECTL` and `NARWHAL_HELM` | `access` and every stage after it |
+| Namespace, fleet, Kubernetes context or kubectl path | `NARWHAL_KUBERNETES_NAMESPACE`, the fleet's uid in `NARWHAL_KUBERNETES_FLEET_UID`, `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` | `access` and every stage after it |
 | Engine node, model volume, image, checkpoint, launch policy or transport | The discovery fields of `.env`, the Kubernetes inputs of the engine pods and the images | `discover` and every stage after it |
-| Narwhal release or chart | The SHA-256 of the installed package's Python files and of the chart's files | `discover` and every stage after it |
+| Narwhal release | The SHA-256 of the installed package's Python files, which build every object | `discover` and every stage after it |
+| Engine API key Secret | The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, never the key itself | `engine-prepare`, `router-start` |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start` |
 | Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start` |

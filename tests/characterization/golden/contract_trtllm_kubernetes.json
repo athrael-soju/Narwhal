@@ -54,7 +54,6 @@
   },
   "prepare": {
     "env": [
-      "NARWHAL_TRTLLM_API_KEY=engine-only-secret",
       "NARWHAL_TRTLLM_TRANSFER_HOST=$(NARWHAL_POD_IP)",
       "NARWHAL_TRTLLM_TRANSFER_PORT=5600",
       "PYTHONPATH=/narwhal-hooks",
@@ -230,10 +229,17 @@
               }
             },
             "securityContext": {
+              "allowPrivilegeEscalation": false,
               "capabilities": {
                 "add": [
                   "IPC_LOCK"
+                ],
+                "drop": [
+                  "ALL"
                 ]
+              },
+              "seccompProfile": {
+                "type": "RuntimeDefault"
               }
             },
             "volumeMounts": [
@@ -316,6 +322,15 @@
                     "fieldPath": "metadata.name"
                   }
                 }
+              },
+              {
+                "name": "NARWHAL_ENGINE_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "api-key",
+                    "name": "engine-credential"
+                  }
+                }
               }
             ],
             "image": "registry.example/narwhal@sha256:<sha256>",
@@ -333,8 +348,12 @@
                   "ALL"
                 ]
               },
-              "runAsGroup": 0,
-              "runAsUser": 0
+              "runAsGroup": 10002,
+              "runAsNonRoot": true,
+              "runAsUser": 10002,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
             },
             "volumeMounts": [
               {
@@ -396,7 +415,8 @@
                 "runpy.run_path(sys.argv[0], run_name='__main__')"
               ],
               "{\"/narwhal-hooks\": {\"engine.json\": \"<sha256>\", \"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
-              "checkpoint"
+              "checkpoint",
+              "10002"
             ],
             "env": [
               {
@@ -426,6 +446,12 @@
             ],
             "image": "registry.example/engine@sha256:<sha256>",
             "name": "checkpoint",
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
             "volumeMounts": [
               {
                 "mountPath": "/narwhal-hooks",
@@ -550,10 +576,17 @@
               }
             },
             "securityContext": {
+              "allowPrivilegeEscalation": false,
               "capabilities": {
                 "add": [
                   "IPC_LOCK"
+                ],
+                "drop": [
+                  "ALL"
                 ]
+              },
+              "seccompProfile": {
+                "type": "RuntimeDefault"
               }
             },
             "volumeMounts": [
@@ -790,6 +823,7 @@
         "seccomp_unconfined": false,
         "service_account": "narwhal-attestation",
         "sidecar_image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sidecar_user": 10002,
         "state_claim": "narwhal-state"
       },
       "kv_events": null,

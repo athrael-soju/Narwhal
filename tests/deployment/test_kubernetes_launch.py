@@ -17,7 +17,13 @@ from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import cli as engine_cli
 from narwhal.deployment.launch_engine import kubernetes, pod
 from narwhal.deployment.launch_engine.check import read_checked
-from narwhal.deployment.launch_engine.plan import build
+from narwhal.deployment.launch_engine.plan import (
+    API_KEY_ENV,
+    build,
+    launch_headers,
+    plan_launcher,
+    read_env,
+)
 from tests.backends.contract import fixtures, launch_record, prepared
 from tests.deployment.fixtures import launch_document, launcher_inputs
 from tests.deployment.pod_fixtures import (
@@ -103,7 +109,7 @@ class KubernetesLaunchTests(unittest.TestCase):
             "JSON volume source": {"NARWHAL_KUBERNETES_MODEL_VOLUME": '{"emptyDir": {}}'},
             "PersistentVolumeClaim's name": {"NARWHAL_KUBERNETES_STATE_CLAIM": "State_Claim"},
             "<secret name>/<key>": {"NARWHAL_KUBERNETES_API_KEY_SECRET": "credential"},
-            "the Secret that holds": {"NARWHAL_ENGINE_API_KEY": ""},
+            "unset NARWHAL_ENGINE_API_KEY": {"NARWHAL_ENGINE_API_KEY": "engine-only-secret"},
             "service account the attestation sidecar": {"NARWHAL_KUBERNETES_SERVICE_ACCOUNT": ""},
             "the Narwhal image's registry digest": {
                 "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "registry.example/narwhal:latest"
@@ -135,15 +141,28 @@ class KubernetesLaunchTests(unittest.TestCase):
             sidecar["command"][-4:],
             ["--run", str(kubernetes.LAUNCH_MOUNT), "--pod-evidence", str(pod.STATE)],
         )
+        # The sidecar runs as its own user, so root in the engine container, which has no
+        # CAP_SYS_PTRACE or CAP_DAC_OVERRIDE, reaches neither its token nor its evidence.
         self.assertEqual(
             sidecar["securityContext"],
             {
-                "runAsUser": 0,
-                "runAsGroup": 0,
+                "runAsUser": kubernetes.DEFAULT_SIDECAR_USER,
+                "runAsGroup": kubernetes.DEFAULT_SIDECAR_USER,
+                "runAsNonRoot": True,
                 "allowPrivilegeEscalation": False,
                 "capabilities": {"drop": ["ALL"]},
+                "seccompProfile": {"type": "RuntimeDefault"},
             },
         )
+        checkpoint = next(c for c in spec["initContainers"] if c["name"] == "checkpoint")
+        self.assertEqual(checkpoint["command"][-2:], ["checkpoint", "10002"])
+        run, _ = self.prepared("sidecar-user", NARWHAL_KUBERNETES_SIDECAR_USER="20001")
+        spec = json.loads((run / "kubernetes.json").read_text())["podSpec"]
+        self.assertEqual(spec["containers"][1]["securityContext"]["runAsUser"], 20001)
+        self.assertEqual(spec["initContainers"][0]["command"][-1], "20001")
+        for refused in ("0", "root", "-1", "4294967296"):
+            with self.subTest(refused), self.assertRaisesRegex(ValueError, "non-root user ID"):
+                kubernetes.sidecar_user({kubernetes.SIDECAR_USER_ENV: refused})
         mounts = {mount["mountPath"]: mount for mount in sidecar["volumeMounts"]}
         launch = mounts[str(kubernetes.LAUNCH_MOUNT)]
         self.assertEqual(
@@ -173,6 +192,34 @@ class KubernetesLaunchTests(unittest.TestCase):
         run, _ = self.prepared("runtime-class", NARWHAL_KUBERNETES_RUNTIME_CLASS="nvidia")
         spec = json.loads((run / "kubernetes.json").read_text())["podSpec"]
         self.assertEqual(spec["runtimeClassName"], "nvidia")
+
+    def test_no_launch_file_holds_the_engine_api_key(self):
+        # The key an SSH launch carries in its files is in no file of a Kubernetes launch.
+        secret = {"name": "engine-credential", "key": "api-key"}
+        run, plan = self.prepared()
+        self.assertEqual(plan["kubernetes"]["api_key_secret"], secret)
+        credential = plan_launcher(plan).api_key_env
+        self.assertNotIn(credential, read_env(run / "container.env"))
+        for path in run.rglob("*"):
+            if path.is_file():
+                with self.subTest(path=path.name):
+                    self.assertNotIn(b"engine-only-secret", path.read_bytes())
+        spec = json.loads((run / "kubernetes.json").read_text())["podSpec"]
+        engine, sidecar = spec["containers"]
+        reference = {"secretKeyRef": secret}
+        self.assertIn({"name": credential, "valueFrom": reference}, engine["env"])
+        self.assertIn({"name": API_KEY_ENV, "valueFrom": reference}, sidecar["env"])
+        self.assertTrue(all("value" not in item for item in sidecar["env"]))
+
+    def test_the_engine_header_comes_from_the_containers_own_variable(self):
+        run, plan = self.prepared()
+        with patch.dict(os.environ, {API_KEY_ENV: "from-the-secret"}):
+            self.assertEqual(launch_headers(run, plan), {"Authorization": "Bearer from-the-secret"})
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(ValueError, f"has no {API_KEY_ENV}"),
+        ):
+            launch_headers(run, plan)
 
     def test_the_engine_step_records_its_process_for_the_attestation_sidecar(self):
         run, plan, engine = self.started()
@@ -317,13 +364,36 @@ class KubernetesLaunchTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertIn("verdict.py differs from its pinned SHA-256", refused.stderr)
 
-    def test_the_runtime_and_engine_containers_may_lock_memory(self):
+    def test_the_checkpoint_hands_the_pods_directory_to_the_sidecar(self):
+        run, _ = self.prepared()
+        engine = self.pod(run)
+        engine.state.chmod(0o755)
+        with patch("os.chown", wraps=os.chown) as chown:
+            self.assertEqual(engine.run("checkpoint"), 0, engine.stderr.getvalue())
+        # The test's user stands in for the sidecar's, which the pod spec names.
+        self.assertEqual(engine.sidecar_user, kubernetes.DEFAULT_SIDECAR_USER)
+        chown.assert_called_once_with(engine.state, os.getuid(), -1)
+        # The group, root's in the pod, keeps write access for the runtime check.
+        self.assertEqual(engine.state.stat().st_mode & 0o777, 0o775)
+
+    def test_the_runtime_and_engine_containers_keep_only_ipc_lock(self):
         run, plan = self.prepared()
         engine = self.pod(run)
-        locked = {"capabilities": {"add": ["IPC_LOCK"]}}
-        self.assertNotIn("securityContext", engine.containers["checkpoint"])
+        locked = {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
+        }
+        # The checkpoint step keeps the runtime's default capabilities to hand the pod's
+        # directory to the sidecar, and adds none.
+        self.assertEqual(
+            engine.containers["checkpoint"]["securityContext"],
+            {"allowPrivilegeEscalation": False, "seccompProfile": {"type": "RuntimeDefault"}},
+        )
         for name in ("runtime-check", "engine"):
-            self.assertEqual(engine.containers[name]["securityContext"], locked)
+            self.assertEqual(
+                engine.containers[name]["securityContext"],
+                {**locked, "seccompProfile": {"type": "RuntimeDefault"}},
+            )
         # A ROCm engine also runs without a seccomp filter, as its Docker launch does.
         record = {**launch_record(self.fixtures.launch_runtime, None, dict(RDMA_TRANSFER))}
         rocm = {**record, "gpu_visibility_env": "ROCR_VISIBLE_DEVICES"}

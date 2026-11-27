@@ -10,7 +10,16 @@ judges the probe output again and writes checked.json.
 
 The attestation sidecar runs in the Narwhal image beside the engine container. The pod shares
 its process namespace, so the sidecar binds the engine process to its container, and it reads
-the launch directory that checked its pod from the state volume.
+the launch directory that checked its pod from the state volume. It runs as its own non-root
+user, `NARWHAL_KUBERNETES_SIDECAR_USER`. The engine and runtime-check containers keep only
+IPC_LOCK, under the RuntimeDefault seccomp profile unless the launch runs unconfined, so the
+engine can neither reach the sidecar's files through /proc nor rewrite the evidence the
+sidecar writes. The checkpoint init container hands the pod's directory of the state volume to
+the sidecar's user.
+
+The engine API key stays in its Secret. The launch names the Secret, and the pod spec gives the
+key to the containers that call the engine, the engine and the sidecar, by `secretKeyRef`, so
+no file of the launch directory, which the state volume and the run directory keep, holds it.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -30,6 +40,7 @@ from .backend import plan_launcher
 from .check import check_context, finish_check, judge, require_checked
 from .checkpoint import json_digest
 from .plan import (
+    API_KEY_ENV,
     HOOK_MOUNT,
     KV_EVENTS_MOUNT,
     MODEL_MOUNT,
@@ -47,6 +58,9 @@ API_KEY_SECRET_ENV = "NARWHAL_KUBERNETES_API_KEY_SECRET"
 SERVICE_ACCOUNT_ENV = "NARWHAL_KUBERNETES_SERVICE_ACCOUNT"
 SIDECAR_IMAGE_ENV = "NARWHAL_KUBERNETES_SIDECAR_IMAGE"
 RUNTIME_CLASS_ENV = "NARWHAL_KUBERNETES_RUNTIME_CLASS"
+# The user and group the attestation sidecar runs as; the chart's settings name it.
+SIDECAR_USER_ENV = "NARWHAL_KUBERNETES_SIDECAR_USER"
+DEFAULT_SIDECAR_USER = 10002
 # Volume sources that serve a staged checkpoint to the pod.
 MODEL_VOLUME_SOURCES = ("persistentVolumeClaim", "hostPath", "nfs", "csi")
 # The pod steps, by file name in the pod-step ConfigMap; the engine's probe reader joins them.
@@ -134,12 +148,17 @@ def model_volume(env: dict[str, str]) -> dict:
     return source
 
 
-def api_key_secret(env: dict[str, str]) -> dict | None:
+def api_key_secret(env: Mapping[str, str]) -> dict | None:
+    """The Secret and key that hold the engine API key, or None for an engine without one.
+
+    A Kubernetes launch takes the key by this reference only: a launch whose inputs hold the
+    key itself is refused, so no launch file can hold it.
+    """
     reference = env.get(API_KEY_SECRET_ENV, "")
-    if bool(reference) != bool(env.get("NARWHAL_ENGINE_API_KEY")):
+    if env.get("NARWHAL_ENGINE_API_KEY"):
         raise ValueError(
-            f"set {API_KEY_SECRET_ENV} to the Secret that holds NARWHAL_ENGINE_API_KEY, "
-            "and leave both unset for an engine without a credential"
+            "a Kubernetes engine reads its API key from the Secret "
+            f"{API_KEY_SECRET_ENV} names; unset NARWHAL_ENGINE_API_KEY so no launch file holds it"
         )
     if not reference:
         return None
@@ -161,6 +180,14 @@ def pod_files(plan: dict) -> dict[str, Path]:
             raise ValueError(f"the engine backend's {name} has no source file")
         files[name] = Path(module.__file__)
     return files
+
+
+def sidecar_user(env: Mapping[str, str]) -> int:
+    """The non-root user the attestation sidecar runs as, `DEFAULT_SIDECAR_USER` unless set."""
+    value = env.get(SIDECAR_USER_ENV, "") or str(DEFAULT_SIDECAR_USER)
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", value) or int(value) > 2**31 - 1:
+        raise ValueError(f"set {SIDECAR_USER_ENV} to a non-root user ID")
+    return int(value)
 
 
 def sidecar_image(env: dict[str, str]) -> str:
@@ -221,6 +248,7 @@ def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
         "state_claim": claim,
         "service_account": account,
         "sidecar_image": sidecar_image(env),
+        "sidecar_user": sidecar_user(env),
         **({"api_key_secret": secret} if secret is not None else {}),
         **({"runtime_class": runtime_class} if runtime_class else {}),
         # Docker's ROCm launch runs the engine without a seccomp filter, as this pod does.
@@ -269,22 +297,27 @@ def config_map(name: str, data: dict[str, str]) -> dict:
 
 
 def pod_env(run: Path, plan: dict) -> list[dict]:
-    """Return the engine environment, with the downward API values its references use first."""
-    settings = plan["kubernetes"]
-    secret = settings.get("api_key_secret")
+    """Return the engine environment, with the downward API values its references use first.
+
+    The engine's credential variable comes from the plan's Secret; container.env never holds it.
+    """
+    secret = plan["kubernetes"].get("api_key_secret")
     credential = plan_launcher(plan).api_key_env
     env: list[dict] = [
         {"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
         for name, field in DOWNWARD_ENV
     ]
-    for name, value in sorted(read_env(run / "container.env").items()):
+    values: list[dict] = []
+    for name, value in read_env(run / "container.env").items():
         if name == credential:
-            if secret is None:
-                raise ValueError(f"the engine credential needs {API_KEY_SECRET_ENV}")
-            env.append({"name": name, "valueFrom": {"secretKeyRef": dict(secret)}})
-        else:
-            env.append({"name": name, "value": literal(value)})
-    return env
+            raise ValueError(
+                f"container.env holds the engine credential {name}; a Kubernetes engine reads "
+                f"it from the Secret {API_KEY_SECRET_ENV} names"
+            )
+        values.append({"name": name, "value": literal(value)})
+    if secret is not None:
+        values.append({"name": credential, "valueFrom": {"secretKeyRef": dict(secret)}})
+    return env + sorted(values, key=lambda item: item["name"])
 
 
 def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> dict:
@@ -327,13 +360,15 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
     resources = {
         "limits": {settings["gpu_resource"]: str(settings["gpus"]), settings["rdma_resource"]: "1"}
     }
+    profile = "Unconfined" if settings["seccomp_unconfined"] else "RuntimeDefault"
     security = {
         "securityContext": {
+            "allowPrivilegeEscalation": False,
             # Docker lifts the engine's locked-memory limit; RDMA memory registration needs it.
-            "capabilities": {"add": ["IPC_LOCK"]},
-            **(
-                {"seccompProfile": {"type": "Unconfined"}} if settings["seccomp_unconfined"] else {}
-            ),
+            # Without the other capabilities, root in the engine reaches neither the sidecar's
+            # files through /proc nor the evidence it writes.
+            "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
+            "seccompProfile": {"type": profile},
         }
     }
     hooks_map, steps_map = maps
@@ -352,9 +387,15 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
             {
                 "name": "checkpoint",
                 "image": plan["image"],
-                "command": command("checkpoint"),
+                # It keeps the runtime's default capabilities, to hand the pod's directory of
+                # the state volume to the sidecar's user.
+                "command": command("checkpoint", str(settings["sidecar_user"])),
                 "env": env[: len(DOWNWARD_ENV)],
                 "volumeMounts": [*delivered, state(False)],
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
             },
             {
                 "name": "runtime-check",
@@ -430,13 +471,27 @@ def pod_spec(run: Path, plan: dict, probe: list[str], maps: tuple[str, str]) -> 
     }
 
 
+def sidecar_env(plan: dict) -> list[dict]:
+    """The sidecar's downward API values and, for an engine with a key, the key from its
+    Secret in `API_KEY_ENV`: the sidecar calls the engine it attests."""
+    env: list[dict] = [
+        {"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
+        for name, field in SIDECAR_ENV
+    ]
+    secret = plan["kubernetes"].get("api_key_secret")
+    if secret is not None:
+        env.append({"name": API_KEY_ENV, "valueFrom": {"secretKeyRef": dict(secret)}})
+    return env
+
+
 def sidecar(plan: dict, mounts: list[dict]) -> dict:
     """Return the attestation sidecar container, which runs in the Narwhal image.
 
     It mounts the launch directory that checked its pod read-only, writes its attestation in
     the pod's directory of the state volume, and reads the engine process's directory in the
-    engine volume. It runs as root, the engine's user, with no capabilities.
+    engine volume. It runs as its own non-root user, with no capabilities.
     """
+    user = plan["kubernetes"]["sidecar_user"]
     launch = {
         "name": "narwhal-state",
         "mountPath": str(LAUNCH_MOUNT),
@@ -458,17 +513,16 @@ def sidecar(plan: dict, mounts: list[dict]) -> dict:
             "--pod-evidence",
             str(pod.STATE),
         ],
-        "env": [
-            {"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
-            for name, field in SIDECAR_ENV
-        ],
+        "env": sidecar_env(plan),
         "ports": [{"name": "attestation", "containerPort": plan["attestation_port"]}],
         "volumeMounts": [*mounts, launch, account],
         "securityContext": {
-            "runAsUser": 0,
-            "runAsGroup": 0,
+            "runAsUser": user,
+            "runAsGroup": user,
+            "runAsNonRoot": True,
             "allowPrivilegeEscalation": False,
             "capabilities": {"drop": ["ALL"]},
+            "seccompProfile": {"type": "RuntimeDefault"},
         },
     }
 

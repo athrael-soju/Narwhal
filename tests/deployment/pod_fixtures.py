@@ -58,6 +58,8 @@ def kubernetes_env(env: dict[str, str]) -> dict[str, str]:
     env = {**env, **INPUTS}
     # The pod advertises its own address.
     del env["NARWHAL_NODE_1_IP"]
+    # The pod reads the engine API key from its Secret; a Kubernetes launch never holds it.
+    env.pop("NARWHAL_ENGINE_API_KEY", None)
     return env
 
 
@@ -148,7 +150,13 @@ class EnginePod:
 
     def command(self, name: str) -> list[str]:
         environment = self.environment(name)
-        return [expand(part, environment) for part in self.containers[name]["command"]]
+        command = [expand(part, environment) for part in self.containers[name]["command"]]
+        if name == "checkpoint":
+            # The checkpoint step runs as root in the pod and hands the state directory to the
+            # sidecar's user; the test's own user stands in for it here.
+            self.sidecar_user = int(command[-1])
+            command[-1] = str(os.getuid())
+        return command
 
     def run(self, name: str, *, probe: list[str] | None = None) -> int:
         """Run a container's step; `probe` stands in for the runtime probe's arguments."""

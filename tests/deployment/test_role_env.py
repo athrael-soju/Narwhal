@@ -52,6 +52,16 @@ class HostEnvironmentTests(unittest.TestCase):
         self.assertNotIn("NARWHAL_NODE_2_URL", engine)
         self.assertEqual(engine["NARWHAL_NODE_2_IP"], "192.0.2.2")
 
+    def test_a_kubernetes_role_file_names_no_engine_api_key(self):
+        env = {name: value for name, value in self.env.items() if name != "ENGINE_TOKEN"}
+        for role, node in (("engine", 1), ("router", None)):
+            values = select_values(role, node, self.fleet, env, by_reference=True)
+            self.assertNotIn("ENGINE_TOKEN", values)
+            self.assertNotIn("NARWHAL_ENGINE_API_KEY", values)
+        for held in ({"ENGINE_TOKEN": "k"}, {"NARWHAL_ENGINE_API_KEY": "k"}):
+            with self.subTest(held), self.assertRaisesRegex(ValueError, "holds the engine API key"):
+                select_values("engine", 1, self.fleet, {**env, **held}, by_reference=True)
+
     def test_router_export_carries_the_monitored_router_pair(self):
         pair = {
             "NARWHAL_ROUTER_URL": "http://router-a:8000,http://router-b:8000",
