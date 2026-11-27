@@ -1140,7 +1140,12 @@ def qualify_edge(
                     folder / f"{role}.comparison.json",
                 )
         else:
-            data = _sample(fabric, ssh, where, sample)
+            # A runner that starts a sample's server and client itself, as the Kubernetes
+            # target does with Jobs, samples it; an SSH host runs both from one session each.
+            sampler = getattr(ssh, "sample", None)
+            data = (
+                sampler(fabric, where, sample) if sampler else _sample(fabric, ssh, where, sample)
+            )
             _write(folder / name, data)
             _check_sample(fabric, where, sample, data)
             for role in sample.source_roles:

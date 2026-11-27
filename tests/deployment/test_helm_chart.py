@@ -435,6 +435,99 @@ class ChartTests(Rendering, unittest.TestCase):
         self.assertEqual(container["image"], chart_fixtures.FABRIC_IMAGE)
         self.assertEqual(container["resources"]["limits"], {"rdma.example.com/hca": "1"})
 
+    def test_the_runners_gates_get_their_inputs_node_and_identity(self):
+        values = copy.deepcopy(self.values)
+        values["gates"] = [
+            {
+                "name": "prepare-engine-1",
+                "kind": "prepare",
+                "command": ["narwhal-engine", "prepare"],
+                "deadlineSeconds": 600,
+                "node": "node-a",
+                "inputs": "prepare-engine-1",
+                "modelVolume": {"persistentVolumeClaim": {"claimName": "models"}},
+            },
+            {
+                "name": "probe-node-a",
+                "kind": "fabric-probe",
+                "command": ["ip", "route"],
+                "deadlineSeconds": 60,
+                "node": "node-a",
+            },
+            {
+                "name": "verify-engine-1",
+                "kind": "sidecar-verify",
+                "command": ["python", "-m", "narwhal.deployment.attestation_contract.cli"],
+                "deadlineSeconds": 300,
+                "serviceAccount": True,
+            },
+        ]
+        jobs = {
+            d["metadata"]["name"]: d["spec"]["template"]["spec"]
+            for d in self.render(values)
+            if d["kind"] == "Job"
+        }
+        prepare = jobs["prepare-engine-1"]
+        mounts = {m["mountPath"]: m for m in prepare["containers"][0]["volumeMounts"]}
+        self.assertTrue(mounts["/narwhal-input"]["readOnly"])
+        self.assertTrue(mounts["/model"]["readOnly"])
+        volumes = {v["name"]: v for v in prepare["volumes"]}
+        self.assertEqual(volumes["narwhal-input"]["configMap"]["name"], "prepare-engine-1")
+        self.assertFalse(prepare["automountServiceAccountToken"])
+        probe = jobs["probe-node-a"]
+        self.assertTrue(probe["hostNetwork"])
+        self.assertNotIn("resources", probe["containers"][0])
+        self.assertNotIn("securityContext", probe["containers"][0])
+        verify = jobs["verify-engine-1"]
+        self.assertEqual(verify["serviceAccountName"], "narwhal-attestation")
+        self.assertTrue(verify["automountServiceAccountToken"])
+
+    def test_placement_holds_each_engine_pod_until_the_run_pins_it(self):
+        values = copy.deepcopy(self.values)
+        values["placement"] = {"engine-1": "node-a", "engine-2": "node-b"}
+        [engines] = [
+            d
+            for d in self.render(values)
+            if d["kind"] == "StatefulSet" and d["metadata"]["name"] == "engine"
+        ]
+        self.assertEqual(
+            engines["spec"]["template"]["spec"]["schedulingGates"],
+            [{"name": "narwhal.io/placement"}],
+        )
+        default = self.find("StatefulSet", "engine")["spec"]["template"]["spec"]
+        self.assertNotIn("schedulingGates", default)
+        values["placement"] = {"engine-1": "node-a"}
+        result = self.helm(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("placement names no node for engine-2", result.stderr)
+
+    def test_a_release_without_engines_holds_its_volumes_and_gates(self):
+        values = copy.deepcopy(self.values)
+        values["engines"] = {}
+        values["routers"]["enabled"] = False
+        values["state"]["claimName"] = "narwhal-state"
+        values["gates"] = [values["gates"][0], values["gates"][2]]
+        values["gates"][0]["modelVolume"] = {"persistentVolumeClaim": {"claimName": "models"}}
+        documents = self.render(values)
+        kinds = sorted({d["kind"] for d in documents})
+        self.assertEqual(kinds, ["Job", "PersistentVolumeClaim"])
+        claims = {d["metadata"]["name"] for d in documents if d["kind"] == "PersistentVolumeClaim"}
+        self.assertEqual(claims, {"narwhal-state", "narwhal-lease"})
+        values["routers"]["enabled"] = True
+        self.assertNotEqual(self.helm(values).returncode, 0)
+        values["routers"]["enabled"] = False
+        del values["state"]["claimName"]
+        result = self.helm(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("state.claimName", result.stderr)
+
+    def test_the_state_claim_must_be_the_one_the_plans_name(self):
+        values = copy.deepcopy(self.values)
+        values["state"]["claimName"] = "another-claim"
+        result = self.helm(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NARWHAL_KUBERNETES_STATE_CLAIM", result.stderr)
+
     def test_incomplete_values_are_refused(self):
         def without(path: str) -> dict:
             values = copy.deepcopy(self.values)

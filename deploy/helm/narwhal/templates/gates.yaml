@@ -2,10 +2,18 @@
 One Job per entry of `gates`, which `narwhal deploy --target kubernetes` sets for the stage it
 runs. Every gate Job mounts the whole state volume writable at /narwhal-state; it is the only
 workload that may write the engines' records there. A Job runs once, within its stage's time
-limit, and the runner reruns a failed stage itself.
+limit, and the runner reruns a failed stage itself. A gate's `inputs` names the ConfigMap the
+runner made for it, mounted read-only at /narwhal-input.
 */ -}}
 {{- range .Values.gates }}
 {{- $fabric := hasPrefix "fabric-" .kind }}
+{{- /* A probe reads the host's interfaces and routes; a sample opens the RDMA device. */}}
+{{- $rdma := and $fabric (ne .kind "fabric-probe") }}
+{{- /* Discovery reads the engines' model volume unless its entry names one. */}}
+{{- $model := .modelVolume }}
+{{- if and (not $model) (eq .kind "discovery") $.Values.engines }}
+{{- $model = $.Values.engines.modelVolume }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -25,18 +33,28 @@ spec:
     spec:
       restartPolicy: Never
       enableServiceLinks: false
+      {{- if .serviceAccount }}
+      # Verifying a sidecar reads the engine pod through the API, as the sidecar does.
+      serviceAccountName: {{ $.Values.engines.access.serviceAccount.metadata.name }}
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       {{- with .node }}
       nodeName: {{ . }}
       {{- end }}
-      {{- if $fabric }}
-      # The fabric sample runs on the host's fabric interface, as KV does.
+      {{- with .runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- if or $fabric .hostNetwork }}
+      # A fabric sample runs on the host's fabric interface, as KV does, and discovery reads
+      # the host's interfaces.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
       containers:
         - name: gate
-          image: {{ ternary $.Values.images.fabric $.Values.images.narwhal $fabric }}
+          image: {{ .image | default (ternary $.Values.images.fabric $.Values.images.narwhal $fabric) }}
           command:
             {{- toYaml .command | nindent 12 }}
           {{- if or .env $.Values.credentials.engineApiKey }}
@@ -47,17 +65,17 @@ spec:
             {{- end }}
             {{- include "narwhal.credentials" $ | nindent 12 }}
           {{- end }}
-          {{- if or $fabric .resources }}
+          {{- if or $rdma .resources }}
           resources:
             limits:
-              {{- if $fabric }}
+              {{- if $rdma }}
               {{ $.Values.engines.rdmaResource | quote }}: "1"
               {{- end }}
               {{- range $name, $quantity := .resources }}
               {{ $name | quote }}: {{ $quantity | quote }}
               {{- end }}
           {{- end }}
-          {{- if $fabric }}
+          {{- if $rdma }}
           securityContext:
             capabilities:
               # RDMA memory registration locks memory.
@@ -66,7 +84,12 @@ spec:
           volumeMounts:
             - name: narwhal-state
               mountPath: /narwhal-state
-            {{- if eq .kind "discovery" }}
+            {{- if .inputs }}
+            - name: narwhal-input
+              mountPath: /narwhal-input
+              readOnly: true
+            {{- end }}
+            {{- if $model }}
             - name: model
               mountPath: /model
               readOnly: true
@@ -75,8 +98,13 @@ spec:
         - name: narwhal-state
           persistentVolumeClaim:
             claimName: {{ include "narwhal.stateClaim" $ }}
-        {{- if eq .kind "discovery" }}
+        {{- with .inputs }}
+        - name: narwhal-input
+          configMap:
+            name: {{ . }}
+        {{- end }}
+        {{- with $model }}
         - name: model
-          {{- toYaml $.Values.engines.modelVolume | nindent 10 }}
+          {{- toYaml . | nindent 10 }}
         {{- end }}
 {{- end }}

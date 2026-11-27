@@ -1,6 +1,8 @@
-"""Write the stage and rerun tables in docs/Deploy.md and docs/cli/Dev.md from the stage graphs.
+"""Write the stage and rerun tables in docs/Deploy.md, docs/deploy/Kubernetes.md and docs/cli/Dev.md
+from the stage graphs.
 
-Run it after changing `src/narwhal/deployment/deploy_graph.py` or `dev_graph.py`. With `--check`
+Run it after changing `src/narwhal/deployment/deploy_graph.py`, `dev_graph.py` or
+`kubernetes_graph.py`. With `--check`
 it changes nothing and exits 1 when a page differs from its graphs; the unit suite runs that
 check.
 """
@@ -16,6 +18,7 @@ from narwhal import backends
 from narwhal.deployment.deploy_graph import CAPABILITIES, DEPLOY_GRAPH
 from narwhal.deployment.dev_graph import DIRECT_GRAPH, LAUNCHED_GRAPH
 from narwhal.deployment.graph import StageGraph
+from narwhal.deployment.kubernetes_graph import KUBERNETES_GRAPH
 from narwhal.deployment.launch_engine import backend as launch_backend
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +43,13 @@ class Block:
 
 PAGES = {
     ROOT / "docs/Deploy.md": (Block(DEPLOY_GRAPH, "src/narwhal/deployment/deploy_graph.py"),),
+    ROOT / "docs/deploy/Kubernetes.md": (
+        Block(
+            KUBERNETES_GRAPH,
+            "KUBERNETES_GRAPH in src/narwhal/deployment/kubernetes_graph.py",
+            "../",
+        ),
+    ),
     ROOT / "docs/cli/Dev.md": (
         Block(LAUNCHED_GRAPH, "LAUNCHED_GRAPH in src/narwhal/deployment/dev_graph.py", "../"),
         Block(DIRECT_GRAPH, "DIRECT_GRAPH in src/narwhal/deployment/dev_graph.py", "../"),

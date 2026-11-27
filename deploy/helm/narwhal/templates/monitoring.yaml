@@ -1,5 +1,5 @@
 {{- with .Values.monitoring }}
-{{- if .enabled }}
+{{- if and .enabled $.Values.routers.enabled }}
 {{- $root := $ }}
 {{- $suffix := printf "%s.svc.%s" $.Release.Namespace $.Values.haproxy.clusterDomain }}
 {{- $routers := list (printf "router-0.routers.%s:8000" $suffix) (printf "router-1.routers.%s:8000" $suffix) }}

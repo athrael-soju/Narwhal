@@ -84,6 +84,7 @@ nav:
       - Attesting live engines: deploy/05-Attest.md
       - Profiling and preflight: deploy/06-Profile-and-Preflight.md
       - Serving and measuring: deploy/07-Serve-and-Measure.md
+      - Deploying on Kubernetes: deploy/Kubernetes.md
   - Deployment operations:
       - Measuring a fleet:
           - Overview: Measure.md

@@ -41,6 +41,8 @@ narwhal deploy run --run runs/deploy/first-deploy
 
 A failed stage prints its recovery section and evidence directory. Fix the cause and run `run` again: it resumes at that stage and skips every stage whose result still holds. `narwhal deploy status` shows each stage and checks the processes the run started, and `narwhal deploy down` stops them. [Running the stage graph](cli/Deploy.md#running-the-stage-graph) describes what each stage runs and the inputs it reads. The `monitoring` and `trial` stages still run by hand, as [Serve and measure](deploy/07-Serve-and-Measure.md) describes.
 
+On a Kubernetes cluster, the same commands take `--target kubernetes` and run each stage through the Narwhal Helm chart; [Deploying on Kubernetes](deploy/Kubernetes.md) covers its inputs and stages.
+
 ## Deployment sequence
 
 Each gate page below runs its stages by hand. Record each gate's result before the next gate.
