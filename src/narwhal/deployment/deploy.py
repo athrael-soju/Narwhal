@@ -29,6 +29,7 @@ from narwhal.engines.attestation import AttestationDocument, launch_digest
 from ..observability.stack.make_targets import FLEET_NAME, alertmanager_origin
 from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
 from ..runtime.lease import DEFAULT_SAFETY_MARGIN_S, WITNESS_NAME
+from ..runtime.standby import MAX_HANDOFF_AGE_S
 from . import (
     balancer,
     cache_groups,
@@ -131,6 +132,11 @@ _NOT_INPUTS = re.compile(
     r"|LOAD_BALANCER_SSH(_PASSWORD)?|TRIAL_.*)"
 )
 _FABRIC_TEST = re.compile(r"NARWHAL_(FABRIC_TEST_PORT|(NODE_[1-9][0-9]*_)?RDMA_.*)")
+
+
+def _pause(seconds: float) -> None:
+    """Wait before a router start; the tests replace it."""
+    time.sleep(seconds)
 
 
 class InputError(ValueError):
@@ -1483,8 +1489,10 @@ class Deployment:
 
         The stage first checks that the lease directory on this host is the shared mount that
         `lease-check` saw. The primary starts with `--first-start-primary`, so it claims the
-        lease only while no lease file exists, and otherwise starts as the standby of its peer
-        and takes over an expired lease. The stage never removes a lease. Each start ends with
+        lease when no lease file exists or when the lease expired too long ago for a standby to
+        take it over, and otherwise starts as the standby of its peer. Before the primary
+        starts, the stage waits out a lease that expired so recently that a standby may still
+        take it over. The stage never removes a lease. Each start ends with
         the router overhead measured on the router that controls the fleet.
         """
         values, routers = settings(self.env), pair(self.env)
@@ -1506,6 +1514,23 @@ class Deployment:
                 self._measure(context, host, env, manifest["remote_dir"], (url, peer), values)
                 return kept
         lease = self._lease_state(context, ssh, host, manifest["remote_dir"], routers.lease_path)
+        for _ in range(3):
+            if not primary or lease["live"] or lease.get("holder") is None:
+                break
+            # A standby may still take over a lease that expired this recently, so the primary
+            # would start as its standby; once no standby can, the primary claims the lease.
+            expired = lease["now"] - lease["expires_at"]
+            wait = MAX_HANDOFF_AGE_S + DEFAULT_SAFETY_MARGIN_S - expired
+            if wait <= 0:
+                break
+            self.announce(
+                f"router-start: the lease expired {expired:.0f}s ago and a standby may still "
+                f"take it over; {host.id}'s router starts in {wait:.0f}s"
+            )
+            _pause(wait)
+            lease = self._lease_state(
+                context, ssh, host, manifest["remote_dir"], routers.lease_path
+            )
         address = urlsplit(url)
         argv = [
             "{root}/.venv/bin/narwhal-serve",

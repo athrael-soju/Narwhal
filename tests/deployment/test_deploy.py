@@ -318,6 +318,30 @@ class DeployTests(unittest.TestCase):
         lease = json.loads(start.read_text())["lease"]
         self.assertEqual((lease["holder"], lease["live"]), ("node-2:token", True))
 
+    def test_a_cold_start_waits_out_a_lease_a_standby_could_still_take_over(self):
+        # The pair stopped 10 s ago: its lease file is left and expired, and the primary
+        # claims it only once no standby's handoff can take it over.
+        self.fleet.lease_expired_ago = 10.0
+        waits = []
+
+        def pause(seconds):
+            waits.append(seconds)
+            self.fleet.lease_expired_ago += seconds
+
+        with patch.object(deploy, "_pause", pause):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(waits, [21.0])
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        start = self.run / "stages/router-start/node-1/attempt-1/router.json"
+        self.assertEqual(json.loads(start.read_text())["lease"]["expires_at"], 969.0)
+
+    def test_a_cold_start_after_a_long_stop_starts_the_primary_at_once(self):
+        self.fleet.lease_expired_ago = 3600.0
+        with patch.object(deploy, "_pause", lambda seconds: self.fail("waited")):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+
     def test_a_router_host_without_its_lease_mount_starts_no_router(self):
         self.deploy("run")
         del self.fleet.units[

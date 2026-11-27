@@ -173,6 +173,9 @@ class Fleet:
         self.mounts: dict[str, str] = {}
         self.clocks: dict[str, tuple[float, float]] = {}
         self.unmounted: set[str] = set()
+        # Seconds since the pair's last lease expired, when no router runs and a lease file
+        # is left; None for no lease file.
+        self.lease_expired_ago: float | None = None
         # The overhead measurement scripts, in order.
         self.measured: list[str] = []
         self.monitoring_up = False
@@ -537,6 +540,11 @@ class _SSH:
         if operation == "read the pair's lease":
             fleet.calls[operation] += 1
             holder = fleet.lease_holder()
+            if holder is None and fleet.lease_expired_ago is not None:
+                expires = 1000.0 - fleet.lease_expired_ago
+                return json.dumps(
+                    {"holder": "node-2:old", "epoch": 2, "expires_at": expires, "now": 1000.0}
+                )
             if holder is None:
                 return json.dumps({"holder": None, "now": 1000.0})
             return json.dumps(

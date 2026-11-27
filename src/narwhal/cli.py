@@ -8,6 +8,7 @@ import logging
 import math
 import socket
 import sys
+import time
 from pathlib import Path
 
 import uvicorn
@@ -15,8 +16,9 @@ import uvicorn
 from .cli_errors import failure
 from .cli_support import add_version_argument
 from .config import FleetConfig
-from .runtime.lease import DEFAULT_SAFETY_MARGIN_S
+from .runtime.lease import DEFAULT_SAFETY_MARGIN_S, FileLease, LeaseError
 from .runtime.listeners import check_http_bind
+from .runtime.standby import MAX_HANDOFF_AGE_S
 from .serving.app import create_app
 
 # uvicorn logs its shutdown steps here.
@@ -36,6 +38,28 @@ LOG_LEVELS = {
     "debug": "DEBUG",
     "trace": "DEBUG",
 }
+
+
+def _first_start(args: argparse.Namespace) -> bool:
+    """Whether a `--first-start-primary` router starts as the primary and claims the lease.
+
+    It does when no lease exists, or when the lease expired longer ago than the
+    `--standby-max-handoff-age`, since no standby then holds a handoff fresh enough to take
+    over. A live lease, or one a standby can still take over, makes it the standby of its
+    peer, as does a lease directory without its `--lease-witness`.
+    """
+    lease = FileLease(
+        Path(args.lease_path),
+        "first-start",
+        args.lease_ttl,
+        witness=Path(args.lease_witness) if args.lease_witness else None,
+    )
+    try:
+        record = lease.read()
+    except (LeaseError, ValueError):
+        # A missing directory or witness, or a lease this version cannot read.
+        return False
+    return record is None or time.time() - record.expires_at > args.standby_max_handoff_age
 
 
 def serve(argv: list[str] | None = None) -> int:
@@ -108,7 +132,7 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--standby-max-handoff-age",
         type=float,
-        default=30.0,
+        default=MAX_HANDOFF_AGE_S,
         help="finite positive maximum state age in seconds for automatic takeover (default 30)",
     )
     ap.add_argument(
@@ -213,10 +237,7 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--first-start-primary requires --standby-of")
     if args.lease_witness and not args.lease_path:
         ap.error("--lease-witness requires --lease-path")
-    witnessed = not args.lease_witness or Path(args.lease_witness).is_file()
-    if args.first_start_primary and witnessed and not Path(args.lease_path).exists():
-        # The first router of a pair claims the free lease; any later start finds the lease
-        # file and shadows the router that holds it.
+    if args.first_start_primary and _first_start(args):
         args.standby_of = ""
     if args.lease_safety_margin < 0:
         ap.error("--lease-safety-margin must be nonnegative")

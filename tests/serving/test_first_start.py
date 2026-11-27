@@ -2,6 +2,7 @@
 
 import io
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from narwhal.cli import serve
+from narwhal.runtime.lease import FileLease, LeaseRecord
 
 
 class FirstStartTests(unittest.TestCase):
@@ -34,9 +36,33 @@ class FirstStartTests(unittest.TestCase):
         self.assertIsNone(self.start("--standby-of", "http://peer:8000", "--first-start-primary"))
 
     def test_a_later_start_finds_the_lease_and_shadows_the_peer(self):
-        self.lease.write_text("{}")
+        self.write_lease(expires_in=4)
         standby = self.start("--standby-of", "http://peer:8000/", "--first-start-primary")
         self.assertEqual(standby, "http://peer:8000")
+
+    def test_a_lease_a_standby_could_still_take_over_makes_it_shadow_the_peer(self):
+        # Expired 10 s ago: a standby's 30 s handoff may still take it over.
+        self.write_lease(expires_in=-10)
+        standby = self.start("--standby-of", "http://peer:8000", "--first-start-primary")
+        self.assertEqual(standby, "http://peer:8000")
+
+    def test_a_lease_no_standby_can_take_over_is_claimed_on_a_cold_start(self):
+        # Both routers stopped long ago: no handoff is fresh enough for a takeover.
+        self.write_lease(expires_in=-31)
+        self.assertIsNone(self.start("--standby-of", "http://peer:8000", "--first-start-primary"))
+        argv = ("--standby-of", "http://peer:8000", "--first-start-primary")
+        standby = self.start(*argv, "--standby-max-handoff-age", "60")
+        self.assertEqual(standby, "http://peer:8000")
+
+    def test_a_malformed_lease_makes_it_shadow_the_peer(self):
+        self.lease.write_text("{}")
+        standby = self.start("--standby-of", "http://peer:8000", "--first-start-primary")
+        self.assertEqual(standby, "http://peer:8000")
+
+    def write_lease(self, expires_in: float) -> None:
+        now = time.time()
+        record = LeaseRecord(3, "peer:token", now + expires_in, now + expires_in - 5)
+        FileLease(self.lease, "peer:token", 5)._write_unlocked(record)
 
     def test_without_its_witness_the_first_start_shadows_the_peer(self):
         # An unmounted lease directory holds neither the lease nor the witness; the router
