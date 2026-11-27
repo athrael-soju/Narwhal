@@ -159,6 +159,16 @@ class PodIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(PodIdentityError, "shows 2 first processes"):
             pod_identity.container_process(ENGINE_ID)
 
+    def test_a_process_left_by_kubectl_exec_does_not_stand_in_for_an_ended_engine(self):
+        # The engine's first process has ended; a process `kubectl exec` started 3 seconds after
+        # the container remains in its cgroup.
+        for path in (self.proc.root / "7").iterdir():
+            path.unlink()
+        (self.proc.root / "7").rmdir()
+        self.proc.process(15, scope(ENGINE_ID), ticks=ENGINE_TICKS + 3 * TICKS_PER_S)
+        with self.assertRaisesRegex(EngineNotRunning, "first process has ended"):
+            self.identity()
+
     def test_a_process_kubectl_exec_started_is_not_the_first(self):
         # `kubectl exec` starts its process from outside the pod's process namespace too.
         self.proc.process(15, scope(ENGINE_ID), ticks=ENGINE_TICKS + 900)
@@ -372,6 +382,12 @@ class SidecarPodTests(unittest.TestCase):
         sleep = patch.object(sidecar.time, "sleep")
         self.sleep = sleep.start()
         self.addCleanup(sleep.stop)
+        # A sidecar that keeps waiting fails the test instead of hanging it.
+        self.sleep.side_effect = self.waited
+
+    def waited(self, _: float) -> None:
+        if self.sleep.call_count > 5:
+            raise AssertionError("the sidecar kept waiting")
 
     def publish(self, container: str, **changes) -> Path:
         """Publish an attestation of `container` with its identity record, as capture does."""

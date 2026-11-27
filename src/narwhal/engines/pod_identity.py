@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from .host_process import boot_time
+from .host_process import boot_time, started_at_seconds
 
 PROC = Path("/proc")
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -31,8 +31,8 @@ API_SERVER = "https://kubernetes.default.svc"
 API_TIMEOUT_S = 10.0
 # The engine container's name in the pod specification.
 ENGINE_CONTAINER = "engine"
-# The kernel's boot time has one-second resolution, so two readings of one process start
-# can differ by this many seconds.
+# The kernel's boot time and the kubelet's startedAt have one-second resolution, so two
+# readings of one moment can differ by this many seconds.
 START_TOLERANCE_S = 2.0
 CONTAINER_ID = re.compile(r"([a-z][a-z0-9.-]*)://([0-9a-f]{64})")
 IMAGE_DIGEST = re.compile(r"(?:^|@)(sha256:[0-9a-f]{64})$")
@@ -232,7 +232,12 @@ def read_identity(
     The pod must be the one with UID `pod_uid`, share its process namespace and run the
     container. The pod specification must name `image`, a `<repository>@sha256:<hex>`
     reference, for the container, and the container must run that digest. The container's
-    first process must be visible here.
+    first process must be visible here, and must not have started after the container.
+
+    The runtime forks the first process when it creates the container, before its hooks run
+    and before it reports the start, so the process can start any time before `startedAt`.
+    A process that started after it is a later one, such as one `kubectl exec` left behind
+    once the first process ended.
     """
     pod = read_pod(namespace, pod_name)
     metadata, spec = pod.get("metadata", {}), pod.get("spec", {})
@@ -266,6 +271,12 @@ def read_identity(
         )
     pid, ticks = container_process(status["container_id"])
     started = process_start(ticks)
+    if started > started_at_seconds(status["started_at"]) + START_TOLERANCE_S:
+        raise EngineNotRunning(
+            f"process {pid} of the {container} container started at {started}, after the "
+            f"container started at {status['started_at']}, so the container's first process "
+            "has ended"
+        )
     return PodIdentity(
         namespace=namespace,
         pod=pod_name,
