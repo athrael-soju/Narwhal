@@ -189,6 +189,20 @@ class Fleet:
         self.overhead_problem: str | None = None
         # The router that controls the fleet, by host ID.
         self.active_router = "node-1"
+        # What each engine's runtime check resolved for prefix caching.
+        self.prefix_caching: bool | None = False
+        # The capacity trial: each load client argv, the forwards each host held, the journal
+        # rows on each router host, each router's request counters, the exit code of a rate's
+        # client run, the journal rows a router lost, and the series Prometheus leaves out.
+        self.load_argv: list[list[str]] = []
+        self.forwards: list[tuple[str, dict[int, tuple[str, int]]]] = []
+        self.open_forwards = 0
+        self.journals: dict[str, list[dict]] = {}
+        self.counters: dict[str, Counter[str]] = {}
+        self.client_exit: dict[str, int] = {}
+        self.lost_rows = 0
+        self.missing_series: set[tuple[str, str]] = set()
+        self.queries: list[str] = []
 
     def mount(self, host: str) -> str:
         """`lease_check mount` on `host`: the lease directory's mount."""
@@ -355,7 +369,9 @@ class Fleet:
         elif stage == "engine-prepare":
             files["launch.json"] = json.dumps({"role": role, "nonce": uuid.uuid4().hex}).encode()
         elif stage == "engine-check":
-            files["checked.json"] = b'{"plan": "checked"}'
+            files["checked.json"] = json.dumps(
+                {"plan": "checked", "prefix_caching": self.prefix_caching}
+            ).encode()
         elif stage == "engine-start":
             assert role is not None
             cid = uuid.uuid4().hex
@@ -404,12 +420,27 @@ class Fleet:
             )
             files["host/fleet.json"] = uploaded
             if stage == "profile":
-                files["host/profiles.json"] = b"{}"
+                rows = [
+                    {
+                        "iid": f"n{n}",
+                        "prefill_min_tokens": 256,
+                        "prefill_max_tokens": 2048,
+                        "decode_min_output_tokens": 16,
+                        "decode_max_output_tokens": 256,
+                        "decode_max_kv_tokens": 65536,
+                    }
+                    for n in (1, 2)
+                ]
+                files["host/profiles.json"] = json.dumps({"profiles": rows}).encode()
                 files["host/profiles.samples.json"] = b"{}"
             elif stage == "calibrate":
                 files["host/first-token-calibration.json"] = b'{"candidate_deadline_s": 1.5}'
             else:
                 files["host/preflight-evidence.json"] = b"{}"
+        elif stage == "trial":
+            self.calls["ring"] += 1
+            assert "--ring" in step.command, step.command
+            files["host/ring.json"] = b'{"status": "success"}'
         remote.write(directory, files)
         return ""
 
@@ -418,6 +449,105 @@ class Fleet:
         stage_limit({}, stage)
         self.calls[f"upload {stage}"] += 1
         self.uploads[target] = source.read_bytes()
+
+    # The capacity trial's load client, router samples and Prometheus.
+
+    def load_client(self, argv: list[str], log: Path, limit: float) -> int:
+        """The load client: `prepare` writes a workload, `run` offers it to the router that
+        controls the fleet, which journals and counts each offer and its warmup."""
+        stage_limit({}, "trial")
+        self.load_argv.append(list(argv))
+        assert self.open_forwards, "the load client ran without the forwards"
+        command, options = argv[3], dict(zip(argv[4::2], argv[5::2], strict=False))
+        out = Path(options["--out"])
+        out.mkdir(mode=0o700)
+        if command == "prepare":
+            workload = {"schema": 1, "model": "served-model", "token_pool": [1, 2]}
+            write_private(out / "workload.json", json.dumps(workload).encode())
+            return 0
+        run_id = uuid.uuid4().hex
+        rate = options["--rate"]
+        requests = int(options["--requests"])
+        write_private(out / "manifest.json", json.dumps({"run_id": run_id}).encode())
+        rows = [
+            {"client_rid": f"{run_id}-{n}", "sent": True, "outcome": "completed"}
+            for n in range(requests)
+        ]
+        warmup = {"client_rid": f"{run_id}-warmup", "sent": True, "outcome": "completed"}
+        write_private(out / "warmup.json", json.dumps(warmup).encode())
+        write_private(out / "requests.jsonl", "".join(json.dumps(r) + "\n" for r in rows).encode())
+        journal = self.journals.setdefault(self.active_router, [])
+        offered = [warmup, *rows]
+        for row in offered[self.lost_rows :]:
+            journal.append({"client_rid": row["client_rid"], "terminal": "completed", "run": "j1"})
+        counters = self.counters.setdefault(self.active_router, Counter())
+        counters["narwhal_offered_total"] += len(offered)
+        counters["narwhal_served_total"] += len(offered)
+        code = self.client_exit.get(rate, 0)
+        within = requests if code == 0 else requests // 2
+        summary = {
+            "offered": requests,
+            "within_candidate_limits": within,
+            "attainment": within / requests,
+            "required_attainment": float(options["--attainment"]),
+            "client_schedule_valid": True,
+            "ttft_s": {"p50": 0.5, "p95": 0.8, "p99": 0.9},
+            "tpot_s": {"p50": 0.02, "p95": 0.03, "p99": 0.04},
+        }
+        write_private(out / "summary.json", json.dumps(summary).encode())
+        return code
+
+    def _forwarded(self, url: str) -> tuple[str, str]:
+        """The host and the address that a forwarded local URL reaches."""
+        port = int(url.rsplit(":", 1)[1])
+        for host, ports in self.forwards:
+            if port in ports:
+                address, remote_port = ports[port]
+                return host, f"{address}:{remote_port}"
+        raise AssertionError(f"{url} is not a forwarded port")
+
+    def router_sample(self, client: Any, url: str) -> dict:
+        _, origin = self._forwarded(url)
+        host = _ROUTER_HOSTS[origin]
+        counters = self.counters.setdefault(host, Counter())
+        names = (
+            "narwhal_offered_total",
+            "narwhal_served_total",
+            "narwhal_failed_total",
+            "narwhal_refused_total",
+            "narwhal_rejected_total",
+            "narwhal_expired_total",
+            "narwhal_invalid_requests_total",
+            "narwhal_cancelled_total",
+        )
+        metrics = "".join(f"{name} {counters[name]}\n" for name in names)
+        self.calls[f"sample {host}"] += 1
+        return {
+            "at": f"2026-01-01T00:00:{self.calls[f'sample {host}']:02d}Z",
+            "monotonic": float(sum(self.calls.values())),
+            "router": url,
+            "errors": {},
+            "state": {"journal_run": "j1" if host == self.active_router else f"j-{host}"},
+            "router_metrics": metrics,
+            "journal_run_after": "j1" if host == self.active_router else f"j-{host}",
+        }
+
+    def prometheus(self, origin: str) -> Any:
+        host, address = self._forwarded(origin)
+        assert (host, address) == ("node-1", "127.0.0.1:9090"), (host, address)
+
+        def query(expression: str) -> list[dict]:
+            # The stage runs the checks in their listed order.
+            series = deploy.capacity.SERIES[len(self.queries) % len(deploy.capacity.SERIES)]
+            self.queries.append(expression)
+            values = {"iid": ("n1", "n2"), "role": ("prefill", "decode"), None: ("",)}
+            return [
+                {"metric": {series.per: value} if series.per else {}, "value": [0, "1"]}
+                for value in values[series.per]
+                if (series.name, value) not in self.missing_series
+            ]
+
+        return query
 
     # The SSH calls stages make directly.
 
@@ -458,6 +588,9 @@ class Fleet:
                 (deploy.supervision, "check_systemd_host", lambda runner: []),
                 (deploy_cli, "compose_problem", lambda runner: self.compose_problem),
                 (deploy.AttestationDocument, "load", _document),
+                (deploy, "_load_client", self.load_client),
+                (deploy.capacity, "router_sample", self.router_sample),
+                (deploy.capacity, "prometheus", self.prometheus),
                 (deploy, "launch_digest", lambda contract, launch: json.dumps(launch)),
             )
             for owner, name, value in targets:
@@ -487,6 +620,16 @@ class _SSH:
 
     def log(self, host: Host) -> Path:
         return self.logs / f"{host.id}.log"
+
+    @contextlib.contextmanager
+    def forward(self, host: Host, stage: str, ports: dict[int, tuple[str, int]]) -> Iterator[None]:
+        stage_limit({}, stage)
+        self.fleet.forwards.append((host.id, dict(ports)))
+        self.fleet.open_forwards += 1
+        try:
+            yield
+        finally:
+            self.fleet.open_forwards -= 1
 
     def clock_offset(self, host: Host, stage: str, operation: str, script: str, samples: int):
         assert "lease_check clock" in script, script
@@ -574,6 +717,10 @@ class _SSH:
             return json.dumps(
                 {"holder": f"{holder}:token", "epoch": 1, "expires_at": 1005.0, "now": 1000.0}
             )
+        if operation == "read the router journal":
+            run_id = shlex.split(script.split("grep -F -- ", 1)[1])[0]
+            rows = fleet.journals.get(host.id, [])
+            return "\n".join(json.dumps(row) for row in rows if run_id in row["client_rid"])
         if operation == "ask which router controls the fleet":
             return "200" if _router_host(script) == fleet.active_router else "503"
         if operation in _LEASE_CHECK:

@@ -4,6 +4,8 @@ description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen 
 
 # Synthetic load trial
 
+`narwhal deploy run --trial` runs this trial as its [`trial` stage](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial), with the rates and thresholds of a trial file. This page describes the load client and how to run it by hand.
+
 ## Running the synthetic deployment trial
 
 1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).

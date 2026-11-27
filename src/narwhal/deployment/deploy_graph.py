@@ -194,14 +194,8 @@ STAGES = (
         ("load-balancer",),
         ("monitoring_identity",),
     ),
-    _stage(
-        "tunnel",
-        WORKSTATION,
-        _SERVE,
-        "Tunnelling router, Prometheus, and Grafana to the workstation",
-        ("monitoring",),
-    ),
-    _stage("trial", WORKSTATION, _SERVE, "Running the initial capacity trial", ("tunnel",)),
+    # The trial runs only with `--trial`; it holds its own forwards to the hosts.
+    _stage("trial", WORKSTATION, _SERVE, "Running the initial capacity trial", ("monitoring",)),
 )
 
 
@@ -276,7 +270,7 @@ FACTS = (
         "profiling",
         INPUT,
         WORKSTATION,
-        "Profiling sweep or warmup, or a trial rate or request count outside the profiled range",
+        "Profiling sweep or warmup",
         "The prefill and decode sweep lengths, the decode concurrency and the warmup requests",
         _reruns("profile", *_SERVING),
     ),
@@ -327,8 +321,8 @@ FACTS = (
         "trial",
         INPUT,
         WORKSTATION,
-        "Trial workload, rate, request count or thresholds, within the profiled range",
-        "The trial workload, offered rate, request count and thresholds",
+        "Trial workload, rates, request count or thresholds",
+        "The SHA-256 of the `--trial` file",
         (Rerun("trial", note="from a drained router"),),
     ),
     # A launch directory starts one engine once. Once its engine has stopped, the engine is

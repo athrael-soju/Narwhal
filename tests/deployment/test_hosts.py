@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -99,6 +100,21 @@ middle = (
 env = {**os.environ, "NARWHAL_FAKE_COMMAND": json.dumps(sys.argv[4:])}
 subprocess.call([sys.executable, "-c", middle], env=env, start_new_session=True)
 sys.exit(124)
+"""
+
+
+LISTENER = """\
+import os, socket, sys, time
+specs = [sys.argv[i + 1] for i, arg in enumerate(sys.argv) if arg == "-L"]
+listening = []
+for spec in specs:
+    server = socket.socket()
+    server.bind(("127.0.0.1", int(spec.split(":")[1])))
+    server.listen()
+    listening.append(server)
+with open(sys.argv[1], "w") as record:
+    record.write("\\n".join([str(os.getpid()), *specs]))
+time.sleep(60)
 """
 
 
@@ -699,6 +715,63 @@ class SshTests(unittest.TestCase):
                 self.assert_stopped(children)
                 self.assertIn("timeout=0.5s; the host did not answer", ssh.log(host).read_text())
         self.assert_private_logs()
+
+    def listening_ssh(self, record: Path):
+        """A fake `ssh` that listens on each -L port, as OpenSSH does once it has logged in,
+        and writes its process ID and forwards to `record`. `ssh` gets no other environment,
+        so the script names the interpreter and the record itself."""
+        listener = self.root / "listener.py"
+        listener.write_text(LISTENER)
+        python, script = shlex.quote(sys.executable), shlex.quote(str(listener))
+        return self.fake_ssh(f'exec {python} {script} {shlex.quote(str(record))} "$@"')
+
+    def test_forwards_hold_while_the_block_runs_and_their_ssh_stops_after(self):
+        record = self.root / "forward.record"
+        ports = {hosts.free_port(): ("10.0.0.1", 8080), hosts.free_port(): ("::1", 9090)}
+        with self.listening_ssh(record):
+            ssh = SSH(self.env, self.root / "logs")
+            with ssh.forward(self.hosts[0], "trial", ports):
+                pid, *specs = record.read_text().splitlines()
+                for local in ports:
+                    with socket.create_connection(("127.0.0.1", local), timeout=1):
+                        pass
+        local = list(ports)
+        self.assertEqual(
+            specs, [f"127.0.0.1:{local[0]}:10.0.0.1:8080", f"127.0.0.1:{local[1]}:[::1]:9090"]
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the forward's ssh outlived its block")
+        log = (self.root / "logs" / "node-1.log").read_text()
+        self.assertIn("[forwards of trial]", log)
+        self.assert_private_logs()
+
+    def test_a_forward_whose_ssh_exits_names_the_host_and_status(self):
+        with self.fake_ssh("exit 255"):
+            ssh = SSH(self.env, self.root / "logs")
+            with (
+                self.assertRaisesRegex(RemoteError, "node-2: .*forward 127.0.0.1.*ssh exited 255"),
+                ssh.forward(self.hosts[1], "trial", {hosts.free_port(): ("10.0.0.2", 8000)}),
+            ):
+                self.fail("the block ran without its forward")
+
+    def test_a_forward_that_never_listens_times_out_and_stops_its_ssh(self):
+        record = self.root / "silent.pid"
+        body = f"echo $$ > {shlex.quote(str(record))}; exec sleep 60"
+        with self.fake_ssh(body), patch.object(hosts, "CONNECT_TIMEOUT_S", 0.5):
+            ssh = SSH(self.env, self.root / "logs")
+            with (
+                self.assertRaisesRegex(RemoteError, "no forward listened within 0.5s"),
+                ssh.forward(self.hosts[1], "trial", {hosts.free_port(): ("10.0.0.2", 8000)}),
+            ):
+                self.fail("the block ran without its forward")
+        self.assert_stopped(record)
 
     def test_the_clock_offset_brackets_the_hosts_clock_between_two_local_readings(self):
         # A host whose clock runs 5 seconds ahead of the workstation's.

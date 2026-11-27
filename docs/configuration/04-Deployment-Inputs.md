@@ -174,9 +174,10 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 | `NARWHAL_STANDBY_ROUTER_URL`, `NARWHAL_LOAD_BALANCER_URL`, `NARWHAL_LEASE_PATH`, `NARWHAL_HAPROXY_IMAGE` | `lease-check`, `router-start`, `load-balancer`, `monitoring` | The [router pair](#router-pair) |
 | `NARWHAL_FLEET_NAME` | `monitoring` | Required. The `fleet` label of every series, 1 to 63 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit |
 | `NARWHAL_ALERTMANAGER_URL` | `monitoring` | Optional Alertmanager that Prometheus sends alerts to, `http(s)://HOST:PORT` with an optional path. Without one, alerts show only on the Prometheus alerts page |
-| `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `monitoring` | Optional listen addresses of the [monitoring stack](../observability/02-Access.md) |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | `monitoring`, `trial` | Optional listen addresses of the [monitoring stack](../observability/02-Access.md). The trial queries Prometheus at its listen address |
+| `NARWHAL_PREFIX_CACHING`, `NARWHAL_NODE_<n>_PREFIX_CACHING` | Discovery, and `plan` and `run` with `--trial` | `false` for every engine when `run` has `--trial`, which [the capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial) needs |
 
-Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-change), and a change reruns the stages of its row. Every other `NARWHAL_` variable belongs to discovery, apart from the SSH, inventory, stage limit and trial variables. A secret enters the run record only as part of a digest.
+Each group is one input of the [stage table](../Deploy.md#rerunning-after-a-change), and a change reruns the stages of its row. The `--trial` file is the `trial` input. Every other `NARWHAL_` variable belongs to discovery, apart from the SSH, inventory and stage limit variables and the `NARWHAL_TRIAL_` variables that the [measurement pages](../Measure.md) set. A secret enters the run record only as part of a digest.
 
 ### Router pair
 

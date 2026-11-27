@@ -55,7 +55,7 @@ The launcher builds one launch plan per engine with these properties:
 | Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](../measure/03-Load-Trial.md), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans. To turn it off after launch:
+For the [capacity trial](07-Serve-and-Measure.md#running-the-initial-capacity-trial), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans. `narwhal deploy run --trial` refuses to run the trial otherwise. To turn it off after launch:
 
 1. Prepare a fresh launch directory.
 2. Restart each engine.

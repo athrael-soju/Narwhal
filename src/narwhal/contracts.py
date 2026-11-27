@@ -25,6 +25,7 @@ DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
 MEMBERSHIP = "membership"
 DEPLOYMENT_RUN = "deployment_run"
 DEPLOYMENT_STATUS = "deployment_status"
+TRIAL = "trial"
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ CONTRACTS: dict[str, Contract] = {
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
     DEPLOYMENT_RUN: Contract("narwhal.deployment-run", 2),
     DEPLOYMENT_STATUS: Contract("narwhal.deployment-status"),
+    TRIAL: Contract("narwhal.capacity-trial"),
 }
 
 

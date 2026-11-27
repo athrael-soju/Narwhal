@@ -9,6 +9,7 @@ import re
 import select
 import shlex
 import signal
+import socket
 import subprocess
 import tempfile
 import threading
@@ -52,6 +53,8 @@ STAGE_LIMITS = {
     "router-start": 600.0,
     "load-balancer": 300.0,
     "monitoring": 600.0,
+    # Each load client run, journal read and the KV ring of the capacity trial.
+    "trial": 3600.0,
     "down": 300.0,
     # The upload of the deployment status after a run.
     "deployment-status": 60.0,
@@ -655,6 +658,89 @@ class SSH:
             log.write(f"exit={result.returncode}\n")
         if result.returncode:
             raise RemoteError(host.id, "tunnel", "service tunnel", self.log(host))
+
+    @contextmanager
+    def forward(
+        self, host: Host, stage: str, forwards: Mapping[int, tuple[str, int]]
+    ) -> Iterator[None]:
+        """Hold workstation loopback ports forwarded to `host` while the block runs.
+
+        `forwards` maps each local port to the address and port it reaches from the host. The
+        block starts once every local port accepts a connection; SSH failing first, or no port
+        accepting within the connection timeout, raises RemoteError. The block's end stops the
+        `ssh` process this call started, by its process handle.
+        """
+        options = [
+            "-N",
+            "-T",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=3",
+        ]
+        specs = []
+        for local, (address, port) in forwards.items():
+            target = f"[{address}]" if ":" in address else address
+            specs.append(f"127.0.0.1:{local}:{target}:{port}")
+            options += ["-L", specs[-1]]
+        operation = "forward " + ", ".join(specs)
+        with self._record(host, f"forwards of {stage}") as log, self._client(host) as client:
+            log.write(" ".join(specs) + "\n")
+            log.flush()
+            process = subprocess.Popen(
+                self._arguments(host, options),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                env=client,
+            )
+            try:
+                pending = set(forwards)
+                deadline = time.monotonic() + CONNECT_TIMEOUT_S
+                while pending:
+                    if process.poll() is not None:
+                        raise RemoteError(
+                            host.id,
+                            stage,
+                            operation,
+                            self.log(host),
+                            f": ssh exited {process.returncode}",
+                        )
+                    for local in sorted(pending):
+                        with (
+                            suppress(OSError),
+                            socket.create_connection(("127.0.0.1", local), timeout=0.5),
+                        ):
+                            pending.discard(local)
+                    if pending and time.monotonic() >= deadline:
+                        raise RemoteError(
+                            host.id,
+                            stage,
+                            operation,
+                            self.log(host),
+                            f": no forward listened within {CONNECT_TIMEOUT_S}s",
+                        )
+                    if pending:
+                        time.sleep(0.1)
+                yield
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=KILL_AFTER_S)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                log.write(f"exit={process.returncode}\n")
+
+
+def free_port() -> int:
+    """A loopback port no process listens on now, for a forward to take."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 Item = TypeVar("Item")
