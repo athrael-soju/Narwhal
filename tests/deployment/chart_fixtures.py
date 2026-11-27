@@ -79,7 +79,6 @@ def values(engines: dict, **overrides: object) -> dict:
         "images": {"narwhal": NARWHAL_IMAGE, "haproxy": HAPROXY_IMAGE, "fabric": FABRIC_IMAGE},
         "engines": engines,
         "state": {"storageClassName": "shared", "size": "10Gi"},
-        "lease": {"storageClassName": "shared", "size": "1Gi"},
         "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
         "credentials": {
             "engineApiKey": {

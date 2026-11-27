@@ -14,7 +14,7 @@ from ..contracts import ContractVersionError
 from ..profiling.calibration import verify_calibration
 from ..profiling.membership import engine_set_problem
 from . import state as handoff_state
-from .lease import FileLease, LeaseError
+from .lease import LeaseError, RouterLease
 
 if TYPE_CHECKING:
     from ..serving.router.routing import NarwhalRouter
@@ -29,7 +29,7 @@ MAX_HANDOFF_AGE_S = 30.0
 
 def controls_fleet(router: NarwhalRouter) -> bool:
     """Return whether this process owns the active router lease."""
-    lease: FileLease | None = router.lease
+    lease: RouterLease | None = router.lease
     return not router.standby and (lease is None or lease.valid())
 
 
@@ -47,7 +47,7 @@ def lease_role(router: NarwhalRouter) -> str:
 
     A router is fenced while a failover block holds it or its own lease has lapsed.
     """
-    lease: FileLease | None = router.lease
+    lease: RouterLease | None = router.lease
     lapsed = not router.standby and lease is not None and not lease.valid()
     if router.failover_blocked or lapsed:
         return "fenced"
@@ -75,7 +75,11 @@ def ready(router: NarwhalRouter) -> bool:
 
 
 async def lease_renew_loop(router: NarwhalRouter, interval_s: float) -> None:
-    """Renew owned epochs and fence the router on any renewal failure."""
+    """Renew owned epochs and fence the router on any renewal failure.
+
+    A renewal runs in a worker thread, so a slow lease store never stalls serving. The router's
+    fence does not wait for it: `valid()` lapses on the lease's own deadline.
+    """
     lease = router.lease
     if lease is None:
         raise ValueError("lease renewal requires a configured lease")
@@ -83,7 +87,7 @@ async def lease_renew_loop(router: NarwhalRouter, interval_s: float) -> None:
         await asyncio.sleep(interval_s)
         if not lease.owned:
             continue
-        if lease.renew():
+        if await asyncio.to_thread(lease.renew):
             router.lease_epoch = lease.epoch
             router.lease_holder = lease.holder
             continue
@@ -142,7 +146,7 @@ async def _takeover_problem(router: NarwhalRouter, report: handoff_state.Handoff
 async def standby_loop(
     router: NarwhalRouter,
     primary: str,
-    lease: FileLease,
+    lease: RouterLease,
     *,
     probe_interval_s: float = PROBE_INTERVAL_S,
     takeover_after: int = TAKEOVER_AFTER,
@@ -172,7 +176,7 @@ async def standby_loop(
 async def _shadow(
     router: NarwhalRouter,
     primary: str,
-    lease: FileLease,
+    lease: RouterLease,
     *,
     probe_interval_s: float,
     takeover_after: int,
@@ -198,7 +202,7 @@ async def _shadow(
                 response = await client.get(f"{primary}/narwhal/handoff")
                 response.raise_for_status()
                 fresh = handoff_state.validate(response.json())
-                shared = lease.read()
+                shared = await asyncio.to_thread(lease.read)
                 if (
                     shared is None
                     or shared.holder != fresh.get("holder")
@@ -226,14 +230,14 @@ async def _shadow(
                     router.failover_blocked = transient = "no fresh handoff"
                 else:
                     try:
-                        claimed = lease.claim()
+                        claimed = await asyncio.to_thread(lease.claim)
                     except LeaseError as exc:
                         router.failover_blocked = transient = f"lease unavailable: {exc}"
                     else:
                         if claimed:
                             if doc is None:
                                 router.failover_blocked = "no handoff after lease claim"
-                                lease.release()
+                                await asyncio.to_thread(lease.release)
                                 return
                             previous_epoch = int(doc.get("epoch", 0))
                             if previous_epoch != lease.epoch - 1:
@@ -241,9 +245,18 @@ async def _shadow(
                                     f"handoff epoch {previous_epoch} cannot precede "
                                     f"claimed epoch {lease.epoch}"
                                 )
-                                lease.release()
+                                await asyncio.to_thread(lease.release)
                                 return
                             try:
+                                if delay := lease.serving_delay():
+                                    # The claim may hide a holder this router never saw.
+                                    log.warning(
+                                        "claimed epoch %d; waiting %.1fs for any unseen holder's "
+                                        "lease to lapse",
+                                        lease.epoch,
+                                        delay,
+                                    )
+                                    await asyncio.sleep(delay)
                                 report = handoff_state.apply(router, doc)
                                 if not report.applied:
                                     router.failover_blocked = report.why
@@ -297,5 +310,5 @@ async def _shadow(
                                 return
                             finally:
                                 if router.standby:
-                                    lease.release()
+                                    await asyncio.to_thread(lease.release)
             await asyncio.sleep(probe_interval_s)

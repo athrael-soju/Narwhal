@@ -66,7 +66,7 @@ STREAM_LOOPS = 2
 STREAM_BEFORE_S = 15.0
 STREAM_AFTER_S = 30.0
 # The node's directories behind the ReadWriteMany volumes.
-VOLUMES = {"narwhal-state": "1Gi", "narwhal-lease": "64Mi", "narwhal-engine-shared": "1Gi"}
+VOLUMES = {"narwhal-state": "1Gi", "narwhal-engine-shared": "1Gi"}
 NODE_VOLUMES = "/var/lib/narwhal-e2e"
 STORAGE_CLASS = "narwhal-e2e"
 PROFILE_SCRIPT = """
@@ -311,7 +311,6 @@ def values(narwhal_image: str, model: dict, runtime: dict) -> dict:
         "images": {"narwhal": narwhal_image, "haproxy": HAPROXY_IMAGE},
         "directEngines": engines,
         "state": {"storageClassName": STORAGE_CLASS, "size": VOLUMES["narwhal-state"]},
-        "lease": {"storageClassName": STORAGE_CLASS, "size": VOLUMES["narwhal-lease"]},
         # kind's default StorageClass gives each router its own volume.
         "routers": {"fleet": "fleet.json", "storageClassName": "standard", "size": "64Mi"},
     }
@@ -517,8 +516,18 @@ def failover(cluster: Cluster, model: dict) -> dict:
     cluster.kubectl("delete", "pod", holder, "--wait=false")
     print(f"deleted {holder}, the lease holder")
     done = False
+    # The container log carries the client's stderr too, so a line need not be a record.
+    unparsed: list[str] = []
     for line in log.stdout:
-        record = json.loads(line)
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            unparsed.append(line.rstrip("\n"))
+            print(f"client log line that is not JSON: {line.rstrip()!r}", file=sys.stderr)
+            continue
+        if not isinstance(record, dict):
+            unparsed.append(line.rstrip("\n"))
+            continue
         if record.get("done"):
             done = True
             break
@@ -554,6 +563,7 @@ def failover(cluster: Cluster, model: dict) -> dict:
     routers = {name.split("-")[1] for name in files if name.startswith("narwhal-")}
     result = {
         "requests": len(lines),
+        "unparsed": unparsed,
         "failed": failed,
         "deleted": holder,
         "new_holder": new_holder,
@@ -565,6 +575,9 @@ def failover(cluster: Cluster, model: dict) -> dict:
     print(json.dumps({key: value for key, value in result.items() if key != "failed"}))
     if failed:
         raise Failure(f"{len(failed)} of {len(lines)} requests failed: {failed[:5]}")
+    # A traceback means a client thread died, and its requests stopped being counted.
+    if any(line.startswith("Traceback") for line in unparsed):
+        raise Failure(f"the client raised: {unparsed}")
     if not after:
         raise Failure("no request completed after the lease holder's pod was deleted")
     # A request held for the whole window still needs the time it takes to serve.

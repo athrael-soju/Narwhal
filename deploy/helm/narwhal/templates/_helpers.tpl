@@ -5,6 +5,11 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{/* The router pair's ServiceAccount, Role, RoleBinding and Lease. */}}
+{{- define "narwhal.routerName" -}}
+narwhal-router
+{{- end -}}
+
 {{- define "narwhal.labels" -}}
 {{ include "narwhal.selector" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
@@ -36,6 +41,9 @@ app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 {{- end -}}
 {{- if eq $e.serviceName "routers" -}}
 {{- fail "the engines' headless Service may not be named routers, the router pair's Service" -}}
+{{- end -}}
+{{- if eq $e.access.serviceAccount.metadata.name (include "narwhal.routerName" .) -}}
+{{- fail (printf "the engines' service account may not be named %s, the router pair's" (include "narwhal.routerName" .)) -}}
 {{- end -}}
 {{- $key := .Values.credentials.engineApiKey -}}
 {{- range $c := concat $e.podTemplate.initContainers $e.podTemplate.containers -}}

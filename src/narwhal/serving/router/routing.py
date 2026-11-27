@@ -64,7 +64,7 @@ from .sizing import RequestSizer
 from .verification import SuspectVerifier
 
 if TYPE_CHECKING:
-    from ...runtime.lease import FileLease
+    from ...runtime.lease import RouterLease
 
 log = logging.getLogger("narwhal.router")
 
@@ -95,7 +95,7 @@ class NarwhalRouter:
         # Whether the standby's last probe found its primary controlling the fleet.
         self.primary_seen = False
         self.takeover_gap_s: float | None = None
-        self.lease: FileLease | None = None
+        self.lease: RouterLease | None = None
         self.lease_epoch = 0
         self.lease_holder = ""
         self._failover_blocked = ""

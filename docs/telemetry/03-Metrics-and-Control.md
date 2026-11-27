@@ -105,14 +105,14 @@ The four outcome counters and `narwhal_standby_refusals_total` export every docu
 | Metric | Type | Labels | Value |
 | --- | --- | --- | --- |
 | `narwhal_router_ready` | gauge | | `1` while the router admits new traffic, when `/ready` returns HTTP 200. |
-| `narwhal_router_lease_epoch` | gauge | | Epoch of the lease this process last claimed or renewed. `0` before the process holds the lease, and without `--lease-path`. |
+| `narwhal_router_lease_epoch` | gauge | | Epoch of the lease this process last claimed or renewed. `0` before the process holds the lease, and on a router without a lease. The epoch is the lease file's `epoch`, or the Kubernetes Lease's `leaseTransitions`. |
 | `narwhal_router_role` | gauge | `role` | `1` on the series for the router's role, `0` on the others. |
 
 The `role` label takes these values:
 
 | Role | Router |
 | --- | --- |
-| `active` | Controls the fleet. A router started without `--lease-path` is always active. |
+| `active` | Controls the fleet. A router started without `--lease-path` or `--kubernetes-lease` is always active. |
 | `standby` | Shadows the active router, and takes over when the active router releases the lease or the lease expires. |
 | `fenced` | Released or lost the lease, holds a lease that has lapsed before its renewal failed, or had its takeover blocked. The `reason` of its [fleet-state refusal](../http-api/04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) gives the cause, such as `shutting down` or `lease renewal failed`. A standby whose takeover attempt found no fresh handoff, or could not reach the lease, reports `standby` again once the active router answers its probe. |
 

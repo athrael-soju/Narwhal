@@ -374,7 +374,7 @@ class ChartTests(Rendering, unittest.TestCase):
         self.assertIn("resolvers kubernetes", lines)
         self.assertIn("    parse-resolv-conf", lines)
 
-    def test_router_0_starts_primary_until_it_holds_a_handoff(self):
+    def test_router_0_claims_the_lease_first_until_it_holds_a_handoff(self):
         router = self.find("StatefulSet", "router")
         self.assertEqual(router["spec"]["replicas"], 2)
         spec = router["spec"]["template"]["spec"]
@@ -389,24 +389,20 @@ class ChartTests(Rendering, unittest.TestCase):
         fleet = folder / "fleet.json"
         fleet.write_text(json.dumps({"recovery": {"state_path": str(handoff)}}))
         argv[argv.index("--fleet") + 1] = str(fleet)
-        lease = folder / "router.lease"
-        argv[argv.index("--lease-path") + 1] = str(lease)
         domain = "routers.example.svc.cluster.local:8000"
         first, second = f"http://router-1.{domain}", f"http://router-0.{domain}"
-        # Each case: the router, the files that exist, and the standby options it starts with.
+        # Each case: the router, whether its handoff exists, and the standby options it takes.
         cases = (
-            ("router-0", (), []),
-            ("router-1", (), ["--standby-of", second]),
-            ("router-0", (lease,), ["--standby-of", first]),
-            ("router-0", (handoff,), ["--standby-of", first]),
-            ("router-1", (handoff, lease), ["--standby-of", second]),
+            ("router-0", False, ["--standby-of", first, "--first-start-primary"]),
+            ("router-1", False, ["--standby-of", second]),
+            ("router-0", True, ["--standby-of", first]),
+            ("router-1", True, ["--standby-of", second]),
         )
-        for name, present, standby in cases:
-            with self.subTest(name=name, present=[path.name for path in present]):
-                for path in (handoff, lease):
-                    path.unlink(missing_ok=True)
-                for path in present:
-                    path.write_text("{}")
+        for name, saved, standby in cases:
+            with self.subTest(name=name, saved=saved):
+                handoff.unlink(missing_ok=True)
+                if saved:
+                    handoff.write_text("{}")
                 executed: list[list[str]] = []
                 environment = {**variables, "NARWHAL_POD_NAME": name}
                 with (
@@ -420,9 +416,88 @@ class ChartTests(Rendering, unittest.TestCase):
                 self.assertEqual(args[:5], ["python3", "-I", "-m", "narwhal.cli", "--fleet"])
                 tail = ["--router-id", name, *standby]
                 self.assertEqual(args[-len(tail) :], tail)
-                self.assertEqual(args.count("--standby-of"), len(standby) // 2)
-                self.assertIn("--lease-path", args)
+                self.assertEqual(args[args.index("--kubernetes-lease") + 1], "narwhal-router")
+                self.assertNotIn("--lease-path", args)
                 self.assertEqual(args[args.index("--host") + 1], POD_IP)
+
+    def test_the_routers_may_hold_only_their_own_lease(self):
+        role = self.find("Role", "narwhal-router")
+        self.assertEqual(
+            role["rules"],
+            [
+                {
+                    "apiGroups": ["coordination.k8s.io"],
+                    "resources": ["leases"],
+                    "resourceNames": ["narwhal-router"],
+                    "verbs": ["get", "update"],
+                },
+                # A create cannot name its object in RBAC, so it is a rule of its own.
+                {
+                    "apiGroups": ["coordination.k8s.io"],
+                    "resources": ["leases"],
+                    "verbs": ["create"],
+                },
+            ],
+        )
+        binding = self.find("RoleBinding", "narwhal-router")
+        self.assertEqual(binding["roleRef"]["name"], "narwhal-router")
+        self.assertEqual(
+            binding["subjects"], [{"kind": "ServiceAccount", "name": "narwhal-router"}]
+        )
+        self.assertFalse(
+            self.find("ServiceAccount", "narwhal-router")["automountServiceAccountToken"]
+        )
+        # No other Role in the release mentions Leases.
+        for document in self.documents:
+            if document["kind"] == "Role" and document["metadata"]["name"] != "narwhal-router":
+                self.assertNotIn("leases", json.dumps(document["rules"]))
+
+    def test_only_the_router_container_holds_the_lease_token(self):
+        spec = self.find("StatefulSet", "router")["spec"]["template"]["spec"]
+        self.assertEqual(spec["serviceAccountName"], "narwhal-router")
+        self.assertFalse(spec["automountServiceAccountToken"])
+        [api] = [volume for volume in spec["volumes"] if volume["name"] == "narwhal-api"]
+        sources = api["projected"]["sources"]
+        self.assertEqual(sources[0]["serviceAccountToken"]["expirationSeconds"], 3600)
+        self.assertEqual(sources[1]["configMap"]["name"], "kube-root-ca.crt")
+        self.assertEqual(
+            sources[2]["downwardAPI"]["items"][0]["fieldRef"]["fieldPath"], "metadata.namespace"
+        )
+        [container] = spec["containers"]
+        [mount] = [m for m in container["volumeMounts"] if m["name"] == "narwhal-api"]
+        self.assertEqual(mount["mountPath"], "/var/run/secrets/kubernetes.io/serviceaccount")
+        self.assertTrue(mount["readOnly"])
+        claims = [v for v in spec["volumes"] if "persistentVolumeClaim" in v]
+        self.assertEqual(
+            [v["persistentVolumeClaim"]["claimName"] for v in claims], ["narwhal-state"]
+        )
+        self.assertTrue(claims[0]["persistentVolumeClaim"]["readOnly"])
+
+    def test_the_routers_never_share_a_node_while_another_can_take_one(self):
+        spec = self.find("StatefulSet", "router")["spec"]["template"]["spec"]
+        [constraint] = spec["topologySpreadConstraints"]
+        self.assertEqual(
+            constraint,
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                # A tainted node the routers cannot run on is not a node to spread over.
+                "nodeTaintsPolicy": "Honor",
+                "labelSelector": {
+                    "matchLabels": self.find("StatefulSet", "router")["spec"]["selector"][
+                        "matchLabels"
+                    ]
+                },
+            },
+        )
+
+    def test_the_engines_service_account_may_not_take_the_routers_name(self):
+        values = copy.deepcopy(self.values)
+        values["engines"]["access"]["serviceAccount"]["metadata"]["name"] = "narwhal-router"
+        result = self.helm(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("may not be named narwhal-router", result.stderr)
 
     def test_gate_jobs_run_once_on_their_node(self):
         job = self.find("Job", "fabric-node-a-node-b-server")
@@ -569,7 +644,7 @@ class ChartTests(Rendering, unittest.TestCase):
         kinds = sorted({d["kind"] for d in documents})
         self.assertEqual(kinds, ["Job", "PersistentVolumeClaim"])
         claims = {d["metadata"]["name"] for d in documents if d["kind"] == "PersistentVolumeClaim"}
-        self.assertEqual(claims, {"narwhal-state", "narwhal-lease"})
+        self.assertEqual(claims, {"narwhal-state"})
         values["routers"]["enabled"] = True
         self.assertNotEqual(self.helm(values).returncode, 0)
         values["routers"]["enabled"] = False
@@ -917,7 +992,9 @@ class DirectChartTests(Rendering, unittest.TestCase):
     def test_nothing_writes_the_state_volume_and_no_engine_attests(self):
         kinds = {d["kind"] for d in self.documents}
         self.assertNotIn("Job", kinds)
-        self.assertNotIn("ServiceAccount", kinds)
+        # The routers' account, for their Lease, is the only one: no engine reads its pod.
+        accounts = [d["metadata"]["name"] for d in self.documents if d["kind"] == "ServiceAccount"]
+        self.assertEqual(accounts, ["narwhal-router"])
         for document in self.documents:
             if document["kind"] not in ("StatefulSet", "Deployment"):
                 continue

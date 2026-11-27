@@ -1,4 +1,8 @@
-"""File-backed ownership lease for fenced router failover."""
+"""Ownership leases for fenced router failover, and the file-backed lease of SSH hosts.
+
+`RouterLease` is what the router needs from a lease. `FileLease` implements it on shared
+storage, and `kubernetes_lease.KubernetesLease` on a `coordination.k8s.io` Lease.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Protocol, TextIO
 
 from ..contracts import LEASE, ContractVersionError, validate_document, versioned
 
@@ -32,18 +36,60 @@ WITNESS_NAME = ".narwhal-lease-witness"
 ORPHAN_TTLS = 10
 
 
+def _boot_clock() -> float:
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+# The clock a lease fences on. CLOCK_MONOTONIC stops while the host is suspended, so a holder
+# that resumed would still count its deadline as unexpired; CLOCK_BOOTTIME keeps counting.
+# Where it does not exist, the monotonic clock is the best this host has.
+FENCE_CLOCK: Callable[[], float] = (
+    _boot_clock if hasattr(time, "CLOCK_BOOTTIME") else time.monotonic
+)
+
+
 class LeaseError(RuntimeError):
     """A shared lease read or update failed."""
 
 
 @dataclass(frozen=True)
 class LeaseRecord:
-    """One holder's epoch and wall-clock expiry."""
+    """One holder's epoch and wall-clock expiry. An empty holder is a free lease."""
 
     epoch: int
     holder: str
     expires_at: float
     updated_at: float
+
+
+class RouterLease(Protocol):
+    """The lease one router of a pair holds while it controls the fleet.
+
+    `claim` takes a free or expired lease and advances its epoch, `renew` keeps it, and
+    `release` frees it after the router has stopped controlling the fleet. `valid` is the fence:
+    the router admits traffic only while it is true, and it turns false on the router's own
+    monotonic clock before any other router can claim the lease.
+    """
+
+    holder: str
+    epoch: int
+
+    @property
+    def owned(self) -> bool: ...
+
+    def valid(self) -> bool: ...
+
+    def serving_delay(self) -> float:
+        """Seconds a held lease waits before it is valid; 0 once it may serve."""
+        ...
+
+    def read(self) -> LeaseRecord | None: ...
+
+    def claim(self) -> bool: ...
+
+    def renew(self) -> bool: ...
+
+    def release(self) -> None: ...
 
 
 class FileLease:
@@ -57,7 +103,7 @@ class FileLease:
         *,
         safety_margin_s: float = 0.0,
         wall_clock: Callable[[], float] = time.time,
-        monotonic_clock: Callable[[], float] = time.monotonic,
+        monotonic_clock: Callable[[], float] = FENCE_CLOCK,
         sleep: Callable[[float], None] = time.sleep,
         witness: Path | None = None,
     ) -> None:
@@ -92,6 +138,10 @@ class FileLease:
     def valid(self) -> bool:
         """Return whether local ownership remains inside its monotonic deadline."""
         return self._owned and self._monotonic_clock() < self._valid_until
+
+    def serving_delay(self) -> float:
+        """A claimed file lease is valid at once."""
+        return 0.0
 
     def remove_orphans(self) -> list[Path]:
         """Remove this lease's temporary files that a writer left when it died mid-write.
