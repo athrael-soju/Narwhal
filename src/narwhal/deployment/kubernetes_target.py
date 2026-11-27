@@ -340,6 +340,9 @@ PERMISSIONS = (
     ("delete", "pods"),
     ("get", "pods/log"),
     ("get", "nodes"),
+    # RBAC lets an identity grant only what it holds, so installing the routers' Role takes the
+    # Lease verbs that Role grants.
+    *((verb, "leases.coordination.k8s.io") for verb in ("get", "create", "update")),
 )
 # Pod scheduling gates are on by default from this Kubernetes version.
 MINIMUM_SERVER = (1, 27)
@@ -614,7 +617,7 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
     discovered["images"] = json.dumps(images, sort_keys=True)
     router = {
         name: values.get(name)
-        for name in ("routers", "haproxy", "credentials", "monitoring", "lease", "state")
+        for name in ("routers", "haproxy", "credentials", "monitoring", "state")
     }
     source = "environment"
     return {

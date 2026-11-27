@@ -464,14 +464,20 @@ class KubernetesDeployTests(unittest.TestCase):
 
     def test_access_names_an_old_server_and_each_permission_the_identity_lacks(self):
         self.rig.server = "v1.26.9"
-        self.rig.denied = {("patch", "pods"), ("list", "secrets"), ("get", "jobs.batch")}
+        self.rig.denied = {
+            ("patch", "pods"),
+            ("list", "secrets"),
+            ("get", "jobs.batch"),
+            ("update", "leases.coordination.k8s.io"),
+        }
         code, result = self.deploy("run")
         self.assertEqual(code, 1, result)
         [error] = result["errors"]
         self.assertEqual(error["stage"], "access")
         self.assertIn("Kubernetes v1.26.9", error["message"])
         self.assertIn("1.27 or later", error["message"])
-        for denied in ("patch pods", "list secrets", "get jobs.batch"):
+        named = ("patch pods", "list secrets", "get jobs.batch", "update leases.coordination")
+        for denied in named:
             self.assertIn(denied, error["message"])
         for verb, resource in kubernetes_target.PERMISSIONS:
             self.assertEqual(self.rig.calls[f"can-i {verb} {resource}"], 1, (verb, resource))

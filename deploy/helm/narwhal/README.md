@@ -4,13 +4,13 @@ The chart runs one Narwhal fleet in one namespace:
 
 - the engines, one pod each in the StatefulSet `engine`, with the attestation sidecar in each pod, or [direct engines](#direct-engines) that run on CPUs without attestation
 - the headless Service the engine URLs name
-- the state PersistentVolumeClaim and the router pair's lease claim
-- the router pair, the StatefulSet `router`, each started as a standby of the other
+- the state PersistentVolumeClaim
+- the router pair, the StatefulSet `router`, which elects its primary through the Lease `narwhal-router`, and the ServiceAccount, Role and RoleBinding `narwhal-router` that let it
 - HAProxy in front of the routers, configured from [`deploy/ha/haproxy.cfg`](../../ha/haproxy.cfg)
 - the gate Jobs of the deployment stage that is running
 - Prometheus and Grafana, when `monitoring.enabled` is set
 
-`narwhal deploy --target kubernetes` installs the chart and sets the `engines` and `gates` values. The cluster needs Kubernetes 1.27 or later, the GPU and RDMA device plugins the engine plans name, and a ReadWriteMany storage class for the state and lease claims. The lease volume must support `flock`, coherent reads and atomic rename across nodes.
+`narwhal deploy --target kubernetes` installs the chart and sets the `engines` and `gates` values. The cluster needs Kubernetes 1.27 or later, the GPU and RDMA device plugins the engine plans name, and a ReadWriteMany storage class for the state claim.
 
 ## Engines
 
@@ -38,7 +38,6 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | `engines` | The engines, from `chart_values` |
 | `directEngines` | Engines that start directly, from `direct_values`, in place of `engines`. The chart then refuses `gates` |
 | `state.storageClassName`, `state.size` | The state claim's ReadWriteMany storage class and size. The claim takes the name the plans give `NARWHAL_KUBERNETES_STATE_CLAIM` |
-| `lease.storageClassName`, `lease.size` | The lease claim `narwhal-lease` |
 | `routers.fleet` | The fleet file's path on the state volume |
 | `routers.storageClassName`, `routers.size` | Each router's own claim, for its journal and state handoff |
 | `routers.args` | More `narwhal-serve` options, such as `["--lease-ttl", "6"]` |
@@ -54,7 +53,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | --- | --- | --- |
 | Engine pod | Its own directory, `engines/<role>/<pod UID>/`, at `/narwhal-state`. The engine container mounts it read-only. The sidecar also mounts the launch directory that checked the pod, `engines/<role>/launches/<pod UID>/`, read-only | The model volume, read-only |
 | Direct engine pod | None | The model volume, read-only, and `narwhal-engine-shared` |
-| Router | The whole volume, read-only, at `/narwhal-state` | The lease at `/narwhal-lease/router.lease`, its own claim at `/narwhal-router` |
+| Router | The whole volume, read-only, at `/narwhal-state` | Its own claim at `/narwhal-router`, and its ServiceAccount token |
 | Gate Job | The whole volume, writable, at `/narwhal-state` | A discovery Job mounts the model volume read-only at `/model` |
 
 Only gate Jobs write outside an engine pod's own directory. The fleet file's `recovery.state_path` belongs under `/narwhal-router`, which holds each router's state alone; a relative path lands there too.
@@ -63,10 +62,13 @@ Only gate Jobs write outside an engine pod's own directory. The fleet file's `re
 
 The routers are `router-0` and `router-1` in the headless Service `routers`. Each runs from `/narwhal-router` with `--router-id` set to its pod name, listening on port 8000 at its pod address with its journal at `/narwhal-router/journal.jsonl`. [`files/router-start.py`](files/router-start.py) decides how each one starts, as [Starting a router pair](../../../docs/operate/01-Start-Routers.md#starting-a-router-pair) does:
 
-- On the first install, `router-0` finds no handoff at its `recovery.state_path` and no lease file. It starts without `--standby-of` and claims the free lease.
-- `router-1`, and `router-0` once either file exists, start with `--standby-of` set to the other router, as a supervisor restarts one. A primary start while the other router held the lease would leave `router-0` a standby that never takes over.
+- Both start with `--kubernetes-lease narwhal-router` and `--standby-of` set to the other router.
+- On the first install, `router-0` finds no handoff at its `recovery.state_path` and also gets `--first-start-primary`. It claims the Lease while the Lease is absent or free, and otherwise shadows `router-1`.
+- `router-1`, and `router-0` once its handoff exists, start as standbys, as a supervisor restarts one.
 
-When both routers stop and start again, each is a standby of the other, and the first to find the lease free resumes from the handoff at its state path. That handoff must be at most `--standby-max-handoff-age` seconds old, as [Lease behavior](../../../docs/operate/01-Start-Routers.md#lease-behavior) states, so when both routers stay down longer than that, neither takes over on its own.
+The Role `narwhal-router` grants `get` and `update` on the Lease `narwhal-router` and `create` on Leases, since RBAC cannot limit a create to one name. Only the router container mounts the ServiceAccount's token. A topology spread constraint on `kubernetes.io/hostname` (`maxSkew: 1`, `DoNotSchedule`, tainted nodes not counted) keeps the routers on different nodes when several can take them, and lets both run on one node. [Electing the primary on Kubernetes](../../../docs/operate/01-Start-Routers.md#electing-the-primary-on-kubernetes) gives the fencing and the takeover time.
+
+When both routers stop and start again, each is a standby of the other, and the first to find the Lease free resumes from the handoff at its state path. That handoff must be at most `--standby-max-handoff-age` seconds old, as [Lease behavior](../../../docs/operate/01-Start-Routers.md#lease-behavior) states, so when both routers stay down longer than that, neither takes over on its own.
 
 HAProxy runs the shipped configuration with `router-a` at `router-0.routers.<namespace>.svc.<cluster domain>:8000` and `router-b` at `router-1`. A `resolvers` section reads the pod's DNS servers and holds an answer for one second, so HAProxy finds a replaced router pod at its new address. The Service `haproxy` serves port 8000.
 

@@ -25,12 +25,6 @@ state:
   storageClassName: ""
   size: ""
 
-# The router pair's lease volume. It must support flock, coherent reads and atomic rename
-# across nodes.
-lease:
-  storageClassName: ""
-  size: ""
-
 routers:
   # Run the router pair and HAProxy. narwhal deploy --target kubernetes leaves them off until
   # its router-start stage, so the engines and gate Jobs run first.
@@ -40,7 +34,8 @@ routers:
   # Each router's own volume, for its journal and state handoff.
   storageClassName: ""
   size: ""
-  # More narwhal-serve options, such as ["--lease-ttl", "6"].
+  # More narwhal-serve options, such as ["--lease-ttl", "6"]. The routers elect the primary
+  # through the Lease narwhal-router in the release's namespace.
   args: []
 
 haproxy:

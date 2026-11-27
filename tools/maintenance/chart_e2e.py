@@ -66,7 +66,7 @@ STREAM_LOOPS = 2
 STREAM_BEFORE_S = 15.0
 STREAM_AFTER_S = 30.0
 # The node's directories behind the ReadWriteMany volumes.
-VOLUMES = {"narwhal-state": "1Gi", "narwhal-lease": "64Mi", "narwhal-engine-shared": "1Gi"}
+VOLUMES = {"narwhal-state": "1Gi", "narwhal-engine-shared": "1Gi"}
 NODE_VOLUMES = "/var/lib/narwhal-e2e"
 STORAGE_CLASS = "narwhal-e2e"
 PROFILE_SCRIPT = """
@@ -311,7 +311,6 @@ def values(narwhal_image: str, model: dict, runtime: dict) -> dict:
         "images": {"narwhal": narwhal_image, "haproxy": HAPROXY_IMAGE},
         "directEngines": engines,
         "state": {"storageClassName": STORAGE_CLASS, "size": VOLUMES["narwhal-state"]},
-        "lease": {"storageClassName": STORAGE_CLASS, "size": VOLUMES["narwhal-lease"]},
         # kind's default StorageClass gives each router its own volume.
         "routers": {"fleet": "fleet.json", "storageClassName": "standard", "size": "64Mi"},
     }

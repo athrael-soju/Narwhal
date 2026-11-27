@@ -1,0 +1,45 @@
+{{- if .Values.routers.enabled }}
+{{- $name := include "narwhal.routerName" . }}
+# The routers elect the primary through the Lease {{ $name }}. Their ServiceAccount may read,
+# renew, take over and release that one Lease, and create it when it does not exist yet.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "router") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "router") | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ $name }}]
+    verbs: [get, update]
+  # RBAC cannot limit a create by name, because the name is in the request body, so this rule
+  # admits a create of any Lease in the namespace. It grants nothing else: without get, list,
+  # watch, update, patch or delete on another Lease, a router can neither read, renew, take
+  # over nor remove one, and a create of a name that exists fails.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "router") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+{{- end }}

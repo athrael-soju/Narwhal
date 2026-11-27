@@ -3164,7 +3164,6 @@ def environment(root: Path) -> dict[str, str]:
                     "fabric": FABRIC_IMAGE,
                 },
                 "state": {"storageClassName": "shared", "size": "10Gi"},
-                "lease": {"storageClassName": "shared", "size": "1Gi"},
                 "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
                 "credentials": {
                     "engineApiKey": {"env": "NARWHAL_ENGINE_KEY", "secretName": "k", "key": "v"}
