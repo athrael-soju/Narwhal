@@ -52,8 +52,6 @@ CREDENTIALS = (
     "'uid_map': open('/proc/self/uid_map').read(), "
     "'gid_map': open('/proc/self/gid_map').read()}))"
 )
-# The mapping of a process in the initial user namespace, whose IDs are the host's IDs.
-IDENTITY_MAP = [["0", "0", "4294967295"]]
 ACL = "system.posix_acl_access"
 
 
@@ -112,7 +110,8 @@ def can_read_write(info: os.stat_result, uid: int, gid: int, groups: list[int]) 
 
     Root may. Otherwise the owner bits apply to the owner, the group bits to a member of the
     file's group, and the other bits to everyone else, as the kernel's mode check applies them.
-    The IDs must be host IDs, and the file must carry no access control list, whose mask
+    The IDs must be those of the inspection's user namespace, and the file must carry no access
+    control list, whose mask
     replaces the group bits. The inspection refuses the other cases before it calls this.
     """
     if uid == 0:
@@ -136,18 +135,28 @@ def has_acl(path: str) -> bool:
     return True
 
 
-def host_ids(credentials: Mapping[str, object]) -> list[str]:
-    """The reasons the credentials are not host IDs, one for each mapping that is not identity."""
+def _mapping(text: str) -> list[list[str]]:
+    return [line.split() for line in text.splitlines()]
+
+
+def same_ids(credentials: Mapping[str, object]) -> list[str]:
+    """Why the engine user's IDs differ from those this inspection reads device owners in.
+
+    The inspection reads each device's owner and group in its own user namespace. Those match
+    the engine user's IDs only when the engine runs in the same namespace, as a native engine
+    does, and as a container does unless rootless Docker or userns-remap gives it its own.
+    """
     problems = []
     for name in ("uid_map", "gid_map"):
         mapping = credentials.get(name)
+        own = Path("/proc/self", name).read_text()
         if not isinstance(mapping, str):
             problems.append(f"the engine user's {name} is unknown")
-        elif [line.split() for line in mapping.splitlines()] != IDENTITY_MAP:
-            ranges = "; ".join(" ".join(line.split()) for line in mapping.splitlines())
+        elif _mapping(mapping) != _mapping(own):
+            ranges = "; ".join(" ".join(line) for line in _mapping(mapping))
             problems.append(
-                f"the engine user runs in a user namespace ({name} {ranges!r}), so its IDs are "
-                "not the host IDs that device permissions name"
+                f"the engine user runs in another user namespace ({name} {ranges!r}), so its IDs "
+                "are not the IDs that the device owners name"
             )
     return problems
 
@@ -319,7 +328,7 @@ class _Inspection:
         )
         if type(user["uid"]) is not int or type(user["gid"]) is not int:
             raise CheckFailed("the engine user's credentials are not numeric IDs")
-        if problems := host_ids(credentials):
+        if problems := same_ids(credentials):
             raise CheckFailed("; ".join(problems))
         self.user = user
 

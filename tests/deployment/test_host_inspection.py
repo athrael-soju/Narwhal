@@ -30,8 +30,9 @@ ROCM_GPUS = [
     {"id": "1", "name": "synthetic-gpu", "device": "/dev/dri/renderD129"},
 ]
 CUDA_GPUS = [{"id": "0", "name": "synthetic-gpu", "uuid": "GPU-zero", "device": "/dev/nvidia0"}]
-# /proc/self/uid_map and gid_map of a process in the initial user namespace.
-IDENTITY = "         0          0 4294967295\n"
+# /proc/self/uid_map and gid_map of this test process, so a synthetic engine shares its namespace.
+IDENTITY = Path("/proc/self/uid_map").read_text()
+GROUPS = Path("/proc/self/gid_map").read_text()
 
 
 def device(mode: int = 0o660, uid: int = 0, gid: int = 44, kind: int = stat.S_IFCHR):
@@ -62,7 +63,7 @@ class Host:
         self.docker_calls: list[list[str]] = []
 
     @staticmethod
-    def maps(uid_map: str = IDENTITY, gid_map: str = IDENTITY) -> dict:
+    def maps(uid_map: str = IDENTITY, gid_map: str = GROUPS) -> dict:
         return {"uid_map": uid_map, "gid_map": gid_map}
 
     def docker(self, command, run, log):
@@ -319,7 +320,7 @@ class HostInspectionTests(unittest.TestCase):
         failures = self.failures()
         self.assertTrue(
             any(
-                f.startswith("engine_user: the engine user runs in a user namespace (uid_map")
+                f.startswith("engine_user: the engine user runs in another user namespace (uid_map")
                 for f in failures
             ),
             failures,
