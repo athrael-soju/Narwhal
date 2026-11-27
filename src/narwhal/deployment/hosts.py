@@ -34,7 +34,8 @@ TIMEOUT_STATUSES = (124, 137)
 HOST_CAUSE = "narwhal-host: "
 # The only variables `ssh` receives. ssh_config's SendEnv adds to the command line's instead of
 # yielding to it, so the client environment holds nothing that SendEnv could usefully forward.
-CLIENT_KEYS = frozenset({"PATH", "HOME", "TERM", "SSH_AUTH_SOCK"})
+# XDG_RUNTIME_DIR locates agent sockets that ssh_config names through ${XDG_RUNTIME_DIR}.
+CLIENT_KEYS = frozenset({"PATH", "HOME", "TERM", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR"})
 # OpenSSH reports a host key that the known-hosts file lacks or contradicts with these lines.
 HOST_KEY_FAILURES = ("Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
 

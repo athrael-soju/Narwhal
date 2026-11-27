@@ -164,7 +164,15 @@ class SshTests(unittest.TestCase):
             self.assertNotIn(PASSWORD, "".join(process.kwargs["env"].values()))
             self.assertLessEqual(
                 set(process.kwargs["env"]),
-                {"PATH", "HOME", "TERM", "SSH_AUTH_SOCK", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"},
+                {
+                    "PATH",
+                    "HOME",
+                    "TERM",
+                    "SSH_AUTH_SOCK",
+                    "XDG_RUNTIME_DIR",
+                    "SSH_ASKPASS",
+                    "SSH_ASKPASS_REQUIRE",
+                },
             )
             self.assertEqual(args[args.index("SetEnv=NARWHAL_DEPLOY=1") - 1], "-o")
             self.assertFalse(any(name.startswith("NARWHAL_") for name in process.kwargs["env"]))
