@@ -4,20 +4,24 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
 from narwhal.backends.vllm.identity import parse_process_start
 from narwhal.config import FleetConfig
 from narwhal.contracts import ATTESTATION, versioned
+from narwhal.engines import attestation
 from narwhal.engines.attestation import (
     AttestationDocument,
     EngineIdentity,
+    HcaPort,
     _payload_digest,
     build_app,
     fetch_engine_identity,
     launch_digest,
     make_attestation,
+    read_hca_counters,
     verify_attestation,
 )
 from narwhal.engines.kv_events import StoredBlocks
@@ -225,6 +229,85 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await cold.get("/v1/residency")).status_code, 404)
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
+
+    async def test_sidecar_serves_hca_counters_only_for_its_hca_port(self):
+        start = 100
+
+        def handle(request):
+            return vllm_identity_engine(request, self.identity.version, start)
+
+        transport = httpx.MockTransport(handle)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            counters = root / "mlx5_0/ports/1/counters"
+            counters.mkdir(parents=True)
+            (counters / "port_xmit_data").write_text("4096\n")
+            boot = root / "boot_id"
+            boot.write_text("boot-a\n")
+            hca = HcaPort.parse("mlx5_0:1")
+            apps = {
+                "hca": build_app(
+                    self.document, "http://engine", self.identity, transport=transport, hca=hca
+                ),
+                "none": build_app(
+                    self.document, "http://engine", self.identity, transport=transport
+                ),
+            }
+            with (
+                patch.object(attestation, "INFINIBAND", root),
+                patch.object(attestation, "BOOT_ID", boot),
+            ):
+                async with (
+                    httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=apps["hca"]), base_url="http://sidecar"
+                    ) as client,
+                    httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=apps["none"]), base_url="http://sidecar"
+                    ) as none,
+                ):
+                    self.assertEqual(
+                        (await client.get("/v1/hca")).json(),
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": 4096,
+                        },
+                    )
+                    self.assertEqual(
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["hca"]),
+                        ),
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": 4096,
+                        },
+                    )
+                    self.assertEqual((await none.get("/v1/hca")).status_code, 404)
+                    self.assertIsNone(
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["none"]),
+                        )
+                    )
+                    (counters / "port_xmit_data").unlink()
+                    unreadable = await client.get("/v1/hca")
+                    self.assertEqual(unreadable.status_code, 503)
+                    self.assertIn("HCA counters unreadable", unreadable.json()["detail"])
+                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA counters unreadable"):
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["hca"]),
+                        )
+                    (counters / "port_xmit_data").write_text("4096\n")
+                    start = 101
+                    self.assertEqual((await client.get("/v1/hca")).status_code, 503)
+        for value in ("mlx5_0", "mlx5_0:0", "mlx5_0:1,mlx5_1:1", "mlx 5:1"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "DEVICE:PORT"):
+                HcaPort.parse(value)
 
     async def test_residency_events_report_the_state_of_their_changes(self):
 

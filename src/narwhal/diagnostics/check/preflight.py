@@ -27,7 +27,7 @@ from .engines import (
 from .evidence import check_directed_evidence, write_directed_evidence
 from .profiles import gate_profile, gate_profile_generation, gate_slo
 from .report import Report
-from .transfer import gate_consume, gate_produce
+from .transfer import gate_consume, gate_hca, gate_produce
 
 
 async def _live_roles(
@@ -113,13 +113,14 @@ async def run(
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")
             activity.advance(2)
         else:
+            hca = await gate_hca(cfg, live, rep)
             handoffs = await gate_produce(cfg, live, client, rep)
             activity.advance()
             if evidence_out is None:
-                await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
+                await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats, hca=hca)
             else:
                 await gate_consume(
-                    cfg, live, handoffs, client, rep, mesh, repeats, evidence=rep.pairs
+                    cfg, live, handoffs, client, rep, mesh, repeats, evidence=rep.pairs, hca=hca
                 )
             activity.advance()
         gate_slo(cfg, store, rep)
