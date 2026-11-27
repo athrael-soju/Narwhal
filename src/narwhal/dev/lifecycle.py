@@ -231,7 +231,7 @@ def _wait(url: str, identity: dict, seconds: int = 30) -> None:
     deadline = time.monotonic() + seconds
     with httpx.Client(timeout=2, trust_env=False) as client:
         while time.monotonic() < deadline:
-            if not native_engine._owns_process(identity):
+            if not native_engine.owns_process(identity):
                 raise ValueError(f"process exited before {url} became healthy; inspect its log")
             try:
                 if client.get(url).status_code == 200:
@@ -342,9 +342,9 @@ def _stop(root: Path, state: dict) -> None:
             errors.append(f"{helper['stage']}: {error}")
     for record in reversed(records):
         identity = record["identity"]
-        if native_engine._group_members(identity):
+        if native_engine.group_members(identity):
             try:
-                native_engine._terminate(identity)
+                native_engine.terminate(identity)
                 stopped.append(record["name"])
             except (OSError, ValueError) as exc:
                 errors.append(f"{record['name']}: {exc}")
@@ -697,11 +697,11 @@ def status(root: Path) -> dict:
         {"name": path.parent.name, "identity": _read_identity(path)}
         for path in sorted(run.glob("engine-*/native-process.json"))
     )
-    live = [r["name"] for r in records if native_engine._owns_process(r["identity"])]
+    live = [r["name"] for r in records if native_engine.owns_process(r["identity"])]
     survivors = {
         r["name"]: sorted(members)
         for r in records
-        if r["name"] not in live and (members := native_engine._group_members(r["identity"]))
+        if r["name"] not in live and (members := native_engine.group_members(r["identity"]))
     }
     helpers = {
         str(path.relative_to(run)): sorted(members)

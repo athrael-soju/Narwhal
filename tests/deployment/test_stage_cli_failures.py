@@ -138,8 +138,8 @@ class SharedStageFailureTests(unittest.TestCase):
                             )
                         ),
                     ),
-                    patch.object(native_engine, "_group_members", return_value={102: 2}),
-                    patch.object(native_engine, "_terminate") as terminate,
+                    patch.object(native_engine, "group_members", return_value={102: 2}),
+                    patch.object(native_engine, "terminate") as terminate,
                     patch.object(
                         native_engine, "stop", side_effect=ValueError("prior engine cleanup failed")
                     ) as stop,
