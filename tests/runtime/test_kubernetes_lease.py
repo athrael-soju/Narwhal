@@ -9,8 +9,10 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 import unittest
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -18,7 +20,7 @@ import httpx
 from narwhal.runtime import kubernetes_api as k
 from narwhal.runtime import state
 from narwhal.runtime.kubernetes_lease import KubernetesLease, check_settings
-from narwhal.runtime.lease import LeaseError
+from narwhal.runtime.lease import FileLease, LeaseError
 from narwhal.runtime.standby import standby_loop
 from narwhal.serving.app import create_app
 from tests.deployment.kubernetes_cluster import LEASE, Clock, ObjectStore
@@ -239,17 +241,18 @@ class ExpiryTests(LeaseCase):
         self.assertTrue(b.lease.claim())
         self.assertTrue(b.lease.valid())
 
-    def test_a_longer_duration_written_by_the_holder_is_respected(self):
+    def test_a_peer_on_a_longer_ttl_is_refused_rather_than_waited_out(self):
         a, b = self.router("a", 0.0), self.router("b", 3.0)
         self.holding(a)
         lease = self.stored()
         lease["spec"]["leaseDurationSeconds"] = 3 * TTL
         self.store.replace(lease)
         b.lease.read()
-        self.step(2 * TTL)
-        self.assertFalse(b.lease.claim())
-        self.step(TTL + 0.1)
-        self.assertTrue(b.lease.claim())
+        self.step(4 * TTL)
+        # Were B to create the Lease after a deletion, it would wait only its own 5 s.
+        with self.assertRaisesRegex(LeaseError, "same --lease-ttl"):
+            b.lease.claim()
+        self.assertFalse(b.lease.owned)
 
 
 class ReleaseTests(LeaseCase):
@@ -345,6 +348,65 @@ class EditTests(LeaseCase):
             self.step(0.25, a.lease.renew, b.lease.claim, b.lease.renew)
         self.assertTrue(b.lease.valid())
         self.assertEqual(b.lease.epoch, 3)
+
+
+class LostReplyWaitTests(LeaseCase):
+    """A claim that must wait one duration keeps that wait when its reply and re-read are lost."""
+
+    def lose_reply_then_reads(self, router: Router) -> None:
+        def landed_then_down(request: httpx.Request) -> str:
+            if request.method in ("PUT", "POST"):
+                router.fault = lambda request: "lost"
+                return "unanswered"
+            return ""
+
+        router.fault = landed_then_down
+
+    def recover_and_check(self, a: Router, b: Router) -> None:
+        with self.assertRaises(LeaseError):
+            b.lease.claim()
+        b.fault = lambda request: ""
+        self.step(0.25)
+        # B finds its own write, and still waits out a holder it may not have seen.
+        self.assertTrue(b.lease.claim())
+        self.assertFalse(b.lease.valid())
+        for _ in range(int(2 * TTL / 0.25)):
+            self.step(0.25, a.lease.renew, b.lease.renew)
+        self.assertTrue(b.lease.valid())
+
+    def test_a_create_after_a_deletion_keeps_its_wait(self):
+        a, b = self.router("a", 0.0), self.router("b", 4.0)
+        self.holding(a)
+        b.lease.read()
+        self.store.delete(LEASE, NS, NAME)
+        a.down = True
+        self.lose_reply_then_reads(b)
+        self.recover_and_check(a, b)
+
+    def test_a_take_of_a_lease_patched_free_keeps_its_wait(self):
+        a, b = self.router("a", 0.0), self.router("b", 4.0)
+        self.holding(a)
+        b.lease.read()
+        self.store.patch(LEASE, NS, NAME, {"spec": {"holderIdentity": ""}}, patch_type="merge")
+        a.down = True
+        self.lose_reply_then_reads(b)
+        self.recover_and_check(a, b)
+
+
+class FenceClockTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(time, "CLOCK_BOOTTIME"), "CLOCK_BOOTTIME is Linux only")
+    def test_both_leases_fence_on_a_clock_that_counts_suspend(self):
+        # CLOCK_MONOTONIC stops while the host sleeps; a resumed holder would still serve.
+        for lease in (
+            KubernetesLease(Router(ObjectStore(), Time(), "a", 0.0).client, NAME, "a", TTL),
+            FileLease(Path("/nonexistent/lease.json"), "a", TTL),
+        ):
+            with self.subTest(lease=type(lease).__name__):
+                clock = lease._monotonic_clock
+                before = time.clock_gettime(time.CLOCK_BOOTTIME)
+                self.assertLessEqual(before, clock())
+                self.assertLessEqual(clock(), time.clock_gettime(time.CLOCK_BOOTTIME))
+                self.assertIsNot(clock, time.monotonic)
 
 
 class ConflictTests(LeaseCase):

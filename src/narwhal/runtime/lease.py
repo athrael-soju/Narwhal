@@ -36,6 +36,18 @@ WITNESS_NAME = ".narwhal-lease-witness"
 ORPHAN_TTLS = 10
 
 
+def _boot_clock() -> float:
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+# The clock a lease fences on. CLOCK_MONOTONIC stops while the host is suspended, so a holder
+# that resumed would still count its deadline as unexpired; CLOCK_BOOTTIME keeps counting.
+# Where it does not exist, the monotonic clock is the best this host has.
+FENCE_CLOCK: Callable[[], float] = (
+    _boot_clock if hasattr(time, "CLOCK_BOOTTIME") else time.monotonic
+)
+
+
 class LeaseError(RuntimeError):
     """A shared lease read or update failed."""
 
@@ -91,7 +103,7 @@ class FileLease:
         *,
         safety_margin_s: float = 0.0,
         wall_clock: Callable[[], float] = time.time,
-        monotonic_clock: Callable[[], float] = time.monotonic,
+        monotonic_clock: Callable[[], float] = FENCE_CLOCK,
         sleep: Callable[[float], None] = time.sleep,
         witness: Path | None = None,
     ) -> None:

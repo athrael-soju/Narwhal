@@ -32,14 +32,14 @@ import math
 import re
 import threading
 import time
-from collections import deque
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from . import kubernetes_api as k
-from .lease import DEFAULT_SAFETY_MARGIN_S, LeaseError, LeaseRecord
+from .lease import DEFAULT_SAFETY_MARGIN_S, FENCE_CLOCK, LeaseError, LeaseRecord
 
 log = logging.getLogger("narwhal.kubernetes_lease")
 
@@ -49,7 +49,8 @@ BACKOFF = k.Backoff(base_s=0.1, cap_s=0.5, attempts=2)
 MAX_DURATION_S = 2**31 - 1
 # The annotation a release writes, `<epoch>/<holder>`, and every claim removes.
 RELEASED = "narwhal.io/released-by"
-# Recent renewTime stamps this process wrote, to recognise its own write after a lost reply.
+# Recent renewTime stamps this process wrote, each with the time before which that write may
+# not serve, to recognise its own write after a lost reply without dropping its wait.
 STAMPS_KEPT = 32
 _NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
 
@@ -116,7 +117,7 @@ class KubernetesLease:
         *,
         safety_margin_s: float = DEFAULT_SAFETY_MARGIN_S,
         wall_clock: Callable[[], float] = time.time,
-        monotonic_clock: Callable[[], float] = time.monotonic,
+        monotonic_clock: Callable[[], float] = FENCE_CLOCK,
     ) -> None:
         if not holder:
             raise ValueError("lease holder must not be empty")
@@ -139,7 +140,7 @@ class KubernetesLease:
         # The (uid, resourceVersion) of a release this router saw happen.
         self._released: tuple[str, str] | None = None
         self._stamp_us = 0
-        self._stamps: deque[str] = deque(maxlen=STAMPS_KEPT)
+        self._stamps: OrderedDict[str, float] = OrderedDict()
 
     @classmethod
     def in_cluster(
@@ -259,8 +260,15 @@ class KubernetesLease:
             return self._create(not_before=now + longest)
         lease, seen = found
         if seen.holder == self.holder and seen.stamp in self._stamps:
-            # This router's own write, whose reply was lost.
-            return self._take(lease, seen.epoch, not_before=-math.inf)
+            # This router's own write, whose reply was lost: it keeps the wait it was sent with.
+            return self._take(lease, seen.epoch, not_before=self._stamps[seen.stamp])
+        if seen.duration_s > self.ttl_s:
+            # A peer on a longer --lease-ttl would let this router's created Lease serve inside
+            # the peer's deadline after a deletion. Refuse to take part.
+            raise LeaseError(
+                f"Lease {self.name} lasts {seen.duration_s:g}s, longer than this router's "
+                f"--lease-ttl {self.ttl_s:g}; run both routers with the same --lease-ttl"
+            )
         if seen.holder:
             if now - seen.at < seen.duration_s:
                 self._owned = False
@@ -272,7 +280,7 @@ class KubernetesLease:
         return self._take(lease, seen.epoch + 1, not_before=seen.at + seen.duration_s)
 
     def _create(self, *, not_before: float) -> bool:
-        stamp = self._next_stamp()
+        stamp = self._next_stamp(not_before)
         body = {
             "apiVersion": k.LEASE.api_version,
             "kind": k.LEASE.kind,
@@ -299,7 +307,7 @@ class KubernetesLease:
         return True
 
     def _take(self, lease: Mapping[str, Any], epoch: int, *, not_before: float) -> bool:
-        stamp = self._next_stamp()
+        stamp = self._next_stamp(not_before)
         body = copy.deepcopy(dict(lease))
         # A held Lease carries no release mark, so a later free version without one is no release.
         annotations = (body.get("metadata") or {}).get("annotations")
@@ -340,7 +348,7 @@ class KubernetesLease:
             if not self._live():
                 return False
             for _ in range(2):
-                stamp = self._next_stamp()
+                stamp = self._next_stamp(self._not_before)
                 body = copy.deepcopy(self._object)
                 body["spec"] = {
                     **(body.get("spec") or {}),
@@ -477,9 +485,12 @@ class KubernetesLease:
         self._valid_until = 0.0
         return False
 
-    def _next_stamp(self) -> str:
+    def _next_stamp(self, not_before: float = -math.inf) -> str:
         """A MicroTime after every one this router wrote, so each write is a new version."""
         self._stamp_us = max(int(self._wall_clock() * 1_000_000), self._stamp_us + 1)
         stamp = _micro_time(self._stamp_us)
-        self._stamps.append(stamp)
+        # Recorded before the write is sent: a write whose reply is lost keeps its wait.
+        self._stamps[stamp] = not_before
+        while len(self._stamps) > STAMPS_KEPT:
+            self._stamps.popitem(last=False)
         return stamp

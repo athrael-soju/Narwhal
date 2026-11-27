@@ -111,12 +111,16 @@ Configure the supervisor to restart each router with `--standby-of` set to the o
 
 On Kubernetes the routers elect the primary through a `coordination.k8s.io` Lease instead of a file, so no shared volume holds the lease. Start both routers with `--kubernetes-lease` set to the same Lease name in place of `--lease-path`. The [Helm chart](../deploy/Kubernetes.md#starting-the-router-pair) uses the Lease `narwhal-router`. The router's ServiceAccount needs `get` and `update` on that Lease, and `create` on Leases so the first router can create it. RBAC cannot limit `create` to one name, since the name is in the request body.
 
-Each router fences itself on its own monotonic clock. No decision compares one router's clock with the other's or with the API server's:
+Each router fences itself on its own clock, `CLOCK_BOOTTIME` on Linux, which keeps counting while the host is suspended, so a holder that resumes finds its deadline gone. No decision compares one router's clock with the other's or with the API server's:
 
 - The holder controls the fleet until `--lease-ttl` less `--lease-safety-margin` after it sent its last renewal that the API server accepted: 4 seconds with the defaults. When the API server does not answer, the holder keeps serving until that deadline and then fences itself.
 - A standby takes the Lease only after it has seen one version of it, by `resourceVersion`, stay unchanged on its own clock for the longer of the Lease's `leaseDurationSeconds` and its own `--lease-ttl`, and only with an update that fails if the Lease changed since. Every renewal that lands is a new version, so the holder's deadline passes at least `--lease-safety-margin` seconds before the standby can take over.
 - A standby that saw the holder release the Lease claims it at once. A release keeps the epoch and carries the annotation `narwhal.io/released-by`, naming the holder and epoch. A Lease patched free by hand has no such mark and counts as a free Lease the standby never saw released.
 - A router that creates the Lease, or claims a free Lease it never saw released, holds it at once and serves one lease duration later, so any holder it never saw has fenced by then. This happens on a fleet's first start and after someone deletes the Lease.
+
+Both routers must run with the same `--lease-ttl`. A router refuses to claim a Lease that lasts longer than its own `--lease-ttl`, and reports `lease unavailable`. A router that creates the Lease after a deletion waits only the longest duration it has seen, so a peer on a longer `--lease-ttl` that it never saw could still be inside its deadline.
+
+A hypervisor that pauses a holder's virtual machine and stops its guest clock also stops the holder's deadline. When the machine resumes, the holder keeps serving until its next renewal, at most `--lease-renew-interval` later, meets the standby's update as a conflict and fences it. Keep such pauses from router hosts, or count that interval as a window with two routers.
 
 A standby reads the Lease after every poll that reaches the primary, and on each takeover attempt once `--standby-takeover-after` polls have failed. With the defaults it therefore takes over 5 to about 7 seconds after the primary's last renewal, inside the 10 seconds HAProxy holds a request. A conflict or a write whose reply was lost never counts as a lost or won Lease: the router reads the Lease again and checks the holder, the epoch and the renewal time it wrote.
 
