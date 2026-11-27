@@ -24,7 +24,9 @@ WHEEL_NAME = re.compile(r"narwhal_inference-([0-9]+\.[0-9]+\.[0-9]+)-py3-none-an
 # marker, and the SHA-256 of every distribution file that pip may install.
 LOCKED_REQUIREMENT = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9.+!_-]+"
-    r"(?: *;[^\\#]*?)?"
+    # pip reads each token that starts with `-` as an option, so a marker holds none, and no
+    # `#` or `\`.
+    r"(?: *;(?:(?!\s-)[^\\#])*?)?"
     r"(?: +--hash=sha256:[0-9a-f]{64})+"
 )
 # The package's name for the lock that NARWHAL_REQUIREMENTS names.

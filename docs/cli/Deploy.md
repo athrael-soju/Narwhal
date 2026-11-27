@@ -31,7 +31,7 @@ narwhal deploy tunnel --forward 18000:8000
 
 Every connection checks the host's key against `NARWHAL_SSH_KNOWN_HOSTS` alone, with OpenSSH `StrictHostKeyChecking=yes`, before it authenticates, whatever your SSH config sets. `narwhal deploy` never adds or replaces a key in that file. A host whose key is missing from the file or differs from it fails with `<host-id>: blocked at <operation>: the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it`. [Known-hosts handling](../configuration/04-Deployment-Inputs.md#known-hosts-handling) lists the options that override your SSH config, and [Jump host](../configuration/04-Deployment-Inputs.md#jump-host) how to reach the hosts through one.
 
-Key authentication runs with OpenSSH `BatchMode=yes`, so a key that needs a passphrase fails instead of prompting. Add it to your SSH agent first. `shell` can prompt. Password authentication reads the password from a private askpass helper and needs OpenSSH 8.5 or later, as every connection does.
+Key authentication runs with OpenSSH `BatchMode=yes`, so a key that needs a passphrase fails instead of prompting. Add it to your SSH agent first. `shell` can prompt. Password authentication passes the password to OpenSSH through a private askpass helper and a FIFO, never a file. Every connection needs OpenSSH 8.5 or later.
 
 Each remote command runs under the time limit of its stage:
 
@@ -47,7 +47,7 @@ Each remote command runs under the time limit of its stage:
 NARWHAL_STAGE_DISCOVER_TIMEOUT_SECONDS=7200 narwhal deploy discover --out runs/discovery/first-deploy
 ```
 
-The host runs each command under coreutils `timeout`, which sends SIGTERM to the command and every process it started at the limit, and SIGKILL 5 seconds later. A host without `timeout` fails with `the host lacks the coreutils timeout command`. When the host has not answered 30 seconds after the limit, the workstation kills its `ssh`. The error names the host, the operation, the limit and the host's log, as in `node-2: hash checkpoint files exceeded the 3600s discover time limit; inspect runs/discovery/first-deploy/logs/node-2.log`. OpenSSH gives up on a connection after 30 seconds. `shell` and `tunnel` run until you leave them.
+The host runs each command under coreutils `timeout`, which sends SIGTERM to the command and every process it started at the limit, and SIGKILL 5 seconds later to a command that ignores SIGTERM. Both count as exceeding the limit. A host without `timeout` fails with `the host lacks the coreutils timeout command`. When the host has not answered 30 seconds after the limit, the workstation kills its `ssh`. The error names the host, the operation, the limit and the host's log, as in `node-2: hash checkpoint files exceeded the 3600s discover time limit; inspect runs/discovery/first-deploy/logs/node-2.log`. OpenSSH gives up on a connection after 30 seconds. `shell` and `tunnel` run until you leave them.
 
 Each host's log holds the scripts that ran there, their exit status or time limit, and their output, at mode 0600. The log directory is `logs/` in the discovery output or the package directory, or `runs/access-<id>/` for `access`, `tunnel`, and `shell` without `--run`.
 

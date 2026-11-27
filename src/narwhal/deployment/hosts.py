@@ -32,9 +32,9 @@ HOST_GRACE_S = 30.0
 TIMEOUT_STATUSES = (124, 137)
 # The remote scripts start a line with this to name the cause of their failure.
 HOST_CAUSE = "narwhal-host: "
-CLIENT_KEYS = frozenset(
-    {"PATH", "HOME", "LANG", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "XDG_RUNTIME_DIR"}
-)
+# The only variables `ssh` receives. ssh_config's SendEnv adds to the command line's instead of
+# yielding to it, so the client environment holds nothing that SendEnv could usefully forward.
+CLIENT_KEYS = frozenset({"PATH", "HOME", "TERM", "SSH_AUTH_SOCK"})
 # OpenSSH reports a host key that the known-hosts file lacks or contradicts with these lines.
 HOST_KEY_FAILURES = ("Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
 
@@ -133,17 +133,25 @@ def trust_options(store: Path) -> list[str]:
         "RemoteCommand": "none",
         "ForwardAgent": "no",
         "ForwardX11": "no",
+        # OpenSSH keeps the first SetEnv it reads, and cannot clear it, so this fixed value
+        # displaces any that ssh_config sets.
+        "SetEnv": "NARWHAL_DEPLOY=1",
         "ConnectTimeout": str(CONNECT_TIMEOUT_S),
     }
     return [argument for name, value in values.items() for argument in ("-o", f"{name}={value}")]
 
 
 def bounded(script: str, limit: float) -> str:
-    """Return a host command that runs `script` under coreutils `timeout` at `limit`."""
+    """Return a host command that runs `script` under coreutils `timeout` at `limit`.
+
+    The shell stays the parent of `timeout`, which puts itself and the script in a process
+    group of their own. When the script ignores SIGTERM, `timeout` sends SIGKILL to that group
+    and dies with it, and the shell still exits with 137, which `ssh` passes back.
+    """
     return (
         "command -v timeout > /dev/null 2>&1 || "
         f"{{ echo '{HOST_CAUSE}the host lacks the coreutils timeout command' >&2; exit 127; }}\n"
-        f"exec timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)}"
+        f"timeout -k {KILL_AFTER_S} {limit:.3f}s sh -c {shlex.quote(script)}; exit $?"
     )
 
 
@@ -177,11 +185,7 @@ class SSH:
 
     def __init__(self, env: Mapping[str, str], logs: Path):
         self.env = env
-        self.client_env = {
-            name: value
-            for name, value in os.environ.items()
-            if name in CLIENT_KEYS or name.startswith("LC_")
-        }
+        self.client_env = {name: value for name, value in os.environ.items() if name in CLIENT_KEYS}
         store = env.get("NARWHAL_SSH_KNOWN_HOSTS", "")
         if not store or not Path(store).is_file():
             raise ValueError("NARWHAL_SSH_KNOWN_HOSTS must name the supplied known-hosts file")
@@ -234,19 +238,34 @@ class SSH:
     def _client(self, host: Host) -> Iterator[dict[str, str]]:
         """Yield the client environment, with a private askpass helper for a password host.
 
-        OpenSSH asks the helper for the password, so the password never appears in an argument
-        list or an environment, and `ssh` stays in the process group that a time limit kills.
+        OpenSSH asks the helper for the password, which it reads from a FIFO that this process
+        holds open. The password lives only in the pipe until OpenSSH reads it, and never in a
+        file, an argument list or an environment, and `ssh` stays in the process group that a
+        time limit kills.
         """
         if not host.password_env:
             yield dict(self.client_env)
             return
         with tempfile.TemporaryDirectory(dir=self.logs, prefix=".askpass-") as folder:
-            secret = Path(folder) / "password"
-            write_private(secret, self.env[host.password_env].encode() + b"\n")
-            helper = Path(folder) / "askpass"
-            write_private(helper, f"#!/bin/sh\nexec cat {shlex.quote(str(secret))}\n".encode())
-            helper.chmod(0o700)
-            yield {**self.client_env, "SSH_ASKPASS": str(helper), "SSH_ASKPASS_REQUIRE": "force"}
+            channel = Path(folder) / "password"
+            os.mkfifo(channel, 0o600)
+            # Opening for reading and writing never blocks, and keeps the pipe's contents until
+            # the helper reads them or this process exits.
+            pipe = os.open(channel, os.O_RDWR)
+            try:
+                os.write(pipe, self.env[host.password_env].encode() + b"\n")
+                helper = Path(folder) / "askpass"
+                write_private(
+                    helper, f"#!/bin/sh\nexec head -n 1 {shlex.quote(str(channel))}\n".encode()
+                )
+                helper.chmod(0o700)
+                yield {
+                    **self.client_env,
+                    "SSH_ASKPASS": str(helper),
+                    "SSH_ASKPASS_REQUIRE": "force",
+                }
+            finally:
+                os.close(pipe)
 
     def _record(self, host: Host, heading: str) -> IO[str]:
         fd = os.open(self.log(host), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

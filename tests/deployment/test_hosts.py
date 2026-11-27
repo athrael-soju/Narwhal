@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -29,10 +30,29 @@ def askpass_answer(helper):
     """Return what the askpass helper answers, read without starting a process.
 
     The tests that patch `subprocess` cannot run the helper; the tests with a fake `ssh` on
-    PATH run it.
+    PATH run it. The helper reads the password from a FIFO, never from a file.
     """
-    command = shlex.split(Path(helper).read_text().splitlines()[1])
-    return Path(command[-1]).read_bytes()
+    channel = Path(shlex.split(Path(helper).read_text().splitlines()[1])[-1])
+    assert stat.S_ISFIFO(channel.stat().st_mode), f"{channel} is not a FIFO"
+    pipe = os.open(channel, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        return os.read(pipe, 1024)
+    finally:
+        os.close(pipe)
+
+
+# Stands in for `ssh` and the host's sshd: it runs the command string in a session of its own
+# with bash as the login shell, which runs a lone command in place of itself as sshd's login
+# shells do, and exits with 255 when a signal ended that shell, as OpenSSH does.
+SSHD_LIKE = """#!/usr/bin/env python3
+import os, subprocess, sys
+helper = os.environ.get("SSH_ASKPASS")
+if helper and subprocess.run([helper, "password:"], capture_output=True).stdout != %r:
+    sys.exit(255)
+shell = subprocess.Popen(["bash", "-c", sys.argv[-1]], start_new_session=True)
+status = shell.wait()
+sys.exit(255 if status < 0 else status)
+"""
 
 
 class FakeProcess:
@@ -142,12 +162,19 @@ class SshTests(unittest.TestCase):
             self.assertNotIn("StrictHostKeyChecking=accept-new", args)
             self.assertNotIn(PASSWORD, " ".join(args))
             self.assertNotIn(PASSWORD, "".join(process.kwargs["env"].values()))
+            self.assertLessEqual(
+                set(process.kwargs["env"]),
+                {"PATH", "HOME", "TERM", "SSH_AUTH_SOCK", "SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"},
+            )
+            self.assertEqual(args[args.index("SetEnv=NARWHAL_DEPLOY=1") - 1], "-o")
             self.assertFalse(any(name.startswith("NARWHAL_") for name in process.kwargs["env"]))
             self.assertTrue(process.kwargs["start_new_session"])
             self.assertEqual(process.stdin, payload.read_bytes())
             self.assertEqual(process.timeout, 1800 + HOST_GRACE_S)
             self.assertEqual(shlex.split(args[-1])[:2], ["sh", "-c"])
-            self.assertIn("\nexec timeout -k 5 1800.000s sh -c cat", shlex.split(args[-1])[2])
+            self.assertTrue(
+                shlex.split(args[-1])[2].endswith("\ntimeout -k 5 1800.000s sh -c cat; exit $?")
+            )
         self.assertEqual(password.password, (PASSWORD + "\n").encode())
         self.assertEqual(password.kwargs["env"]["SSH_ASKPASS_REQUIRE"], "force")
         self.assertIn("NumberOfPasswordPrompts=1", password.args)
@@ -177,6 +204,7 @@ class SshTests(unittest.TestCase):
             "  RemoteCommand id\n"
             "  ForwardAgent yes\n"
             "  BatchMode no\n"
+            "  SetEnv SYNTHETIC_SECRET=1\n"
         )
 
         def effective(ssh, host):
@@ -202,6 +230,7 @@ class SshTests(unittest.TestCase):
             ("permitlocalcommand", "no"),
             ("forwardagent", "no"),
             ("batchmode", "yes"),
+            ("setenv", "NARWHAL_DEPLOY=1"),
         ):
             self.assertEqual(values[name], value, name)
         for name in (
@@ -290,17 +319,29 @@ class SshTests(unittest.TestCase):
             ):
                 stage_limit({"NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS": value}, "access")
 
+    def sshd_like(self):
+        """Put an `ssh` on PATH that runs the remote command as OpenSSH and sshd would."""
+        tools = self.root / "sshd-bin"
+        tools.mkdir(exist_ok=True)
+        fake = tools / "ssh"
+        fake.write_text(SSHD_LIKE % (PASSWORD + "\n").encode())
+        fake.chmod(0o700)
+        return patch.dict(os.environ, {"PATH": f"{tools}:{os.environ['PATH']}"})
+
     def test_the_host_stops_a_command_that_exceeds_its_time_limit(self):
-        # The fake ssh runs the remote command as sshd would, so `timeout` on the "host"
-        # must stop the script's own child process.
+        # `timeout` on the "host" must stop the script and its child, whether the script
+        # leaves at SIGTERM or ignores it until SIGKILL.
         children = self.root / "children"
         self.env["NARWHAL_STAGE_ACCESS_TIMEOUT_SECONDS"] = "0.5"
-        script = f"sleep 30 & echo $! > {shlex.quote(str(children))}; wait"
-        for host in self.hosts:
+        for host, ignore in ((self.hosts[0], ""), (self.hosts[1], ""), (self.hosts[1], "x")):
+            script = f"sleep 30 & echo $! > {shlex.quote(str(children))}; wait"
+            if ignore:
+                script = "trap '' TERM; " + script
             with (
-                self.subTest(host=host.id),
-                self.fake_ssh('exec sh -c "$last"'),
+                self.subTest(host=host.id, ignores_term=bool(ignore)),
+                self.sshd_like(),
                 patch("narwhal.deployment.hosts.HOST_GRACE_S", 60.0),
+                patch("narwhal.deployment.hosts.KILL_AFTER_S", 1),
             ):
                 ssh = SSH(self.env, self.root / "logs")
                 started = time.monotonic()
@@ -341,7 +382,8 @@ class SshTests(unittest.TestCase):
         tools = self.root / "host-bin"
         tools.mkdir()
         (tools / "sh").symlink_to(shutil.which("sh"))
-        with self.fake_ssh(f'PATH={shlex.quote(str(tools))} exec {shutil.which("sh")} -c "$last"'):
+        shell = shutil.which("sh")
+        with self.fake_ssh(f'PATH={shlex.quote(str(tools))} exec {shell} -c "$last"'):
             ssh = SSH(self.env, self.root / "logs")
             with self.assertRaisesRegex(
                 RemoteError,

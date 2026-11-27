@@ -239,6 +239,16 @@ class PackageTests(unittest.TestCase):
             ("fastapi==0.136.3\n", "line 1: pin one exact version"),
             ("--index-url https://example.invalid\n", "line 1: pin one exact version"),
             ("-e .\n", "line 1: pin one exact version"),
+            (
+                'fastapi==0.136.3 ; python_version > "3" --index-url https://example.invalid'
+                " --hash=sha256:" + "a" * 64 + "\n",
+                "line 1: pin one exact version",
+            ),
+            (
+                'fastapi==0.136.3 ; python_version > "3" -i https://example.invalid'
+                " --hash=sha256:" + "a" * 64 + "\n",
+                "line 1: pin one exact version",
+            ),
             ("# no requirements\n", "must lock the wheel's dependencies, not the wheel"),
             (
                 "narwhal-inference==0.13.0 --hash=sha256:" + "a" * 64 + "\n",
