@@ -73,6 +73,8 @@ CREDENTIALS = (
     "NARWHAL_PASSWD",
 )
 CLAIM = "narwhal-state"
+# The narwhal chart's default: a claim and nothing else.
+POLICY = fleet_resource.VolumePolicy()
 
 
 def nodes(node, path=""):
@@ -232,7 +234,7 @@ class Rules(unittest.TestCase):
             spec_env(
                 fleet_fixtures.changed(lambda d: d["metadata"].update(name="x")),
                 state_claim=CLAIM,
-                host_path_prefixes=(),
+                policy=POLICY,
             )
 
     def test_the_model_volume_takes_exactly_one_source_read_only(self):
@@ -253,7 +255,7 @@ class Rules(unittest.TestCase):
             self.assertNotIn("x-kubernetes-preserve-unknown-fields", node, path)
 
     def test_launch_refuses_every_variable_the_fleet_sets(self):
-        env = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, policy=POLICY)
         launch = {item["name"] for item in fleet_fixtures.fleet()["spec"]["engines"]["launch"]}
         for name in set(env) - launch:
             with self.subTest(name):
@@ -284,7 +286,7 @@ class Rules(unittest.TestCase):
                             )
                         ),
                         state_claim=CLAIM,
-                        host_path_prefixes=(),
+                        policy=POLICY,
                     )
 
     def test_launch_takes_backend_inputs(self):
@@ -366,11 +368,32 @@ class Rules(unittest.TestCase):
             "/var/lib/docker",
             "/var/lib/containers/storage",
             "/var/lib/rancher/k3s",
+            "/var/lib/etcd/member",
+            "/var/lib/k0s",
+            "/var/lib/cni/networks",
+            "/var/log",
+            "/var/snap/microk8s",
+            "/root",
+            "/home/user/.ssh",
+            "/opt/cni/bin",
+            "/host",
+            "/boot",
             "/var",
             "/var/lib",
+            "/opt",
         ):
             self.assertRegex(path, fleet_resource.HOST_PATH_REFUSED)
-        for path in ("/process", "/etcd/models", "/devices", "/var/lib/kubeletx", "/srv/models"):
+        for path in (
+            "/process",
+            "/etcd/models",
+            "/devices",
+            "/var/lib/kubeletx",
+            "/srv/models",
+            "/homes",
+            "/opt/models",
+            "/hosted",
+            "/var/lib/models",
+        ):
             self.assertNotRegex(path, fleet_resource.HOST_PATH_REFUSED)
 
     def test_every_string_that_reaches_a_variable_refuses_control_characters(self):
@@ -415,7 +438,7 @@ class Rules(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(ValueError, "control character reaches NARWHAL_ENGINE_ENV"):
-            spec_env(document, state_claim=CLAIM, host_path_prefixes=())
+            spec_env(document, state_claim=CLAIM, policy=POLICY)
 
 
 class Values(unittest.TestCase):
@@ -460,7 +483,7 @@ class Values(unittest.TestCase):
 
 class Variables(unittest.TestCase):
     def test_a_fleet_gives_the_variables_the_target_reads_today_and_no_others(self):
-        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, policy=POLICY)
         with tempfile.TemporaryDirectory() as root:
             today = kubernetes_cluster.environment(Path(root))
         # The fleet forces the model volume read-only.
@@ -486,7 +509,7 @@ class Variables(unittest.TestCase):
             )
 
     def test_each_variable_has_the_fact_the_design_gives_it(self):
-        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, policy=POLICY)
         facts = {name: fleet_resource.variable_fact(name) for name in env}
         expected = {
             "NARWHAL_KUBERNETES_NAMESPACE": "cluster",
@@ -515,7 +538,7 @@ class Variables(unittest.TestCase):
                 rdma={"gidIndex": 3, "roceMode": "v2"}
             )
         )
-        env = spec_env(document, state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(document, state_claim=CLAIM, policy=POLICY)
         self.assertEqual(env["NARWHAL_NODE_2_KUBERNETES_NODE"], "gpu-b")
         self.assertEqual(
             env["NARWHAL_NODE_2_URL"],
@@ -538,7 +561,7 @@ class Variables(unittest.TestCase):
             spec["profiling"]["decodeConcurrency"] = [1, 8]
             spec["timeouts"] = {"defaultSeconds": 600, "stages": {"profile": 7200}}
 
-        env = spec_env(fleet_fixtures.changed(change), state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(fleet_fixtures.changed(change), state_claim=CLAIM, policy=POLICY)
         self.assertEqual(env["NARWHAL_MODEL_PATH"], "/model/gguf/model.gguf")
         self.assertEqual(env["NARWHAL_MODEL_SHA256"], "a" * 64)
         self.assertEqual(env["NARWHAL_KUBERNETES_API_KEY_SECRET"], "engine-key-v2/api-key")
@@ -559,13 +582,13 @@ class Variables(unittest.TestCase):
         self.assertEqual(env["NARWHAL_ENGINE_BACKEND"], "vllm")
 
     def test_no_variable_comes_from_until_stopped_or_retained_runs(self):
-        base = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, host_path_prefixes=())
+        base = spec_env(fleet_fixtures.fleet(), state_claim=CLAIM, policy=POLICY)
         edited = spec_env(
             fleet_fixtures.changed(
                 lambda d: d["spec"].update(until="profile", stopped=True, retainRuns=5)
             ),
             state_claim=CLAIM,
-            host_path_prefixes=(),
+            policy=POLICY,
         )
         self.assertEqual(base, edited)
 
@@ -575,7 +598,7 @@ class Variables(unittest.TestCase):
                 readOnly=False
             )
         )
-        env = spec_env(writable, state_claim=CLAIM, host_path_prefixes=())
+        env = spec_env(writable, state_claim=CLAIM, policy=POLICY)
         self.assertEqual(
             json.loads(env["NARWHAL_KUBERNETES_MODEL_VOLUME"]),
             {"persistentVolumeClaim": {"claimName": "model", "readOnly": True}},
@@ -587,7 +610,7 @@ class Variables(unittest.TestCase):
                         lambda d, v=volume: d["spec"]["engines"].update(modelVolume=v)
                     ),
                     state_claim=CLAIM,
-                    host_path_prefixes=(),
+                    policy=POLICY,
                 )
 
     def test_a_missing_field_gives_no_variable(self):
@@ -597,7 +620,7 @@ class Variables(unittest.TestCase):
                 "spec": {},
             },
             state_claim=CLAIM,
-            host_path_prefixes=(),
+            policy=POLICY,
         )
         self.assertEqual(
             env,
@@ -609,28 +632,149 @@ class Variables(unittest.TestCase):
         )
 
 
+def volume(source):
+    """`fleet()` with `source` as its model volume."""
+    return fleet_fixtures.changed(lambda d: d["spec"]["engines"].update(modelVolume=source))
+
+
+def policy(*sources, **lists):
+    return fleet_resource.VolumePolicy(sources, **lists)
+
+
+HOST = {"hostPath": {"path": "/srv/models", "type": "Directory"}}
+NFS = {"nfs": {"server": "nfs.example.com", "path": "/exports/models", "readOnly": True}}
+CSI = {"csi": {"driver": "csi.example.com", "readOnly": True}}
+
+
+class ModelVolumes(unittest.TestCase):
+    """A fleet mounts only the model volumes the cluster admin allows: a claim by default, and
+    a hostPath, NFS export or CSI volume only once the admin lists it and what it may name."""
+
+    def check(self, source, allowed):
+        fleet_resource.check_model_volume(volume(source), allowed)
+
+    def refused(self, source, allowed, message):
+        with self.assertRaisesRegex(ValueError, message):
+            self.check(source, allowed)
+
+    def test_by_default_only_a_claim_is_allowed(self):
+        self.check(fleet_fixtures.fleet()["spec"]["engines"]["modelVolume"], POLICY)
+        everything = policy(
+            "persistentVolumeClaim",
+            host_path_prefixes=("/srv",),
+            nfs_servers=("nfs.example.com",),
+            csi_drivers=("csi.example.com",),
+        )
+        for source, kind in ((HOST, "hostPath"), (NFS, "nfs"), (CSI, "csi")):
+            with self.subTest(kind):
+                self.refused(source, POLICY, f"{kind}: the cluster admin allows only")
+                self.refused(source, everything, "allows only persistentVolumeClaim")
+        self.refused(
+            fleet_fixtures.fleet()["spec"]["engines"]["modelVolume"],
+            policy("nfs", nfs_servers=("nfs.example.com",)),
+            "persistentVolumeClaim: the cluster admin allows only nfs",
+        )
+
+    def test_a_listed_source_needs_its_own_list(self):
+        self.refused(HOST, policy("hostPath"), "hostPath is off")
+        self.refused(NFS, policy("nfs"), "nfs.example.com is not in modelNfsServers")
+        self.refused(CSI, policy("csi"), "csi.example.com is not in modelCsiDrivers")
+        self.check(HOST, policy("hostPath", host_path_prefixes=("/srv",)))
+        self.check(NFS, policy("nfs", nfs_servers=("nfs.example.com",)))
+        self.check(CSI, policy("csi", csi_drivers=("csi.example.com",)))
+
+    def test_an_unlisted_nfs_server_or_csi_driver_is_refused(self):
+        loopback = {"nfs": {"server": "127.0.0.1", "path": "/etc", "readOnly": True}}
+        self.refused(
+            loopback, policy("nfs", nfs_servers=("nfs.example.com",)), "127.0.0.1 is not in"
+        )
+        other = {"csi": {"driver": "hostpath.csi.k8s.io", "readOnly": True}}
+        self.refused(
+            other, policy("csi", csi_drivers=("csi.example.com",)), "hostpath.csi.k8s.io is not"
+        )
+
+    def test_a_volume_needs_exactly_one_source(self):
+        for source in ({}, {**HOST, **NFS}):
+            with self.subTest(source):
+                self.refused(source, POLICY, "exactly one")
+
+    def test_a_policy_names_only_real_sources_and_normalised_prefixes(self):
+        with self.assertRaisesRegex(ValueError, "emptyDir is no model volume source"):
+            policy("emptyDir")
+        with self.assertRaisesRegex(ValueError, "modelHostPathPrefixes: '/srv/'"):
+            policy("hostPath", host_path_prefixes=("/srv/",))
+
+    def test_spec_env_applies_the_policy(self):
+        with self.assertRaisesRegex(ValueError, "allows only"):
+            spec_env(volume(HOST), state_claim=CLAIM, policy=POLICY)
+        env = spec_env(
+            volume({"hostPath": {"path": "/srv/models"}}),
+            state_claim=CLAIM,
+            policy=policy("hostPath", host_path_prefixes=("/srv",)),
+        )
+        self.assertEqual(
+            json.loads(env["NARWHAL_KUBERNETES_MODEL_VOLUME"]),
+            {"hostPath": {"path": "/srv/models", "type": "Directory"}},
+        )
+
+    def test_the_chart_allows_a_claim_only_by_default(self):
+        chart = kubernetes_cluster.GATES.parents[1]
+        values = yaml.safe_load((chart / "values.yaml").read_text())
+        self.assertEqual(fleet_resource.VolumePolicy.from_values(values), POLICY)
+        self.assertEqual(fleet_resource.VolumePolicy.from_values({}), fleet_resource.VolumePolicy())
+        schema = json.loads((chart / "values.schema.json").read_text())["properties"]
+        self.assertEqual(schema["modelVolumeSources"]["items"]["enum"], list(MODEL_VOLUME_SOURCES))
+        self.assertEqual(
+            schema["modelHostPathPrefixes"]["items"]["pattern"], fleet_resource._NORMALISED
+        )
+        self.assertEqual(
+            schema["modelNfsServers"]["items"]["pattern"],
+            at("spec.engines.modelVolume.nfs.server")["pattern"],
+        )
+        self.assertEqual(
+            schema["modelCsiDrivers"]["items"]["pattern"],
+            at("spec.engines.modelVolume.csi.driver")["pattern"],
+        )
+
+
 class HostPaths(unittest.TestCase):
     """hostPath stays off until the cluster admin lists prefixes, and never reaches a node's
     system, kubelet or runtime directories."""
 
+    def host(self, path, prefixes):
+        fleet_resource.check_model_volume(
+            volume({"hostPath": {"path": path, "type": "Directory"}}),
+            policy("hostPath", host_path_prefixes=prefixes),
+        )
+
     def test_without_prefixes_host_path_is_off(self):
         with self.assertRaisesRegex(ValueError, "hostPath is off"):
-            fleet_resource.check_host_path("/srv/models", ())
+            self.host("/srv/models", ())
 
     def test_a_path_must_lie_at_or_below_a_prefix_by_segment(self):
         prefixes = ("/srv/models", "/data")
         for path in ("/srv/models", "/srv/models/llama", "/data/x/y"):
-            fleet_resource.check_host_path(path, prefixes)
+            self.host(path, prefixes)
         for path in ("/srv/models2", "/srv", "/opt/models", "/database"):
             with self.subTest(path), self.assertRaisesRegex(ValueError, "outside"):
-                fleet_resource.check_host_path(path, prefixes)
+                self.host(path, prefixes)
 
     def test_a_prefix_never_admits_a_system_directory(self):
-        for path in ("/var/lib/kubelet/pods", "/var/run/docker.sock", "/etc/kubernetes"):
+        for path in (
+            "/var/lib/kubelet/pods",
+            "/var/run/docker.sock",
+            "/etc/kubernetes",
+            "/var/lib/etcd",
+            "/var/log/pods",
+            "/root/.kube",
+            "/home/admin",
+            "/opt/cni/bin",
+            "/host/etc",
+        ):
             with self.subTest(path), self.assertRaisesRegex(ValueError, "container runtime"):
-                fleet_resource.check_host_path(path, ("/var", "/etc"))
+                self.host(path, ("/var", "/etc", "/root", "/home", "/opt", "/host"))
 
-    def test_a_path_or_prefix_must_be_normalised(self):
+    def test_a_path_must_be_normalised(self):
         for path in (
             "//models",
             "/models/",
@@ -641,31 +785,7 @@ class HostPaths(unittest.TestCase):
             "/m\n",
         ):
             with self.subTest(path), self.assertRaisesRegex(ValueError, "normalised"):
-                fleet_resource.check_host_path(path, ("/models",))
-        with self.assertRaisesRegex(ValueError, "modelHostPathPrefixes: '/srv/'"):
-            fleet_resource.check_host_path("/srv/models", ("/srv/",))
-
-    def test_a_fleet_mounts_an_admitted_directory_only(self):
-        document = fleet_fixtures.changed(
-            lambda d: d["spec"]["engines"].update(modelVolume={"hostPath": {"path": "/srv/models"}})
-        )
-        with self.assertRaisesRegex(ValueError, "hostPath is off"):
-            spec_env(document, state_claim=CLAIM, host_path_prefixes=())
-        env = spec_env(document, state_claim=CLAIM, host_path_prefixes=("/srv",))
-        self.assertEqual(
-            json.loads(env["NARWHAL_KUBERNETES_MODEL_VOLUME"]),
-            {"hostPath": {"path": "/srv/models", "type": "Directory"}},
-        )
-
-    def test_the_chart_holds_the_admin_list_off_by_default(self):
-        chart = kubernetes_cluster.GATES.parents[1]
-        self.assertEqual(
-            yaml.safe_load((chart / "values.yaml").read_text())["modelHostPathPrefixes"], []
-        )
-        node = json.loads((chart / "values.schema.json").read_text())["properties"][
-            "modelHostPathPrefixes"
-        ]
-        self.assertEqual(node["items"]["pattern"], fleet_resource._NORMALISED)
+                self.host(path, ("/models",))
 
 
 class Definition(unittest.TestCase):

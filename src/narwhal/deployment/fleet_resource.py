@@ -22,6 +22,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from . import fabric
@@ -126,8 +127,9 @@ _NORMALISED = r"^(/[^/\x00-\x1f\x7f-\x9f]+)+$"
 # configuration, the kubelet's and container runtimes' state, and the directories that hold
 # them. Matched by whole segments.
 HOST_PATH_REFUSED = (
-    r"^/(proc|sys|dev|run|var/run|etc|var/lib/kubelet|var/lib/containerd|var/lib/docker"
-    r"|var/lib/containers|var/lib/cri-o|var/lib/crio|var/lib/rancher)(/|$)|^/(var|var/lib)$"
+    r"^/(proc|sys|dev|run|var/run|etc|boot|root|home|host|var/log|var/snap|opt/cni"
+    r"|var/lib/(kubelet|etcd|containerd|docker|containers|cri-o|crio|rancher|k0s|cni))(/|$)"
+    r"|^/(var|var/lib|opt)$"
 )
 
 # Bounds. Each keeps a fleet small and each CEL rule's cost estimate low.
@@ -307,8 +309,8 @@ _MODEL_VOLUME = _object(
         ),
         "hostPath": _object(
             "A directory on every engine node. The controller refuses it unless the cluster "
-            "admin lists a prefix that holds it in the narwhal chart's modelHostPathPrefixes, "
-            "which is empty by default.",
+            "admin lists hostPath in the narwhal chart's modelVolumeSources and a prefix that "
+            "holds it in modelHostPathPrefixes, which is empty by default.",
             {
                 "path": _absolute(
                     "The directory's normalised absolute path on the node", host=True
@@ -322,7 +324,8 @@ _MODEL_VOLUME = _object(
             required=["path", "type"],
         ),
         "nfs": _object(
-            "An NFS export",
+            "An NFS export. The controller refuses it unless the cluster admin lists nfs in "
+            "the narwhal chart's modelVolumeSources and its server in modelNfsServers.",
             {
                 "server": _string(
                     "The NFS server's host name or address", 253, pattern=r"^[A-Za-z0-9.:\[\]-]+$"
@@ -333,7 +336,8 @@ _MODEL_VOLUME = _object(
             required=["server", "path"],
         ),
         "csi": _object(
-            "A CSI ephemeral volume",
+            "A CSI ephemeral volume. The controller refuses it unless the cluster admin lists "
+            "csi in the narwhal chart's modelVolumeSources and its driver in modelCsiDrivers.",
             {
                 "driver": _string("The CSI driver's name", 63, pattern=_DNS_SUBDOMAIN),
                 "readOnly": _read_only(),
@@ -835,13 +839,75 @@ def _normalised(path: str) -> bool:
     return bool(re.fullmatch(_NORMALISED, path)) and not re.search(_DOT_SEGMENT, path)
 
 
-def check_host_path(path: str, prefixes: Sequence[str]) -> None:
+@dataclass(frozen=True)
+class VolumePolicy:
+    """The cluster admin's allow-lists for a fleet's model volume, as the narwhal chart's
+    values hold them. The defaults are the chart's: only a PersistentVolumeClaim."""
+
+    sources: tuple[str, ...] = ("persistentVolumeClaim",)
+    host_path_prefixes: tuple[str, ...] = ()
+    nfs_servers: tuple[str, ...] = ()
+    csi_drivers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        unknown = sorted(set(self.sources) - set(MODEL_VOLUME_SOURCES))
+        if unknown:
+            raise ValueError(f"modelVolumeSources: {', '.join(unknown)} is no model volume source")
+        for prefix in self.host_path_prefixes:
+            if not _normalised(prefix):
+                raise ValueError(
+                    f"modelHostPathPrefixes: {prefix!r} is not a normalised absolute path"
+                )
+
+    @classmethod
+    def from_values(cls, values: Mapping[str, Any]) -> VolumePolicy:
+        """The policy the narwhal chart's values set, with the chart's defaults."""
+        default = cls()
+        return cls(
+            tuple(values.get("modelVolumeSources", default.sources)),
+            tuple(values.get("modelHostPathPrefixes", ())),
+            tuple(values.get("modelNfsServers", ())),
+            tuple(values.get("modelCsiDrivers", ())),
+        )
+
+
+def check_model_volume(fleet: Mapping[str, Any], policy: VolumePolicy) -> None:
+    """Refuse a fleet whose model volume the admin's `policy` does not allow.
+
+    The source must be one of `policy.sources`. A hostPath must also pass `_check_host_path`,
+    an NFS export must come from one of `policy.nfs_servers`, and a CSI volume must use one of
+    `policy.csi_drivers`; each list is empty by default, which turns that source off.
+    `spec_env` applies this check for the controller. The narwhal chart's admission policy,
+    which task 26 step H adds, is to apply the same rules.
+    """
+    source = _block(_block(_block(fleet, "spec"), "engines"), "modelVolume")
+    if len(source) != 1 or next(iter(source)) not in MODEL_VOLUME_SOURCES:
+        raise ValueError(
+            "engines.modelVolume: set exactly one of " + ", ".join(MODEL_VOLUME_SOURCES)
+        )
+    [(kind, settings)] = source.items()
+    settings = settings if isinstance(settings, Mapping) else {}
+    if kind not in policy.sources:
+        raise ValueError(
+            f"engines.modelVolume.{kind}: the cluster admin allows only "
+            f"{', '.join(policy.sources) or 'no source'} in modelVolumeSources"
+        )
+    if kind == "hostPath":
+        _check_host_path(str(settings.get("path", "")), policy.host_path_prefixes)
+    elif kind == "nfs" and settings.get("server") not in policy.nfs_servers:
+        raise ValueError(
+            f"engines.modelVolume.nfs.server: {settings.get('server')} is not in modelNfsServers"
+        )
+    elif kind == "csi" and settings.get("driver") not in policy.csi_drivers:
+        raise ValueError(
+            f"engines.modelVolume.csi.driver: {settings.get('driver')} is not in modelCsiDrivers"
+        )
+
+
+def _check_host_path(path: str, prefixes: Sequence[str]) -> None:
     """Refuse a model hostPath unless it is normalised, outside every directory
     `HOST_PATH_REFUSED` names, and at or below one of `prefixes`, matched by whole segments.
-
-    `prefixes` is the cluster admin's `modelHostPathPrefixes`; without one, hostPath is off.
-    The controller and the admission policy apply the same check.
-    """
+    Without a prefix, hostPath is off."""
     if not _normalised(path):
         raise ValueError(
             f"engines.modelVolume.hostPath.path: {path!r} is not a normalised absolute path"
@@ -851,9 +917,6 @@ def check_host_path(path: str, prefixes: Sequence[str]) -> None:
             f"engines.modelVolume.hostPath.path: {path} is or lies in a system, kubelet or "
             "container runtime directory"
         )
-    for prefix in prefixes:
-        if not _normalised(prefix):
-            raise ValueError(f"modelHostPathPrefixes: {prefix!r} is not a normalised absolute path")
     if not prefixes:
         raise ValueError(
             "engines.modelVolume.hostPath: hostPath is off; the cluster admin turns it on by "
@@ -865,31 +928,23 @@ def check_host_path(path: str, prefixes: Sequence[str]) -> None:
         )
 
 
-def model_volume(spec: Mapping[str, Any], *, host_path_prefixes: Sequence[str]) -> dict:
-    """The model volume source of an engines block, with `readOnly` forced on and a hostPath
-    checked against the admin's prefixes."""
-    source = _block(spec, "modelVolume")
-    if len(source) != 1 or next(iter(source)) not in MODEL_VOLUME_SOURCES:
-        raise ValueError(
-            "engines.modelVolume: set exactly one of " + ", ".join(MODEL_VOLUME_SOURCES)
-        )
-    [(kind, settings)] = source.items()
+def model_volume(spec: Mapping[str, Any]) -> dict:
+    """The model volume source of an engines block that `check_model_volume` allowed, with
+    `readOnly` forced on and a hostPath's type fixed to Directory."""
+    [(kind, settings)] = _block(spec, "modelVolume").items()
     settings = dict(settings) if isinstance(settings, Mapping) else {}
     if kind == "hostPath":
-        check_host_path(str(settings.get("path", "")), host_path_prefixes)
         settings["type"] = "Directory"
     else:
         settings["readOnly"] = True
     return {kind: settings}
 
 
-def spec_env(
-    fleet: Mapping[str, Any], *, state_claim: str, host_path_prefixes: Sequence[str]
-) -> dict[str, str]:
+def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy) -> dict[str, str]:
     """The variables `kubernetes_target.inputs()` reads, from a `NarwhalFleet` object.
 
     `state_claim` names the state PersistentVolumeClaim the chart made, and
-    `host_path_prefixes` the admin's `modelHostPathPrefixes`. A field the fleet leaves out
+    `policy` the admin's model volume allow-lists. A field the fleet leaves out
     gives no variable, so `inputs()` names it. `VARIABLE_FACTS` gives each variable's fact.
 
     The fleet replaces the chart values file, and the controller builds its objects from the
@@ -897,8 +952,7 @@ def spec_env(
     `NARWHAL_KUBERNETES_CHART` comes from a fleet.
 
     Raises `ValueError` for a fleet with another name, a launch input the fleet refuses, a
-    model volume without exactly one source, a hostPath `check_host_path` refuses, or a
-    control character in any value.
+    model volume `check_model_volume` refuses, or a control character in any value.
     """
     metadata = _block(fleet, "metadata")
     if metadata.get("name") != NAME:
@@ -932,9 +986,8 @@ def spec_env(
         env["NARWHAL_MODEL_PATH"] = f"{MODEL_MOUNT}/{model['file']}"
     _set(env, "NARWHAL_MODEL_SHA256", model, "fileSha256")
     if "modelVolume" in engines:
-        env[MODEL_VOLUME_ENV] = json.dumps(
-            model_volume(engines, host_path_prefixes=host_path_prefixes), sort_keys=True
-        )
+        check_model_volume(fleet, policy)
+        env[MODEL_VOLUME_ENV] = json.dumps(model_volume(engines), sort_keys=True)
     resources = _block(engines, "resources")
     _set(env, GPU_RESOURCE_ENV, resources, "gpu")
     _set(env, RDMA_RESOURCE_ENV, resources, "rdma")

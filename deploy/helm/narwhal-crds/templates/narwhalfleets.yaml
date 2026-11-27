@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "f78327b82582ff28e982df62c01e8fef1b39c697734bfff005470c3d56d17655"
+    "narwhal.example.com/schema-sha256": "66902d970fcb37de96aa1889b5f3d2df8093d948cc3c1cef999dab722969b006"
 spec:
   group: "narwhal.example.com"
   names:
@@ -135,7 +135,7 @@ spec:
                             - "claimName"
                         hostPath:
                           type: "object"
-                          description: "A directory on every engine node. The controller refuses it unless the cluster admin lists a prefix that holds it in the narwhal chart's modelHostPathPrefixes, which is empty by default."
+                          description: "A directory on every engine node. The controller refuses it unless the cluster admin lists hostPath in the narwhal chart's modelVolumeSources and a prefix that holds it in modelHostPathPrefixes, which is empty by default."
                           properties:
                             path:
                               type: "string"
@@ -145,7 +145,7 @@ spec:
                               x-kubernetes-validations:
                                 - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
                                   message: "must not hold a . or .. segment"
-                                - rule: "!self.matches(r'^/(proc|sys|dev|run|var/run|etc|var/lib/kubelet|var/lib/containerd|var/lib/docker|var/lib/containers|var/lib/cri-o|var/lib/crio|var/lib/rancher)(/|$)|^/(var|var/lib)$')"
+                                - rule: "!self.matches(r'^/(proc|sys|dev|run|var/run|etc|boot|root|home|host|var/log|var/snap|opt/cni|var/lib/(kubelet|etcd|containerd|docker|containers|cri-o|crio|rancher|k0s|cni))(/|$)|^/(var|var/lib|opt)$')"
                                   message: "must not be or lie in a node's system, kubelet or container runtime directory"
                             type:
                               type: "string"
@@ -158,7 +158,7 @@ spec:
                             - "type"
                         nfs:
                           type: "object"
-                          description: "An NFS export"
+                          description: "An NFS export. The controller refuses it unless the cluster admin lists nfs in the narwhal chart's modelVolumeSources and its server in modelNfsServers."
                           properties:
                             server:
                               type: "string"
@@ -185,7 +185,7 @@ spec:
                             - "path"
                         csi:
                           type: "object"
-                          description: "A CSI ephemeral volume"
+                          description: "A CSI ephemeral volume. The controller refuses it unless the cluster admin lists csi in the narwhal chart's modelVolumeSources and its driver in modelCsiDrivers."
                           properties:
                             driver:
                               type: "string"

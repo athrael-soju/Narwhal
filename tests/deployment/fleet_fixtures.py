@@ -180,6 +180,23 @@ REFUSED: dict[str, Refusal] = {
     "a runtime's images": _rule(_host("/var/lib/containerd"), _HOST_PATH, _SYSTEM),
     "a parent of the kubelet's state": _rule(_host("/var/lib"), _HOST_PATH, _SYSTEM),
     "devices": _rule(_host("/dev"), _HOST_PATH, _SYSTEM),
+    **{
+        f"the host directory {path}": _rule(_host(path), _HOST_PATH, _SYSTEM)
+        for path in (
+            "/var/lib/etcd",
+            "/root",
+            "/home/admin",
+            "/var/log/pods",
+            "/var/lib/k0s",
+            "/var/snap",
+            "/opt/cni/bin",
+            "/host",
+            "/var/lib/cni",
+            "/var/lib/docker",
+            "/var/lib/rancher",
+            "/opt",
+        )
+    },
     "a path of any type": Refusal(
         _host("/models", ""), "spec.engines.modelVolume.hostPath.type", "enum"
     ),
