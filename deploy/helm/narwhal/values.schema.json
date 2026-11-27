@@ -352,6 +352,236 @@
           }
         ]
       }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "prometheus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
+              "description": "Prometheus image by registry digest"
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "storageClassName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                  "description": "StorageClass of the data claim"
+                },
+                "size": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+                  "description": "Requested size of the data claim, such as 20Gi"
+                }
+              },
+              "required": [
+                "storageClassName",
+                "size"
+              ]
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                },
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                }
+              },
+              "description": "Container resource requests and limits"
+            }
+          }
+        },
+        "grafana": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": "^(|[^\\s@]+@sha256:[0-9a-f]{64})$",
+              "description": "Grafana image by registry digest"
+            },
+            "dashboard": {
+              "type": "string",
+              "description": "The dashboard python -m tools.observability.chart_dashboard renders"
+            },
+            "admin": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "secretName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                },
+                "userKey": {
+                  "type": "string",
+                  "pattern": "^[-._a-zA-Z0-9]+$"
+                },
+                "passwordKey": {
+                  "type": "string",
+                  "pattern": "^[-._a-zA-Z0-9]+$"
+                }
+              },
+              "description": "The Secret that holds the Grafana admin login"
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "storageClassName": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                  "description": "StorageClass of the data claim"
+                },
+                "size": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$",
+                  "description": "Requested size of the data claim, such as 20Gi"
+                }
+              },
+              "required": [
+                "storageClassName",
+                "size"
+              ]
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                },
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|m)?$"
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "propertyNames": {
+                    "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                  }
+                }
+              },
+              "description": "Container resource requests and limits"
+            }
+          }
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "prometheus",
+          "grafana"
+        ],
+        "properties": {
+          "prometheus": {
+            "required": [
+              "image"
+            ],
+            "properties": {
+              "image": {
+                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          "grafana": {
+            "required": [
+              "image",
+              "dashboard",
+              "admin"
+            ],
+            "properties": {
+              "image": {
+                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+              },
+              "dashboard": {
+                "minLength": 1
+              },
+              "admin": {
+                "required": [
+                  "secretName",
+                  "userKey",
+                  "passwordKey"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "required": [

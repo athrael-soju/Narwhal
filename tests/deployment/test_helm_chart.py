@@ -24,6 +24,9 @@ from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.kubernetes import MANIFESTS
 from tests.deployment import chart_fixtures
 from tests.deployment.pod_fixtures import NODE, POD_IP, POD_UID, SECRET_VALUE, expand
+from tools.observability.artifacts import DEFAULT_CONSOLE_URL, stage_artifacts
+from tools.observability.chart_dashboard import chart_dashboard
+from tools.observability.make_targets import load_contract
 
 ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "deploy" / "helm" / "narwhal"
@@ -37,6 +40,10 @@ HELM = (
 # What the engine image's own environment holds before the pod's variables.
 IMAGE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/root"}
 STEPS = ("checkpoint", "runtime-check", "engine")
+OBSERVABILITY = ROOT / "tools" / "observability"
+SERVICES = f"{chart_fixtures.NAMESPACE}.svc.cluster.local"
+ROUTERS = [f"router-{n}.routers.{SERVICES}:8000" for n in (0, 1)]
+LOAD_BALANCER = f"haproxy.{SERVICES}:8000"
 SIDECAR = "attestation"
 
 
@@ -469,6 +476,121 @@ class ChartTests(unittest.TestCase):
             "engineApiKey": {"env": "KEY", "secretName": "other", "key": "api-key"}
         }
         self.assertIn("set credentials.engineApiKey", self.helm(credentials).stderr)
+
+    def mounted(self, deployment: str, volume: str) -> dict[str, str]:
+        """The files a Deployment's ConfigMap volume holds, by their path in the volume."""
+        spec = self.find("Deployment", deployment)["spec"]["template"]["spec"]
+        [source] = [v["configMap"] for v in spec["volumes"] if v["name"] == volume]
+        data = self.find("ConfigMap", source["name"])["data"]
+        items = source.get("items") or [{"key": key, "path": key} for key in data]
+        return {item["path"]: data[item["key"]] for item in items}
+
+    def test_monitoring_reads_the_files_make_observe_stages(self):
+        staged = self.root / "observe"
+        contract = load_contract(
+            [f"http://{router}" for router in ROUTERS], f"http://{LOAD_BALANCER}"
+        )
+        stage_artifacts(contract, DEFAULT_CONSOLE_URL, root=staged)
+        prometheus = staged / "prometheus"
+        expected = {
+            str(path.relative_to(prometheus)): path.read_text()
+            for path in prometheus.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(self.mounted("prometheus", "config"), expected)
+        provisioning = staged / "grafana-provisioning"
+        expected = {
+            str(path.relative_to(provisioning)): path.read_text()
+            for path in provisioning.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(self.mounted("grafana", "provisioning"), expected)
+        # make observe adds the fleet control link and markers that the chart's dashboard takes
+        # with --console-url.
+        dashboard = json.loads((staged / "grafana-dashboards" / "narwhal.json").read_text())
+        self.assertEqual(json.loads(chart_dashboard(DEFAULT_CONSOLE_URL)), dashboard)
+        [served] = self.mounted("grafana", "dashboards").values()
+        self.assertEqual(served, self.values["monitoring"]["grafana"]["dashboard"])
+
+    def test_prometheus_scrapes_both_routers_and_each_engine_once(self):
+        files = self.mounted("prometheus", "config")
+        config = yaml.safe_load(files["prometheus.yml"])
+        jobs = {job["job_name"]: job for job in config["scrape_configs"]}
+        [routers] = jobs["narwhal-router"]["file_sd_configs"]
+        [path] = routers["files"]
+        self.assertEqual(
+            json.loads(files[path.removeprefix("/etc/prometheus/")]), [{"targets": ROUTERS}]
+        )
+        # The active router serves the engine targets through the load balancer, so a pair
+        # lists each engine once.
+        [engines] = jobs["engines"]["http_sd_configs"]
+        self.assertEqual(engines["url"], f"http://{LOAD_BALANCER}/narwhal/targets")
+        [rules] = config["rule_files"]
+        alerts = (OBSERVABILITY / "prometheus-alerts.yml").read_text()
+        self.assertEqual(files[rules.removeprefix("/etc/prometheus/")], alerts)
+
+    def test_monitoring_runs_as_make_observe_configures_it(self):
+        compose = yaml.safe_load((OBSERVABILITY / "compose.yml").read_text())["services"]
+        [prometheus] = self.find("Deployment", "prometheus")["spec"]["template"]["spec"][
+            "containers"
+        ]
+        listen = "--web.listen-address="
+        self.assertEqual(
+            [flag for flag in prometheus["args"] if not flag.startswith(listen)],
+            [flag for flag in compose["prometheus"]["command"] if not flag.startswith(listen)],
+        )
+        [grafana] = self.find("Deployment", "grafana")["spec"]["template"]["spec"]["containers"]
+        env = {item["name"]: item.get("value") for item in grafana["env"]}
+        for name in (
+            "GF_AUTH_ANONYMOUS_ENABLED",
+            "GF_AUTH_ANONYMOUS_ORG_ROLE",
+            "GF_SECURITY_ALLOW_EMBEDDING",
+        ):
+            self.assertEqual(env[name], compose["grafana"]["environment"][name], name)
+        self.assertEqual(env["NARWHAL_PROMETHEUS_URL"], f"http://prometheus.{SERVICES}:9090")
+        admin = {
+            item["name"]: item["valueFrom"]["secretKeyRef"]
+            for item in grafana["env"]
+            if "valueFrom" in item
+        }
+        self.assertEqual(
+            admin,
+            {
+                "GF_SECURITY_ADMIN_USER": {"name": "grafana-admin", "key": "user"},
+                "GF_SECURITY_ADMIN_PASSWORD": {"name": "grafana-admin", "key": "password"},
+            },
+        )
+
+    def test_monitoring_values(self):
+        disabled = copy.deepcopy(self.values)
+        disabled["monitoring"] = {"enabled": False}
+        kinds = {(d["kind"], d["metadata"]["name"]) for d in self.render(disabled)}
+        self.assertNotIn(("Deployment", "prometheus"), kinds)
+        self.assertNotIn(("Deployment", "grafana"), kinds)
+        claims = {
+            d["metadata"]["name"] for d in self.documents if d["kind"] == "PersistentVolumeClaim"
+        }
+        self.assertIn("prometheus", claims)
+        self.assertNotIn("grafana", claims)
+        source = (OBSERVABILITY / "grafana-narwhal.json").read_text()
+        cases = {
+            "image": ("prometheus", "image", None),
+            "dashboard": ("grafana", "dashboard", None),
+            "admin": ("grafana", "admin", None),
+            "unrendered placeholders": ("grafana", "dashboard", source),
+            "is not JSON": ("grafana", "dashboard", "{"),
+            "@sha256": ("grafana", "image", "grafana/grafana:13.2.1"),
+        }
+        for message, (part, field, value) in cases.items():
+            with self.subTest(message):
+                values = copy.deepcopy(self.values)
+                if value is None:
+                    del values["monitoring"][part][field]
+                else:
+                    values["monitoring"][part][field] = value
+                result = self.helm(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
     def test_gate_keys_and_the_fleet_path_must_be_names(self):
         for field, key in (("env", "A: b"), ("resources", "cpu x")):

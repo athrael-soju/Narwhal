@@ -98,7 +98,7 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg` or to the Kubernetes launch backend. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
+Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `tools/observability` or to the Kubernetes launch backend. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
 
 `tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
@@ -300,6 +300,8 @@ Import each name from the subpackage module that defines it.
 | `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |
 | `tools/observability/start/readiness.py`    | Service, dashboard and target readiness          |
 | `tools/observability/start/cli.py`          | Startup sequence and command                     |
+
+`tools/observability/chart_dashboard.py` renders the same dashboard for the Helm chart's Grafana.
 
 The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurement/router_benchmark/cli.py`:
 
