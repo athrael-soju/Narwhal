@@ -10,7 +10,7 @@ A run directory holds:
 
 | Path | Contents |
 | --- | --- |
-| `run.json` | The run record, `narwhal.deployment-run` version 2, at mode 0600 |
+| `run.json` | The run record, `narwhal.deployment-run` version 3, at mode 0600 |
 | `run.lock` | The lock one runner holds while it uses the directory |
 | `run.salt` | 32 random bytes at mode 0600 that key the record's digests of inputs and files. The first run makes it, and a runner refuses one of another size, owner or mode |
 | `stages/<stage>/attempt-<n>/` | The files attempt `n` of a stage that runs once per run wrote |
@@ -18,7 +18,7 @@ A run directory holds:
 
 Inputs and the files an attempt writes can hold credentials, such as the engine key in a role environment. The record keeps each of their digests as `hmac-sha256:<hex>`, an HMAC-SHA256 of the value's SHA-256 under `run.salt`. A copy of `run.json` without `run.salt` cannot confirm a guessed credential. Changing a credential still changes its digest and reruns the stages it feeds. Never copy `run.salt` out of the run directory. A diagnostic bundle leaves it out.
 
-A record that an earlier version wrote keeps unkeyed `sha256:` digests and an output `sha256`. The next run makes `run.salt` and keys those digests in place, so they match the keyed digests of the same values and no stage reruns for the change. A Narwhal older than this one cannot read a keyed record.
+A version 2 record keeps unkeyed `sha256:` digests and an output `sha256`. The runner reads it, and the next time it writes the record it makes `run.salt`, keys those digests in place and writes version 3. A keyed digest of an old value equals the keyed digest of the same value now, so no stage reruns for the upgrade. A release that writes version 2 refuses a version 3 record as newer than its build.
 
 Each attempt writes into a new directory, so a rerun never meets a file an earlier attempt left. The runner replaces `run.json` by writing a temporary file, flushing it to disk and renaming it over the record, so a crash leaves either the old record or the new one. The next runner removes a temporary file a crash left.
 
@@ -40,7 +40,7 @@ An interrupted stage runs a new attempt, unless its action can take over the wor
 
 | Field | Content |
 | --- | --- |
-| `schema`, `schema_version` | `narwhal.deployment-run` and `2` |
+| `schema`, `schema_version` | `narwhal.deployment-run` and `3` |
 | `run_id` | 32 hexadecimal characters, fixed for the life of the run directory |
 | `target` | `dev`, `ssh` or `kubernetes`. A runner for another target refuses the directory |
 | `narwhal_version` | Narwhal version of the last runner |

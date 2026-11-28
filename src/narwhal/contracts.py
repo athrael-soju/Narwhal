@@ -34,6 +34,11 @@ class Contract:
 
     schema: str
     current: int = 1
+    # Earlier versions a reader still accepts and migrates; writers emit only `current`.
+    older: tuple[int, ...] = ()
+
+    def reads(self) -> tuple[int, ...]:
+        return (*self.older, self.current)
 
 
 CONTRACTS: dict[str, Contract] = {
@@ -51,7 +56,8 @@ CONTRACTS: dict[str, Contract] = {
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),
     DIAGNOSTIC_BUNDLE: Contract("narwhal.diagnostic-bundle"),
-    DEPLOYMENT_RUN: Contract("narwhal.deployment-run", 2),
+    # Version 3 keys the digests of inputs and outputs; a version 2 record is keyed on read.
+    DEPLOYMENT_RUN: Contract("narwhal.deployment-run", 3, older=(2,)),
     DEPLOYMENT_STATUS: Contract("narwhal.deployment-status"),
     TRIAL: Contract("narwhal.capacity-trial"),
 }
@@ -100,10 +106,14 @@ def validate_document(document: Any, name: str) -> int:
     version = document["schema_version"]
     if not isinstance(version, int) or isinstance(version, bool) or version < 0:
         raise ContractVersionError(f"{name} schema_version must be a nonnegative integer")
-    if version != spec.current:
+    if version not in spec.reads():
         relation = "newer than" if version > spec.current else "not readable by"
+        readable = ", ".join(str(number) for number in spec.reads())
         raise ContractVersionError(
             f"{name} schema version {version} is {relation} this build "
+            f"(writes {spec.current}, reads {readable})"
+            if spec.older
+            else f"{name} schema version {version} is {relation} this build "
             f"(writes and reads {spec.current})"
         )
     return version
@@ -162,7 +172,7 @@ def manifest() -> dict[str, Any]:
         name: {
             "schema": spec.schema,
             "write": spec.current,
-            "read": [spec.current],
+            "read": list(spec.reads()),
         }
         for name, spec in sorted(CONTRACTS.items())
     }

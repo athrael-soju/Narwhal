@@ -667,9 +667,13 @@ class DeployTests(unittest.TestCase):
                 }
                 for output in entry["outputs"]
             ]
-        run_record.write(self.run, record)
+        # As a version 2 runner wrote it, before any run directory had a salt.
+        document = {"schema": "narwhal.deployment-run", "schema_version": 2, **record}
+        (self.run / "run.json").write_text(json.dumps(document))
         (self.run / run_record.SALT).unlink()
         self.assertEqual(self.ran(self.keyed_run("stub-key-1")), set())
+        written = json.loads((self.run / "run.json").read_text())
+        self.assertEqual(written["schema_version"], 3)
         text = (self.run / "run.json").read_text()
         for value in unkeyed.values():
             self.assertNotIn(value.digest, text)

@@ -28,11 +28,18 @@ class ContractTests(unittest.TestCase):
             doc = versioned(name, {"value": 1})
             self.assertEqual(validate_document(doc, name), current(name))
             invalid = (True, -1, 0, current(name) + 1)
-            if current(name) > 1:
+            older = CONTRACTS[name].older
+            if current(name) > 1 and current(name) - 1 not in older:
                 invalid += (current(name) - 1,)
             for value in invalid:
                 with self.subTest(name=name, value=value), self.assertRaises(ContractVersionError):
                     validate_document({**doc, "schema_version": value}, name)
+            # A reader still accepts the older versions it migrates.
+            for value in older:
+                with self.subTest(name=name, older=value):
+                    self.assertEqual(
+                        validate_document({**doc, "schema_version": value}, name), value
+                    )
         self.assertEqual(set(manifest()["contracts"]), set(CONTRACTS))
 
     def test_writer_owns_schema_fields(self):

@@ -13,7 +13,14 @@ from collections.abc import Container, Iterator, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from narwhal.contracts import DEPLOYMENT_RUN, ContractVersionError, read_json, versioned
+from narwhal.contracts import (
+    DEPLOYMENT_RUN,
+    ContractVersionError,
+    current,
+    read_json,
+    validate_document,
+    versioned,
+)
 
 from . import stages
 from .launch_engine.runtime import KEYED, salt_file
@@ -170,14 +177,41 @@ def read(directory: Path) -> dict[str, Any]:
     path = directory / RECORD
     document = read_json(path, DEPLOYMENT_RUN)
     body = {name: value for name, value in document.items() if name not in _SCHEMA_FIELDS}
-    validate(body, path)
+    validate(body, path, version=validate_document(document, DEPLOYMENT_RUN))
     return body
 
 
-def write(directory: Path, body: Mapping[str, Any]) -> None:
-    """Replace the run record atomically at mode 0600."""
+def write(directory: Path, body: dict[str, Any]) -> None:
+    """Replace the run record atomically at mode 0600, as the current version.
+
+    A body read from a version 2 record has its digests keyed in place first, under the run
+    directory's salt, which this makes when the directory has none yet.
+    """
+    if not _keyed_body(body):
+        key_digests(body, salt(directory), set(body.get("inputs", {})))
     validate(body, directory / RECORD)
     stages.write_evidence(directory / RECORD, versioned(DEPLOYMENT_RUN, body))
+
+
+def _keyed_body(body: Mapping[str, Any]) -> bool:
+    """Whether every digest of an input and of an output in `body` is keyed."""
+    inputs = body.get("inputs", {})
+    stages_ = body.get("stages", {})
+    return (
+        isinstance(inputs, dict)
+        and isinstance(stages_, dict)
+        and all(not _digest(value.get("digest")) for value in inputs.values())
+        and all(
+            "sha256" not in output
+            for entry in stages_.values()
+            for output in entry.get("outputs", ())
+        )
+        and all(
+            not (name in inputs and _digest(value))
+            for entry in stages_.values()
+            for name, value in entry.get("input_digests", {}).items()
+        )
+    )
 
 
 _SCHEMA_FIELDS = ("schema", "schema_version")
@@ -221,8 +255,13 @@ _STAGE = (
 _OWNER = ("pid", "boot_id", "start_ticks", "hostname", "user", "argv")
 
 
-def validate(body: Mapping[str, Any], path: Path) -> None:
-    """Refuse a run record whose fields differ from the `narwhal.deployment-run` contract."""
+def validate(body: Mapping[str, Any], path: Path, *, version: int | None = None) -> None:
+    """Refuse a run record whose fields differ from the `narwhal.deployment-run` contract.
+
+    `version` is the record's, the current one by default. Version 3 keeps every digest of an
+    input and of an output keyed; version 2 kept them unkeyed.
+    """
+    keyed_digests = (current(DEPLOYMENT_RUN) if version is None else version) >= 3
 
     def check(condition: bool, message: str) -> None:
         if not condition:
@@ -249,17 +288,19 @@ def validate(body: Mapping[str, Any], path: Path) -> None:
         check(
             isinstance(value, dict)
             and set(value) == {"digest", "source"}
-            and (_keyed(value["digest"]) or _digest(value["digest"]))
+            and (_keyed(value["digest"]) if keyed_digests else _digest(value["digest"]))
             and _text(value["source"]),
             f"inputs.{name} needs a digest and a source",
         )
     check(body["until"] is None or _text(body["until"]), "until must be null or a stage")
     check(isinstance(body["stages"], dict), "stages must be an object")
     for name, stage in body["stages"].items():
-        _validate_stage(name, stage, check)
+        _validate_stage(name, stage, check, keyed_digests, set(body["inputs"]))
 
 
-def _validate_stage(name: str, stage: Any, check: Any) -> None:
+def _validate_stage(
+    name: str, stage: Any, check: Any, keyed_digests: bool, inputs: set[str]
+) -> None:
     where = f"stages.{name}"
     check(isinstance(stage, dict) and set(stage) == set(_STAGE), f"{where} fields")
     check(_text(stage["stage"]) and _text(stage["scope"]), f"{where} needs stage and scope")
@@ -275,13 +316,19 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
     digests = stage["input_digests"]
     check(
         isinstance(digests, dict)
-        and all(_keyed(value) or _digest(value) for value in digests.values()),
+        and all(
+            # A product's digest stays unkeyed, since the record holds the product itself.
+            (_keyed(value) if key in inputs else _keyed(value) or _digest(value))
+            if keyed_digests
+            else _digest(value)
+            for key, value in digests.items()
+        ),
         f"{where}.input_digests must map names to digests",
     )
     outputs = stage["outputs"]
     check(isinstance(outputs, list), f"{where}.outputs must be a list")
     for output in outputs:
-        # A record of an earlier version keeps the file's unkeyed `sha256`.
+        # A version 2 record keeps the file's unkeyed `sha256`.
         check(
             isinstance(output, dict)
             and (
@@ -289,7 +336,8 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
                     set(output) == {"path", "hmac_sha256", "size", "mode"}
                     and _keyed(output["hmac_sha256"])
                 )
-                or (
+                if keyed_digests
+                else (
                     set(output) == {"path", "sha256", "size", "mode"}
                     and isinstance(output["sha256"], str)
                     and bool(_HEX.fullmatch(output["sha256"]))

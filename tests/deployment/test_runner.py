@@ -19,6 +19,7 @@ from narwhal.deployment import run_record, runner
 from narwhal.deployment.deploy_graph import DEPLOY_GRAPH
 from narwhal.deployment.graph import INPUT, LIVE, PRODUCT
 from narwhal.deployment.hosts import RemoteTimeout
+from narwhal.deployment.launch_engine.runtime import regular_file_digest
 from narwhal.deployment.run_record import key
 from narwhal.deployment.runner import (
     Command,
@@ -1092,16 +1093,18 @@ class RunRecordTests(unittest.TestCase):
     def test_the_record_carries_its_contract_and_is_listed_in_the_manifest(self):
         document = json.loads((self.directory / "run.json").read_text())
         self.assertEqual(
-            (document["schema"], document["schema_version"]), ("narwhal.deployment-run", 2)
+            (document["schema"], document["schema_version"]), ("narwhal.deployment-run", 3)
         )
+        listed = manifest()["contracts"]["deployment_run"]
         self.assertEqual(
-            manifest()["contracts"]["deployment_run"]["schema"], "narwhal.deployment-run"
+            (listed["schema"], listed["write"], listed["read"]),
+            ("narwhal.deployment-run", 3, [2, 3]),
         )
 
     def test_a_record_of_another_version_or_shape_is_refused(self):
         path = self.directory / "run.json"
         document = json.loads(path.read_text())
-        for version, relation in ((1, "not readable by"), (3, "newer than")):
+        for version, relation in ((1, "not readable by"), (4, "newer than")):
             path.write_text(json.dumps({**document, "schema_version": version}))
             with (
                 self.subTest(version=version),
@@ -1119,6 +1122,63 @@ class RunRecordTests(unittest.TestCase):
         path.write_text(json.dumps(changed))
         with self.assertRaisesRegex(ContractVersionError, "outputs"):
             run_record.read(self.directory)
+
+    def test_a_version_3_record_round_trips(self):
+        path = self.directory / "run.json"
+        before = json.loads(path.read_text())
+        record = run_record.read(self.directory)
+        run_record.write(self.directory, record)
+        self.assertEqual(json.loads(path.read_text()), before)
+        self.assertEqual(run_record.read(self.directory), record)
+
+    def test_a_version_2_record_reads_and_is_keyed_when_written(self):
+        path = self.directory / "run.json"
+        record = run_record.read(self.directory)
+        old = json.loads(json.dumps(record))
+        for value in old["inputs"].values():
+            value["digest"] = "sha256:" + "1" * 64
+        for entry in old["stages"].values():
+            for name in set(entry["input_digests"]) & set(old["inputs"]):
+                entry["input_digests"][name] = "sha256:" + "1" * 64
+            entry["outputs"] = [
+                {
+                    "path": output["path"],
+                    "sha256": regular_file_digest(self.directory / output["path"]),
+                    "size": output["size"],
+                    "mode": output["mode"],
+                }
+                for output in entry["outputs"]
+            ]
+        path.write_text(
+            json.dumps({"schema": "narwhal.deployment-run", "schema_version": 2, **old})
+        )
+        # A version 3 reader refuses unkeyed digests, and a version 2 reader keyed ones.
+        with self.assertRaisesRegex(ContractVersionError, "needs a digest"):
+            run_record.validate(old, path)
+        with self.assertRaisesRegex(ContractVersionError, "needs a digest"):
+            run_record.validate(record, path, version=2)
+        self.assertEqual(run_record.read(self.directory), old)
+        (self.directory / run_record.SALT).unlink()
+        run_record.write(self.directory, old)
+        written = json.loads(path.read_text())
+        self.assertEqual(written["schema_version"], 3)
+        secret = run_record.find_salt(self.directory)
+        self.assertEqual(
+            {value["digest"] for value in written["inputs"].values()},
+            {run_record.keyed(secret, "sha256:" + "1" * 64)},
+        )
+        for entry in written["stages"].values():
+            for output in entry["outputs"]:
+                unkeyed = "sha256:" + regular_file_digest(self.directory / output["path"])
+                self.assertEqual(output["hmac_sha256"], run_record.keyed(secret, unkeyed))
+        self.assertEqual(
+            run_record.read(self.directory),
+            {
+                name: value
+                for name, value in written.items()
+                if name not in ("schema", "schema_version")
+            },
+        )
 
     def test_the_record_reaches_the_disk_before_the_rename_and_the_rename_after_it(self):
         record = run_record.read(self.directory)
