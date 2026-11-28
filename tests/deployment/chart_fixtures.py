@@ -1,9 +1,10 @@
 """Synthetic Kubernetes engine launches, the engine values a fleet of them takes, and the chart
 values `make chart-check` renders the chart with.
 
-`python -m tests.deployment.chart_fixtures <values.json> <direct-values.json>` writes those
-values: a release that installs a fleet of attested engines, and a release of engines that
-start directly.
+`python -m tests.deployment.chart_fixtures <values.json> <direct-values.json> <cluster-values.json>`
+writes those values: a release that installs a fleet of attested engines, a release of engines
+that start directly, and the first release with its monitoring left to the cluster's
+Prometheus Operator and Grafana.
 """
 
 from __future__ import annotations
@@ -154,6 +155,20 @@ def direct_example(count: int = 2) -> dict:
     return document
 
 
+def cluster_monitoring(**overrides: object) -> dict:
+    """Complete chart values of `values()` whose monitors, alert rules and dashboard are for
+    the cluster's Prometheus Operator and Grafana, which the chart then does not run."""
+    document = values(**overrides)
+    document["monitoring"] = {
+        "enabled": True,
+        "serviceMonitors": {"enabled": True, "labels": {"release": "kube-prometheus-stack"}},
+        "dashboardConfigMap": {"enabled": True},
+        "grafana": {"dashboard": document["monitoring"]["grafana"]["dashboard"]},
+    }
+    return document
+
+
 if __name__ == "__main__":
     Path(sys.argv[1]).write_text(json.dumps(values(), indent=2) + "\n")
     Path(sys.argv[2]).write_text(json.dumps(direct_example(), indent=2) + "\n")
+    Path(sys.argv[3]).write_text(json.dumps(cluster_monitoring(), indent=2) + "\n")

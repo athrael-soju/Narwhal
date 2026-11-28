@@ -7,7 +7,7 @@ The chart runs the fleet controller for one namespace, and what the controller d
 - the engines' ServiceAccount and a fleet-editor Role
 - the state PersistentVolumeClaim, which `helm uninstall` keeps
 - a NetworkPolicy in front of the controller's routers
-- Prometheus and Grafana, when `monitoring.enabled` is set
+- Prometheus and Grafana, when `monitoring.enabled` is set, or the monitors, alert rules and dashboard for [the cluster's own](#the-clusters-prometheus-and-grafana)
 - a `NarwhalFleet`, when `fleet` is set
 - or [direct engines](#direct-engines) that run on CPUs without attestation
 
@@ -48,7 +48,7 @@ The policy trusts the engine, router, gate and HAProxy labels only on an object 
 
 Admission cannot stop a user who can act as the controller. Kubernetes' `edit` and `admin` roles may impersonate the namespace's ServiceAccounts, request their tokens and exec into pods, so anyone with `edit`, `admin` or `pods/exec` in the fleet's namespace has the controller's power, including starting host-network engine pods with `IPC_LOCK`. Run each fleet in a namespace of its own, give the people who run fleets only the `<release>-fleet-editor` Role there, and keep `edit`, `admin` and exec in that namespace to the people who install the chart.
 
-The routers' NetworkPolicy also admits pods labelled as Prometheus. The chart runs Prometheus, so the policy cannot tie that label to one sender, and anyone who can create pods in the namespace can give a pod it. With `monitoring.enabled` off, the NetworkPolicy leaves that label out; scrape with a cluster Prometheus through `networkPolicy.monitoring` instead to close it.
+The routers' NetworkPolicy also admits pods labelled as Prometheus. The chart runs Prometheus, so the policy cannot tie that label to one sender, and anyone who can create pods in the namespace can give a pod it. With `monitoring.enabled` off or `monitoring.serviceMonitors.enabled` set, the NetworkPolicy leaves that label out; scrape with a cluster Prometheus through `networkPolicy.monitoring` instead to close it.
 
 The namespace runs with the Pod Security `privileged` level: the `baseline` level refuses the engine pods' host network and `IPC_LOCK`, and Pod Security cannot exempt single pods. If the cluster enforces `baseline` by default, label the namespace `pod-security.kubernetes.io/enforce=privileged`. The admission policy then enforces the baseline's rules on every other pod.
 
@@ -126,18 +126,56 @@ helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
 | `monitoring.enabled` | Run Prometheus and Grafana, default `false` |
 | `monitoring.fleet` | The `fleet` label of every series, so one Prometheus and one dashboard can hold several fleets. Default: the release name |
 | `monitoring.alertmanagerUrl` | The Alertmanager that Prometheus sends alerts to, `http(s)://HOST:PORT` with an optional path. Without one, alerts show only on the Prometheus alerts page |
-| `monitoring.prometheus.image`, `monitoring.grafana.image` | The images by registry digest. Required with monitoring |
-| `monitoring.grafana.dashboard` | The rendered dashboard. Required with monitoring |
-| `monitoring.grafana.admin` | `{"secretName", "userKey", "passwordKey"}`: the Secret that holds the Grafana admin login. Required with monitoring |
+| `monitoring.prometheus.image`, `monitoring.grafana.image` | The images by registry digest. Required unless the cluster runs that service |
+| `monitoring.grafana.dashboard` | The rendered dashboard. Required with monitoring, for the cluster's Grafana too |
+| `monitoring.grafana.admin` | `{"secretName", "userKey", "passwordKey"}`: the Secret that holds the Grafana admin login. Required with the chart's Grafana |
 | `monitoring.grafana.anonymous` | Let anyone who reaches Grafana view the dashboards without signing in, default `false` |
 | `monitoring.prometheus.storage`, `monitoring.grafana.storage` | `{"storageClassName", "size"}` for a ReadWriteOnce data claim. Without one, the data lasts only as long as the pod |
 | `monitoring.prometheus.resources`, `monitoring.grafana.resources` | Container `requests` and `limits` |
+| `monitoring.serviceMonitors.enabled` | Leave Prometheus to the cluster's Prometheus Operator, default `false` |
+| `monitoring.serviceMonitors.labels` | Labels for the monitors and the `PrometheusRule`, which the cluster's Prometheus selects them by |
+| `monitoring.dashboardConfigMap.enabled` | Leave Grafana to the cluster, default `false` |
+| `monitoring.dashboardConfigMap.label`, `monitoring.dashboardConfigMap.labelValue` | The label the Grafana dashboard sidecar watches, default `grafana_dashboard: "1"` |
 
 Prometheus keeps 30 days of samples, as under `make observe`. A changed configuration or dashboard restarts the pod that reads it.
 
+### The cluster's Prometheus and Grafana
+
+On a cluster that already runs the Prometheus Operator and Grafana, such as kube-prometheus-stack, the chart can leave both to them:
+
+```bash
+helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
+  --set monitoring.enabled=true \
+  --set monitoring.serviceMonitors.enabled=true \
+  --set monitoring.serviceMonitors.labels.release=kube-prometheus-stack \
+  --set monitoring.dashboardConfigMap.enabled=true \
+  --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
+```
+
+The chart's Grafana reads only the chart's Prometheus, so the chart refuses `monitoring.serviceMonitors` without `monitoring.dashboardConfigMap`. `monitoring.dashboardConfigMap` alone keeps the chart's Prometheus.
+
+With `monitoring.serviceMonitors.enabled`, the chart runs no Prometheus. It renders these objects from the same `prometheus.yml` and `prometheus-alerts.yml`:
+
+| Object | What it scrapes or holds |
+| --- | --- |
+| `ServiceMonitor` `<release>-routers` | Both routers, through the Service `routers` on its port `http` |
+| `PodMonitor` `<release>-sidecars` | The container `attestation` of each engine pod, at `engine-<n>.engines.<namespace>.svc:<attestation port>`. Rendered only with `fleet` set, which names the port |
+| `ScrapeConfig` `<release>-engines` | The engines that `/narwhal/targets` lists, read through the Service `haproxy` on port 8000 |
+| `PrometheusRule` `<release>-alerts` | The rules of `prometheus-alerts.yml`, unchanged |
+
+The monitors select what the controller builds by the labels `app.kubernetes.io/name: narwhal` and `app.kubernetes.io/component: router` or `engine`, and by the Service, container and port names above. `src/narwhal/deployment/kubernetes_objects.py` gives the objects those labels and names, and a chart test fails when the two drift apart. HAProxy serves no metrics of its own, so Prometheus reads only the engine targets through it.
+
+Each target gets the job name, address and `fleet` label the bundled Prometheus gives it, and the 5-second scrape interval of `prometheus.yml`, which the router rules need: they count only samples of the last 30 seconds. The alert rules and the dashboard therefore read the same series as under the bundled stack. The Prometheus Operator also adds a `namespace` label.
+
+The cluster's Prometheus picks up the objects whose labels match its `serviceMonitorSelector`, `podMonitorSelector`, `scrapeConfigSelector` and `ruleSelector`, so put those labels in `monitoring.serviceMonitors.labels`. `ScrapeConfig` is a `v1alpha1` kind, and a Prometheus without a `scrapeConfigSelector` scrapes no engine. The routers' NetworkPolicy admits the cluster's Prometheus only through `networkPolicy.monitoring`.
+
+Several fleets can share one Prometheus: each series carries its fleet's `fleet` label, and every rule matches and aggregates within one fleet. Each release's `PrometheusRule` holds the same rules, so each raises the same alerts for every fleet, and Alertmanager merges the identical ones.
+
+With `monitoring.dashboardConfigMap.enabled`, the chart runs no Grafana. It renders `monitoring.grafana.dashboard` as the ConfigMap `<release>-dashboard`, labelled for the Grafana dashboard sidecar. The dashboard is in Grafana's v2 dashboard format, which the cluster's Grafana must read, as the Grafana 13 of `make observe` does. Pick the cluster's Prometheus in the dashboard's data source variable.
+
 ## Checking the chart
 
-`make chart-check` installs the pinned helm and kubeconform into `local/bin`, renders the chart for a release with a fleet and for one with direct engines, validates the manifests against the Kubernetes API schemas and runs `tests/deployment/test_helm_chart.py`.
+`make chart-check` installs the pinned helm and kubeconform into `local/bin`, renders the chart for a release with a fleet, for the same release with the cluster's Prometheus and Grafana, and for one with direct engines. It validates the manifests against the Kubernetes API schemas and the Prometheus Operator v0.95.2 CRDs that `tools/maintenance/operator_schemas.py` pins, and runs `tests/deployment/test_helm_chart.py`.
 
 `python -m tests.deployment.chart_live --kubeconfig <file> --namespace <ns> --release <name>` checks an installed release against an API server: what the controller's Role and ClusterRole grant and refuse, the objects the controller builds and the pods the admission policy must refuse, and its model volume rules against the controller's. With `--lifecycle <chart> <values> --upgrade-set <key>=<value>`, it first uninstalls the release, then installs, upgrades, uninstalls and installs it again with the admission policy in place, and checks each time that every workload the chart applies makes its pods.
 

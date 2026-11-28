@@ -1,7 +1,14 @@
+{{- /*
+The bundled Prometheus and Grafana. monitoring.serviceMonitors leaves Prometheus to the
+cluster, and monitoring.dashboardConfigMap leaves Grafana to it; cluster-monitoring.yaml then
+renders the monitors, alert rules and dashboard ConfigMap the cluster's own read instead.
+*/ -}}
 {{- with .Values.monitoring }}
 {{- if .enabled }}
 {{- $root := $ }}
 {{- $suffix := printf "%s.svc.%s" $.Release.Namespace $.Values.haproxy.clusterDomain }}
+{{- $dashboard := include "narwhal.dashboard" $ }}
+{{- if not (.serviceMonitors).enabled }}
 {{- $routers := list (printf "router-0.routers.%s:8000" $suffix) (printf "router-1.routers.%s:8000" $suffix) }}
 {{- /* The pair's engine targets come through the load balancer, as `make observe` reads them
 for a router pair, so Prometheus scrapes each engine once. */}}
@@ -37,17 +44,7 @@ for a router pair, so Prometheus scrapes each engine once. */}}
   "tools.json" "[]\n"
   "fleet-control-token" ""
 }}
-{{- $dashboard := .grafana.dashboard }}
-{{- if contains "<<" $dashboard }}
-{{- fail "monitoring.grafana.dashboard holds unrendered placeholders; write it with python -m narwhal.observability.stack.chart_dashboard" }}
-{{- end }}
-{{- if hasKey (fromJson $dashboard) "Error" }}
-{{- fail "monitoring.grafana.dashboard is not JSON; write it with python -m narwhal.observability.stack.chart_dashboard" }}
-{{- end }}
-{{- $provisioning := dict
-  "dashboards.yml" ($.Files.Get "files/observability/grafana-dashboards.yml")
-  "datasources.yml" ($.Files.Get "files/observability/grafana-datasources.yml")
-}}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -134,8 +131,8 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
----
 {{- with .prometheus.storage }}
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -148,8 +145,8 @@ spec:
   resources:
     requests:
       storage: {{ .size }}
----
 {{- end }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -163,6 +160,12 @@ spec:
     - name: http
       port: 9090
       targetPort: http
+{{- end }}
+{{- if not (.dashboardConfigMap).enabled }}
+{{- $provisioning := dict
+  "dashboards.yml" ($.Files.Get "files/observability/grafana-dashboards.yml")
+  "datasources.yml" ($.Files.Get "files/observability/grafana-datasources.yml")
+}}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -278,8 +281,8 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
----
 {{- with .grafana.storage }}
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -292,8 +295,8 @@ spec:
   resources:
     requests:
       storage: {{ .size }}
----
 {{- end }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -307,5 +310,6 @@ spec:
     - name: http
       port: 3000
       targetPort: http
+{{- end }}
 {{- end }}
 {{- end }}

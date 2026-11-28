@@ -74,6 +74,20 @@ monitoring:
   # The Alertmanager Prometheus sends alerts to, such as http://alertmanager.monitoring:9093.
   # Without one, alerts show only on the Prometheus alerts page.
   alertmanagerUrl: ""
+  # Leave Prometheus to the cluster's Prometheus Operator: the chart runs no Prometheus and
+  # renders ServiceMonitor, PodMonitor and ScrapeConfig objects and the alert rules as a
+  # PrometheusRule. Needs dashboardConfigMap, since the chart's Grafana reads its own Prometheus.
+  serviceMonitors:
+    enabled: false
+    # Labels for those objects, which the cluster's Prometheus selects them by, such as
+    # {"release": "kube-prometheus-stack"}.
+    labels: {}
+  # Leave Grafana to the cluster: the chart runs no Grafana and renders the dashboard as a
+  # ConfigMap with the label the Grafana dashboard sidecar watches.
+  dashboardConfigMap:
+    enabled: false
+    label: grafana_dashboard
+    labelValue: "1"
   prometheus:
     # The Prometheus image by registry digest. Required with monitoring.
     image: ""

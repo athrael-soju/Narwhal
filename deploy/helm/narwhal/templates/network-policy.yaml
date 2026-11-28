@@ -19,7 +19,7 @@ spec:
   ingress:
     - from:
         {{- $peers := list "haproxy" "gate" "router" }}
-        {{- if .Values.monitoring.enabled }}
+        {{- if and .Values.monitoring.enabled (not (.Values.monitoring.serviceMonitors).enabled) }}
         {{- $peers = append $peers "prometheus" }}
         {{- end }}
         {{- range $peers }}

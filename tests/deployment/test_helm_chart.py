@@ -1044,6 +1044,384 @@ class ChartTests(Rendering, unittest.TestCase):
                 self.assertIn(message, result.stderr)
 
 
+# The kinds the chart renders for the cluster's Prometheus Operator.
+OPERATOR_KINDS = ("ServiceMonitor", "PodMonitor", "ScrapeConfig", "PrometheusRule")
+# The target labels Prometheus Operator sets before a monitor's own relabelings, as `pod`,
+# `service`, `container` and `endpoint` of a ServiceMonitor's target.
+OPERATOR_LABELS = ("namespace", "service", "pod", "container", "endpoint")
+
+
+def relabel(labels: dict[str, str], relabelings: list[dict]) -> dict[str, str] | None:
+    """A target's labels after Prometheus applies `relabelings`, the Prometheus Operator form,
+    or None for a dropped target. Covers the actions the chart's monitors use."""
+    labels = dict(labels)
+    for step in relabelings:
+        action = step.get("action", "replace").lower()
+        regex = re.compile(f"(?:{step.get('regex', '(.*)')})")
+        if action == "labeldrop":
+            labels = {k: v for k, v in labels.items() if not regex.fullmatch(k)}
+            continue
+        value = step.get("separator", ";").join(
+            labels.get(name, "") for name in step.get("sourceLabels", [])
+        )
+        match = regex.fullmatch(value)
+        if action == "keep":
+            if not match:
+                return None
+        elif action == "replace":
+            if match:
+                template = re.sub(r"\$\{?(\d+)\}?", r"\\g<\1>", step.get("replacement", "$1"))
+                labels[step["targetLabel"]] = match.expand(template)
+        else:
+            raise AssertionError(f"relabel has no {action}")
+    labels.setdefault("instance", labels["__address__"])
+    return {k: v for k, v in labels.items() if not k.startswith("__")}
+
+
+@unittest.skipUnless(HELM, "helm is not installed")
+class ClusterMonitoringTests(Rendering, unittest.TestCase):
+    """A release that leaves Prometheus and Grafana to the cluster: monitors, alert rules and a
+    dashboard ConfigMap from the files the bundled stack reads, selecting what the controller
+    builds by its labels and ports."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.folder.name)
+        cls.values = chart_fixtures.cluster_monitoring()
+        cls.documents = cls.render(cls.values)
+        cls.bundled = cls.render(chart_fixtures.values())
+        cls.config = yaml.safe_load((OBSERVABILITY / "prometheus.yml").read_text())
+        cls.jobs = {job["job_name"]: job for job in cls.config["scrape_configs"]}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.folder.cleanup()
+
+    def of(self, kind: str, documents: list[dict] | None = None) -> dict:
+        [found] = [d for d in documents or self.documents if d["kind"] == kind]
+        return found
+
+    def kinds(self, documents: list[dict]) -> set[tuple[str, str]]:
+        return {(d["kind"], d["metadata"]["name"]) for d in documents}
+
+    def test_the_bundled_stack_is_the_default(self):
+        defaults = yaml.safe_load((CHART / "values.yaml").read_text())["monitoring"]
+        self.assertEqual(defaults["serviceMonitors"], {"enabled": False, "labels": {}})
+        self.assertEqual(
+            defaults["dashboardConfigMap"],
+            {"enabled": False, "label": "grafana_dashboard", "labelValue": "1"},
+        )
+        kinds = self.kinds(self.bundled)
+        for name in ("prometheus", "grafana"):
+            self.assertIn(("Deployment", name), kinds)
+        self.assertFalse({kind for kind, _ in kinds} & set(OPERATOR_KINDS))
+        self.assertNotIn(("ConfigMap", "fleet-dashboard"), kinds)
+
+    def test_the_cluster_runs_prometheus_and_grafana_instead(self):
+        kinds = self.kinds(self.documents)
+        self.assertLessEqual(
+            {
+                ("ServiceMonitor", "fleet-routers"),
+                ("PodMonitor", "fleet-sidecars"),
+                ("ScrapeConfig", "fleet-engines"),
+                ("PrometheusRule", "fleet-alerts"),
+                ("ConfigMap", "fleet-dashboard"),
+            },
+            kinds,
+        )
+        bundled = {(kind, name) for kind, name in self.kinds(self.bundled)}
+        chart_stack = {
+            (kind, name)
+            for kind, name in bundled
+            if name.startswith(("prometheus", "grafana")) and kind != "NetworkPolicy"
+        }
+        self.assertEqual(len(chart_stack), 8)
+        self.assertFalse(chart_stack & kinds)
+        # The chart runs no Prometheus, so the routers admit no pod by the Prometheus label;
+        # networkPolicy.monitoring admits the cluster's.
+        policy = self.of("NetworkPolicy")
+        components = [
+            peer["podSelector"]["matchLabels"]["app.kubernetes.io/component"]
+            for peer in policy["spec"]["ingress"][0]["from"]
+        ]
+        self.assertEqual(components, ["haproxy", "gate", "router"])
+
+    def test_the_alert_rules_are_the_bundled_rules(self):
+        rules = self.of("PrometheusRule")
+        alerts = yaml.safe_load((OBSERVABILITY / "prometheus-alerts.yml").read_text())
+        self.assertEqual(rules["spec"], alerts)
+        [bundled] = [
+            d
+            for d in self.bundled
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "prometheus"
+        ]
+        self.assertEqual(rules["spec"], yaml.safe_load(bundled["data"]["prometheus-alerts.yml"]))
+
+    def test_the_dashboard_is_the_bundled_dashboard_labelled_for_the_grafana_sidecar(self):
+        [dashboard] = [
+            d
+            for d in self.documents
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "fleet-dashboard"
+        ]
+        [bundled] = [
+            d
+            for d in self.bundled
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "grafana-dashboards"
+        ]
+        self.assertEqual(dashboard["data"], bundled["data"])
+        self.assertEqual(dashboard["data"], {"narwhal.json": chart_dashboard()})
+        self.assertEqual(dashboard["metadata"]["labels"]["grafana_dashboard"], "1")
+        values = copy.deepcopy(self.values)
+        values["monitoring"]["dashboardConfigMap"].update(label="dashboards", labelValue="narwhal")
+        [labelled] = [
+            d
+            for d in self.render(values)
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "fleet-dashboard"
+        ]
+        self.assertEqual(labelled["metadata"]["labels"]["dashboards"], "narwhal")
+        self.assertNotIn("grafana_dashboard", labelled["metadata"]["labels"])
+        # The dashboard is refused here as the bundled Grafana refuses it.
+        for message, dashboard_value in (
+            ("unrendered placeholders", (OBSERVABILITY / "grafana-narwhal.json").read_text()),
+            ("is not JSON", "{"),
+        ):
+            with self.subTest(message):
+                values = copy.deepcopy(self.values)
+                values["monitoring"]["grafana"]["dashboard"] = dashboard_value
+                result = self.helm(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_the_monitors_select_what_the_controller_builds(self):
+        from tests.deployment.test_kubernetes_objects import everything
+
+        built = everything()
+        [routers] = [
+            d
+            for d in built
+            if d["kind"] == "Service" and d["metadata"]["name"] == objects.ROUTER_SERVICE
+        ]
+        monitor = self.of("ServiceMonitor")["spec"]
+        self.assertLessEqual(
+            monitor["selector"]["matchLabels"].items(), routers["metadata"]["labels"].items()
+        )
+        [endpoint] = monitor["endpoints"]
+        self.assertIn(endpoint["port"], [port["name"] for port in routers["spec"]["ports"]])
+        [engines] = [
+            d
+            for d in built
+            if d["kind"] == "StatefulSet" and d["metadata"]["name"] == engine_set.STATEFULSET
+        ]
+        pods = self.of("PodMonitor")["spec"]
+        template = engines["spec"]["template"]
+        self.assertLessEqual(
+            pods["selector"]["matchLabels"].items(), template["metadata"]["labels"].items()
+        )
+        [keep] = [
+            step
+            for step in pods["podMetricsEndpoints"][0]["relabelings"]
+            if step.get("action") == "keep"
+        ]
+        self.assertIn(keep["regex"], [c["name"] for c in template["spec"]["containers"]])
+        self.assertEqual(keep["regex"], SIDECAR)
+        # No other monitored Service or pod carries the labels a monitor selects.
+        for selector, kinds in (
+            (monitor["selector"]["matchLabels"], ("Service",)),
+            (pods["selector"]["matchLabels"], ("StatefulSet", "Deployment", "Job")),
+        ):
+            matched = [
+                d["metadata"]["name"]
+                for d in built
+                if d["kind"] in kinds
+                and selector.items()
+                <= (
+                    d["metadata"]["labels"]
+                    if d["kind"] == "Service"
+                    else d["spec"]["template"]["metadata"]["labels"]
+                ).items()
+            ]
+            self.assertEqual(
+                matched,
+                [objects.ROUTER_SERVICE] if kinds == ("Service",) else [engine_set.STATEFULSET],
+            )
+        [haproxy] = [
+            d for d in built if d["kind"] == "Service" and d["metadata"]["name"] == objects.HAPROXY
+        ]
+        [port] = haproxy["spec"]["ports"]
+        [discovery] = self.of("ScrapeConfig")["spec"]["httpSDConfigs"]
+        self.assertEqual(
+            discovery["url"],
+            f"http://{objects.HAPROXY}.{SERVICES}:{port['port']}/narwhal/targets",
+        )
+        self.assertIn(("GET", "/narwhal/targets"), objects.SERVING_ROUTES)
+
+    def test_each_target_gets_the_bundled_job_address_and_fleet(self):
+        """Relabelled as Prometheus does, each target carries the job, address and fleet label
+        of the bundled Prometheus, and the namespace Prometheus Operator adds."""
+        router_endpoint = self.of("ServiceMonitor")["spec"]["endpoints"][0]
+        for n, address in enumerate(ROUTERS):
+            discovered = {
+                "__address__": f"10.0.0.{n}:8000",
+                "__meta_kubernetes_pod_name": f"router-{n}",
+                "job": "serviceMonitor/example/fleet-routers/0",
+                **dict.fromkeys(OPERATOR_LABELS, f"router-{n}"),
+                "namespace": chart_fixtures.NAMESPACE,
+            }
+            self.assertEqual(
+                relabel(discovered, router_endpoint["relabelings"]),
+                {
+                    "job": "narwhal-router",
+                    "instance": address,
+                    "fleet": "fleet",
+                    "namespace": chart_fixtures.NAMESPACE,
+                },
+            )
+        sidecar_endpoint = self.of("PodMonitor")["spec"]["podMetricsEndpoints"][0]
+        found = []
+        for n in range(1, len(self.values["fleet"]["engines"]["nodes"]) + 1):
+            for container in ("checkpoint", "engine", SIDECAR):
+                target = relabel(
+                    {
+                        "__address__": "10.0.1.1",
+                        "__meta_kubernetes_pod_name": f"engine-{n}",
+                        "__meta_kubernetes_pod_container_name": container,
+                        "job": "podMonitor/example/fleet-sidecars/0",
+                        **dict.fromkeys(OPERATOR_LABELS, container),
+                        "namespace": chart_fixtures.NAMESPACE,
+                    },
+                    sidecar_endpoint["relabelings"],
+                )
+                if target is not None:
+                    found.append(target)
+        [bundled] = [
+            d
+            for d in self.bundled
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "prometheus"
+        ]
+        [listed] = json.loads(bundled["data"]["sidecars.json"])
+        self.assertEqual(
+            found,
+            [
+                {
+                    "job": "sidecars",
+                    "instance": address,
+                    "fleet": "fleet",
+                    "namespace": chart_fixtures.NAMESPACE,
+                }
+                for address in listed["targets"]
+            ],
+        )
+        scrape = self.of("ScrapeConfig")["spec"]
+        self.assertEqual(
+            relabel({"__address__": "engine-1.engines:8100", "iid": "e1"}, scrape["relabelings"]),
+            {"job": "engines", "instance": "engine-1.engines:8100", "iid": "e1", "fleet": "fleet"},
+        )
+        # The jobs are those of prometheus.yml, which the alert rules match.
+        alerts = (OBSERVABILITY / "prometheus-alerts.yml").read_text()
+        self.assertLessEqual(set(re.findall(r'job="([^"]+)"', alerts)), set(self.jobs))
+        self.assertLessEqual({"narwhal-router", "sidecars", "engines"}, set(self.jobs))
+
+    def test_the_monitors_scrape_as_the_bundled_prometheus_does(self):
+        # The router rules count only samples of the last 30 seconds, so the cluster's
+        # Prometheus scrapes at the bundled interval rather than its own default.
+        interval = self.config["global"]["scrape_interval"]
+        self.assertEqual(self.of("ServiceMonitor")["spec"]["endpoints"][0]["interval"], interval)
+        self.assertEqual(
+            self.of("PodMonitor")["spec"]["podMetricsEndpoints"][0]["interval"], interval
+        )
+        scrape = self.of("ScrapeConfig")["spec"]
+        self.assertEqual(scrape["scrapeInterval"], interval)
+        [source] = self.jobs["engines"]["http_sd_configs"]
+        [discovery] = scrape["httpSDConfigs"]
+        self.assertEqual(discovery["refreshInterval"], source["refresh_interval"])
+        self.assertEqual(discovery["url"], source["url"].replace("<<targets>>", LOAD_BALANCER))
+
+    def test_each_fleet_keeps_its_own_label_in_a_shared_prometheus(self):
+        values = copy.deepcopy(self.values)
+        values["monitoring"]["fleet"] = "fleet-b"
+        other = self.render(values, namespace="other")
+        for kind in ("ServiceMonitor", "PodMonitor"):
+            for documents, namespace, fleet in (
+                (self.documents, chart_fixtures.NAMESPACE, "fleet"),
+                (other, "other", "fleet-b"),
+            ):
+                spec = self.of(kind, documents)["spec"]
+                # Without a namespace selector, a monitor selects only its own namespace.
+                self.assertNotIn("namespaceSelector", spec)
+                [endpoint] = spec.get("endpoints") or spec["podMetricsEndpoints"]
+                [step] = [s for s in endpoint["relabelings"] if s.get("targetLabel") == "fleet"]
+                self.assertEqual(step["replacement"], fleet)
+                self.assertIn(f".{namespace}.svc", json.dumps(endpoint["relabelings"]))
+        [step] = [
+            s
+            for s in self.of("ScrapeConfig", other)["spec"]["relabelings"]
+            if s.get("targetLabel") == "fleet"
+        ]
+        self.assertEqual(step["replacement"], "fleet-b")
+        self.assertIn(
+            "haproxy.other.svc", self.of("ScrapeConfig", other)["spec"]["httpSDConfigs"][0]["url"]
+        )
+
+    def test_the_cluster_prometheus_selects_the_objects_by_their_labels(self):
+        for kind in OPERATOR_KINDS:
+            labels = self.of(kind)["metadata"]["labels"]
+            self.assertEqual(labels["release"], "kube-prometheus-stack", kind)
+            self.assertEqual(labels["app.kubernetes.io/managed-by"], "Helm", kind)
+        # A label of the value never replaces one of the chart's own.
+        values = copy.deepcopy(self.values)
+        values["monitoring"]["serviceMonitors"]["labels"]["app.kubernetes.io/name"] = "other"
+        rule = self.of("PrometheusRule", self.render(values))
+        self.assertEqual(rule["metadata"]["labels"]["app.kubernetes.io/name"], "narwhal")
+
+    def test_cluster_monitoring_values(self):
+        # The chart's Grafana reads only the chart's Prometheus.
+        values = chart_fixtures.values()
+        values["monitoring"]["serviceMonitors"] = {"enabled": True}
+        result = self.helm(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("set monitoring.dashboardConfigMap.enabled as well", result.stderr)
+        # The cluster's Grafana with the chart's Prometheus, which still needs its image.
+        values = chart_fixtures.values()
+        values["monitoring"]["dashboardConfigMap"] = {"enabled": True}
+        del values["monitoring"]["grafana"]["image"], values["monitoring"]["grafana"]["admin"]
+        kinds = self.kinds(self.render(values))
+        self.assertIn(("Deployment", "prometheus"), kinds)
+        self.assertIn(("ConfigMap", "fleet-dashboard"), kinds)
+        self.assertNotIn(("Deployment", "grafana"), kinds)
+        self.assertFalse({kind for kind, _ in kinds} & set(OPERATOR_KINDS))
+        del values["monitoring"]["prometheus"]["image"]
+        self.assertNotEqual(self.helm(values).returncode, 0)
+        # The dashboard is required in either mode, and labels are Kubernetes labels.
+        cases = {
+            "dashboard": lambda v: v["monitoring"]["grafana"].pop("dashboard"),
+            "'bad key!'": lambda v: v["monitoring"]["serviceMonitors"]["labels"].update(
+                {"bad key!": "x"}
+            ),
+            "'bad value!'": lambda v: v["monitoring"]["serviceMonitors"]["labels"].update(
+                {"team": "bad value!"}
+            ),
+            "'bad label!'": lambda v: v["monitoring"]["dashboardConfigMap"].update(
+                label="bad label!"
+            ),
+            "'not a value!'": lambda v: v["monitoring"]["dashboardConfigMap"].update(
+                labelValue="not a value!"
+            ),
+        }
+        for message, change in cases.items():
+            with self.subTest(message):
+                values = copy.deepcopy(self.values)
+                change(values)
+                result = self.helm(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        # Without the fleet the chart knows no attestation port, as the bundled Prometheus
+        # then lists no sidecar.
+        values = {k: v for k, v in self.values.items() if k != "fleet"}
+        kinds = {kind for kind, _ in self.kinds(self.render(values))}
+        self.assertEqual(kinds & set(OPERATOR_KINDS), set(OPERATOR_KINDS) - {"PodMonitor"})
+
+
 class DirectEngineSetTests(unittest.TestCase):
     def test_the_command_is_the_backends_direct_start_in_the_pod(self):
         engines = chart_fixtures.direct_engines(
