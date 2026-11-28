@@ -288,6 +288,7 @@ def create_app(
                     takeover_after=standby_takeover_after or TAKEOVER_AFTER,
                     max_handoff_age_s=standby_max_handoff_age_s or MAX_HANDOFF_AGE_S,
                     transport=standby_transport,
+                    token=control_token,
                 )
             )
         journal.open()
@@ -447,8 +448,13 @@ def create_app(
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
     @app.get("/narwhal/handoff", summary="The live control-plane handoff document", **controlled)
-    async def handoff() -> dict[str, Any]:
-        return handoff_state.snapshot(router)
+    async def handoff() -> JSONResponse:
+        # A standby accepts only a signed document; the token itself never leaves the router.
+        response = JSONResponse(content=handoff_state.snapshot(router))
+        body = bytes(response.body)
+        signature = handoff_state.sign(json.loads(body), body, control_token)
+        response.headers[handoff_state.SIGNATURE_HEADER] = signature
+        return response
 
     status_path = Path(deployment_status) if deployment_status is not None else None
     restart_count = restarts.supervisor("router")

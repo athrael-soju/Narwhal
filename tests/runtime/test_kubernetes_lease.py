@@ -24,6 +24,7 @@ from narwhal.runtime.kubernetes_lease import KubernetesLease, check_settings
 from narwhal.runtime.lease import FileLease, LeaseError
 from narwhal.runtime.standby import lease_renew_loop, standby_loop
 from narwhal.serving.app import create_app
+from tests import CONTROL_TOKEN, handoff_response
 from tests.deployment.kubernetes_cluster import LEASE, Clock, ObjectStore
 from tests.runtime.test_standby_shutdown import FleetCase
 
@@ -783,7 +784,7 @@ class StandbyTakeoverTests(FleetCase):
                 raise httpx.ConnectError("connection refused", request=request)
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
-            return httpx.Response(200, json=document)
+            return handoff_response(document)
 
         router.standby = True
         router.lease = lease("standby")
@@ -796,6 +797,7 @@ class StandbyTakeoverTests(FleetCase):
                 probe_interval_s=0.05,
                 takeover_after=2,
                 transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
             )
         )
         try:
@@ -904,7 +906,8 @@ class ColdStartTests(FleetCase):
                     raise httpx.ConnectError("connection refused", request=request)
                 if request.url.path == "/ready":
                     return httpx.Response(200, json={"ready": True, "control_ready": True})
-                return httpx.Response(200, json=state.snapshot(other))
+                # The primary stamps its handoff with the pair's wall clock.
+                return handoff_response({**state.snapshot(other), "at": wall()})
 
             return httpx.MockTransport(transport)
 
@@ -922,6 +925,7 @@ class ColdStartTests(FleetCase):
                     takeover_after=2,
                     max_handoff_age_s=self.MAX_AGE,
                     transport=peer_of(n),
+                    token=CONTROL_TOKEN,
                 )
             )
             for n, router in enumerate(routers)
@@ -1016,6 +1020,7 @@ class FileLeaseColdStartTests(FleetCase):
                     probe_interval_s=0.01,
                     takeover_after=2,
                     transport=refused,
+                    token=CONTROL_TOKEN,
                 )
             )
             for n, router in enumerate(routers)

@@ -12,6 +12,8 @@ Returns the `narwhal.handoff` schema version `1` document.
 
 The high-availability (HA) standby router polls this route before takeover. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
+The read needs no token. The router signs each document it returns in the `X-Narwhal-Handoff-Signature` header: `sha256=` and the hex HMAC-SHA256, under the router's [control token](../HTTP-API.md#control-token), of the JSON array `["narwhal.handoff", epoch, holder, at]`, a newline and the response body. The standby shadows only a document whose signature matches its own control token, so both routers of a pair need the same token. It also refuses a document older than the newest one it accepted, or whose `at` is more than the handoff age (`--standby-max-handoff-age`, 30 s by default) from its own clock. A refused document counts as a missed probe, and the standby logs the reason once each time it changes.
+
 ### Handoff fields
 
 The handoff document carries these fields:
