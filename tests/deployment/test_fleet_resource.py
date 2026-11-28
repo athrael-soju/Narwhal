@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import re
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,12 +21,14 @@ from narwhal.deployment.fleet_resource import (
     spec_env,
 )
 from narwhal.deployment.launch_engine.kubernetes import MODEL_VOLUME_SOURCES
+from narwhal.runtime import kubernetes_lease
 from tests.deployment import chart_schema, fleet_fixtures, kubernetes_cluster
 from tools.maintenance import crd_schema
 
-SOURCE = Path(fleet_resource.__file__)
-# The variables a full fleet gives that today's Kubernetes environment does not hold, with the
-# fact each one belongs to. Step E classifies them so in `inputs()`.
+ROOT = Path(__file__).resolve().parents[2]
+CONTRACTS = ROOT / "src" / "narwhal" / "contracts.py"
+# The variables a full fleet gives that the stub's environment does not hold, with the fact
+# each one belongs to, as `inputs()` classifies them.
 NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",
@@ -149,7 +150,6 @@ class Names(unittest.TestCase):
     def test_every_name_derives_from_the_group(self):
         for name in (
             fleet_resource.PLACEMENT_GATE,
-            fleet_resource.RUN_LABEL,
             fleet_resource.GATE_LABEL,
             fleet_resource.CONFIG_SHA256,
             fleet_resource.SCHEMA_SHA256,
@@ -163,10 +163,19 @@ class Names(unittest.TestCase):
         self.assertEqual(fleet_resource.API_VERSION, f"{GROUP}/v1alpha1")
 
     def test_the_group_is_written_once_and_the_old_one_is_gone(self):
-        text = SOURCE.read_text()
-        self.assertEqual(text.count(GROUP), 1)
-        self.assertNotIn("narwhal.io", text)
+        self.assertEqual(CONTRACTS.read_text().count(GROUP), 1)
         self.assertTrue(GROUP.endswith(".example.com"))
+        self.assertEqual(kubernetes_lease.RELEASED, f"{GROUP}/released-by")
+        # The charts write the group through the `narwhal.group` template, and nothing in the
+        # package, the charts, the tools or the docs names the old group. The goldens keep
+        # the chart's rendering from before the controller's builders replaced it.
+        stale = []
+        for top in ("src", "deploy", "tools", "docs"):
+            for path in sorted((ROOT / top).rglob("*")):
+                text = path.suffix in {".py", ".yaml", ".tpl", ".json", ".md"} and path.is_file()
+                if text and "narwhal.io" in path.read_text():
+                    stale.append(str(path.relative_to(ROOT)))
+        self.assertEqual(stale, [])
 
     def test_each_stage_has_a_condition_the_status_can_hold(self):
         pattern = at("status.conditions.[].type")["pattern"]
@@ -491,10 +500,9 @@ class Values(unittest.TestCase):
 
 
 class Variables(unittest.TestCase):
-    def test_a_fleet_gives_the_variables_the_target_reads_today_and_no_others(self):
+    def test_a_fleet_gives_the_variables_the_target_reads_and_no_others(self):
         env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, policy=POLICY)
-        with tempfile.TemporaryDirectory() as root:
-            today = kubernetes_cluster.environment(Path(root))
+        today = kubernetes_cluster.environment()
         # The fleet forces the model volume read-only.
         volume = json.loads(today["NARWHAL_KUBERNETES_MODEL_VOLUME"])
         volume["persistentVolumeClaim"]["readOnly"] = True
@@ -506,12 +514,8 @@ class Variables(unittest.TestCase):
         for name in sorted(set(today) & set(env)):
             with self.subTest(name):
                 self.assertEqual(env[name], today[name])
-        # The spec replaces the values file and the chart directory, and names each engine's
-        # fabric interface.
-        self.assertEqual(
-            set(today) - set(env),
-            {"NARWHAL_KUBERNETES_VALUES", "NARWHAL_KUBERNETES_CHART", "NARWHAL_FABRIC_INTERFACE"},
-        )
+        # The spec names each engine's fabric interface.
+        self.assertEqual(set(today) - set(env), {"NARWHAL_FABRIC_INTERFACE"})
         self.assertEqual(
             {name: fleet_resource.variable_fact(name) for name in set(env) - set(today)},
             NEW_VARIABLES,

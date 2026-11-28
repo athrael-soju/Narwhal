@@ -76,7 +76,6 @@ CONTROLLER_RULES: frozenset[tuple[str, str, str, str]] = frozenset(
             ("coordination.k8s.io", "leases", verb, fleet_resource.CONTROLLER_LEASE)
             for verb in ("get", "update")
         ),
-        *(("events.k8s.io", "events", verb, "") for verb in ("create", "patch")),
     }
 )
 
@@ -108,6 +107,7 @@ FORBIDDEN: tuple[tuple[str, str, str, str], ...] = (
     ("", "serviceaccounts/token", "create", ""),
     ("", "serviceaccounts", "create", ""),
     ("", "persistentvolumeclaims", "delete", ""),
+    ("events.k8s.io", "events", "create", ""),
     ("rbac.authorization.k8s.io", "roles", "create", ""),
     ("rbac.authorization.k8s.io", "rolebindings", "create", ""),
     ("rbac.authorization.k8s.io", "roles", "bind", ""),
@@ -140,7 +140,8 @@ CLAIM = {"persistentVolumeClaim": {"claimName": "models", "readOnly": True}}
 RUNTIME_DEFAULT = {"seccompProfile": {"type": "RuntimeDefault"}}
 # A user with the namespace's edit role, and a RuntimeClass the chart's values do not list.
 FORGER = "chart-live-forger"
-# A workstation's identity that may also create Jobs, as the review of task 26 found it could.
+# A workstation's identity that may also create Jobs, whose Jobs must still not run as the
+# controller or the routers or mount the state claim.
 WORKSTATION = "chart-live-workstation"
 # What an engine pod's checkpoint step adds, to hand the evidence directory to the sidecar.
 CHECKPOINT_CAPABILITIES = ("CHOWN", "FOWNER")

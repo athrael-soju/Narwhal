@@ -78,7 +78,7 @@ spec:
         {{- include "narwhal.selector" (dict "root" $root "component" "prometheus") | nindent 8 }}
       annotations:
         # Prometheus reads its configuration and rules only at start.
-        narwhal.io/config-sha256: {{ toJson $prometheus | sha256sum }}
+        {{ include "narwhal.group" $root }}/config-sha256: {{ toJson $prometheus | sha256sum }}
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
@@ -207,7 +207,7 @@ spec:
       labels:
         {{- include "narwhal.selector" (dict "root" $root "component" "grafana") | nindent 8 }}
       annotations:
-        narwhal.io/config-sha256: {{ printf "%s%s" (toJson $provisioning) $dashboard | sha256sum }}
+        {{ include "narwhal.group" $root }}/config-sha256: {{ printf "%s%s" (toJson $provisioning) $dashboard | sha256sum }}
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false

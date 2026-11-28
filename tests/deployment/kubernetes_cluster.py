@@ -176,7 +176,6 @@ PERSISTENT_VOLUME_CLAIM = Kind(
 )
 NODE = Kind("", "v1", "Node", "nodes", namespaced=False, status=True)
 NAMESPACE_KIND = Kind("", "v1", "Namespace", "namespaces", namespaced=False, status=True)
-EVENT = Kind("events.k8s.io", "v1", "Event", "events")
 STATEFUL_SET = Kind("apps", "v1", "StatefulSet", "statefulsets", status=True, generation=True)
 DEPLOYMENT = Kind("apps", "v1", "Deployment", "deployments", status=True, generation=True)
 # The API default for a Job delete orphans its pods.
@@ -200,7 +199,6 @@ KINDS = (
     PERSISTENT_VOLUME_CLAIM,
     NODE,
     NAMESPACE_KIND,
-    EVENT,
     STATEFUL_SET,
     DEPLOYMENT,
     JOB,
@@ -3169,7 +3167,7 @@ def _pod_ready(pod: Mapping[str, Any]) -> bool:
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
-# The task 18 rig, now over the store.
+# The Kubernetes target's rig, over the store.
 
 NAMESPACE = "fleet"
 NODES = {"engine-1": "gpu-a", "engine-2": "gpu-b"}
@@ -3215,33 +3213,10 @@ def keyed_kinds() -> set[str]:
     return set(kubernetes_objects.CREDENTIAL_KINDS)
 
 
-def environment(root: Path) -> dict[str, str]:
-    """The inputs the Kubernetes target read before the fleet resource: an environment with a
-    chart values file and a chart directory."""
-    values = root / "values.json"
-    values.write_text(
-        json.dumps(
-            {
-                "images": {
-                    "narwhal": NARWHAL_IMAGE,
-                    "haproxy": HAPROXY_IMAGE,
-                    "fabric": FABRIC_IMAGE,
-                },
-                "state": {"storageClassName": "shared", "size": "10Gi"},
-                "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
-                "credentials": {
-                    "engineApiKey": {"env": "NARWHAL_ENGINE_KEY", "secretName": "k", "key": "v"}
-                },
-            }
-        )
-    )
-    chart = root / "chart"
-    chart.mkdir()
-    (chart / "Chart.yaml").write_text("name: narwhal\n")
+def environment() -> dict[str, str]:
+    """The deployment variables of the stub's two-engine fleet, one fabric interface for both."""
     return {
         "NARWHAL_KUBERNETES_NAMESPACE": NAMESPACE,
-        "NARWHAL_KUBERNETES_VALUES": str(values),
-        "NARWHAL_KUBERNETES_CHART": str(chart),
         "NARWHAL_KUBERNETES_GPU_RESOURCE": GPU,
         "NARWHAL_KUBERNETES_MODEL_VOLUME": '{"persistentVolumeClaim": {"claimName": "model"}}',
         "NARWHAL_KUBERNETES_STATE_CLAIM": STATE_CLAIM,
@@ -3296,7 +3271,7 @@ def _returns(command: Sequence[str]) -> dict[str, str]:
 
 
 class _Objects(MutableMapping[str, dict]):
-    """One kind's objects in the rig's namespace, by name, as the task 18 tests read them.
+    """One kind's objects in the rig's namespace, by name, as test_kubernetes_target reads them.
 
     Reading gives the stored object itself, so a test's in-place edit is an out-of-band change;
     setting stores an object as it is; deleting removes it at once.
@@ -3795,7 +3770,9 @@ class Rig:
             stack.enter_context(
                 patch.object(target.KubernetesDeployment, "_write_records", _write_records)
             )
-            stack.enter_context(patch.object(target.engine_set, "chart_values", self.chart_values))
+            stack.enter_context(
+                patch.object(target.engine_set, "statefulset_values", self.statefulset_values)
+            )
             stack.enter_context(patch.object(target.cache_groups, "derive", self.derive))
             stack.enter_context(patch.object(target.fabric, "load", self.load_fabric))
             stack.enter_context(patch.object(target.fabric, "budget", self.budget))
@@ -3807,8 +3784,8 @@ class Rig:
             stack.enter_context(patch.object(target, "CacheRegistration", _Registration))
             yield
 
-    def chart_values(self, runs: Sequence[Path]) -> dict:
-        """Engine set values as `engine_set.chart_values` returns them, for one pod template
+    def statefulset_values(self, runs: Sequence[Path]) -> dict:
+        """Engine set values as `engine_set.statefulset_values` returns them, for one pod template
         whose containers read the engine API key from the fleet's Secret."""
         digest = hashlib.sha256(b"".join((Path(r) / "launch.json").read_bytes() for r in runs))
         key = {"secretKeyRef": dict(self.secret)}

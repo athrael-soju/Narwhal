@@ -19,7 +19,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.runtime import kubernetes_api as k
-from narwhal.runtime import state
+from narwhal.runtime import kubernetes_lease, state
 from narwhal.runtime.kubernetes_lease import KubernetesLease, check_settings
 from narwhal.runtime.lease import FileLease, LeaseError
 from narwhal.runtime.standby import lease_renew_loop, standby_loop
@@ -338,9 +338,10 @@ class EditTests(LeaseCase):
         self.holding(a)
         b.lease.read()
         a.lease.release()
-        self.assertEqual(self.stored()["metadata"]["annotations"]["narwhal.io/released-by"], "1/a")
+        self.assertEqual(self.stored()["metadata"]["annotations"][kubernetes_lease.RELEASED], "1/a")
         self.assertTrue(b.lease.claim())
-        self.assertNotIn("narwhal.io/released-by", self.stored()["metadata"].get("annotations", {}))
+        annotations = self.stored()["metadata"].get("annotations", {})
+        self.assertNotIn(kubernetes_lease.RELEASED, annotations)
         self.live(b, for_s=2)
         c.lease.read()
         b.down = True

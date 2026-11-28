@@ -409,7 +409,7 @@ def _volume_source(source: Mapping[str, Any], what: str) -> None:
 
 
 def engine_pod(values: Mapping[str, Any]) -> dict[str, Any]:
-    """The engine pod: the role-neutral template `engine_set.chart_values` built, with the
+    """The engine pod: the role-neutral template `engine_set.statefulset_values` built, with the
     engine image, resource limits and model volume set where it holds None."""
     spec = copy.deepcopy(dict(values["podTemplate"]))
     limits = {values["gpuResource"]: str(values["gpus"]), values["rdmaResource"]: "1"}
@@ -429,7 +429,7 @@ def engines(
 ) -> list[dict[str, Any]]:
     """The engines' hook ConfigMaps, headless Service and StatefulSet.
 
-    `values` are `engine_set.chart_values` of every engine's launch. With `placement`, which
+    `values` are `engine_set.statefulset_values` of every engine's launch. With `placement`, which
     must name a node for every engine role, each pod waits at the placement scheduling gate
     until the target pins it to that node.
     """
@@ -1031,10 +1031,10 @@ class Routers:
         )
 
 
-# The routers' ServiceAccount, Role and RoleBinding stay in the chart, decided for task 26:
-# the controller holds no RBAC or ServiceAccount verbs. RBAC lets an identity create a Role or
-# RoleBinding only for permissions it holds itself, so building them here would need get and
-# update on the router Lease, with which the controller could take that Lease over.
+# The routers' ServiceAccount, Role and RoleBinding stay in the chart, because the controller
+# holds no RBAC or ServiceAccount verbs. RBAC lets an identity create a Role or RoleBinding only
+# for permissions it holds itself, so building them here would need get and update on the
+# router Lease, with which the controller could take that Lease over.
 def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
     """The router pair's headless Service and StatefulSet.
 

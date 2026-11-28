@@ -26,7 +26,6 @@ Its Role in the namespace grants:
 | `pods`; `pods/log` | get, list, watch, patch, delete; get |
 | `configmaps`, `services`, `statefulsets`, `deployments` | get, list, watch, create, patch, delete |
 | `leases` | create; get and update on `controller.narwhal.example.com` only |
-| `events.k8s.io` events | create, patch |
 
 The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` and `controlTokenSecret` references into the pods that need the key or the routers' control token, and never reads either Secret.
 
@@ -118,16 +117,7 @@ With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the 
 
 Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. With `fleet` set, Prometheus also scrapes each engine pod's attestation sidecar at `engine-<n>.engines.<namespace>.svc:<attestation port>`, for the kubelet restart counts of the pod's containers and the `NarwhalHostDown` alert. Every series gets the `fleet` label. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana asks everyone to sign in unless `monitoring.grafana.anonymous` is set, which lets anyone who reaches it view the dashboards, as under `make observe`. It runs without the image renderer.
 
-The dashboard needs rendering first, because its queries come from the installed engine backends:
-
-```bash
-python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
-helm upgrade --install narwhal deploy/helm/narwhal --namespace <namespace> \
-  --values config/helm/<fleet>.yaml \
-  --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
-```
-
-`--console-url` adds the fleet control link and markers that `make observe` adds.
+`monitoring.grafana.dashboard` needs rendering first, because its queries come from the installed engine backends: [Monitoring](https://athrael-soju.github.io/Narwhal/deploy/Kubernetes/#monitoring) gives the commands. `chart_dashboard --console-url` adds the fleet control link and markers that `make observe` adds.
 
 | Value | Meaning |
 | --- | --- |
@@ -192,4 +182,4 @@ With `monitoring.dashboardConfigMap.enabled`, the chart runs no Grafana. It rend
 
 `make chart-e2e` installs the pinned kind and kubectl as well, and runs both charts and the fleet controller on a kind cluster with a control plane and two workers. It builds the Narwhal image from the repository's `Dockerfile` and downloads the default `narwhal dev` template's model into `local/cache/chart-e2e/`. The workers advertise fake GPU and RDMA resources, and the test applies a `NarwhalFleet` with `kubectl apply --server-side` and nothing else. Without real GPUs the controller cannot pass `discover`, so the test checks the stages it reaches: the fleet becomes Ready up to `access`, neither the fleet nor the chart drifts, an edit reruns only the stages its input affects, a restarted controller adopts the running discovery Jobs without duplicating them, `spec.stopped` deletes the workloads and keeps the volumes, the admission policy refuses a namespace editor's forged engine pod, and deleting the fleet leaves its objects to garbage collection. It also checks that the API server stores the Prometheus Operator objects.
 
-The serving checks run on two llama.cpp direct engines. The router pair and HAProxy come from the controller's own builders, sent as its ServiceAccount, because the controller builds them only at `router-start`. The routers must run on separate workers and answer 401 to `POST /narwhal/engines` without the control token. Under a steady stream of completions through the Service `haproxy`, the test deletes the router pod that holds the Lease. It fails unless the other router takes the Lease, every request succeeds and no request waits longer than the 10 seconds HAProxy holds one. Each check prints one JSON line. The test needs Docker and about 6 GB of free memory [Needs verification: measured for the one-node cluster before task 26; the run now has three nodes], takes about six minutes, and deletes its cluster and image at the end.
+The serving checks run on two llama.cpp direct engines. The router pair and HAProxy come from the controller's own builders, sent as its ServiceAccount, because the controller builds them only at `router-start`. The routers must run on separate workers and answer 401 to `POST /narwhal/engines` without the control token. Under a steady stream of completions through the Service `haproxy`, the test deletes the router pod that holds the Lease. It fails unless the other router takes the Lease, every request succeeds and no request waits longer than the 10 seconds HAProxy holds one. Each check prints one JSON line. The test needs Docker and about 3 GB of free memory, since its three kind nodes peak at about 2.6 GiB, takes about six minutes, and deletes its cluster and image at the end.

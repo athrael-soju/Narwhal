@@ -261,7 +261,7 @@ class EngineSetTests(unittest.TestCase):
         }
         for message, runs in cases.items():
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
-                engine_set.chart_values(runs)
+                engine_set.statefulset_values(runs)
 
     def test_the_chart_follows_the_release_version(self):
         chart = yaml.safe_load((CHART / "Chart.yaml").read_text())

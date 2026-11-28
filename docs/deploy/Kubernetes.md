@@ -94,7 +94,7 @@ The controller writes the status only when a condition or count changes. `status
 | --- | --- | --- |
 | `Ready` | A pass for the current generation has passed every stage up to `spec.until` and its live checks hold | `Passed` when true, with a message that names the last stage up to `spec.until` and says when `spec.until` stops the run before `router-start`. Otherwise the reason of the condition that is true: `Running`, `Retrying`, `Stopping`, `Stalled` or `Stopped`, or `EnginesStopped` when a failed `discover` stopped the engines |
 | `Reconciling` | A pass runs, or one will | `Running` while a stage runs, `Retrying` after an error the controller retries, such as an unreachable API server or an interrupted attempt, `Stopping` while `spec.stopped` takes effect. `Ready`, `Stalled` or `Stopped` when false |
-| `Stalled` | No pass runs until something changes | `StageFailed`, `InputRefused`, `SchemaStale`, `AdmissionPolicyMissing`, `RouterStorageImmutable`, `NameRefused`, `HelpersSurvived`, as below. `Ready`, `Reconciling` or `Stopped` when false |
+| `Stalled` | No pass runs until something changes | `StageFailed`, `InputRefused`, `SchemaStale`, `AdmissionPolicyMissing`, `RouterStorageImmutable`, `NameRefused`, as below. `Ready`, `Reconciling` or `Stopped` when false |
 | `Stopped` | `spec.stopped` is true and the fleet's workloads are gone | `Stopped`, `Stopping` while they go, `Running` |
 
 | `Stalled` reason | Cause | What clears it |
@@ -105,7 +105,6 @@ The controller writes the status only when a condition or count changes. `status
 | `AdmissionPolicyMissing` | The namespace's admission policy or its binding is missing, or the binding does not deny | Installing or upgrading the narwhal chart |
 | `RouterStorageImmutable` | `spec.routers` asks for a storage class or size that the router StatefulSet's volume claim template does not hold. The message names the StatefulSet and claims | Putting `spec.routers` back, or deleting the StatefulSet `router` and the claims `router-state-router-0` and `router-state-router-1`, which loses the routers' handoff state |
 | `NameRefused` | The fleet is not named `fleet` | Applying it as `fleet` |
-| `HelpersSurvived` | Processes an earlier runner started for a stage survived their cleanup | The next pass that finds them gone |
 
 Each stage the run record holds also has a condition, typed `stage.narwhal.example.com/<stage>`. Its reason is the run-record status of its worst instance, in CamelCase and in this order from worst: `Failed`, `Timeout`, `Interrupted`, `Cancelled`, `Running`, `Invalidated`, `Passed`. Its status is `True` for `Passed`, `Unknown` for `Running` and `False` for the rest. Its message gives the reasons the stage last ran after `ran because:`, such as an input that changed, and for a failed instance its failure first. A stage after `spec.until` keeps the condition an earlier pass left, and its message ends `from an earlier pass; spec.until stops at <stage>`. A failed gate's message is the gate's own failure line, such as the `FAIL` lines of the preflight report, and a failure that names an input names the fleet field that sets it, such as `spec.engines.nodes[0].rdma.gidIndex` or the `spec.engines.launch` entry `NARWHAL_TRANSFER_DEVICES`. `status.stages.<stage>` counts the instances that passed, of all the stage runs, with the time one last passed. Per-instance detail stays in the run record.
 
@@ -219,7 +218,6 @@ Each identity holds only what it uses.
 | `pods`; `pods/log` | get, list, watch, patch, delete; get |
 | `configmaps`, `services`, `statefulsets`, `deployments` | get, list, watch, create, patch, delete |
 | `leases` | create; get and update on `controller.narwhal.example.com` only |
-| `events.k8s.io` events | create, patch |
 
 Its ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, for discovery, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. It has no verb on Secrets, RBAC objects or `pods/exec`. The pod mounts no ServiceAccount token; the controller container alone mounts a projected token that lasts an hour. It runs as a non-root user, 10001 by default, on a read-only root filesystem, with no capabilities and the `RuntimeDefault` seccomp profile.
 

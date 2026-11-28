@@ -46,9 +46,10 @@ from .runner import (
 # The stages `narwhal deploy run --until` can stop after, the capacity trial included. Every
 # Kubernetes stage is named as the SSH stage it corresponds to.
 RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.TRIAL_STAGE) + 1]
-# Each target's inputs, deployment and recovery pages.
-# The SSH target runs the stage graph in this process; on Kubernetes the fleet controller runs
-# it, and the subcommands drive the NarwhalFleet through `kubernetes_cli`.
+# The targets whose stage graph `plan`, `run`, `status` and `down` run in this process. Only the
+# SSH target runs here: on Kubernetes the fleet controller runs the graph, and the subcommands
+# drive the NarwhalFleet through `kubernetes_cli`. test_kubernetes_target adds the Kubernetes
+# target to drive the controller's stage actions through these commands.
 TARGETS: dict[str, Any] = {"ssh": stage_run}
 
 DESCRIPTIONS = {
@@ -817,7 +818,7 @@ def _cluster_plan(args: argparse.Namespace, env: dict[str, str]) -> int:
         return 2
     directory = args.run.resolve()
     if directory.exists():
-        # Task 18's checks hold before plan logs into the run directory.
+        # The run directory's owner and mode checks hold before plan logs into it.
         check_directory(directory)
     # Into a run directory, plan logs to a directory of its own there, as every command does.
     logs = None if directory.is_dir() else _access_logs() / kubernetes_cli.KUBECTL_LOGS
@@ -986,7 +987,7 @@ def _followed(
 
 
 def _bound_session(args: argparse.Namespace, env: dict[str, str]) -> kubernetes_cli.Session:
-    """The session of a run directory that follows a fleet, after task 18's checks."""
+    """The session of a run directory that follows a fleet, after its owner and mode checks."""
     directory = args.run.resolve()
     session = kubernetes_cli.Session(directory, env)
     check_directory(directory)

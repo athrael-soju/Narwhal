@@ -86,7 +86,7 @@ ORDER = (
 )
 SERVING = ("preflight", "router-start", "trial")
 
-# The rows of the task 1 record, written out. "same" is the changed fact's instance, "others"
+# The rerun rules, written out as rows. "same" is the changed fact's instance, "others"
 # every other instance of the stage, a relation name its related instances, and "all" every
 # instance.
 ROWS = {

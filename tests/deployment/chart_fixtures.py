@@ -91,7 +91,7 @@ def example(root: Path, count: int = 2, backend: str = "vllm") -> tuple[list[Pat
     runs = [prepare_role(root / f"engine-{n}", n, backend) for n in range(1, count + 1)]
     document = {
         "images": {"narwhal": NARWHAL_IMAGE, "haproxy": HAPROXY_IMAGE, "fabric": FABRIC_IMAGE},
-        "engines": engine_set.chart_values(runs),
+        "engines": engine_set.statefulset_values(runs),
         "credentials": CREDENTIALS,
     }
     return runs, document

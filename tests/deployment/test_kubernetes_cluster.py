@@ -39,8 +39,8 @@ NS = "team"
 FLEET = custom_kind("narwhal.example.com", "v1alpha1", "NarwhalFleet", "narwhalfleets")
 GATE = "example.com/placement"
 _ITEM = {"type": "object", "properties": {"name": {"type": "string"}, "image": {"type": "string"}}}
-# A structural schema in the shape of a NarwhalFleet. It stands in for the CRD that step A's
-# `deploy/helm/narwhal-crds` chart renders until that lands.
+# A structural schema in the shape of a NarwhalFleet. It stands in for the CRD that
+# `deploy/helm/narwhal-crds` renders, so the store's own tests do not follow the fleet's schema.
 FLEET_SCHEMA = {
     "type": "object",
     "properties": {

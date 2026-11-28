@@ -1,11 +1,10 @@
 """The `NarwhalFleet` custom resource: its API group, its schema, and the deployment inputs a
 fleet's spec holds.
 
-`GROUP` is the one place the API group is written. Every label, annotation, condition type,
-scheduling gate and Lease name derives from it, and `tools/maintenance/crd_schema.py` writes
-it into the charts. The group is a placeholder under `example.com`, which RFC 2606 reserves, so
-nobody else can own it; moving to a project domain follows the group migration runbook in the
-task 26 design.
+`GROUP` is `contracts.API_GROUP`, the one place the API group is written. Every label,
+annotation, condition type, scheduling gate and Lease name derives from it, and
+`tools/maintenance/crd_schema.py` writes it into the charts. The group is a placeholder under
+`example.com`, which RFC 2606 reserves, so nobody else can own it.
 
 `SCHEMA` is the only copy of the schema. The same tool renders the CRD from it, and the unit
 suite fails when the rendered chart is stale. Every array has `maxItems`, every string
@@ -25,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..contracts import API_GROUP as GROUP
 from . import fabric
 from .deploy import CALIBRATION, MARGIN, PROFILE, SLO
 from .kubernetes_graph import KUBERNETES_GRAPH
@@ -38,7 +38,6 @@ from .launch_engine.kubernetes import (
     STATE_CLAIM_ENV,
 )
 
-GROUP = "narwhal.example.com"
 VERSION = "v1alpha1"
 API_VERSION = f"{GROUP}/{VERSION}"
 KIND = "NarwhalFleet"
@@ -56,7 +55,6 @@ def qualified(name: str) -> str:
 
 
 PLACEMENT_GATE = qualified("placement")
-RUN_LABEL = qualified("run")
 GATE_LABEL = qualified("gate")
 CONFIG_SHA256 = qualified("config-sha256")
 # On the CRD: the SHA-256 of its spec, which the controller compares with `schema_digest()`.
