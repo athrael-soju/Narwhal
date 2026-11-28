@@ -20,3 +20,14 @@ config/fleet.json
 .env
 .env.*
 !.env.example
+# Private configuration and working files, as .gitignore keeps them out of the repository.
+config/deployment.env
+config/hosts.*.json
+!config/hosts.example.json
+config/engine-launch.*.json
+!config/engine-launch.example.json
+config/fleet-control.*.json
+!config/fleet-control.example.json
+config/helm/
+config/*.known_hosts
+.claude/

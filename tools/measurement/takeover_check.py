@@ -44,7 +44,9 @@ from tools.measurement.router_benchmark.processes import (
 
 SHIPPED_CONFIG = ROOT / "deploy" / "ha" / "haproxy.cfg"
 SIMULATED_ENGINE = ROOT / "tools" / "measurement" / "simulated_engine.py"
-DEFAULT_IMAGE = "haproxy:3.2-alpine"
+DEFAULT_IMAGE = (
+    "haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb"
+)
 SHAPE = Shape(
     engines=2,
     prefill_engines=1,

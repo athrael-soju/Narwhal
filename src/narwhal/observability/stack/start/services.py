@@ -7,11 +7,21 @@ from dataclasses import dataclass
 
 GRAFANA_PORT = 3000
 COMMAND_TIMEOUT_S = 10.0
-PROMETHEUS_IMAGE = "prom/prometheus:v3.14.0"
+# Each image is pinned by tag and registry digest, as compose.yml names it; a test keeps the two
+# files and the versions in step.
+PROMETHEUS_IMAGE = (
+    "prom/prometheus:v3.14.0"
+    "@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
+)
 PROMETHEUS_VERSION = "3.14.0"
-GRAFANA_IMAGE = "grafana/grafana:13.2.1"
+GRAFANA_IMAGE = (
+    "grafana/grafana:13.2.1@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283"
+)
 GRAFANA_VERSION = "13.2.1"
-RENDERER_IMAGE = "grafana/grafana-image-renderer:v5.12.5"
+RENDERER_IMAGE = (
+    "grafana/grafana-image-renderer:v5.12.5"
+    "@sha256:76542ccc4c045e5ff9f80f87b25de6fcc71b31222172de5031a8ceba33772ee1"
+)
 
 
 class StartupError(RuntimeError):
