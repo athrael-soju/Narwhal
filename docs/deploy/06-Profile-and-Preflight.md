@@ -44,6 +44,14 @@ When an engine refuses a decode measurement request, reports an error in its str
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, the stage fails: set shorter `NARWHAL_PROFILE_PREFILL_LENS` and `NARWHAL_PROFILE_DECODE_INPUT_LENS` and run again. If the sequence limit leaves fewer than two decode concurrency points, change the engine launch policy.
 
+The stage also fails when the engine never ran a decode cohort's streams together long enough to measure it:
+
+```text
+narwhal-profile: ... decode probe has insufficient complete-cohort intervals: got 0, need 96, isl=8192, c=48, tokens=64
+```
+
+Here the engine never decoded 48 streams of 8,192 input tokens at once within the 64 decode tokens. The sweep always ends at the engine's sequence limit, so a lower `NARWHAL_PROFILE_DECODE_CONCURRENCY` does not remove a cohort at that limit. Replace the `isl` length in `NARWHAL_PROFILE_DECODE_INPUT_LENS` with a shorter one and run again. Keep at least three decode lengths: with two, the decode cross-validation has little to fit and can exceed its limit.
+
 The stage also fails when the prefill curve does not fit the per-length medians within 20% mean error or 50% worst-point error, as [Prefill fit](../measure/01-Profile.md#prefill-fit) defines:
 
 ```text
@@ -109,7 +117,7 @@ Choose the inputs:
 | `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | Above the fleet's `engine.first_token_timeout_s` and at most `serving.request_timeout_s`, which the command requires |
 | `NARWHAL_CALIBRATION_SAMPLES` | At least 100, the minimum for qualifying evidence |
 
-On SGLang the live context limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length.
+On SGLang the live context limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length: six tokens below it while the KV pool does not set a lower limit. For a context length of 16,384 the live limit is 16,378, so the longest calibration length is 16,376 and the inputs are `256,8192,16376`.
 
 The command exits 0 when the artifact is [`complete`](../cli/Check.md#calibration-artifact) and every engine returns to its starting role. Otherwise it exits 1 and the stage fails.
 

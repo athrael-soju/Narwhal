@@ -145,7 +145,9 @@ Generate the router's [control token](../HTTP-API.md#control-token) once per fle
 python -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-The profiling and calibration lengths above suit engines whose live context is 16,384 tokens; [Profile engines and run preflight](06-Profile-and-Preflight.md) explains how to choose them, and [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) the SLO targets. If `profile` fails with a prefill fit error, change the lengths as [Profiling idle engines](06-Profile-and-Preflight.md#profiling-idle-engines) describes. Engines on one host share its fabric interface, so they need distinct engine, attestation and side-channel ports and port ranges. A fleet on one host has no fabric edges to measure, and preflight checks the transfers between its engines. [Needs verification: task 13 follows this layout on one live host]
+The profiling and calibration lengths above suit engines whose live context is 16,384 tokens; [Profile engines and run preflight](06-Profile-and-Preflight.md) explains how to choose them, and [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) the SLO targets. If `profile` fails with a prefill fit error, change the lengths as [Profiling idle engines](06-Profile-and-Preflight.md#profiling-idle-engines) describes. Engines on one host share its fabric interface, so they need distinct engine, attestation and side-channel ports and port ranges. A fleet on one host has no fabric edges to measure, and preflight checks the transfers between its engines.
+
+The longest calibration length must leave two output tokens within each engine's live context. An SGLang engine reports a live context six tokens below `NARWHAL_CONTEXT_LENGTH`, so with a context length of 16,384 set `NARWHAL_CALIBRATION_INPUT_TOKENS=256,8192,16376`. If `profile` fails with `insufficient complete-cohort intervals`, shorten the decode lengths as [Profiling idle engines](06-Profile-and-Preflight.md#profiling-idle-engines) describes.
 
 The router overhead and first-token margin above are starting values. `router-start` measures the overhead and fails when it exceeds `NARWHAL_ROUTER_OVERHEAD_S`. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) fails when the calibrated first-token deadline plus the margin, the slowest prefill of the longest calibrated input and the overhead add up to more than `NARWHAL_TTFT_S`.
 
@@ -170,14 +172,14 @@ For KV over RDMA, also name each engine's HCA port and devices, and the GID inde
 ```bash
 NARWHAL_TRANSFER_TRANSPORT=ucx_rdma
 NARWHAL_NODE_1_TRANSFER_NET_DEVICES=mlx5_0:1
-NARWHAL_NODE_1_TRANSFER_DEVICES='["/dev/infiniband/uverbs0","/dev/infiniband/rdma_cm"]'
+NARWHAL_NODE_1_TRANSFER_DEVICES='["/dev/infiniband/uverbs0"]'
 NARWHAL_NODE_2_TRANSFER_NET_DEVICES=mlx5_1:1
-NARWHAL_NODE_2_TRANSFER_DEVICES='["/dev/infiniband/uverbs1","/dev/infiniband/rdma_cm"]'
+NARWHAL_NODE_2_TRANSFER_DEVICES='["/dev/infiniband/uverbs1"]'
 NARWHAL_RDMA_GID_INDEX=0
 NARWHAL_RDMA_ROCE_MODE=infiniband
 ```
 
-[Fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) shows how to read each value from the host. Single-quote JSON values such as `NARWHAL_TRANSFER_DEVICES` and `NARWHAL_ENGINE_ARGS`: the shell reads `.env` when you load it, and strips unquoted double quotes, which leaves `[/dev/infiniband/uverbs0,/dev/infiniband/rdma_cm]`. [Needs verification: whether the engines need `/dev/infiniband/rdma_cm`]
+[Fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) shows how to read each value from the host. Single-quote JSON values such as `NARWHAL_TRANSFER_DEVICES` and `NARWHAL_ENGINE_ARGS`: the shell reads `.env` when you load it, and strips unquoted double quotes, which leaves `[/dev/infiniband/uverbs0]`. Each engine needs only the verbs device of its HCA port; KV transfers do not use `/dev/infiniband/rdma_cm`.
 
 ## Checking the inputs with plan
 

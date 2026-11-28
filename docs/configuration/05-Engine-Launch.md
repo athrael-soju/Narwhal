@@ -166,7 +166,7 @@ On SGLang 0.5.23 and later, discovery adds `--decode-attention-backend flashinfe
 
 On an earlier SGLang release, for a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to every SGLang engine, unless the engine arguments already set `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`. With the overlap scheduler on, those releases use `extra_buffer` for a model that supports it, and an engine switched to decode exits under sustained load. On those releases, when your `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`, set it to `no_buffer` and add `--disable-overlap-schedule`.
 
-`--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. Give each engine on a host its own device.
+`--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. The engine arguments are cache inputs, so engines whose `--disaggregation-ib-device` differs fall into different cache groups, and [`transfer-measure`](../deploy/04-Qualify-Fabric.md#measuring-kv-handoffs) finds no peer for them: it fails with `no other engine matches it`. Leave the option unset, or give it the same value on every engine of a cache group.
 
 `narwhal-engine prepare` rejects a native SGLang launch whose model path is a file.
 
