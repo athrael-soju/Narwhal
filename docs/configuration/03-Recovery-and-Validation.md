@@ -120,7 +120,7 @@ When `engine.engine_api_key_env` names a variable at deployment export, the cred
 | Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
 | Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
 
-The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`. `trtllm-serve` does not check `NARWHAL_TRTLLM_API_KEY` and serves every caller that reaches its port, so keep a TensorRT-LLM engine port on a private network.
+The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`. The launch wrapper runs SGLang in its own process, so the key appears in no process's argument list or inherited environment, and it replaces the key with `[REDACTED]` in the wrapper's output and log records, including the server arguments SGLang logs at startup. `trtllm-serve` does not check `NARWHAL_TRTLLM_API_KEY` and serves every caller that reaches its port, so keep a TensorRT-LLM engine port on a private network.
 
 `engine.backend` is `"vllm"`, the default, `"sglang"`, `"trtllm"` for TensorRT-LLM, or `"llamacpp"` for a [development fleet of llama.cpp engines](../dev/Llama-Cpp-Engines.md). `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults:
 
