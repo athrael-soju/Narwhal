@@ -11,14 +11,17 @@ chart is installed, and returns every case the server decided otherwise:
 - `refused()` are objects the policy must refuse, with the words its refusal names. `forged()`
   are pods and workloads a user with the namespace's `edit` role sends with the labels of the
   controller's objects; the policy must refuse them too, and `relabel` checks that the user
-  cannot give an existing pod those labels.
+  cannot give an existing pod those labels. `workstation_refused()` are Jobs the user
+  `WORKSTATION` sends, who holds the workstation's role and may also create Jobs: none may run
+  as the controller's ServiceAccount or mount the state claim.
 - `volume_cases(policy)` pairs each of `MODEL_VOLUMES` with whether
   `fleet_resource.check_model_volume` allows it under that policy, which the admission policy
   must match.
 
 Each object is sent with `kubectl create --dry-run=server`, which runs admission and stores
-nothing. `check` binds `edit` to the user `FORGER` and creates the RuntimeClass `UNLISTED` for
-its cases, and removes both when it ends.
+nothing. `check` binds `edit` to the user `FORGER`, the fleet-editor Role and
+`WORKSTATION_RULES` with Job creation to `WORKSTATION`, and creates the RuntimeClass `UNLISTED`
+for its cases, and removes them when it ends.
 
 `check_lifecycle` uninstalls an installed release and installs, upgrades, uninstalls and
 installs it again with the admission policy present, and checks that every workload the chart
@@ -42,7 +45,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from narwhal.deployment import fleet_resource
+from narwhal.deployment import fleet_resource, kubernetes_cli, kubernetes_export
 from narwhal.deployment import kubernetes_objects as objects
 
 # (API group, resource, verb, resource name or ""), as the controller's Role grants them in
@@ -134,6 +137,8 @@ CLAIM = {"persistentVolumeClaim": {"claimName": "models", "readOnly": True}}
 RUNTIME_DEFAULT = {"seccompProfile": {"type": "RuntimeDefault"}}
 # A user with the namespace's edit role, and a RuntimeClass the chart's values do not list.
 FORGER = "chart-live-forger"
+# A workstation's identity that may also create Jobs, as the review of task 26 found it could.
+WORKSTATION = "chart-live-workstation"
 # What an engine pod's checkpoint step adds, to hand the evidence directory to the sidecar.
 CHECKPOINT_CAPABILITIES = ("CHOWN", "FOWNER")
 # The router pods' component label, which the routers' NetworkPolicy admits.
@@ -339,6 +344,41 @@ def admitted(
     found["a router StatefulSet"] = Case(router, user=sender)
     found["a router StatefulSet's pod"] = made_by(
         pod_of(router, "chart-live-router-0"), "StatefulSet", "chart-live-router"
+    )
+    # An export Job, as the controller makes it from its own image, and its pod.
+    request = kubernetes_export.Request("0" * 32, {}, "")
+    export = kubernetes_export.job(
+        OWNER,
+        request,
+        ["stages/access/attempt-1"],
+        image=NARWHAL,
+        user=10001,
+        group=10001,
+        claim=state_claim,
+        runs=f"runs/{namespace}/{OWNER.uid}",
+    )
+    found["an export Job"] = Case(export, user=sender)
+    found["an export Job's pod"] = made_by(pod_of(export, "export-pod"), "Job", "export")
+    # The controller's own Deployment makes ReplicaSets and pods that run as its ServiceAccount
+    # and mount the state claim; helm applies the Deployment, which the lifecycle check makes.
+    own = _workload(
+        "Deployment",
+        f"{release}-controller",
+        objects.labels("controller"),
+        _plain(
+            serviceAccountName=f"{release}-controller",
+            volumes=[{"name": "state", "persistentVolumeClaim": {"claimName": state_claim}}],
+        ),
+    )
+    own_set = replica_set(own)
+    own_set["metadata"]["name"] = f"{release}-controller-chartlive"
+    found["the controller Deployment's ReplicaSet"] = made_by(
+        own_set, "Deployment", f"{release}-controller"
+    )
+    found["the controller Deployment's pod"] = made_by(
+        pod_of(own_set, f"{release}-controller-chartlive-pod"),
+        "ReplicaSet",
+        f"{release}-controller-chartlive",
     )
     # A ROCm engine runs without a seccomp filter, as Docker's ROCm launch does.
     found["an unconfined engine pod with IPC_LOCK"] = made_by(
@@ -625,6 +665,59 @@ def forged(release: str) -> dict[str, Case]:
     return {name: Case(case.document, case.words, FORGER) for name, case in cases.items()}
 
 
+ACCOUNT = "run as the controller's ServiceAccount"
+STATE = "mount the state claim"
+
+
+def workstation_refused(release: str, state_claim: str = "narwhal-state") -> dict[str, Case]:
+    """Jobs and pods that would hand their sender the controller's token or the state claim's
+    secrets, sent by a workstation that may create Jobs or a user with `edit`. The policy
+    refuses each."""
+    account = _plain(serviceAccountName=f"{release}-controller")
+    state = {"name": "state", "persistentVolumeClaim": {"claimName": state_claim}}
+    mounted = _plain(
+        volumes=[state],
+        containers=[_container(volumeMounts=[{"name": "state", "mountPath": "/s"}])],
+    )
+    at_root = _plain(
+        volumes=[
+            {**state, "persistentVolumeClaim": {**state["persistentVolumeClaim"], "readOnly": True}}
+        ],
+        containers=[
+            _container(volumeMounts=[{"name": "state", "mountPath": "/s", "readOnly": True}])
+        ],
+    )
+    plain: dict[str, str] = {}
+    cases = {
+        "a Job as the controller's ServiceAccount": Case(
+            _workload("Job", "as-controller", plain, account), ACCOUNT, WORKSTATION
+        ),
+        "a Job that mounts the state claim": Case(
+            _workload("Job", "state", plain, mounted), STATE, WORKSTATION
+        ),
+        "a Job that mounts the state claim's root read-only": Case(
+            _workload("Job", "state-ro", plain, at_root), STATE, WORKSTATION
+        ),
+        "a pod as the controller's ServiceAccount": Case(
+            _pod("as-controller", None, account), ACCOUNT, FORGER
+        ),
+        "a pod that mounts the state claim": Case(_pod("state", None, mounted), STATE, FORGER),
+        "a Deployment of another name as the controller's ServiceAccount": Case(
+            _workload("Deployment", "as-controller", {"app": "x"}, account), ACCOUNT, FORGER
+        ),
+        "a ReplicaSet naming the controller's Deployment as its owner": Case(
+            made_by(
+                replica_set(_workload("Deployment", "x", {"app": "x"}, account)),
+                "Deployment",
+                f"{release}-controller",
+            ).document,
+            ACCOUNT,
+            FORGER,
+        ),
+    }
+    return cases
+
+
 # Model volume sources, against which the admission policy and `check_model_volume` agree.
 MODEL_VOLUMES: tuple[dict, ...] = (
     CLAIM,
@@ -752,7 +845,8 @@ def check_admission(
         ok, error = _create(run, namespace, case)
         if not ok:
             found.append(f"refused {name}: {error}")
-    for name, case in {**refused(release), **forged(release)}.items():
+    cases = {**refused(release), **forged(release), **workstation_refused(release)}
+    for name, case in cases.items():
         ok, error = _create(run, namespace, case)
         if ok:
             found.append(f"admitted {name}")
@@ -802,30 +896,53 @@ def check_volumes(run: Run, namespace: str, policy: Mapping[str, Sequence[str]])
     return found
 
 
-@contextmanager
-def _fixtures(run: Run, namespace: str) -> Iterator[None]:
-    """The forger's edit role and the unlisted RuntimeClass, for the duration of the checks."""
-    binding = {
+def _binding(name: str, namespace: str, kind: str, role: str, user: str) -> dict:
+    return {
         "apiVersion": "rbac.authorization.k8s.io/v1",
         "kind": "RoleBinding",
-        "metadata": {"name": FORGER, "namespace": namespace},
-        "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "edit"},
-        "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": FORGER}],
+        "metadata": {"name": name, "namespace": namespace},
+        "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": kind, "name": role},
+        "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": user}],
     }
+
+
+@contextmanager
+def _fixtures(run: Run, namespace: str, release: str) -> Iterator[None]:
+    """The forger's edit role, the workstation's roles with Job creation, and the unlisted
+    RuntimeClass, for the duration of the checks."""
+    binding = _binding(FORGER, namespace, "ClusterRole", "edit", FORGER)
+    workstation_role = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": WORKSTATION, "namespace": namespace},
+        "rules": [
+            *kubernetes_cli.WORKSTATION_RULES,
+            {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]},
+        ],
+    }
+    workstation = _binding(WORKSTATION, namespace, "Role", WORKSTATION, WORKSTATION)
+    editor = _binding(
+        f"{WORKSTATION}-editor", namespace, "Role", f"{release}-fleet-editor", WORKSTATION
+    )
     runtime = {
         "apiVersion": "node.k8s.io/v1",
         "kind": "RuntimeClass",
         "metadata": {"name": UNLISTED},
         "handler": "runc",
     }
-    for document in (binding, runtime):
+    for document in (binding, workstation_role, workstation, editor, runtime):
         result = run(["apply", "-f", "-"], json.dumps(document))
         if result.returncode:
             raise RuntimeError(f"cannot create {document['kind']}: {result.stderr.strip()}")
     try:
         yield
     finally:
-        run(["delete", "rolebinding", FORGER, "--namespace", namespace, "--ignore-not-found"], None)
+        for name in (FORGER, WORKSTATION, f"{WORKSTATION}-editor"):
+            run(
+                ["delete", "rolebinding", name, "--namespace", namespace, "--ignore-not-found"],
+                None,
+            )
+        run(["delete", "role", WORKSTATION, "--namespace", namespace, "--ignore-not-found"], None)
         run(["delete", "runtimeclass", UNLISTED, "--ignore-not-found"], None)
 
 
@@ -838,7 +955,7 @@ def check(
 ) -> list[str]:
     """Every RBAC, admission and model volume case the API server decides otherwise."""
     run = _runner(kubectl)
-    with _fixtures(run, namespace):
+    with _fixtures(run, namespace, release):
         return [
             *check_rbac(run, namespace, release),
             # The builders' objects mount a claim as the model volume.

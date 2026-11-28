@@ -182,6 +182,7 @@ class ControllerTest(unittest.TestCase):
         for count in range(20):
             controller.elect()
             controller.pump()
+            controller.export_once()
             if not controller.work_once():
                 return count
         raise AssertionError("the queue never emptied")
@@ -1172,6 +1173,8 @@ class SettingsTests(unittest.TestCase):
             ("stateClaim", "Not A Name"),
             ("runtimeClassNames", "nvidia"),
             ("modelHostPathPrefixes", [1]),
+            ("image", "registry.example/narwhal:latest"),
+            ("runAsUser", "10001"),
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 Settings.of({k: v for k, v in {**good, field: value}.items() if v is not None})

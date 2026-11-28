@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "ddaae8401a63cb59f6e994f663a165eba21c0329d7fc5eb7f4ae5db8bb2fff74"
+    "narwhal.example.com/schema-sha256": "ff2f441d4ec5851a17935e6824649f9a89a280a7371cb3ac8d1699aba6caf64b"
 spec:
   group: "narwhal.example.com"
   names:
@@ -1212,6 +1212,37 @@ spec:
                     pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                   maxItems: 16
                   x-kubernetes-list-type: "atomic"
+                exports:
+                  type: "array"
+                  description: "The export Jobs the controller made for the latest narwhal.example.com/export-request values"
+                  items:
+                    type: "object"
+                    description: "One export request's answer: its Job, or why it has none"
+                    properties:
+                      nonce:
+                        type: "string"
+                        description: "The request's nonce"
+                        maxLength: 32
+                        pattern: "^[0-9a-f]{32}$"
+                      job:
+                        type: "string"
+                        description: "The export Job's name"
+                        maxLength: 63
+                      uid:
+                        type: "string"
+                        description: "The export Job's UID"
+                        maxLength: 36
+                        pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                      error:
+                        type: "string"
+                        description: "Why the controller made no export Job"
+                        maxLength: 1024
+                    required:
+                      - "nonce"
+                  maxItems: 4
+                  x-kubernetes-list-type: "map"
+                  x-kubernetes-list-map-keys:
+                    - "nonce"
           required:
             - "spec"
           x-kubernetes-validations:

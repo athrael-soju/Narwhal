@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import yaml
 from narwhal.deployment import (
     fleet_resource,
     kubernetes_cli,
+    kubernetes_export,
     kubernetes_gate,
     kubernetes_target,
     run_record,
@@ -36,6 +38,7 @@ from narwhal.dev import cli
 from narwhal.runtime.kubernetes_api import ApiClient, Connection, Kind
 from tests.deployment import chart_fixtures, fleet_fixtures
 from tests.deployment.kubernetes_cluster import (
+    CONTROLLER_IMAGE,
     JOB,
     NAMESPACE,
     POD,
@@ -232,7 +235,7 @@ class WorkstationTest(ControllerTest):
 
     def kubelet(self, pod: dict) -> Any:
         labels = pod["metadata"].get("labels") or {}
-        if labels.get(objects.COMPONENT_LABEL) != kubernetes_cli.EXPORT:
+        if labels.get(fleet_resource.GATE_LABEL) != kubernetes_export.EXPORT:
             return self.rig.kubelet(pod)
         uid = pod["metadata"]["uid"]
         if uid not in self.outcomes:
@@ -240,17 +243,27 @@ class WorkstationTest(ControllerTest):
         return self.outcomes[uid]
 
     def export_pod(self, pod: dict) -> Any:
-        """Run the export Job's program on the directory its mount names."""
+        """Run the export Job's program on a root that holds only what its mounts name, as
+        the kubelet would mount them."""
         [container] = pod["spec"]["containers"]
-        [mount] = container["volumeMounts"]
-        source = self.state / mount["subPath"]
-        if not source.is_dir():
-            return Wait("CreateContainerConfigError", "failed to create subPath directory")
+        root = Path(tempfile.mkdtemp(dir=self.root))
+        for mount in container["volumeMounts"]:
+            self.assertIs(mount["readOnly"], True)
+            source = self.state / mount["subPath"]
+            if not source.exists():
+                return Wait("CreateContainerConfigError", "failed to create subPath directory")
+            relative = Path(mount["mountPath"]).relative_to(kubernetes_export.MOUNT)
+            if source.is_dir():
+                shutil.copytree(source, root / relative, symlinks=True)
+            else:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, root / relative)
         command = container["command"]
         self.assertEqual(command[:4], ["python3", "-I", "-B", "-c"])
+        self.assertEqual(command[5], kubernetes_export.MOUNT)
         env = {item["name"]: item["value"] for item in container["env"]}
         result = subprocess.run(
-            [sys.executable, "-I", "-B", "-c", command[4], str(source)],
+            [sys.executable, "-I", "-B", "-c", command[4], str(root)],
             env={"PATH": os.environ.get("PATH", "/usr/bin")} | env,
             capture_output=True,
             text=True,
@@ -319,10 +332,16 @@ class RunTests(WorkstationTest):
         mirrored = self.mirrored()
         self.assertEqual(mirrored["run.json"], controller["run.json"])
         self.assertEqual(data["run_id"], json.loads(controller["run.json"])["run_id"])
+        # Every attempt has ended, so the mirror holds each attempt's evidence whole, and of the
+        # run directory's root only the record.
         for name, content in controller.items():
-            if name in kubernetes_cli.NEVER_EXPORTED:
-                continue
-            self.assertEqual(mirrored.get(name), content, name)
+            if name.startswith("stages/"):
+                self.assertEqual(mirrored.get(name), content, name)
+        roots = {name for name in mirrored if "/" not in name}
+        local = {kubernetes_cli.FLEET_FILE, kubernetes_cli.EXPORT_FILE, run_record.LOCK}
+        self.assertEqual(roots, {"run.json", *local})
+        # The workstation never touched a Job: the controller made every export Job.
+        self.assertFalse([r for r in self.requests if r[2] == "jobs"], self.requests)
         # Task 18's checks hold: the directory and every file are this user's alone.
         for path in [self.run_dir, *self.run_dir.rglob("*")]:
             mode = stat.S_IMODE(path.lstat().st_mode)
@@ -330,19 +349,25 @@ class RunTests(WorkstationTest):
         # Each stage's progress was printed as it changed.
         self.assertIn("router-start: passed (1/1 passed)", err)
 
-    def test_a_second_run_applies_nothing_new_and_exports_only_what_changed(self):
+    def test_a_second_run_applies_nothing_new_and_exports_only_new_attempts(self):
         self.assertEqual(self.deploy("run")[0], 0)
         generation = self.live()["metadata"]["generation"]
         before = len(self.exports)
-        (self.directory() / "stages" / "extra.json").write_text('{"new": true}')
         code, result, _ = self.deploy("run")
         self.assertEqual(code, 0, result)
         self.assertEqual(self.live()["metadata"]["generation"], generation)
         carried = set().union(*(self.exported(i) for i in range(before, len(self.exports))))
-        self.assertIn("stages/extra.json", carried)
-        # Only the new file and the record the resync pass rewrote travel again.
-        self.assertLessEqual(carried, {"stages/extra.json", "run.json"})
-        self.assertEqual((self.run_dir / "stages" / "extra.json").read_text(), '{"new": true}')
+        # The run directory holds every attempt, so only the record travels again.
+        self.assertEqual(carried, {"run.json"})
+        held = set(self.mirrored())
+        self.env["NARWHAL_TTFT_S"] = "3"
+        before = len(self.exports)
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(self.deploy("run")[0], 0)
+        carried = set().union(*(self.exported(i) for i in range(before, len(self.exports))))
+        # The edit's new attempts travel, and nothing the run directory held.
+        self.assertTrue({name for name in carried if "/fleet-limits/attempt-2/" in name})
+        self.assertFalse((carried - {"run.json"}) & held)
 
     def test_an_apply_that_meets_another_managers_field_is_a_conflict_and_writes_nothing(self):
         self.assertEqual(self.deploy("run")[0], 0)
@@ -381,7 +406,19 @@ class RunTests(WorkstationTest):
         self.assertFalse(result["data"]["applied"])
         self.assertEqual(result["data"]["managers"], ["helm (Update)"])
         writes = [r for r in self.requests if r[0] in ("apply", "patch", "create", "delete")]
-        self.assertFalse([r for r in writes if r[2] == fleet_resource.PLURAL], writes)
+        # The workstation writes nothing of the fleet but its export request.
+        fleet_writes = [r for r in writes if r[2] == fleet_resource.PLURAL]
+        self.assertTrue(fleet_writes)
+        self.assertEqual({r[0] for r in fleet_writes}, {"patch"})
+        live = self.live()
+        self.assertEqual(live["spec"], {**self.fleet_template["spec"], "retainRuns": 3})
+        for entry in live["metadata"]["managedFields"]:
+            if entry["manager"] == CLI_MANAGER:
+                self.assertEqual(set(entry["fieldsV1"]), {"f:metadata"})
+                annotations = entry["fieldsV1"]["f:metadata"]["f:annotations"]
+                self.assertEqual(
+                    set(annotations) - {"."}, {f"f:{kubernetes_export.EXPORT_REQUEST}"}
+                )
         self.assertEqual(kubernetes_cli.spec_managers(self.live()), ["helm (Update)"])
         # down refuses to stop a fleet another manager owns.
         code, result, _ = self.deploy("down")
@@ -479,6 +516,41 @@ class PlanTests(WorkstationTest):
         self.assertEqual(self.live()["spec"]["slo"]["ttftS"], "4")
 
 
+class PlanResultTests(WorkstationTest):
+    def test_a_dry_run_that_meets_another_managers_field_is_an_apply_conflict(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.env["NARWHAL_TTFT_S"] = "3"
+        handled = self.rig._handle
+
+        def race(request: httpx.Request) -> httpx.Response:
+            if request.headers.get("content-type", "").startswith("application/apply-patch"):
+                self.store.patch(
+                    self.fleet_kind,
+                    NAMESPACE,
+                    fleet_resource.NAME,
+                    {"spec": {"slo": {"ttftS": "5"}}},
+                    patch_type="merge",
+                    field_manager="kubectl-edit",
+                )
+            return handled(request)
+
+        with patch.object(self.rig, "_handle", race), patch.dict(os.environ, self.env):
+            code, result, _ = self.deploy("plan")
+        self.assertEqual((code, result["status"]), (4, "error"), result)
+        [error] = result["errors"]
+        self.assertEqual(error["code"], "apply_conflict")
+        self.assertIn(
+            {"manager": "kubectl-edit", "field": ".spec.slo.ttftS"}, error["context"]["fields"]
+        )
+
+    def test_plan_checks_the_run_directory_before_it_writes_there(self):
+        self.run_dir.mkdir(parents=True, mode=0o700)
+        self.run_dir.chmod(0o777)
+        code, result, _ = self.deploy("plan")
+        self.assertEqual(code, 2, result)
+        self.assertFalse((self.run_dir / kubernetes_cli.KUBECTL_LOGS).exists())
+
+
 class ExportTests(WorkstationTest):
     def setUp(self):
         super().setUp()
@@ -490,98 +562,175 @@ class ExportTests(WorkstationTest):
         )
         return session
 
-    def test_an_export_job_has_no_token_and_reads_only_the_run_directory(self):
-        [job] = [
+    def export_jobs(self) -> list[dict]:
+        return [
             w
             for w in self.rig.workloads
             if w["kind"] == "Job"
-            and w["metadata"]["labels"][objects.COMPONENT_LABEL] == kubernetes_cli.EXPORT
-        ][:1]
-        live = self.live()
-        self.assertTrue(objects.controlled(objects.Owner.of(live), job))
-        pod = job["spec"]["template"]["spec"]
-        self.assertIs(pod["automountServiceAccountToken"], False)
-        self.assertNotIn("serviceAccountName", pod)
-        self.assertNotIn("hostNetwork", pod)
-        [volume] = pod["volumes"]
-        self.assertEqual(
-            volume,
-            {
-                "name": "state",
-                "persistentVolumeClaim": {"claimName": STATE_CLAIM, "readOnly": True},
-            },
-        )
-        [container] = pod["containers"]
-        [mount] = container["volumeMounts"]
-        self.assertEqual(mount["subPath"], f"runs/{NAMESPACE}/{live['metadata']['uid']}")
-        self.assertIs(mount["readOnly"], True)
-        self.assertEqual(container["image"], live["spec"]["images"]["narwhal"])
-        self.assertIs(container["securityContext"]["readOnlyRootFilesystem"], True)
-        self.assertIs(pod["securityContext"]["runAsNonRoot"], True)
-        self.assertNotIn("envFrom", container)
-        self.assertFalse([e for e in container["env"] if "valueFrom" in e])
-        self.assertLessEqual(job["spec"]["activeDeadlineSeconds"], kubernetes_cli.EXPORT_SECONDS)
-        # The namespace's admission policy admits it from the workstation's identity.
-        self.assertEqual(policy_refusals(job, requester="user:workstation"), [])
+            and w["metadata"]["labels"].get(fleet_resource.GATE_LABEL) == kubernetes_export.EXPORT
+        ]
 
-    def test_the_key_checks_salt_and_hmac_never_leave_the_cluster(self):
+    def forget(self, attempt: str) -> None:
+        """Make the run directory hold `attempt` no longer, as a fresh workstation would."""
+        shutil.rmtree(self.run_dir / attempt, ignore_errors=True)
+        path = self.run_dir / kubernetes_cli.EXPORT_FILE
+        state = json.loads(path.read_text())
+        parent, _, number = attempt.rpartition("/attempt-")
+        state["held"][parent].remove(int(number))
+        path.write_text(json.dumps(state))
+
+    def test_the_controller_makes_each_export_job_from_its_own_image_and_mounts_no_secret(self):
+        jobs = self.export_jobs()
+        self.assertTrue(jobs)
+        live = self.live()
+        uid = live["metadata"]["uid"]
+        runs = f"runs/{NAMESPACE}/{uid}"
+        for job in jobs:
+            # The fleet owns it, so it goes with the fleet; stopping the fleet leaves it be.
+            [owner] = job["metadata"]["ownerReferences"]
+            self.assertEqual((owner["uid"], owner["controller"]), (uid, False))
+            pod = job["spec"]["template"]["spec"]
+            self.assertIs(pod["automountServiceAccountToken"], False)
+            self.assertNotIn("serviceAccountName", pod)
+            self.assertNotIn("hostNetwork", pod)
+            [volume] = pod["volumes"]
+            self.assertEqual(
+                volume["persistentVolumeClaim"], {"claimName": STATE_CLAIM, "readOnly": True}
+            )
+            [container] = pod["containers"]
+            # The controller's image, never the one the fleet names.
+            self.assertEqual(container["image"], CONTROLLER_IMAGE)
+            self.assertNotEqual(container["image"], live["spec"]["images"]["narwhal"])
+            for mount in container["volumeMounts"]:
+                self.assertIs(mount["readOnly"], True)
+                relative = mount["subPath"].removeprefix(runs + "/")
+                self.assertNotEqual(relative, mount["subPath"])
+                # The record, or one attempt's directory: never the root, the salt or the HMACs.
+                self.assertTrue(
+                    relative == "run.json"
+                    or kubernetes_export.INSTANCE_DIRECTORY.fullmatch(
+                        relative.rpartition("/attempt-")[0]
+                    ),
+                    relative,
+                )
+            self.assertIs(container["securityContext"]["readOnlyRootFilesystem"], True)
+            self.assertIs(pod["securityContext"]["runAsNonRoot"], True)
+            self.assertFalse([e for e in container["env"] if "valueFrom" in e])
+            self.assertLessEqual(
+                job["spec"]["activeDeadlineSeconds"], kubernetes_export.EXPORT_SECONDS
+            )
+            # The admission policy admits it from the controller, and from no one else.
+            self.assertEqual(policy_refusals(job, state_claim=STATE_CLAIM), [])
+            self.assertIn(
+                "state claim",
+                policy_refusals(job, requester="user:workstation", state_claim=STATE_CLAIM),
+            )
+        # The status names each request's Job under its nonce.
+        answers = self.status()["exports"]
+        self.assertTrue(all(kubernetes_export.NONCE.fullmatch(a["nonce"]) for a in answers))
+        self.assertLessEqual({a["job"] for a in answers}, {j["metadata"]["name"] for j in jobs})
+
+    def test_no_export_reaches_the_salts_or_the_key_checks_hmacs(self):
         controller = self.controller_files()
         self.assertIn(kubernetes_target.CREDENTIAL_FILE, controller)
         salt = json.loads(controller[kubernetes_target.CREDENTIAL_FILE])["salt"]
         self.assertNotIn(kubernetes_target.CREDENTIAL_FILE, self.mirrored())
-        # Nor does the salt that keys the run record's digests.
         self.assertIn(run_record.SALT, controller)
         self.assertNotIn(run_record.SALT, self.mirrored())
         key = controller[run_record.SALT]
         for export in self.exports:
             self.assertNotIn(base64.b64encode(key).decode(), export["log"])
-        for export in self.exports:
             self.assertNotIn(salt, export["log"])
+            mounts = export["pod"]["spec"]["containers"][0]["volumeMounts"]
+            for mount in mounts:
+                for secret in (run_record.SALT, kubernetes_target.CREDENTIAL_FILE):
+                    self.assertFalse(mount["subPath"].endswith(secret), mount)
+                self.assertNotRegex(mount["subPath"], r"^runs/[^/]+/[^/]+$")
 
     def test_each_export_job_stays_within_its_budget_and_the_next_carries_the_rest(self):
-        budget = kubernetes_cli.EXPORT_RESERVE + 48 * 1024
-        large = os.urandom(64 * 1024)
-        (self.directory() / "stages" / "large.bin").write_bytes(large)
-        for n in range(6):
-            (self.directory() / "stages" / f"part-{n}.bin").write_bytes(os.urandom(12 * 1024))
+        record = (self.directory() / "run.json").stat().st_size
+        budget = kubernetes_export.EXPORT_RESERVE + 4 * record // 3 + 1024 + 48 * 1024
+        attempt = "stages/access/attempt-1"
+        # Larger than any log of the budget can carry.
+        (self.directory() / attempt / "large.bin").write_bytes(os.urandom(budget))
+        parts = {f"{attempt}/part-{n}.bin": os.urandom(12 * 1024) for n in range(6)}
+        for name, data in parts.items():
+            (self.directory() / name).write_bytes(data)
+        self.forget(attempt)
         before = len(self.exports)
-        with patch.object(kubernetes_cli, "EXPORT_LOG_BYTES", budget):
+        with patch.object(kubernetes_export, "EXPORT_LOG_BYTES", budget):
             done = self.session().export()
         logs = [e["log"] for e in self.exports[before:]]
         self.assertGreater(len(logs), 1)
         self.assertTrue(all(len(log.encode()) <= budget for log in logs))
-        for n in range(6):
-            self.assertTrue((self.run_dir / "stages" / f"part-{n}.bin").is_file())
+        for name, data in parts.items():
+            self.assertEqual((self.run_dir / name).read_bytes(), data)
         # A file no export Job's log can hold stays in the cluster, and the result names it.
-        self.assertFalse((self.run_dir / "stages" / "large.bin").exists())
-        self.assertEqual(done.large, ["stages/large.bin"])
+        self.assertFalse((self.run_dir / attempt / "large.bin").exists())
+        self.assertEqual(done.large, [f"{attempt}/large.bin"])
         self.assertTrue(done.data()["complete"])
+        # The rest of the run directory travelled no second time.
+        carried = set().union(*(self.exported(i) for i in range(before, len(self.exports))))
+        self.assertLessEqual(carried, {"run.json", *parts, f"{attempt}/access.json"})
 
-    def test_an_export_carries_only_the_files_the_run_directory_lacks(self):
-        (self.directory() / "stages" / "late.json").write_text("{}")
-        changed = next(p for p in self.directory().rglob("*.log"))
-        changed.write_text(changed.read_text() + "more\n")
+    def test_an_export_job_mounts_at_most_its_attempts_and_the_next_carries_on(self):
+        controller = {n: d for n, d in self.controller_files().items() if n.startswith("stages/")}
+        shutil.rmtree(self.run_dir / "stages")
+        (self.run_dir / kubernetes_cli.EXPORT_FILE).unlink()
+        before = len(self.exports)
+        with patch.object(kubernetes_export, "MAX_ATTEMPTS", 3):
+            done = self.session().export()
+        self.assertTrue(done.data()["complete"])
+        pods = [e["pod"] for e in self.exports[before:]]
+        self.assertGreater(len(pods), 3)
+        for pod in pods:
+            self.assertLessEqual(len(pod["spec"]["containers"][0]["volumeMounts"]), 4)
+        mirrored = {n: d for n, d in self.mirrored().items() if n.startswith("stages/")}
+        self.assertEqual(mirrored, controller)
+
+    def test_an_export_carries_only_the_attempts_the_run_directory_lacks(self):
         before = len(self.exports)
         self.session().export()
-        carried = set().union(*(self.exported(i) for i in range(before, len(self.exports))))
-        relative = changed.relative_to(self.directory()).as_posix()
-        self.assertLessEqual({"stages/late.json", relative}, carried)
-        self.assertLessEqual(carried, {"stages/late.json", relative, "run.json"})
-        self.assertEqual((self.run_dir / relative).read_text(), changed.read_text())
+        self.assertEqual(self.exported(), {"run.json"})
+        # A held attempt is never read again; one the run directory lacks is.
+        attempt = "stages/access/attempt-1"
+        (self.directory() / attempt / "late.json").write_text("{}")
+        self.session().export()
+        self.assertEqual(self.exported(), {"run.json"})
+        self.forget(attempt)
+        self.session().export()
+        self.assertEqual(
+            self.exported(), {"run.json", f"{attempt}/access.json", f"{attempt}/late.json"}
+        )
+        self.assertEqual(len(self.exports), before + 3)
+
+    def test_a_running_attempt_waits_until_it_ends(self):
+        record = json.loads((self.directory() / "run.json").read_text())
+        entry = record["stages"]["access"]
+        entry["status"] = run_record.RUNNING
+        held = kubernetes_export.Request("0" * 32, {}, "")
+        self.assertNotIn(
+            entry["directory"], kubernetes_export.wanted(record, held, self.directory())
+        )
+        entry["status"] = run_record.INTERRUPTED
+        self.assertNotIn(
+            entry["directory"], kubernetes_export.wanted(record, held, self.directory())
+        )
+        entry["status"] = run_record.FAILED
+        self.assertIn(entry["directory"], kubernetes_export.wanted(record, held, self.directory()))
 
     def test_a_tampered_log_writes_nothing(self):
-        (self.directory() / "stages" / "late.json").write_text('{"a": 1}')
+        attempt = "stages/access/attempt-1"
+        (self.directory() / attempt / "late.json").write_text('{"a": 1}')
+        self.forget(attempt)
         before = self.mirrored()
+        name = f"{attempt}/late.json"
 
         def altered(log: str) -> str:
             line = next(
-                row
-                for row in log.splitlines()
-                if row.startswith(kubernetes_gate.FILE + "stages/late.json")
+                row for row in log.splitlines() if row.startswith(kubernetes_gate.FILE + name)
             )
-            forged = (
-                kubernetes_gate.FILE + "stages/late.json " + base64.b64encode(b'{"a": 2}').decode()
-            )
+            forged = kubernetes_gate.FILE + name + " " + base64.b64encode(b'{"a": 2}').decode()
             return log.replace(line, forged)
 
         self.tamper = altered
@@ -591,13 +740,15 @@ class ExportTests(WorkstationTest):
         # status reports the refusal and the mirror as it was.
         _, result, _ = self.deploy("status")
         self.assertIn("other than its manifest", result["data"]["evidence"]["error"])
-        self.assertFalse((self.run_dir / "stages" / "late.json").exists())
+        self.assertFalse((self.run_dir / name).exists())
 
-    def test_a_log_that_returns_a_workstation_file_is_refused(self):
+    def forge(self, extra: dict[str, bytes]) -> None:
+        """Have the next export pods return `extra` beside what they read, with a manifest
+        that matches."""
+
         def forged(log: str) -> str:
-            files = kubernetes_target.gate_files(log)
-            files[kubernetes_cli.FLEET_FILE] = b'{"uid": "x"}'
-            lines = [row for row in log.splitlines() if row.startswith(kubernetes_cli.SUMMARY)]
+            files = {**kubernetes_target.gate_files(log), **extra}
+            lines = [row for row in log.splitlines() if row.startswith(kubernetes_export.SUMMARY)]
             body = "".join(
                 f"{kubernetes_gate.FILE}{n} {base64.b64encode(d).decode()}\n"
                 for n, d in files.items()
@@ -609,10 +760,56 @@ class ExportTests(WorkstationTest):
             return body + lines[-1] + "\n" + kubernetes_gate.MANIFEST + json.dumps(manifest) + "\n"
 
         self.tamper = forged
-        with self.assertRaisesRegex(kubernetes_cli.ExportError, "which no export writes"):
-            self.session().export()
+
+    def test_a_log_that_returns_a_workstation_file_is_refused_whatever_its_case(self):
+        for name in (kubernetes_cli.FLEET_FILE, "Kubernetes-Fleet.json", "KUBECTL/x.log"):
+            with self.subTest(name=name):
+                self.forge({name: b'{"uid": "x"}'})
+                with self.assertRaisesRegex(kubernetes_cli.ExportError, "which no export writes"):
+                    self.session().export()
+                self.assertFalse(
+                    (self.run_dir / name).exists() and name != kubernetes_cli.FLEET_FILE
+                )
         bound = json.loads((self.run_dir / kubernetes_cli.FLEET_FILE).read_text())
         self.assertNotEqual(bound["uid"], "x")
+
+    def test_a_name_with_an_empty_or_dot_part_is_refused(self):
+        for name in (".", "stages//x", "stages/access/attempt-1/./x", "stages/access/attempt-1/"):
+            with self.subTest(name=name):
+                self.assertFalse(kubernetes_cli.exportable(name))
+                with self.assertRaisesRegex(kubernetes_cli.ExportError, "no file an export writes"):
+                    self.session()._write({name: b"x"})
+        self.assertTrue(kubernetes_cli.exportable("stages/access/attempt-1/.env.engine-1"))
+
+    def test_an_export_never_replaces_evidence_the_run_directory_holds(self):
+        name = next(n for n in self.mirrored() if n.startswith("stages/") and n.endswith(".json"))
+        held = (self.run_dir / name).read_bytes()
+        self.forge({name: b'{"forged": true}'})
+        with self.assertRaisesRegex(kubernetes_cli.ExportError, "never replaces it"):
+            self.session().export()
+        self.assertEqual((self.run_dir / name).read_bytes(), held)
+        # The same bytes again write nothing and refuse nothing.
+        self.session()._write({name: held})
+
+    def test_the_controller_answers_a_refused_request_with_its_reason(self):
+        for value in (
+            json.dumps({"nonce": "a" * 32, "held": {"/etc": [1]}}),
+            json.dumps({"nonce": "b" * 32, "after": "../run.salt"}),
+        ):
+            with self.subTest(value=value):
+                self.store.patch(
+                    self.fleet_kind,
+                    NAMESPACE,
+                    fleet_resource.NAME,
+                    {"metadata": {"annotations": {kubernetes_export.EXPORT_REQUEST: value}}},
+                    patch_type="merge",
+                )
+                jobs = len(self.export_jobs())
+                self.work(self.controllers[0])
+                nonce = json.loads(value)["nonce"]
+                [answer] = [a for a in self.status()["exports"] if a["nonce"] == nonce]
+                self.assertIn(kubernetes_export.EXPORT_REQUEST, answer["error"])
+                self.assertEqual(len(self.export_jobs()), jobs)
 
     def test_no_export_job_mounts_a_run_directory_the_controller_has_not_made(self):
         self.store.remove(self.fleet_kind, NAMESPACE, fleet_resource.NAME)
@@ -656,6 +853,16 @@ class StatusTests(WorkstationTest):
         code, result, _ = self.deploy("status")
         self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
 
+    def test_status_of_a_fleet_stalled_on_a_refused_input_is_invalid_input_as_for_run(self):
+        self.env[kubernetes_target.MODEL_VOLUME] = json.dumps(
+            {"hostPath": {"path": "/srv/models", "type": "Directory"}}
+        )
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(self.deploy("run")[0], 2)
+            code, result, _ = self.deploy("status")
+        self.assertEqual((code, result["status"]), (2, "invalid_input"), result)
+        self.assertIn("InputRefused", result["errors"][0]["message"])
+
 
 class DownTests(WorkstationTest):
     def setUp(self):
@@ -692,6 +899,16 @@ class DownTests(WorkstationTest):
         code, result, _ = self.deploy("down")
         self.assertEqual(code, 0, result)
 
+    def test_down_with_delete_keeps_a_fleet_that_did_not_stop_in_time(self):
+        self.on_wait = lambda: None
+        code, result, err = self.deploy("down", "--delete", "--timeout", "30")
+        self.assertEqual((code, result["status"]), (4, "error"), (result, err))
+        self.assertEqual(result["errors"][0]["code"], "follow_timeout")
+        self.assertIn("did not delete it", result["errors"][0]["message"])
+        self.assertFalse(result["data"]["deleted"])
+        self.assertIsNotNone(self.live())
+        self.assertFalse([d for d in self.store.deletes if d.kind == fleet_resource.KIND])
+
 
 class RbacTests(WorkstationTest):
     def granted(self) -> set[tuple[str, str, str]]:
@@ -720,7 +937,12 @@ class RbacTests(WorkstationTest):
         self.assertEqual(self.granted() - used, set())
         resources = {resource for _, _, resource in self.requests}
         self.assertFalse(
-            {"secrets", "roles", "rolebindings", "pods/exec", "configmaps"} & resources
+            {"jobs", "secrets", "roles", "rolebindings", "pods/exec", "configmaps"} & resources
+        )
+        # The documented role grants nothing that starts a pod.
+        self.assertFalse(
+            {(v, r) for v, _, r in self.granted() if v in ("create", "patch", "update")}
+            - {(v, fleet_resource.PLURAL) for v in ("create", "patch")}
         )
         self.assertNotIn(f"{fleet_resource.PLURAL}/status", resources)
 

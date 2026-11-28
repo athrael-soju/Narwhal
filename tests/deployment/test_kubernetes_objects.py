@@ -874,7 +874,8 @@ def without_release(document: dict) -> dict:
 # The chart's admission policy, mirrored in Python for workloads a requester creates: the CEL
 # cannot run here. Each entry is one of the policy's validations, in its order.
 POLICY = ROOT / "deploy" / "helm" / "narwhal" / "templates" / "admission-policy.yaml"
-CONTROLLER_USER = f"system:serviceaccount:{chart_fixtures.NAMESPACE}:fleet-controller"
+CONTROLLER_NAME = "fleet-controller"
+CONTROLLER_USER = f"system:serviceaccount:{chart_fixtures.NAMESPACE}:{CONTROLLER_NAME}"
 POLICY_KINDS = {
     "engine": ["StatefulSet"],
     "router": ["StatefulSet"],
@@ -910,6 +911,7 @@ def policy_refusals(
     *,
     volumes: fleet_resource.VolumePolicy | None = None,
     runtime_classes: tuple[str, ...] = (),
+    state_claim: str = "narwhal-state",
 ) -> list[str]:
     """The validations of the admission policy that refuse a workload `requester` creates,
     under the model volume allow-lists `volumes` and the RuntimeClasses `runtime_classes`."""
@@ -955,6 +957,11 @@ def policy_refusals(
         return (context(c).get("capabilities") or {}).get("add") or []
 
     annotations = (pod.get("metadata") or {}).get("annotations") or {}
+    # A workload's requester makes it; only the installer's controller Deployment is its own.
+    controller_path = (
+        document["kind"] == "Deployment" and document["metadata"]["name"] == CONTROLLER_NAME
+    )
+    account = spec.get("serviceAccountName", spec.get("serviceAccount", ""))
     rules = {
         "host network": not spec.get("hostNetwork") or host_network_allowed,
         "reserved label": component not in POLICY_KINDS or controlled,
@@ -1027,6 +1034,12 @@ def policy_refusals(
             for c in containers
             for m in c.get("volumeMounts", [])
         ),
+        "controller ServiceAccount": account != CONTROLLER_NAME or controller_path,
+        "state claim": not any(
+            (v.get("persistentVolumeClaim") or {}).get("claimName") == state_claim for v in volumes
+        )
+        or bool(trusted)
+        or controller_path,
     }
     return [name for name, holds in rules.items() if not holds]
 
@@ -1301,16 +1314,47 @@ class RouterTests(unittest.TestCase):
             with self.subTest(path=str(path)):
                 self.assertTrue(any(path.is_relative_to(mount) for mount in writable), path)
 
+    def test_no_one_but_the_controller_runs_as_its_account_or_mounts_the_state_claim(self):
+        from tests.deployment import chart_live
+
+        workstation = f"user:{chart_live.WORKSTATION}"
+        for name, case in chart_live.workstation_refused("fleet").items():
+            if case.document["kind"] == "Pod":
+                continue
+            with self.subTest(name):
+                rule = (
+                    "controller ServiceAccount"
+                    if case.words == chart_live.ACCOUNT
+                    else "state claim"
+                )
+                self.assertIn(rule, policy_refusals(case.document, workstation))
+        # The installer's controller Deployment, and the export Job the controller makes.
+        admitted = chart_live.admitted(chart_fixtures.NAMESPACE, "fleet")
+        export = admitted["an export Job"].document
+        self.assertEqual(policy_refusals(export), [])
+        self.assertIn("state claim", policy_refusals(export, workstation))
+        deployment = chart_live._workload(
+            "Deployment",
+            CONTROLLER_NAME,
+            objects.labels("controller"),
+            chart_live._plain(
+                serviceAccountName=CONTROLLER_NAME,
+                volumes=[{"name": "s", "persistentVolumeClaim": {"claimName": "narwhal-state"}}],
+            ),
+        )
+        self.assertEqual(policy_refusals(deployment, "user:installer"), [])
+
     def test_the_router_pair_passes_the_charts_admission_policy(self):
         validations = POLICY.read_text().split("  validations:\n", 1)[1].split("\n---", 1)[0]
         # The mirror holds every validation of the policy.
-        self.assertEqual(validations.count("\n    - expression:") + 1, 20)
+        self.assertEqual(validations.count("\n    - expression:") + 1, 22)
         statefulset = router_set()
         self.assertEqual(policy_refusals(statefulset), [])
         # The router labels are reserved: only the controller may apply them.
         self.assertEqual(
             policy_refusals(statefulset, f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x"),
-            ["reserved label"],
+            # Nor may anyone else mount the state claim the routers mount.
+            ["reserved label", "state claim"],
         )
         # Each rule the routers keep to refuses them once broken.
         broken = {

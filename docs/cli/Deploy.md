@@ -101,20 +101,19 @@ With `--target kubernetes`, the subcommands read the same variables as the [Kube
 
 - `run` applies the fleet server-side as the field manager `narwhal-cli`, without forcing a conflict, then follows its status until it is `Ready`, `Stalled` or `--timeout` passes. It prints each stage's progress as it changes, such as `engine-check: running (1/2 passed)`, and copies the evidence each time a stage instance passes. When the fleet was stalled on a failed stage and the inputs did not change, `run` sets a new `narwhal.example.com/requested-at` annotation so the controller runs the stage again.
 - `plan` checks the inputs and dry-runs the apply on the API server. Each input that differs from the live fleet's reruns the stages the [stage table](../deploy/Kubernetes.md#rerunning-after-a-change) names for it, and each stage instance of the run record the run directory last copied that has not passed runs again. It starts no Job, and leaves the live pods and routes to the controller, which checks them on each pass.
-- `status` copies the evidence again, then prints the fleet's conditions, each stage of the run record and the live checks of the engine, sidecar and router pods. A route needs a Job on each node to observe, so `status` reports each fabric route `not observed`; the controller observes them on every pass.
-- `down` sets `spec.stopped` and waits for the fleet's `Stopped` condition, within `--timeout`. With `--delete` it then deletes the fleet, in the background, and the garbage collector removes what the controller made. The volumes stay either way, and `run` starts a stopped fleet again.
+- `status` copies the evidence again, then prints the fleet's conditions, each stage of the run record and the live checks of the engine, sidecar and router pods. A route needs a Job on each node to observe, so `status` reports each fabric route `not observed`; the controller observes them on every pass. A stalled fleet exits as `run` would: `2` for a refused input, `1` for a failed check.
+- `down` sets `spec.stopped` and waits for the fleet's `Stopped` condition, within `--timeout`. With `--delete` it then deletes the fleet, in the background, and the garbage collector removes what the controller made. A fleet that has not stopped within `--timeout` is not deleted, and `down` exits with code `4`. The volumes stay either way, and `run` starts a stopped fleet again.
 
-A fleet whose `spec` another field manager owns, such as Helm, Argo CD or Flux, is followed and never written: `run` prints a note and follows it, and `down` refuses it with code `2`. Set `spec.stopped` through that tool instead. An apply that meets a field another manager took in the meantime exits with code `4` and error code `apply_conflict`, and its `context.fields` lists each field and manager.
+A fleet whose `spec` another field manager owns, such as Helm, Argo CD or Flux, is followed and never written: `run` prints a note and follows it, and `down` refuses it with code `2`. Set `spec.stopped` through that tool instead. An apply, or `plan`'s dry run of it, that meets a field another manager took in the meantime exits with code `4` and error code `apply_conflict`, and its `context.fields` lists each field and manager.
 
-The run directory belongs to the workstation and keeps the owner and mode checks above. `kubernetes-fleet.json` names the fleet it follows by uid, and the subcommands refuse a fleet with another uid, such as one deleted and made again: start a new run directory for it. Beside it, the directory mirrors the controller's run directory: `run.json` and every stage's evidence. The mirror arrives through export Jobs, never `exec`. Each export Job is owned by the fleet, runs the fleet's Narwhal image as UID 10001 with no ServiceAccount token, mounts only the controller's run directory, read-only, and prints the files the run directory lacks by SHA-256. The workstation checks each file against the manifest at the end of the Job's log, so a truncated or altered log writes nothing. A log stays under 8 MiB, below the kubelet's 10 MiB log rotation, and the next Job carries the rest. A file too large for one log stays in the cluster, and the command result names it. The salt that keys the run record's digests, and the key check's salt and HMACs, never leave the cluster.
+The run directory belongs to the workstation and keeps the owner and mode checks above. `kubernetes-fleet.json` names the fleet it follows by uid, and the subcommands refuse a fleet with another uid, such as one deleted and made again: start a new run directory for it. Beside it, the directory mirrors the controller's run directory: `run.json` and the evidence of every stage attempt that has ended. An attempt still running arrives once it ends, and `kubernetes-export.json` keeps which attempts the directory holds whole.
 
-The workstation's identity needs the chart's `<release>-fleet-editor` Role and this Role, and nothing on Secrets, RBAC or `pods/exec`:
+The mirror arrives through export Jobs, never `exec`, and the workstation never creates one. It sets the fleet's `narwhal.example.com/export-request` annotation to a nonce and the attempts it holds; the controller creates the export Job from its own image, user and group, and names the Job under that nonce in `status.exports`. The Job has no ServiceAccount token and mounts, read-only, only `run.json` and the attempt directories asked for, so the salt that keys the run record's digests and the key check's salt and HMACs never reach it. The workstation reads the Job's pod log and checks each file against the manifest at its end, so a truncated or altered log writes nothing, and a copied file never replaces evidence the directory already holds. A log stays under 8 MiB, below the kubelet's 10 MiB log rotation, and the next Job carries the rest. A file too large for one log stays in the cluster, and the command result names it.
+
+The workstation's identity needs the chart's `<release>-fleet-editor` Role and this Role:
 
 ```yaml
 rules:
-  - apiGroups: [batch]
-    resources: [jobs]
-    verbs: [get, create]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
@@ -123,7 +122,7 @@ rules:
     verbs: [get]
 ```
 
-Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. Creating Jobs lets the identity run any pod the namespace's admission policy admits, which writing the fleet already allows through the controller. The export Jobs need no verbs of their own; the controller's Role already deletes them when the fleet stops, and they go with the fleet.
+Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. The Role above lets it find an export Job's pod and read its log, and read the engine, sidecar and router pods for the live checks of `plan` and `status`. Together they grant no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, so the identity cannot start a pod of its own or read a credential; it can only edit the fleet, which the controller and the namespace's admission policy bound.
 
 ## Host keys and time limits
 
@@ -188,7 +187,7 @@ In text mode, stdout carries progress lines, and a failure writes one stderr lin
 | A remote command fails or exceeds its time limit, a fabric check fails, a fabric sample is below a role's budget, a stage's check rejects it, a host cannot run units for `plan`, `status` finds the last run stopped at a failed or timed-out stage, or another operating-system error | `1` |
 | Invalid arguments, inventory, environment, package or discovery inputs, an output that already exists, or a fleet the API server or the controller refuses | `2` |
 | `status` finds a recorded process gone or changed, or a route changed | `3` |
-| A stage of `run` fails without a verdict or exceeds its time limit, another runner holds the run for `run` or `down`, an apply meets another field manager's field, or `run` or `down` follows a cluster's fleet past `--timeout` | `4` |
+| A stage of `run` fails without a verdict or exceeds its time limit, another runner holds the run for `run` or `down`, an apply or `plan`'s dry run meets another field manager's field, or `run` or `down` follows a cluster's fleet past `--timeout` | `4` |
 | `run` or `tunnel` stopped with Ctrl+C | `130` |
 | `tunnel` stopped with SIGTERM or SIGHUP | `143` or `129` |
 

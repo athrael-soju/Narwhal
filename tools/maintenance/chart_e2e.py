@@ -22,6 +22,9 @@ attested backend. So the controller is tested on the stages it can reach:
 - `spec.stopped` deletes the routers, HAProxy and Jobs and keeps the volumes, and clearing it
   starts the stage again;
 - a namespace editor's forged engine pod is refused by the admission policy;
+- `narwhal deploy plan|run|status|down --target kubernetes`, as a ServiceAccount holding only
+  the workstation's documented role, follows the fleet without changing its spec, copies its
+  evidence through an export Job the controller makes, and cannot create a Job itself;
 - deleting the fleet leaves its objects to garbage collection.
 
 The serving path runs on two llama.cpp engines that the chart's `directEngines` starts on
@@ -67,7 +70,7 @@ sys.path.insert(2, str(ROOT / "tools" / "maintenance"))
 import operator_schemas
 
 from narwhal.config.loading import load as load_fleet
-from narwhal.deployment import fleet_resource
+from narwhal.deployment import fleet_resource, kubernetes_cli, kubernetes_target
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.direct_engine_set import direct_values, fleet_engines
 from narwhal.observability.stack.chart_dashboard import chart_dashboard
@@ -82,6 +85,8 @@ CONTROLLER = f"{RELEASE}-controller"
 CONTROLLER_ACCOUNT = f"system:serviceaccount:{NAMESPACE}:{CONTROLLER}"
 # A user with the namespace's edit role, who forges an engine pod.
 EDITOR = "chart-e2e-editor"
+# The workstation's ServiceAccount, which holds the documented workstation role alone.
+WORKSTATION = "chart-e2e-workstation"
 # The field manager the fleet is applied under, as Argo CD or Flux applies it server-side.
 GITOPS_MANAGER = "chart-e2e-gitops"
 NODE_IMAGE = (
@@ -1031,11 +1036,184 @@ def chart_drift(cluster: Cluster, summary: Summary) -> None:
     summary.passed("chart-no-drift", objects=len(manifests(cluster)))
 
 
+def workstation(cluster: Cluster) -> Path:
+    """A kubeconfig for the ServiceAccount `WORKSTATION`, bound to the chart's fleet-editor Role
+    and `kubernetes_cli.WORKSTATION_RULES` alone."""
+    account = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {"name": WORKSTATION, "namespace": NAMESPACE},
+    }
+    role = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": WORKSTATION, "namespace": NAMESPACE},
+        "rules": list(kubernetes_cli.WORKSTATION_RULES),
+    }
+    subject = [{"kind": "ServiceAccount", "name": WORKSTATION, "namespace": NAMESPACE}]
+    bindings = [
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {"name": name, "namespace": NAMESPACE},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": role_name},
+            "subjects": subject,
+        }
+        for name, role_name in (
+            (WORKSTATION, WORKSTATION),
+            (f"{WORKSTATION}-fleet-editor", f"{RELEASE}-fleet-editor"),
+        )
+    ]
+    documents: list[dict[str, Any]] = [account, role, *bindings]
+    for document in documents:
+        cluster.apply(document)
+    token = cluster.kubectl("create", "token", WORKSTATION, "--duration=1h").strip()
+    path = cluster.work / "workstation.kubeconfig"
+    shutil.copy(cluster.kubeconfig, path)
+    path.chmod(0o600)
+    config = [str(cluster.tools / "kubectl"), "--kubeconfig", str(path), "config"]
+    run([*config, "set-credentials", WORKSTATION, f"--token={token}"], capture=True)
+    run(
+        [
+            *config,
+            "set-context",
+            WORKSTATION,
+            f"--cluster=kind-{cluster.name}",
+            f"--user={WORKSTATION}",
+            f"--namespace={NAMESPACE}",
+        ],
+        capture=True,
+    )
+    return path
+
+
 def workstation_cli(cluster: Cluster, fleet: Fleet, summary: Summary) -> None:
-    # STEP I HOOK: once `narwhal deploy --target kubernetes` merges, run it here against the
-    # same fleet (`plan`, then `status`) and check that it follows the status the controller
-    # writes without changing the spec kubectl applied.
-    summary.skipped("workstation-cli", "narwhal deploy --target kubernetes lands with step I")
+    """`narwhal deploy plan|run|status|down --target kubernetes` from a workstation that holds
+    only its documented role: it follows the fleet kubectl applied without changing its spec,
+    copies the evidence through an export Job the controller makes, and cannot create a Job."""
+    # Stop the discovery that waits on the missing model directory, then run up to access.
+    fleet.apply(stopped=True)
+    wait_for("the fleet to report Stopped", lambda: fleet.condition("Stopped") == "True", 120)
+    generation = fleet.apply(stopped=False, until="access")
+    wait_for("the fleet to be Ready up to access", lambda: fleet.ready(generation), 180)
+    spec = fleet.get()["spec"]
+    kubeconfig = workstation(cluster)
+    kubectl = [str(cluster.tools / "kubectl"), "--kubeconfig", str(kubeconfig)]
+    # The role holds no verb on Jobs, so neither the CLI nor anyone with its token makes one.
+    can = run(
+        [*kubectl, "--context", WORKSTATION, "auth", "can-i", "create", "jobs"],
+        capture=True,
+        check=False,
+    ).strip()
+    if can != "no":
+        raise Failure(f"the workstation's role may create Jobs: {can}")
+    job = pod_job(f"{WORKSTATION}-job", fleet.image, ["true"], {})
+    created = subprocess.run(
+        [*kubectl, "--context", WORKSTATION, "create", "--dry-run=server", "-f", "-"],
+        input=json.dumps(job),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if created.returncode == 0 or "forbidden" not in created.stderr.lower():
+        raise Failure(f"the workstation's role created a Job: {created.stdout}{created.stderr}")
+    env = fleet_resource.spec_env(
+        fleet.get(), state_claim="narwhal-state", policy=fleet_resource.VolumePolicy()
+    )
+    # What only the controller sets.
+    for name in (
+        kubernetes_target.FLEET_UID,
+        kubernetes_target.ENGINE_ACCOUNT,
+        kubernetes_target.SIDECAR_USER,
+    ):
+        env.pop(name, None)
+    env.update(
+        PATH=os.environ.get("PATH", "/usr/bin:/bin"),
+        HOME=str(cluster.work),
+        KUBECONFIG=str(kubeconfig),
+        NARWHAL_KUBECTL=str(cluster.tools / "kubectl"),
+        NARWHAL_KUBERNETES_CONTEXT=WORKSTATION,
+    )
+    directory = cluster.work / "workstation-run"
+    narwhal = Path(sys.executable).with_name("narwhal")
+    results: dict[str, dict[str, Any]] = {}
+    for action, wanted in (("plan", {0}), ("run", {0}), ("status", {0, 3}), ("down", {2})):
+        argv = [str(narwhal), "deploy", action, "--target", "kubernetes", "--run", str(directory)]
+        if action == "run":
+            argv += ["--timeout", "300"]
+        done = subprocess.run(
+            [*argv, "--format", "json"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        try:
+            result = json.loads(done.stdout)
+        except ValueError:
+            raise Failure(f"deploy {action} printed no result: {done.stderr[-2000:]}") from None
+        if done.returncode not in wanted:
+            raise Failure(
+                f"deploy {action} --target kubernetes exited {done.returncode}: "
+                f"{json.dumps(result.get('errors'))} {done.stderr[-2000:]}"
+            )
+        results[action] = {"exit": done.returncode, "data": result.get("data") or {}}
+    if spec != fleet.get()["spec"]:
+        raise Failure("the workstation changed the fleet's spec")
+    managers = results["run"]["data"].get("managers") or []
+    if not any(GITOPS_MANAGER in manager for manager in managers) or results["run"]["data"].get(
+        "applied"
+    ):
+        raise Failure(f"run applied a fleet another manager owns: {managers}")
+    evidence = results["run"]["data"].get("evidence") or {}
+    if not evidence.get("jobs") or not evidence.get("files") or not evidence.get("complete"):
+        raise Failure(f"run copied no evidence through an export Job: {evidence}")
+    mirrored = sorted(
+        str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()
+    )
+    if "run.json" not in mirrored or not any(
+        n.startswith("stages/access/attempt-") for n in mirrored
+    ):
+        raise Failure(f"the run directory mirrors no record or access evidence: {mirrored}")
+    if any(n.endswith(("run.salt", "credential.json")) for n in mirrored):
+        raise Failure(f"an export copied a secret of the run directory: {mirrored}")
+    answers = (fleet.get().get("status") or {}).get("exports") or []
+    jobs = json.loads(cluster.kubectl("get", "jobs", "-o", "json", "--show-managed-fields"))
+    exports = [
+        item
+        for item in jobs["items"]
+        if item["metadata"].get("labels", {}).get(GATE_KIND_LABEL) == "export"
+    ]
+    if not answers or not exports:
+        raise Failure(f"the controller named no export Job: {answers}")
+    for item in exports:
+        pod = item["spec"]["template"]["spec"]
+        mounts = pod["containers"][0]["volumeMounts"]
+        # Who wrote the Job itself; the Job controller writes its status.
+        writers = {
+            entry["manager"]
+            for entry in item["metadata"].get("managedFields") or []
+            if entry.get("subresource") != "status"
+        }
+        if (
+            pod.get("automountServiceAccountToken") is not False
+            or not all(mount.get("readOnly") for mount in mounts)
+            or any(mount["subPath"].count("/") < 3 for mount in mounts)
+            or writers != {objects.MANAGER}
+        ):
+            raise Failure(f"export Job {item['metadata']['name']} is not the controller's: {item}")
+    summary.passed(
+        "workstation-cli",
+        account=WORKSTATION,
+        can_create_jobs=False,
+        exits={action: found["exit"] for action, found in results.items()},
+        managers=managers,
+        evidence=evidence,
+        export_jobs=len(exports),
+        mirrored=len(mirrored),
+        spec_unchanged=True,
+    )
 
 
 def delete(cluster: Cluster, fleet: Fleet, summary: Summary) -> None:
@@ -1250,21 +1428,30 @@ def serve(
     )
     cluster.kubectl("wait", "--for=condition=Ready", "pod", "-l", selector, "--timeout=600s")
     profiled = fleet_file(template, document["directEngines"])
-    cluster.apply(
-        pod_job(
-            "profile",
-            reference,
-            [
-                "python3",
-                "-I",
-                "-c",
-                PROFILE_SCRIPT,
-                json.dumps(profiled),
-                json.dumps(template["runtime"]),
-                f"/narwhal-state/{FLEET_FILE}",
-            ],
-            {"narwhal-state": "/narwhal-state"},
-        )
+    # It stands in for the controller's gate Jobs, which alone may mount the state claim, so
+    # it is sent as the controller.
+    cluster.kubectl(
+        "create",
+        "--as",
+        CONTROLLER_ACCOUNT,
+        "-f",
+        "-",
+        input=json.dumps(
+            pod_job(
+                "profile",
+                reference,
+                [
+                    "python3",
+                    "-I",
+                    "-c",
+                    PROFILE_SCRIPT,
+                    json.dumps(profiled),
+                    json.dumps(template["runtime"]),
+                    f"/narwhal-state/{FLEET_FILE}",
+                ],
+                {"narwhal-state": "/narwhal-state"},
+            )
+        ),
     )
     profile = wait_job(cluster, "profile", 600).strip()
     apply_serving(cluster, fleet)

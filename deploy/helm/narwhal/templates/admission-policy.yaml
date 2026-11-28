@@ -15,6 +15,14 @@ IPC_LOCK:
   capability.
 - Only the controller's workloads carry the engine, router, gate and HAProxy labels; the
   routers' NetworkPolicy admits the last three.
+- Only the controller's Deployment, the ReplicaSets the Deployment controller makes for it and
+  the pods the ReplicaSet controller makes for those run as the controller's ServiceAccount,
+  so no other pod gets the controller's token. A pod names its ReplicaSet only by name, so the
+  policy takes a ReplicaSet named after the controller's Deployment as one of its own; only the
+  Deployment controller makes such a ReplicaSet with the controller's ServiceAccount.
+- Only the controller's workloads, the controller's own Deployment, and the pods and
+  ReplicaSets the Kubernetes controllers make for them mount the state claim, which holds the
+  run directories, their salts and the key check's HMACs.
 - No pod is privileged, shares the host's process or IPC namespace, binds a host port, or sets
   an unsafe SELinux type, an unconfined AppArmor profile, an unmasked /proc, an unsafe sysctl, a
   Windows host process or a RuntimeClass outside runtimeClassNames. Every pod but an engine pod
@@ -32,7 +40,8 @@ it outlives the controller and the workloads the fleet leaves behind.
 */ -}}
 {{- $name := printf "%s-narwhal" .Release.Namespace }}
 {{- $model := include "narwhal.fleet.modelVolume" . }}
-{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "narwhal.controller" .) }}
+{{- $controllerName := include "narwhal.controller" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace $controllerName }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -95,6 +104,12 @@ spec:
           && object.metadata.ownerReferences.exists(r, has(r.controller) && r.controller)
           ? object.metadata.ownerReferences.filter(r, has(r.controller) && r.controller)[0].kind
           : ''
+    - name: ownerName
+      expression: |-
+        has(object.metadata.ownerReferences)
+          && object.metadata.ownerReferences.exists(r, has(r.controller) && r.controller)
+          ? object.metadata.ownerReferences.filter(r, has(r.controller) && r.controller)[0].name
+          : ''
     - name: requester
       expression: request.userInfo.username
     # The Kubernetes controller that makes an object of each owner kind, by its ServiceAccount
@@ -120,6 +135,23 @@ spec:
               || (request.operation == 'UPDATE' && object.spec.template == oldObject.spec.template)
               || (object.kind == 'ReplicaSet' && variables.madeByOwner && variables.owner == 'Deployment')
             ? object.kind : ''
+    # The controller's own Deployment, as its installer applies it, the ReplicaSets the
+    # Deployment controller makes for it, and their pods.
+    - name: controllerPath
+      expression: |-
+        (object.kind == 'Deployment' && object.metadata.name == '{{ $controllerName }}')
+          || (object.kind == 'ReplicaSet' && variables.madeByOwner
+              && variables.owner == 'Deployment' && variables.ownerName == '{{ $controllerName }}')
+          || (object.kind == 'Pod' && variables.madeByOwner && variables.owner == 'ReplicaSet'
+              && variables.ownerName.startsWith('{{ $controllerName }}-'))
+    - name: serviceAccount
+      expression: |-
+        has(variables.spec.serviceAccountName) ? variables.spec.serviceAccountName
+          : (has(variables.spec.serviceAccount) ? variables.spec.serviceAccount : '')
+    - name: templateKept
+      expression: |-
+        request.operation == 'UPDATE'
+          && (object.kind == 'Pod' || object.spec.template == oldObject.spec.template)
     # The workload kinds each controller-owned component comes from.
     - name: kinds
       expression: |-
@@ -316,6 +348,17 @@ spec:
         variables.containers.all(c, !has(c.volumeMounts)
           || c.volumeMounts.all(m, m.name != '{{ $model }}' || (has(m.readOnly) && m.readOnly)))
       message: every container mounts the model volume read-only
+      reason: Forbidden
+    - expression: |-
+        variables.templateKept || variables.serviceAccount != '{{ $controllerName }}'
+          || variables.controllerPath
+      message: only the controller's Deployment and its pods run as the controller's ServiceAccount
+      reason: Forbidden
+    - expression: |-
+        !variables.volumes.exists(v, has(v.persistentVolumeClaim)
+            && v.persistentVolumeClaim.claimName == '{{ include "narwhal.stateClaim" . }}')
+          || variables.trusted != '' || variables.controllerPath
+      message: only the fleet controller's workloads and its own Deployment mount the state claim
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

@@ -814,6 +814,9 @@ def _cluster_plan(args: argparse.Namespace, env: dict[str, str]) -> int:
     if built is None:
         return 2
     directory = args.run.resolve()
+    if directory.exists():
+        # Task 18's checks hold before plan logs into the run directory.
+        check_directory(directory)
     logs = directory if directory.is_dir() else _access_logs()
     session = kubernetes_cli.Session(directory, env, logs=logs / kubernetes_cli.KUBECTL_LOGS)
     if directory.is_dir():
@@ -856,8 +859,8 @@ def _cluster_plan(args: argparse.Namespace, env: dict[str, str]) -> int:
         }
     )
     if conflict is not None:
-        _conflict("plan", conflict, "failed_gate", "gate_failed")
-        return 1
+        _conflict("plan", conflict, "error", "apply_conflict")
+        return 4
     return 0
 
 
@@ -1032,13 +1035,17 @@ def _cluster_status(args: argparse.Namespace, env: dict[str, str]) -> int:
         return 1
     stall = kubernetes_cli.conditions(live).get(fleet_resource.STALLED) or {}
     if stall.get("status") == "True":
+        # The same result `run` gives the stall: a refused input is invalid input.
+        status, code, exit_code = kubernetes_cli.stall_result(
+            stall, kubernetes_cli.failure_of(directory)
+        )
         results.record_error(
-            "failed_gate",
+            code,
             f"the fleet is stalled: {stall.get('reason')}: {stall.get('message')}",
             stage="fleet",
         )
-        results.set_status("failed_gate")
-        return 1
+        results.set_status(status)
+        return exit_code
     # Observing a route takes a Job on each node; the controller observes it on every pass.
     if _degraded(checks, unobserved=True):
         results.set_status("degraded")
@@ -1099,7 +1106,8 @@ def _cluster_down(args: argparse.Namespace, env: dict[str, str]) -> int:
         data["stopped"] = followed.outcome == "stopped"
         if followed.outcome != "gone":
             data["evidence"] = _evidence(session, "down")
-        if args.delete:
+        # A fleet that has not stopped is never deleted: its evidence is not all copied yet.
+        if args.delete and data["stopped"]:
             data["deleted"] = session.delete(uid)
     for process in processes:
         state = "stopped" if process["stopped"] else "not running"
@@ -1114,6 +1122,7 @@ def _cluster_down(args: argparse.Namespace, env: dict[str, str]) -> int:
     if not data["stopped"] and not data["deleted"]:
         message = (
             f"the controller did not report the fleet stopped within {timeout:g} s"
+            + ("; down did not delete it" if args.delete else "")
             if followed.outcome == "timeout"
             else "the fleet was deleted while down waited for it to stop"
         )

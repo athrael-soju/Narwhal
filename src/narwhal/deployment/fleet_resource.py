@@ -64,6 +64,8 @@ CONFIG_SHA256 = qualified("config-sha256")
 SCHEMA_SHA256 = qualified("schema-sha256")
 # On the fleet: a new value asks a stalled fleet to run again.
 REQUESTED_AT = qualified("requested-at")
+# A workstation's request for an export Job; see `kubernetes_export`.
+EXPORT_REQUEST = qualified("export-request")
 # Lease names are DNS subdomains, so the group can follow a label.
 CONTROLLER_LEASE = f"controller.{GROUP}"
 # The field manager of `narwhal deploy`; a fleet whose spec another manager owns is followed,
@@ -730,6 +732,21 @@ _STATUS = _object(
             "The fleet UIDs of the run directories an earlier fleet of this name left",
             _string("A fleet UID", 36, pattern=_UID),
             MAX_RETAINED_RUNS,
+        ),
+        "exports": _array(
+            f"The export Jobs the controller made for the latest {EXPORT_REQUEST} values",
+            _object(
+                "One export request's answer: its Job, or why it has none",
+                {
+                    "nonce": _string("The request's nonce", 32, pattern=r"^[0-9a-f]{32}$"),
+                    "job": _string("The export Job's name", 63),
+                    "uid": _string("The export Job's UID", 36, pattern=_UID),
+                    "error": _string("Why the controller made no export Job", 1024),
+                },
+                required=["nonce"],
+            ),
+            4,
+            map_keys=["nonce"],
         ),
     },
 )

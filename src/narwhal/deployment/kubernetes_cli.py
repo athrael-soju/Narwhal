@@ -10,28 +10,27 @@ workstation never takes a field from a GitOps tool.
 
 The run directory stays the workstation's, with task 18's owner and mode checks. It names the
 fleet it follows in `kubernetes-fleet.json` and mirrors the controller's run directory: its
-`run.json` and every stage's evidence. The mirror arrives through export Jobs, never exec. An
-export Job is owned by the fleet, runs the fleet's Narwhal image without a ServiceAccount
-token, mounts the controller's run directory read-only and prints the files the workstation
-lacks, by SHA-256, as a gate Job returns its files. `kubernetes_target.gate_files` checks them
-against the log's manifest, so a truncated or altered log writes nothing. Each Job's log stays
-under `EXPORT_LOG_BYTES`, below the kubelet's 10 MiB log rotation, and the next Job carries
-what did not fit. The key check's salt and HMAC never leave the cluster: together they would
-let anyone holding them test guesses of the engine API key.
+`run.json` and every finished attempt's evidence. The mirror arrives through export Jobs,
+never exec, and the workstation never creates one: it sets the fleet's
+`<GROUP>/export-request` annotation, the fleet controller makes the Job from its own image and
+names it in `status.exports`, and the workstation reads the Job's pod log. `kubernetes_export`
+describes the Job, which mounts only the run record and the attempt directories asked for,
+read-only, so the salt that keys the record's digests and the key check's salt and HMACs
+never reach an export pod. `kubernetes_target.gate_files` checks the files against the log's
+manifest, so a truncated or altered log writes nothing, and an exported file never replaces
+evidence the run directory already holds. `kubernetes-export.json` keeps which attempts the
+run directory holds whole.
 
-The workstation's identity needs the chart's fleet-editor Role and `WORKSTATION_RULES`:
-create and get on Jobs for the export Jobs, get and list on pods for an export Job's pod and
-the live checks of `plan` and `status`, and get on `pods/log`. It needs nothing on Secrets,
-RBAC or exec. Creating Jobs lets it run any pod the namespace's admission policy admits, which
-a fleet writer can already have the controller run.
+The workstation's identity needs the chart's fleet-editor Role, of which it uses get, create,
+patch and delete on `narwhalfleets` (`FLEET_RULES`), and `WORKSTATION_RULES`: get and list on
+pods, to find an export Job's pod and for the live checks of `plan` and `status`, and get on
+`pods/log`, to read the export. It needs no verb on Jobs, Secrets, RBAC or `pods/exec`, so it
+cannot start a pod of its own.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
-import gzip
-import hashlib
 import json
 import os
 import re
@@ -42,11 +41,10 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Protocol
 
 from narwhal.runtime.kubernetes_api import (
-    JOB,
     POD,
     Conflict,
     Kind,
@@ -54,7 +52,7 @@ from narwhal.runtime.kubernetes_api import (
 )
 
 from ..serving.control_token import ROUTER_TOKEN_ENV
-from . import discovery, fabric, fleet_resource, kubernetes_gate, kubernetes_objects, run_record
+from . import discovery, fabric, fleet_resource, kubernetes_export, run_record
 from . import kubernetes_target as target
 from .deploy import CALIBRATION, MARGIN, PROFILE, SLO, InputError
 from .fleet_resource import (
@@ -80,7 +78,6 @@ from .fleet_resource import (
     stage_timeout_env,
 )
 from .kubernetes_graph import KUBERNETES_GRAPH
-from .kubernetes_objects import Owner
 from .kubernetes_target import FLEET, Cluster, KubectlCluster, KubernetesDeployment
 from .launch_engine.kubernetes import (
     API_KEY_SECRET_ENV,
@@ -95,7 +92,7 @@ from .runner import Decision, check_directory
 FLEET_FILE = "kubernetes-fleet.json"
 KUBECTL_LOGS = "kubectl"
 LIVE_LOGS = "live"
-LOCAL_ONLY = (FLEET_FILE, run_record.LOCK, KUBECTL_LOGS, LIVE_LOGS)
+LOCAL_ONLY = (FLEET_FILE, "kubernetes-export.json", run_record.LOCK, KUBECTL_LOGS, LIVE_LOGS)
 # The controller's files no export reads: its lock, the salt that keys the run record's
 # digests, and the key check's salt and HMAC.
 NEVER_EXPORTED = (
@@ -112,70 +109,16 @@ DEFAULT_STATE_CLAIM = "narwhal-state"
 _ENGINE_ACCOUNT = "narwhal-engine"
 _PLACEHOLDER_UID = "00000000-0000-4000-8000-000000000000"
 
-# The export Jobs.
-EXPORT = "export"
-EXPORT_MOUNT = "/narwhal-state"
-# A Job's whole log, kept below the kubelet's default 10 MiB rotation so none of it is lost.
-EXPORT_LOG_BYTES = 8 * 1024 * 1024
-# What the manifest and summary lines take beside the files.
-EXPORT_RESERVE = 64 * 1024
-EXPORT_SECONDS = 300
-EXPORT_TTL_SECONDS = 600
-# Export Jobs one export runs at most; the next export carries on.
+# The export Jobs, which the controller makes on request.
+EXPORT_LOG_BYTES = kubernetes_export.EXPORT_LOG_BYTES
+EXPORT_RESERVE = kubernetes_export.EXPORT_RESERVE
+EXPORT_SECONDS = kubernetes_export.EXPORT_SECONDS
+# Export Jobs one export asks for at most; the next export carries on.
 EXPORT_ROUNDS = 32
-# The SHA-256 list of what the workstation holds travels in the Job's environment.
-HAVE_MAX_BYTES = 256 * 1024
-# The Dockerfile's user, which owns the controller's run directories.
-EXPORT_USER = 10001
-SUMMARY = "narwhal-export "
-_HAVE_ENV = "NARWHAL_EXPORT_HAVE"
-_BYTES_ENV = "NARWHAL_EXPORT_BYTES"
-_SKIP_ENV = "NARWHAL_EXPORT_SKIP"
-# A file being written: `stages.write_evidence`'s, the key check's and the mirror's own.
-TEMPORARY = r"\..+(-[0-9a-f]{32}|\.[0-9]+|\.[0-9]+\.export)"
-# The export Job's program, standard library only. It walks the run directory, skips what the
-# workstation already holds, and prints the rest as `kubernetes_gate` does, until the budget.
-EXPORT_SCRIPT = f"""import base64, gzip, hashlib, json, os, re, sys
-root = sys.argv[1]
-have = json.loads(gzip.decompress(base64.b64decode(os.environ[{_HAVE_ENV!r}])))
-budget = int(os.environ[{_BYTES_ENV!r}]) - {EXPORT_RESERVE}
-skip = set(json.loads(os.environ[{_SKIP_ENV!r}]))
-safe = re.compile(r"(?:[A-Za-z0-9_.+-]+/)*[A-Za-z0-9_.+-]+")
-temporary = re.compile({TEMPORARY!r})
-manifest, used, more, large, unnamed = {{}}, 0, 0, [], 0
-for top, dirs, names in os.walk(root):
-    dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(top, d)))
-    for name in sorted(names):
-        path = os.path.join(top, name)
-        rel = os.path.relpath(path, root).replace(os.sep, "/")
-        if (temporary.fullmatch(name) or rel.split("/")[0] in skip or os.path.islink(path)
-                or not os.path.isfile(path)):
-            continue
-        if not safe.fullmatch(rel) or ".." in rel.split("/"):
-            unnamed += 1
-            continue
-        try:
-            with open(path, "rb") as source:
-                data = source.read()
-        except OSError:
-            continue
-        digest = hashlib.sha256(data).hexdigest()
-        if have.get(rel) == digest:
-            continue
-        cost = 2 * len(rel) + 4 * ((len(data) + 2) // 3) + 160
-        if cost > budget:
-            large.append(rel)
-            continue
-        if used + cost > budget:
-            more += 1
-            continue
-        used += cost
-        print({kubernetes_gate.FILE!r} + rel + " " + base64.b64encode(data).decode(), flush=True)
-        manifest[rel] = {{"sha256": digest, "size": len(data)}}
-print({SUMMARY!r} + json.dumps({{"more": more, "large": large[:64], "unnamed": unnamed}}),
-      flush=True)
-print({kubernetes_gate.MANIFEST!r} + json.dumps(manifest, sort_keys=True), flush=True)
-"""
+SUMMARY = kubernetes_export.SUMMARY
+TEMPORARY = kubernetes_export.TEMPORARY
+# Which attempts the run directory holds whole, by the fleet's uid.
+EXPORT_FILE = "kubernetes-export.json"
 
 # Following the fleet, and the time functions it waits with.
 _sleep: Callable[[float], None] = time.sleep
@@ -195,7 +138,6 @@ FLEET_RULES: tuple[dict[str, Any], ...] = (
     },
 )
 WORKSTATION_RULES: tuple[dict[str, Any], ...] = (
-    {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["get", "create"]},
     {"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
     {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
 )
@@ -929,52 +871,62 @@ class Session:
 
     # Evidence.
 
-    def held(self) -> dict[str, str]:
-        """The SHA-256 of every mirrored file the run directory holds, by relative path."""
-        found = {}
-        for top, dirs, names in os.walk(self.directory):
-            here = Path(top)
-            relative = here.relative_to(self.directory)
-            dirs[:] = [
-                d
-                for d in dirs
-                if not (here / d).is_symlink() and not (relative == Path(".") and d in LOCAL_ONLY)
-            ]
-            for name in names:
-                path = here / name
-                rel = (relative / name).as_posix()
-                if re.fullmatch(TEMPORARY, name) or rel in LOCAL_ONLY or path.is_symlink():
-                    continue
-                if path.is_file():
-                    found[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-        return found
+    def held(self, uid: str) -> dict[str, list[int]]:
+        """The attempts the run directory holds whole, by stage instance directory."""
+        path = self.directory / EXPORT_FILE
+        if not path.is_file():
+            return {}
+        found = json.loads(path.read_text())
+        held = found.get("held") if isinstance(found, dict) and found.get("uid") == uid else None
+        if not isinstance(held, dict):
+            return {}
+        return {str(name): [int(n) for n in numbers] for name, numbers in held.items()}
+
+    def _save_held(self, uid: str, held: Mapping[str, list[int]]) -> None:
+        path = self.directory / EXPORT_FILE
+        if path.is_symlink():
+            raise ExportError(f"{path} is not a regular file of the run")
+        pending = path.with_name(f".{path.name}.{os.getpid()}.export")
+        with contextlib.suppress(FileNotFoundError):
+            pending.unlink()
+        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump({"uid": uid, "held": {k: sorted(v) for k, v in held.items()}}, stream)
+        os.replace(pending, path)
 
     def export(self) -> Exported:
-        """Bring every file of the controller's run directory the run directory lacks, one
-        export Job at a time, each within `EXPORT_LOG_BYTES`."""
+        """Bring the controller's run record and every finished attempt the run directory
+        lacks, one export Job at a time, each within `EXPORT_LOG_BYTES`."""
         check_directory(self.directory)
         live = self.live()
         if live is None:
             raise ExportError(f"{self.env.get(target.NAMESPACE)} holds no {KIND}")
         self.check_bound(live)
         if not (live.get("status") or {}).get("stages"):
-            # The controller makes the run directory as its first pass starts; a Job that
-            # mounted it before then would have the kubelet make it.
+            # The controller writes its run record as its first pass starts.
             return Exported()
-        image = ((live.get("spec") or {}).get("images") or {}).get("narwhal")
-        if not image:
-            raise ExportError("the fleet names no Narwhal image to export with")
-        owner = Owner.of(live)
+        uid = live["metadata"]["uid"]
+        held = self.held(uid)
+        after = ""
         done = Exported()
         while done.rounds < EXPORT_ROUNDS:
-            files, report = self._export_round(owner, image, self.held())
+            request = kubernetes_export.Request(uuid.uuid4().hex, held, after)
+            files, report = self._export_round(request)
             done.rounds += 1
             self._write(files)
             done.files += len(files)
-            done.large = list(report["large"])
+            done.large = sorted({*done.large, *report["large"]})
             done.unnamed = int(report["unnamed"])
             done.more = bool(report["more"])
-            if not done.more or not files:
+            for attempt in report["complete"]:
+                parent, _, number = attempt.rpartition("/attempt-")
+                held.setdefault(parent, [])
+                if int(number) not in held[parent]:
+                    held[parent].append(int(number))
+            # A file that did not fit is resumed after the last one sent of its attempt.
+            after = str(report["last"]) if report["deferred"] else ""
+            self._save_held(uid, held)
+            if not done.more:
                 break
         if done.files:
             try:
@@ -983,89 +935,18 @@ class Session:
                 raise ExportError(f"the mirrored run record is not valid: {error}") from None
         return done
 
-    def export_job(self, owner: Owner, image: str, name: str, have: Mapping[str, str]) -> dict:
-        """The export Job: the fleet's Narwhal image, no ServiceAccount token, and the
-        controller's run directory alone, read-only."""
-        packed = base64.b64encode(
-            gzip.compress(json.dumps(dict(have), sort_keys=True).encode(), mtime=0)
-        ).decode()
-        if len(packed) > HAVE_MAX_BYTES:
-            raise ExportError(
-                f"{self.directory} holds too many files to list in an export Job; start a "
-                "new run directory"
-            )
-        claim = self.env.get(target.STATE_CLAIM) or DEFAULT_STATE_CLAIM
-        skip = sorted({*NEVER_EXPORTED, *LOCAL_ONLY})
-        metadata = kubernetes_objects.metadata(owner, name, EXPORT)
-        metadata["labels"][kubernetes_objects.MANAGED_BY_LABEL] = CLI_MANAGER
-        container = {
-            "name": EXPORT,
-            "image": image,
-            "command": ["python3", "-I", "-B", "-c", EXPORT_SCRIPT, EXPORT_MOUNT],
-            "env": [
-                {"name": _HAVE_ENV, "value": packed},
-                {"name": _BYTES_ENV, "value": str(EXPORT_LOG_BYTES)},
-                {"name": _SKIP_ENV, "value": json.dumps(skip)},
-            ],
-            "resources": {
-                "requests": {"cpu": "50m", "memory": "64Mi"},
-                "limits": {"memory": "256Mi"},
-            },
-            "securityContext": {
-                "allowPrivilegeEscalation": False,
-                "readOnlyRootFilesystem": True,
-                "capabilities": {"drop": ["ALL"]},
-            },
-            "volumeMounts": [
-                {
-                    "name": "state",
-                    "mountPath": EXPORT_MOUNT,
-                    "subPath": f"{RUNS}/{owner.namespace}/{owner.uid}",
-                    "readOnly": True,
-                }
-            ],
-        }
-        job = {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "metadata": metadata,
-            "spec": {
-                "backoffLimit": 0,
-                "activeDeadlineSeconds": EXPORT_SECONDS,
-                "ttlSecondsAfterFinished": EXPORT_TTL_SECONDS,
-                "template": {
-                    "metadata": {"labels": kubernetes_objects.labels(EXPORT)},
-                    "spec": {
-                        "restartPolicy": "Never",
-                        "automountServiceAccountToken": False,
-                        "enableServiceLinks": False,
-                        "securityContext": {
-                            "runAsNonRoot": True,
-                            "runAsUser": EXPORT_USER,
-                            "runAsGroup": EXPORT_USER,
-                            "seccompProfile": {"type": kubernetes_objects.RUNTIME_DEFAULT},
-                        },
-                        "containers": [container],
-                        "volumes": [
-                            {
-                                "name": "state",
-                                "persistentVolumeClaim": {"claimName": claim, "readOnly": True},
-                            }
-                        ],
-                    },
-                },
-            },
-        }
-        kubernetes_objects.check_metadata(job)
-        return job
-
     def _export_round(
-        self, owner: Owner, image: str, have: Mapping[str, str]
+        self, request: kubernetes_export.Request
     ) -> tuple[dict[str, bytes], dict[str, Any]]:
-        seed = f"{owner.uid}:{uuid.uuid4().hex}"
-        name = f"{EXPORT}-{hashlib.sha256(seed.encode()).hexdigest()[:12]}"
-        job = self.ws.create(JOB, self.export_job(owner, image, name, have))
-        log = self._job_log(job)
+        """Ask the controller for one export Job and read what its pod printed."""
+        try:
+            value = request.value()
+        except ValueError as error:
+            raise ExportError(str(error)) from None
+        self.ws.annotate(FLEET, NAME, {kubernetes_export.EXPORT_REQUEST: value})
+        answer = self._answer(request.nonce)
+        name = str(answer["job"])
+        log = self._job_log(name, str(answer["uid"]))
         if len(log) > EXPORT_LOG_BYTES:
             raise ExportError(f"export Job {name} logged more than {EXPORT_LOG_BYTES} bytes")
         output = log.decode(errors="replace")
@@ -1077,33 +958,51 @@ class Session:
         try:
             report = json.loads(reports[-1][len(SUMMARY) :])
             report = {
-                "more": int(report["more"]),
+                "more": bool(report["more"]),
                 "large": [str(item) for item in report["large"]],
                 "unnamed": int(report["unnamed"]),
+                "deferred": bool(report["deferred"]),
+                "complete": [str(item) for item in report["complete"]],
+                "last": str(report["last"]),
             }
         except (IndexError, ValueError, KeyError, TypeError):
             raise ExportError(f"export Job {name} reported no summary") from None
+        for attempt in report["complete"]:
+            parent, _, number = attempt.rpartition("/attempt-")
+            if not kubernetes_export.INSTANCE_DIRECTORY.fullmatch(parent) or not number.isdigit():
+                raise ExportError(f"export Job {name} reported {attempt!r} as an attempt")
+        if report["last"] and not kubernetes_export.safe_path(report["last"]):
+            raise ExportError(f"export Job {name} reported {report['last']!r} as a file")
         for path in files:
-            parts = PurePosixPath(path).parts
-            if (
-                parts[0] in LOCAL_ONLY
-                or parts[0] in NEVER_EXPORTED
-                or any(re.fullmatch(TEMPORARY, part) for part in parts)
-            ):
+            if not exportable(path):
                 raise ExportError(f"export Job {name} returned {path}, which no export writes")
         return files, report
 
-    def _job_log(self, job: Mapping[str, Any]) -> bytes:
-        """The log of an export Job's pod once the Job completes. Only a pod the Job controls
-        is read."""
-        name = job["metadata"]["name"]
-        uid = job["metadata"]["uid"]
+    def _answer(self, nonce: str) -> dict[str, Any]:
+        """The controller's answer to the export request `nonce`, from the fleet's status."""
+        deadline = self.clock() + target.GRACE_SECONDS
+        while True:
+            live = self.live()
+            if live is None:
+                raise ExportError(f"the {KIND} is gone")
+            for entry in (live.get("status") or {}).get("exports") or []:
+                if entry.get("nonce") != nonce:
+                    continue
+                if entry.get("error"):
+                    raise ExportError(f"the controller made no export Job: {entry['error']}")
+                if entry.get("job") and entry.get("uid"):
+                    return dict(entry)
+            if self.clock() >= deadline:
+                raise ExportError(
+                    f"the controller answered no export request in {target.GRACE_SECONDS} s"
+                )
+            self.sleep(JOB_POLL_SECONDS)
+
+    def _job_log(self, name: str, uid: str) -> bytes:
+        """The log of the export Job's pod once it succeeds. Only a pod the Job of `uid`
+        controls is read, and the workstation reads no Job: the pod's phase says it all."""
         deadline = self.clock() + EXPORT_SECONDS + target.GRACE_SECONDS
         while True:
-            live = self.ws.get(JOB, name)
-            if live is None:
-                raise ExportError(f"export Job {name} is gone")
-            found = {c.get("type"): c for c in (live.get("status") or {}).get("conditions") or []}
             pods = [
                 pod
                 for pod in self.ws.list(POD, {target.JOB_NAME_LABEL: name})
@@ -1112,17 +1011,12 @@ class Session:
                     for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
                 )
             ]
-            if (found.get("Complete") or {}).get("status") == "True":
-                done = [p for p in pods if (p.get("status") or {}).get("phase") == "Succeeded"]
-                if not done:
-                    raise ExportError(f"export Job {name} completed, and none of its pods remain")
-                return self.ws.log(done[0]["metadata"]["name"], EXPORT)
-            failed = found.get("Failed") or {}
-            if failed.get("status") == "True":
-                raise ExportError(
-                    f"export Job {name} failed: {failed.get('reason')}: {failed.get('message')}"
-                )
             for pod in pods:
+                phase = (pod.get("status") or {}).get("phase")
+                if phase == "Succeeded":
+                    return self.ws.log(pod["metadata"]["name"], kubernetes_export.EXPORT)
+                if phase == "Failed":
+                    raise ExportError(f"export Job {name}'s pod failed")
                 if cause := target.never_runs(pod, scheduled=False):
                     raise ExportError(f"export Job {name}: {cause}")
             if self.clock() >= deadline:
@@ -1130,11 +1024,15 @@ class Session:
             self.sleep(JOB_POLL_SECONDS)
 
     def _write(self, files: Mapping[str, bytes]) -> None:
-        """Write the exported files into the run directory, each private and replaced whole,
-        the run record last, so it never names evidence the directory lacks."""
+        """Write the exported files into the run directory, each private and whole, the run
+        record last, so it never names evidence the directory lacks. Only the run record is
+        ever replaced: evidence the directory holds stays as it was copied."""
         check_directory(self.directory)
+        for name in files:
+            if not exportable(name):
+                raise ExportError(f"{name} is no file an export writes")
         for name in sorted(files, key=lambda item: (item == run_record.RECORD, item)):
-            parts = PurePosixPath(name).parts
+            parts = name.split("/")
             here = self.directory
             for part in parts[:-1]:
                 here = here / part
@@ -1144,6 +1042,10 @@ class Session:
             path = here / parts[-1]
             if path.is_symlink() or (path.exists() and not path.is_file()):
                 raise ExportError(f"{path} is not a regular file of the run")
+            if path.exists() and name != run_record.RECORD:
+                if path.read_bytes() == files[name]:
+                    continue
+                raise ExportError(f"{path} holds other evidence; an export never replaces it")
             pending = path.with_name(f".{path.name}.{os.getpid()}.export")
             with contextlib.suppress(FileNotFoundError):
                 pending.unlink()
@@ -1251,6 +1153,23 @@ def failure_of(directory: Path) -> tuple[str, dict[str, Any]] | None:
         if entry["status"] in (run_record.FAILED, run_record.TIMEOUT) and entry["failure"]:
             return name, entry
     return None
+
+
+def exportable(name: str) -> bool:
+    """Whether an export may write `name`: a run-relative file of plain parts, none of the
+    workstation's own files or the controller's secrets, compared without case, since a
+    workstation's file system may ignore it."""
+    if not kubernetes_export.safe_path(name):
+        return False
+    parts = name.split("/")
+    reserved = {item.lower() for item in (*LOCAL_ONLY, *NEVER_EXPORTED)}
+    if parts[0].lower() in reserved:
+        return False
+    if any(re.fullmatch(TEMPORARY, part) for part in parts):
+        return False
+    return name == run_record.RECORD or (
+        len(parts) > 3 and parts[0] == "stages" and any(p.startswith("attempt-") for p in parts)
+    )
 
 
 def stall_result(stall: Mapping[str, Any], failed: Any) -> tuple[str, str, int]:

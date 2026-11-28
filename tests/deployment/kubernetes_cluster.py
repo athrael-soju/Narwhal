@@ -3135,6 +3135,7 @@ def _pod_ready(pod: Mapping[str, Any]) -> bool:
 # The task 18 rig, now over the store.
 
 NAMESPACE = "fleet"
+CONTROLLER_IMAGE = "registry.example/narwhal-controller@sha256:" + "c0" * 32
 NODES = {"engine-1": "gpu-a", "engine-2": "gpu-b"}
 IMAGE = "registry.example/engine@sha256:" + "e" * 64
 NARWHAL_IMAGE = "registry.example/narwhal@sha256:" + "a" * 64
@@ -3397,6 +3398,10 @@ class Rig:
             "stateClaim": STATE_CLAIM,
             "engineServiceAccount": ENGINE_ACCOUNT,
             "sidecarUser": SIDECAR_USER,
+            # The controller's own image, which the chart pins apart from the fleet's.
+            "image": CONTROLLER_IMAGE,
+            "runAsUser": 10001,
+            "runAsGroup": 10001,
         }
         self.env = kubernetes_target.settings_env(self.fleet, self.settings)
         self.store.kubelet = self.kubelet
@@ -3512,7 +3517,9 @@ class Rig:
         if old is not None:
             return
         self.workloads.append(copy.deepcopy(obj))
-        if fleet_resource.GATE_LABEL not in (obj["metadata"].get("labels") or {}):
+        gate = (obj["metadata"].get("labels") or {}).get(fleet_resource.GATE_LABEL)
+        # An export Job is no stage's gate; the workstation tests run its pods.
+        if gate is None or gate == "export":
             return
         entry = entry_of(obj)
         self.created.append(entry)
