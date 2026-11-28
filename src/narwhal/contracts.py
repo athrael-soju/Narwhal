@@ -27,6 +27,12 @@ DEPLOYMENT_RUN = "deployment_run"
 DEPLOYMENT_STATUS = "deployment_status"
 TRIAL = "trial"
 
+# The API group of the `NarwhalFleet` resource, and of every Kubernetes label, annotation,
+# condition type, scheduling gate and Lease name Narwhal writes. It is a placeholder under
+# `example.com`, which RFC 2606 reserves, and changes to a registered project domain before
+# the resource reaches `v1beta1`.
+API_GROUP = "narwhal.example.com"
+
 
 @dataclass(frozen=True)
 class Contract:

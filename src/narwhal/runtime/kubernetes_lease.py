@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from ..contracts import API_GROUP
 from . import kubernetes_api as k
 from .lease import DEFAULT_SAFETY_MARGIN_S, FENCE_CLOCK, LeaseError, LeaseRecord
 
@@ -48,7 +49,7 @@ FIELD_MANAGER = "narwhal-router"
 BACKOFF = k.Backoff(base_s=0.1, cap_s=0.5, attempts=2)
 MAX_DURATION_S = 2**31 - 1
 # The annotation a release writes, `<epoch>/<holder>`, and every claim removes.
-RELEASED = "narwhal.io/released-by"
+RELEASED = f"{API_GROUP}/released-by"
 # Recent renewTime stamps this process wrote, each with the time before which that write may
 # not serve, to recognise its own write after a lost reply without dropping its wait.
 STAMPS_KEPT = 32
