@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -92,6 +94,46 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "demand_risk": (controller.safety.risk_handoff() if controller is not None else None),
     }
     return versioned(HANDOFF, out)
+
+
+# The response header that carries the primary's signature of its handoff body.
+SIGNATURE_HEADER = "X-Narwhal-Handoff-Signature"
+
+
+class HandoffRefused(ValueError):
+    """A handoff that did not come from a router holding the control token, or not now."""
+
+
+def _signed(doc: dict[str, Any], body: bytes) -> bytes:
+    # The epoch, holder and time are also in the body; naming them first binds the signature to
+    # the lease term and moment a standby checks, whatever the body's encoding.
+    head = json.dumps([HANDOFF, doc.get("epoch"), doc.get("holder"), doc.get("at")])
+    return head.encode() + b"\n" + body
+
+
+def sign(doc: dict[str, Any], body: bytes, token: str) -> str:
+    """HMAC-SHA256 of the handoff `body`, encoding `doc`, under the router control token."""
+    if not token:
+        raise HandoffRefused("no control token to sign the handoff with")
+    digest = hmac.new(token.encode(), _signed(doc, body), hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def verified(body: bytes, signature: str | None, token: str) -> dict[str, Any]:
+    """Return the handoff `body` once its `signature` proves the router control token signed it.
+
+    The signature is checked before the document is validated, so an unsigned document cannot
+    end a standby's shadowing with a contract version it made up.
+    """
+    try:
+        doc = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HandoffRefused(f"handoff is not JSON: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise HandoffRefused("handoff is not an object")
+    if not signature or not hmac.compare_digest(signature, sign(doc, body, token)):
+        raise HandoffRefused("handoff signature does not match the control token")
+    return validate(doc)
 
 
 def validate(doc: Any) -> dict[str, Any]:

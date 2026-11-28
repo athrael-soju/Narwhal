@@ -108,7 +108,7 @@ Ingress authenticates clients and removes their credentials before a request rea
 }
 ```
 
-Every engine request carries that credential and a router-generated `x-request-id`, unique to every attempt and phase. Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL. Attestation requests go to the attestation sidecar URL on the trusted control network.
+Every engine request carries that credential and a router-generated `x-request-id`, unique to every attempt and phase, with these exceptions. Health checks carry no credential. On a fleet with an `engine_contract`, the router sends an engine no credential before its attestation verifies: it reads the attestation first, then the engine's version and process start without the key. SGLang and llama.cpp serve their version only with the key, so for them the router checks the attestation against the sidecar's process start and the version the attestation names, and reads the version with the key only after that passes. Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL. Attestation requests go to the attestation sidecar URL on the trusted control network.
 
 `/narwhal/state` reports the authentication mode in `admission.engine_auth`: `engine-credential` when `engine.engine_api_key_env` is set, and `boundary` when it is empty. Use the same mode for workload measurement and production serving.
 

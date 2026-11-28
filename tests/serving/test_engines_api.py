@@ -16,6 +16,7 @@ from narwhal.serving import engines_api
 from narwhal.serving.app import create_app
 from narwhal.serving.schemas import MembershipOut
 from narwhal.types import Request
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet
 
 NEW = {
@@ -37,7 +38,9 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
         self.router = app.state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://router"
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(self.client.aclose)
         capture = AsyncMock(

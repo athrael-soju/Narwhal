@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI
 from fastapi import Request as HTTPRequest
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from .. import __version__
 from ..config import FleetConfig
@@ -42,6 +43,7 @@ from ..runtime.standby import (
 )
 from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
+from .control_token import ROUTER_TOKEN_ENV, UNCONFIGURED, authorized, check_token, read_token
 from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
@@ -63,6 +65,20 @@ log = logging.getLogger("narwhal.app")
 
 
 _FORWARD_HEADERS = ("x-request-id",)
+# The OpenAPI entries of a control route's refusals; the ingress answers both.
+CONTROL_REFUSALS: dict[int | str, dict[str, Any]] = {
+    401: {"description": "The request carries no control token, or another one"},
+    403: {"description": "The router has no control token configured"},
+}
+
+
+class Unauthenticated(Exception):
+    """A control route's request carries no valid control token."""
+
+
+async def _unauthenticated(request: HTTPRequest, exc: Exception) -> Response:
+    # The answer says nothing of the route or the token.
+    return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
 def create_app(
@@ -81,8 +97,24 @@ def create_app(
     lease_safety_margin_s: float = 1.0,
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
+    control_token: str | None = None,
 ) -> FastAPI:
+    """Build the router application.
+
+    `control_token`, by default `NARWHAL_ROUTER_TOKEN`, is the bearer token that every route
+    that changes membership or lifecycle requires, and the key that signs the handoff a
+    standby reads. Without one the router refuses those routes, and a standby refuses to start.
+    """
     cfg = cfg or FleetConfig.from_env()
+    if control_token is None:
+        control_token = read_token()
+    engine_key = os.environ.get(cfg.engine_api_key_env) if cfg.engine_api_key_env else None
+    check_token(control_token, engine_key)
+    if standby_of and not control_token:
+        raise ValueError(
+            "a standby accepts only a handoff signed with the control token; "
+            f"set {ROUTER_TOKEN_ENV} to the token its primary holds"
+        )
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
     for name, value in (
@@ -205,6 +237,7 @@ def create_app(
                     takeover_after=standby_takeover_after or TAKEOVER_AFTER,
                     max_handoff_age_s=standby_max_handoff_age_s or MAX_HANDOFF_AGE_S,
                     transport=standby_transport,
+                    token=control_token,
                 )
             )
         journal.open()
@@ -283,8 +316,20 @@ def create_app(
     app.state.router = router
     app.state.yield_control = yield_control
     app.state.begin_shutdown = begin_shutdown
-    app.add_middleware(ServingIngress, router=router)
+    app.add_middleware(ServingIngress, router=router, control_token=control_token)
     app.add_exception_handler(FleetNotControlled, not_controlling_response)
+    app.add_exception_handler(Unauthenticated, _unauthenticated)
+
+    async def require_token(request: HTTPRequest) -> None:
+        # The ingress refuses these requests first; this keeps the routes refusing on their own.
+        if not authorized(request.headers.get("authorization"), control_token):
+            raise Unauthenticated
+
+    # Routes that change membership or lifecycle need the control token.
+    authenticated: dict[str, Any] = {
+        "dependencies": [Depends(require_token)],
+        "responses": CONTROL_REFUSALS,
+    }
     # Routes that describe the fleet answer only from the router that holds the lease.
     controlled: dict[str, Any] = {
         "dependencies": [Depends(require_control)],
@@ -351,9 +396,21 @@ def create_app(
             return JSONResponse(content=content)
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
-    @app.get("/narwhal/handoff", summary="The live control-plane handoff document", **controlled)
-    async def handoff() -> dict[str, Any]:
-        return handoff_state.snapshot(router)
+    @app.get(
+        "/narwhal/handoff",
+        summary="The live control-plane handoff document, signed with the control token",
+        dependencies=controlled["dependencies"],
+        responses={**CONTROLLED_READ, 403: CONTROL_REFUSALS[403]},
+    )
+    async def handoff() -> Response:
+        if not control_token:
+            return PlainTextResponse(UNCONFIGURED, status_code=403)
+        # A standby accepts only a signed document; the token itself never leaves the router.
+        response = JSONResponse(content=handoff_state.snapshot(router))
+        body = bytes(response.body)
+        signature = handoff_state.sign(json.loads(body), body, control_token)
+        response.headers[handoff_state.SIGNATURE_HEADER] = signature
+        return response
 
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
     async def metrics() -> Response:
@@ -387,13 +444,15 @@ def create_app(
     async def state() -> dict[str, Any]:
         return router.state()
 
-    add_engine_routes(app, router, controlled)
+    add_engine_routes(app, router, controlled, authenticated)
 
     @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **diagnosable)
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
 
-    @app.post("/narwhal/lifecycle/drain", summary="Remove engines from new placement")
+    @app.post(
+        "/narwhal/lifecycle/drain", summary="Remove engines from new placement", **authenticated
+    )
     async def drain(action: DrainIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
@@ -429,7 +488,11 @@ def create_app(
                 )
             return JSONResponse(content=router.lifecycle.document())
 
-    @app.post("/narwhal/lifecycle/readmit", summary="Validate and return engines to placement")
+    @app.post(
+        "/narwhal/lifecycle/readmit",
+        summary="Validate and return engines to placement",
+        **authenticated,
+    )
     async def readmit(action: ReadmitIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")

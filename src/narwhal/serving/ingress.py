@@ -6,11 +6,12 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from fastapi import Request
-from fastapi.responses import Response
+from fastapi.responses import PlainTextResponse, Response
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .control_token import CONTROL_BODY_LIMIT, UNCONFIGURED, authorized
 from .lifecycle import RequestLifecycle
 from .outcomes import INFLIGHT_LIMIT_MESSAGE
 from .records import deadline_response, overloaded_response
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
 
 LIFECYCLE = "narwhal.lifecycle"
 COMPLETION_PATHS = frozenset(("/v1/completions", "/v1/chat/completions"))
+# Methods that change nothing. Every other request outside the completion paths is a control
+# request, such as a join, leave, drain or readmission, and needs the control token.
+READ_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
 
 
 class BodyTooLarge(Exception):
@@ -47,16 +51,19 @@ async def _overloaded(
 class ServingIngress:
     """Bound body readers, queued work and response writers as one retained pool."""
 
-    def __init__(self, app: ASGIApp, router: NarwhalRouter) -> None:
-        self.app, self.router = app, router
+    def __init__(self, app: ASGIApp, router: NarwhalRouter, control_token: str = "") -> None:
+        self.app, self.router, self.control_token = app, router, control_token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Create one original owner before a completion endpoint reads its body."""
-        if (
-            scope["type"] != "http"
-            or scope["method"] != "POST"
-            or scope["path"] not in COMPLETION_PATHS
-        ):
+        """Create one original owner before a completion endpoint reads its body, and check a
+        control request's token before anything reads its body."""
+        if scope["type"] == "http" and scope["path"] not in COMPLETION_PATHS:
+            if scope["method"] in READ_METHODS:
+                await self.app(scope, receive, send)
+            else:
+                await self._control(scope, receive, send)
+            return
+        if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
         router = self.router
@@ -113,6 +120,36 @@ class ServingIngress:
         finally:
             state.finish("cancelled")
             router.ingress_inflight -= 1
+
+    async def _control(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Refuse a control request without the token before reading any of its body, then read
+        at most `CONTROL_BODY_LIMIT` bytes and hand the app the body it read."""
+        if not self.control_token:
+            await PlainTextResponse(UNCONFIGURED, status_code=403)(scope, receive, send)
+            return
+        if not authorized(Headers(scope=scope).get("authorization"), self.control_token):
+            # The answer says nothing of the route or the token.
+            await Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})(
+                scope, receive, send
+            )
+            return
+        try:
+            body = await bounded_body(Request(scope, receive), CONTROL_BODY_LIMIT)
+        except BodyTooLarge:
+            await Response(status_code=413)(scope, receive, send)
+            return
+        except ClientDisconnect:
+            return
+        delivered = False
+
+        async def replay() -> Message:
+            nonlocal delivered
+            if delivered:
+                return await receive()
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, replay, send)
 
 
 async def bounded_body(request: Request, limit: int) -> bytes:

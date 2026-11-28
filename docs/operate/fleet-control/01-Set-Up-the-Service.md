@@ -37,6 +37,8 @@ export NARWHAL_CONTROL_TOKEN="$(openssl rand -hex 32)"
 
 Keep the token in your secret store. The console and every API request need it.
 
+The service sends the router's own [control token](../../HTTP-API.md#control-token) with each drain, readmission, join and removal, from `NARWHAL_ROUTER_TOKEN`. Start the service in the router shell, where that variable holds the router's token; without it the router answers those actions with HTTP `403` or `401`. The two tokens are separate: `NARWHAL_CONTROL_TOKEN` guards the service, and `NARWHAL_ROUTER_TOKEN` the router.
+
 ## Start the service
 
 In the router shell, from the checkout root, run:

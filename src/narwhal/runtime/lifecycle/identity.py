@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_spec_identity, verify_attestation
+from ...engines.attestation import (
+    attested_identity,
+    fetch_spec_identity,
+    read_attestation,
+    unkeyed_process_start,
+)
 from ...profiling.generation import (
     binding_digest,
     bound_profiles,
@@ -49,22 +54,19 @@ async def check_process_identities(
 
         async def inspect(spec: EngineSpec) -> tuple[float | None, str]:
             try:
-                identity = await fetch_spec_identity(
-                    cfg,
-                    spec,
-                    transport=router.lifecycle_transport,
-                    headers=router.engines._auth(None),
-                )
                 if not spec.attestation_url:
                     return None, "attestation_url is not configured"
-                async with httpx.AsyncClient(
-                    timeout=cfg.health_timeout_s,
+                # The attestation verifies before any request carries the engine key.
+                payload = await read_attestation(
+                    spec, timeout_s=cfg.health_timeout_s, transport=router.lifecycle_transport
+                )
+                identity, failures = await attested_identity(
+                    cfg,
+                    spec,
+                    payload,
                     transport=router.lifecycle_transport,
-                ) as client:
-                    response = await client.get(spec.attestation_url)
-                    response.raise_for_status()
-                payload = response.json()
-                failures = verify_attestation(payload, contract, identity)
+                    identify=fetch_spec_identity,
+                )
                 if failures:
                     return None, "attestation: " + "; ".join(failures)
                 problems = profile_generation_problems(
@@ -123,11 +125,12 @@ async def capture_process_identities(
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
         try:
-            identity = await fetch_spec_identity(cfg, specs[iid], transport=transport)
+            # A drain record needs only the process start, which needs no engine key.
+            starts[iid] = await unkeyed_process_start(
+                cfg, specs[iid], transport=transport, identify=fetch_spec_identity
+            )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"
-        else:
-            starts[iid] = identity.process_start_time_seconds
     return starts, failures
 
 

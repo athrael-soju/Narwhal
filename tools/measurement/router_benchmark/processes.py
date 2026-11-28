@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -25,6 +26,16 @@ def child_env(pythonpath: str | None) -> dict[str, str]:
     if pythonpath:
         env["PYTHONPATH"] = pythonpath
     return env
+
+
+# The control token every router pair this run starts shares; a standby verifies its primary's
+# handoff with it, and the measurements send none.
+ROUTER_TOKEN = secrets.token_hex(32)
+
+
+def router_env(pythonpath: str | None) -> dict[str, str]:
+    """Return the explicit environment of one router child: `child_env` and its control token."""
+    return {**child_env(pythonpath), "NARWHAL_ROUTER_TOKEN": ROUTER_TOKEN}
 
 
 async def ready_line(process: subprocess.Popen, deadline: float) -> dict:

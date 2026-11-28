@@ -19,6 +19,7 @@ from narwhal.profiling.probe import drain as drain_probe
 from narwhal.profiling.probe import fleet as fleet_probe
 from narwhal.serving import app as serving_app
 from narwhal.types import Role
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet, profile
 from tests.profiling.test_colocated_pairs import WORKLOAD, SglangGroup, sglang_engines, split_fleet
 from tests.wire import routed
@@ -482,7 +483,9 @@ class LiveRouterTests(unittest.IsolatedAsyncioTestCase):
             ):
                 async with Routed(base_url="http://router") as client:
                     response = await client.post(
-                        "/narwhal/lifecycle/drain", json={"engines": [peer.iid]}
+                        "/narwhal/lifecycle/drain",
+                        json={"engines": [peer.iid]},
+                        headers=CONTROL_HEADERS,
                     )
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["engines"][peer.iid]["pending_handoffs"], 0)

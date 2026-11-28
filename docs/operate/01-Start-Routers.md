@@ -84,6 +84,12 @@ Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-prefligh
 
 The shared lease path must support POSIX `flock`, coherent reads, and atomic rename. The host clock offset must stay below `--lease-safety-margin`. `--lease-ttl` must exceed the sum of `--lease-renew-interval` and `--lease-safety-margin`.
 
+Give both routers the same [control token](../HTTP-API.md#control-token) in `NARWHAL_ROUTER_TOKEN`. The standby verifies the primary's handoff with it and refuses to start without it, and every join, removal, drain and readmission needs it. Generate it once per pair and keep it in your secret store:
+
+```bash
+export NARWHAL_ROUTER_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
 Start the first router, with its private listen address as `--host`:
 
 ```bash

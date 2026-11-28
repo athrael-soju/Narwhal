@@ -91,11 +91,16 @@ def _candidate(body: object) -> EngineSpec | str:
     return spec_problem(spec) or spec
 
 
-def add_engine_routes(app: FastAPI, router: NarwhalRouter, controlled: dict[str, Any]) -> None:
+def add_engine_routes(
+    app: FastAPI,
+    router: NarwhalRouter,
+    controlled: dict[str, Any],
+    authenticated: dict[str, Any],
+) -> None:
     """Register `GET` and `POST /narwhal/engines` and `DELETE /narwhal/engines/{iid}`.
 
     `controlled` holds the route options that refuse the read unless the router controls the
-    fleet.
+    fleet, and `authenticated` those that refuse a change without the control token.
     """
 
     @app.get(
@@ -111,7 +116,9 @@ def add_engine_routes(app: FastAPI, router: NarwhalRouter, controlled: dict[str,
         "/narwhal/engines",
         response_model=MembershipOut,
         summary="Validate an engine and add it to the fleet",
+        dependencies=authenticated["dependencies"],
         responses={
+            **authenticated["responses"],
             409: {"model": MembershipOut},
             422: {"model": MembershipOut},
             503: {"model": MembershipOut},
@@ -147,7 +154,9 @@ def add_engine_routes(app: FastAPI, router: NarwhalRouter, controlled: dict[str,
         "/narwhal/engines/{iid}",
         response_model=MembershipOut,
         summary="Drain an engine and remove it from the fleet",
+        dependencies=authenticated["dependencies"],
         responses={
+            **authenticated["responses"],
             202: {"model": MembershipOut},
             404: {"model": MembershipOut},
             409: {"model": MembershipOut},

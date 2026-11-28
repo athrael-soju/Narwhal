@@ -14,7 +14,7 @@ Prerequisites:
 - every engine's `state` is `active` in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle). For a removal, the engine you remove can instead be `drained`, `blocked` or `deadline_exceeded` outside a wave
 - for a join, an `engine.control_connections` sized for the engine count after the join, as [Global admission](../configuration/02-Serving-and-Role-Control.md#global-admission) describes
 - the same Narwhal release on both routers, so the standby can [adopt the membership](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff) after a join or removal
-- a shell on the router host, in the environment and working directory of the router's launch, with `curl` and Python 3
+- a shell on the router host, in the environment and working directory of the router's launch, with `curl` and Python 3. That environment holds the router's [control token](../HTTP-API.md#control-token) in `NARWHAL_ROUTER_TOKEN`, which every join, removal, drain and readmission below sends
 
 The commands below use the fleet file `runs/deployment/fleet.json`, the profile store `runs/profiles.json` at its `profiles.path`, the calibration artifact `runs/deployment/first-token-calibration.json` at its `engine.first_token_calibration_path`, and the limits file `runs/deployment/profiling-limits.json`. Replace them with your paths. Before each join or removal, set `ROUTER_URL` to the active router and `IID` to the engine ID, and create a private run directory:
 
@@ -175,6 +175,7 @@ Replace the member IDs with those of the current fleet:
 BASE=runs/deployment/first-token-calibration.json
 for MEMBER in e0 e1 e2; do
   curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
+    -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
     -H 'content-type: application/json' \
     -d "{\"engines\": [\"$MEMBER\"], \"restart\": false}" > /dev/null
   until curl -fsS "$ROUTER_URL/narwhal/lifecycle" | python3 -c \
@@ -187,6 +188,7 @@ for MEMBER in e0 e1 e2; do
     --calibration-base "$BASE" \
     --calibration-out "$RUN_DIR/first-token-calibration-$MEMBER.json"
   curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
+    -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
     -H 'content-type: application/json' \
     -d "{\"engines\": [\"$MEMBER\"]}" > /dev/null
   BASE="$RUN_DIR/first-token-calibration-$MEMBER.json"
@@ -215,6 +217,7 @@ Send the entry to the active router:
 
 ```bash
 curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d @"$RUN_DIR/$IID.json" \
   -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
@@ -237,7 +240,7 @@ else:
 PY
 ```
 
-On HTTP 200, the engine takes new requests in its entry's `role`. On HTTP 409, `error` gives the refusal or the failed checks. Fix the cause and repeat the request. HTTP 422 reports a problem in the entry, and HTTP 503 means the router does not control the fleet.
+On HTTP 200, the engine takes new requests in its entry's `role`. On HTTP 409, `error` gives the refusal or the failed checks. Fix the cause and repeat the request. HTTP 422 reports a problem in the entry, and HTTP 503 means the router does not control the fleet. HTTP 401 means the request carried no token or the wrong one, and HTTP 403 that the router has no token configured.
 
 To abandon a refused join, install the pre-join store again on both router hosts:
 
@@ -260,6 +263,7 @@ Remove the engine with a 300-second drain deadline:
 
 ```bash
 curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
 ```
 

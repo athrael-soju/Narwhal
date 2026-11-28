@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from fastapi.responses import JSONResponse
 from narwhal.backends import DEFAULT_BACKEND
 from narwhal.backends import load as load_backend
 from narwhal.engines.dialect import EngineDialect
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from narwhal.serving.control_token import headers as control_headers
 
 from .app import API, action_reply
 from .config import Hook
@@ -252,8 +255,13 @@ class EngineActions:
 
     def _client(self) -> httpx.AsyncClient:
         router = self.service.config.router
+        # The router's join, leave, drain and readmit routes need its control token.
+        token = os.environ.get(ROUTER_TOKEN_ENV, "")
         return httpx.AsyncClient(
-            base_url=router.url, timeout=router.timeout_s, transport=self._transport
+            base_url=router.url,
+            timeout=router.timeout_s,
+            transport=self._transport,
+            headers=control_headers(token) if token else None,
         )
 
     async def act(self, iid: str, action: str, params: Mapping[str, Any]) -> Action:

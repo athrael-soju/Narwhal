@@ -4,7 +4,7 @@ description: Serving options, standby takeover and lease fencing for the narwhal
 
 # `narwhal-serve`
 
-Start a router with `narwhal-serve --fleet PATH`.
+Start a router with `narwhal-serve --fleet PATH`, with the router's [control token](../HTTP-API.md#control-token) in `NARWHAL_ROUTER_TOKEN`. Without the token the router serves completions and reads, refuses every membership and lifecycle change with HTTP `403`, and cannot run as a standby.
 
 `narwhal-serve` checks `--host` and `--port` before it loads the fleet file. It exits with these statuses:
 
@@ -14,6 +14,7 @@ Start a router with `narwhal-serve --fleet PATH`.
 | An argument is invalid, including a `--port` outside 0 to 65535 and a `--max-concurrent` above `serving.max_connections` | `2` |
 | The fleet configuration fails to load | `2` |
 | The router configuration fails validation | `2` |
+| `NARWHAL_ROUTER_TOKEN` holds fewer than 32 random bytes or equals the engine API key, or is unset on a router started with `--standby-of` | `2` |
 
 ## Serving options
 
@@ -36,7 +37,7 @@ A command-line option takes precedence over the matching fleet configuration fie
 
 ## Standby takeover and lease fencing
 
-A standby router started with `--standby-of URL` polls the primary every `--standby-probe-interval` seconds. It takes over when all of these hold:
+A standby router started with `--standby-of URL` polls the primary every `--standby-probe-interval` seconds. A poll counts as failed unless the primary returns a handoff [signed](../http-api/07-Handoff-and-Lifecycle.md#get-narwhalhandoff) under the standby's own control token, so both routers need the same `NARWHAL_ROUTER_TOKEN`. It takes over when all of these hold:
 
 - `--standby-takeover-after` consecutive polls have failed.
 - The last handoff the standby received is at most `--standby-max-handoff-age` seconds old.

@@ -20,6 +20,7 @@ from narwhal.runtime.lease import FileLease
 from narwhal.runtime.standby import lease_role, standby_loop
 from narwhal.serving.app import create_app
 from narwhal.types import Role
+from tests import CONTROL_TOKEN, handoff_response
 
 
 class FleetCase(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +89,7 @@ class StandbyRoleTests(FleetCase):
                 return httpx.Response(503, json={"control_ready": False})
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
-            return httpx.Response(200, json=document)
+            return handoff_response(document)
 
         async def until(condition):
             for _ in range(2000):
@@ -105,6 +106,7 @@ class StandbyRoleTests(FleetCase):
                 probe_interval_s=0.005,
                 takeover_after=2,
                 transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
             )
         )
         try:
@@ -143,8 +145,8 @@ class StandbyRoleTests(FleetCase):
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
             if upgraded:
-                return httpx.Response(200, json={**document, "schema_version": 99})
-            return httpx.Response(200, json=document)
+                return handoff_response({**document, "schema_version": 99})
+            return handoff_response(document)
 
         loop = asyncio.create_task(
             standby_loop(
@@ -153,6 +155,7 @@ class StandbyRoleTests(FleetCase):
                 router.lease,
                 probe_interval_s=0.005,
                 transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
             )
         )
         for _ in range(2000):
@@ -181,7 +184,7 @@ class ShutdownHandoffTests(FleetCase):
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
             self.assertEqual(request.url.path, "/narwhal/handoff")
-            return httpx.Response(200, json=document)
+            return handoff_response(document)
 
         app = create_app(
             self.cfg,

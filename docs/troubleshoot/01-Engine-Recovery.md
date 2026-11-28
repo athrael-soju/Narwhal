@@ -34,7 +34,7 @@ For a planned restart, follow [Restarting one engine](../operate/03-Restart-Engi
 If the lifecycle state becomes `blocked`:
 
 1. Repair the failure named in `engines.<id>.error`.
-2. Send `POST /narwhal/lifecycle/readmit` with body `{"engines":["<id>"]}`.
+2. Send `POST /narwhal/lifecycle/readmit` with body `{"engines":["<id>"]}` and the router's [control token](../HTTP-API.md#control-token).
 
 ## Whole-wave recovery
 

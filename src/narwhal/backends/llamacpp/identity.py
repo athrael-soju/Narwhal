@@ -24,6 +24,8 @@ def slot_count(props: Any) -> int | None:
 
 class LlamacppIdentity(EngineIdentityReader):
     reports_process_start = False
+    # The engine serves its version only with its API key.
+    identity_needs_key = True
     contract_fields = frozenset()
 
     async def version(

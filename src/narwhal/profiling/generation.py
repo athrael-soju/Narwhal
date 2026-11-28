@@ -7,7 +7,12 @@ import httpx
 
 from ..config.model import EngineSpec, FleetConfig
 from ..contracts import canonical_digest
-from ..engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
+from ..engines.attestation import (
+    EngineIdentity,
+    attested_identity,
+    fetch_spec_identity,
+    read_attestation,
+)
 
 if TYPE_CHECKING:
     from .model import Profile
@@ -52,16 +57,17 @@ async def read_generation(
     contract = cfg.engine_contract
     if timeout_s is None:
         timeout_s = cfg.health_timeout_s
-    identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
     if contract is None:
+        # A fleet without a contract has no attestation; it trusts the engines it configures.
+        identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
         return identity_generation(identity)
     if not spec.attestation_url:
         raise ValueError(f"{spec.iid}: attestation_url is required for profile generation")
-    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
-        response = await client.get(spec.attestation_url)
-        response.raise_for_status()
-        payload = response.json()
-    failures = verify_attestation(payload, contract, identity)
+    # The attestation is read first, so the engine key goes only to an engine it verifies.
+    payload = await read_attestation(spec, timeout_s=timeout_s, transport=transport)
+    identity, failures = await attested_identity(
+        cfg, spec, payload, timeout_s=timeout_s, transport=transport, identify=fetch_spec_identity
+    )
     if failures:
         raise AttestationMismatch(f"{spec.iid}: attestation: {'; '.join(failures)}")
     return GenerationEvidence(
