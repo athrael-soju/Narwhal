@@ -37,6 +37,8 @@ spec:
     ports:
       engine: 8001
       attestation: 8101
+      sideChannel: 5601
+      ucxTcpPortRange: 20000-20099
     nodes:
       - node: gpu-node-a
         fabricInterface: eth1
@@ -81,7 +83,27 @@ spec:
 
 Decimal fields such as `slo.ttftS` are strings, as the Kubernetes API conventions keep floating point out of a spec. The values above show the shape only. [Deployment inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) names the variable each field becomes, and the sections it links explain how to choose them.
 
-The schema leaves `profiling.warmupRequests` and `calibration.samples` optional, but the controller refuses a fleet without them, with reason `InputRefused`. Every engine of a fleet transfers KV over `ucx_rdma`, which `engines.launch` sets as above.
+Every engine of a fleet transfers KV over `ucx_rdma`, which `engines.launch` sets as above. Two engines may share a node. Engine pods run on the node's host network, so give each engine after the first its own ports in its entry of `engines.nodes`, and give each its GPUs with `NARWHAL_NODE_<n>_GPU_IDS` in `engines.launch`:
+
+```yaml
+    nodes:
+      - node: gpu-node-a
+        fabricInterface: eth1
+      - node: gpu-node-a
+        fabricInterface: eth2
+        ports:
+          engine: 8002
+          attestation: 8102
+          sideChannel: 5602
+          ucxTcpPortRange: 20100-20199
+    launch:
+      - name: NARWHAL_NODE_1_GPU_IDS
+        value: "0"
+      - name: NARWHAL_NODE_2_GPU_IDS
+        value: "1"
+```
+
+The controller refuses, with reason `InputRefused`, a fleet whose engines on one node share a port or overlapping UCX TCP port ranges, or whose engine port is `fabric.testPort`.
 
 ## Fields
 
@@ -127,15 +149,22 @@ A field marked Yes is required whenever the field that holds it is set.
 | `spec.engines.resources.gpu` | string | Yes | The GPU device plugin's extended resource name, <domain>/<name>. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
 | `spec.engines.resources.rdma` | string | Yes | The RDMA device plugin's extended resource name, which hands each engine pod one HCA. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
 | `spec.engines.resources.runtimeClassName` | string |  | The RuntimeClass of nodes whose default container runtime exposes no GPUs. At most 253 characters. |
-| `spec.engines.ports` | object | Yes | The ports each engine pod serves on. API server rule: engine and attestation need two ports. |
+| `spec.engines.ports` | object | Yes | The ports each engine pod serves on, unless its entry of nodes sets its own. API server rule: the engine, attestation and side channel ports must differ. |
 | `spec.engines.ports.engine` | integer | Yes | The engine's HTTP port. From 1 to 65535. |
 | `spec.engines.ports.attestation` | integer | Yes | The attestation sidecar's HTTP port. From 1 to 65535. |
+| `spec.engines.ports.sideChannel` | integer | Yes | The port the engine's KV connector listens on for its peers' handshakes. From 1 to 65535. |
+| `spec.engines.ports.ucxTcpPortRange` | string | Yes | LOW-HIGH, the ports UCX TCP listeners take. At most 11 characters. |
 | `spec.engines.nodes` | list of objects | Yes | The engines, one entry each. 2 to 64 items. |
 | `spec.engines.nodes[].node` | string | Yes | The Kubernetes node's name. At most 253 characters. |
 | `spec.engines.nodes[].fabricInterface` | string | Yes | The network interface that carries the engine's KV transfers. At most 15 characters. |
 | `spec.engines.nodes[].rdma` | object |  | The RDMA port settings of a ucx_rdma engine. |
 | `spec.engines.nodes[].rdma.gidIndex` | integer |  | The GID index of the HCA port. From 0 to 255. |
 | `spec.engines.nodes[].rdma.roceMode` | string |  | v2 or v1 for RoCE, or infiniband for a native InfiniBand port. One of `v2`, `v1`, `infiniband`. |
+| `spec.engines.nodes[].ports` | object |  | This engine's ports in place of engines.ports. Engine pods run on the node's host network, so engines that share a node need ports no other engine there uses, which the controller checks. |
+| `spec.engines.nodes[].ports.engine` | integer |  | The engine's HTTP port. From 1 to 65535. |
+| `spec.engines.nodes[].ports.attestation` | integer |  | The attestation sidecar's HTTP port. From 1 to 65535. |
+| `spec.engines.nodes[].ports.sideChannel` | integer |  | The port the engine's KV connector listens on for its peers' handshakes. From 1 to 65535. |
+| `spec.engines.nodes[].ports.ucxTcpPortRange` | string |  | LOW-HIGH, the ports UCX TCP listeners take. At most 11 characters. |
 | `spec.engines.apiKeySecret` | object |  | The Secret that holds the engines' API key. Name a new Secret to rotate the key. |
 | `spec.engines.apiKeySecret.name` | string | Yes | The Secret's name. At most 253 characters. |
 | `spec.engines.apiKeySecret.key` | string | Yes | The key in the Secret. At most 253 characters. |
@@ -151,10 +180,10 @@ A field marked Yes is required whenever the field that holds it is set.
 | `spec.profiling.prefillLens` | list of integers | Yes | The prompt lengths of the prefill sweep. 1 to 64 items. |
 | `spec.profiling.decodeInputLens` | list of integers | Yes | The input lengths of the decode sweep. 1 to 64 items. |
 | `spec.profiling.decodeConcurrency` | list of integers |  | The concurrency levels of the decode sweep. 1 to 64 items. |
-| `spec.profiling.warmupRequests` | integer |  | Requests sent before measuring. From 0 to 100000. |
+| `spec.profiling.warmupRequests` | integer | Yes | Requests sent before measuring. From 0 to 100000. |
 | `spec.calibration` | object | Yes | The first-token calibration. |
 | `spec.calibration.inputTokens` | list of integers | Yes | The input lengths calibration measures. 1 to 64 items. |
-| `spec.calibration.samples` | integer |  | Samples per group, at least the 100 that preflight accepts. From 100 to 100000. |
+| `spec.calibration.samples` | integer | Yes | Samples per group, at least the 100 that preflight accepts. From 100 to 100000. |
 | `spec.calibration.observationTimeoutS` | string | Yes | Seconds calibration waits for one observation. At most 16 characters. API server rule: must be greater than 0. |
 | `spec.fabric` | object | Yes | Fabric qualification. |
 | `spec.fabric.workload` | object | Yes | The workload the fabric budget sizes each edge for. |

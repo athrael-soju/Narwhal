@@ -42,7 +42,12 @@ def fleet() -> dict:
                 "model": {"name": "served-model", "treeSha256": TREE},
                 "modelVolume": {"persistentVolumeClaim": {"claimName": "model", "readOnly": True}},
                 "resources": {"gpu": "gpu.example.com/gpu", "rdma": "rdma.example.com/hca"},
-                "ports": {"engine": 8100, "attestation": 8200},
+                "ports": {
+                    "engine": 8100,
+                    "attestation": 8200,
+                    "sideChannel": 5600,
+                    "ucxTcpPortRange": "20000-20099",
+                },
                 "nodes": [{"node": node, "fabricInterface": "fabric0"} for node in NODES.values()],
                 "launch": [{"name": "NARWHAL_ENGINE_BACKEND", "value": "vllm"}],
             },
@@ -100,6 +105,12 @@ def full_fleet() -> dict:
     engines["apiKeySecret"] = {"name": "engine-key-v2", "key": "api-key"}
     engines["resources"]["runtimeClassName"] = "nvidia"
     engines["nodes"][1]["rdma"] = {"gidIndex": 3, "roceMode": "v2"}
+    engines["nodes"][1]["ports"] = {
+        "engine": 8101,
+        "attestation": 8201,
+        "sideChannel": 5601,
+        "ucxTcpPortRange": "20100-20199",
+    }
     spec["profiling"]["decodeConcurrency"] = [1, 8]
     spec["routers"]["args"] = ["--lease-ttl", "6"]
     spec["timeouts"] = {"defaultSeconds": 600, "stages": {"profile": 7200}}
@@ -254,10 +265,25 @@ REFUSED: dict[str, Refusal] = {
         "spec.engines.resources",
         "gpu and rdma must name two resources",
     ),
+    "a side channel on the engine port": _rule(
+        lambda d: _engines(d)["ports"].update(sideChannel=8100),
+        "spec.engines.ports",
+        "the engine, attestation and side channel ports must differ",
+    ),
+    "a UCX port range that is no range": Refusal(
+        lambda d: _engines(d)["ports"].update(ucxTcpPortRange="20000"),
+        "spec.engines.ports.ucxTcpPortRange",
+        "pattern",
+    ),
+    "a side channel port in the launch inputs": _rule(
+        _launch("NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT", "5602"),
+        "spec.engines.launch[1].name",
+        _LAUNCH_SET,
+    ),
     "one port for engine and sidecar": _rule(
         lambda d: _engines(d)["ports"].update(attestation=8100),
         "spec.engines.ports",
-        "engine and attestation need two ports",
+        "the engine, attestation and side channel ports must differ",
     ),
     "a model file without its digest": _rule(
         lambda d: _engines(d)["model"].update(file="model.gguf"),

@@ -754,6 +754,21 @@ def inputs(fleet: Fleet, gate: GateJob, files: Mapping[str, bytes]) -> dict[str,
     )
 
 
+def deployment_status(fleet: Fleet, document: Mapping[str, Any]) -> dict[str, Any]:
+    """The ConfigMap that gives the routers the run's `narwhal.deployment-status`."""
+    data = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if len(DEPLOYMENT_STATUS_KEY) + len(data.encode()) > INPUTS_BYTES:
+        raise ValueError("the deployment status exceeds a ConfigMap's 1 MiB")
+    return _finished(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": metadata(fleet.owner, DEPLOYMENT_STATUS, ROUTER),
+            "data": {DEPLOYMENT_STATUS_KEY: data},
+        }
+    )
+
+
 # HAProxy.
 
 
@@ -860,6 +875,11 @@ TOKEN_SECONDS = 3600
 TMP_VOLUME = "tmp"
 TMP_MOUNT = "/tmp"
 TMP_LIMIT = "64Mi"
+# The run's `narwhal.deployment-status`, which the controller writes to this ConfigMap after
+# each pass and each router exports on /metrics, as an SSH run uploads it to the router hosts.
+DEPLOYMENT_STATUS = "deployment-status"
+DEPLOYMENT_STATUS_KEY = "deployment-status.json"
+DEPLOYMENT_STATUS_MOUNT = "/narwhal-deployment"
 # A fleet file on the state volume: in an attempt's work directory under deploy/, which the
 # routers mount by itself, with no hidden or parent part.
 ROUTER_FLEET = re.compile(
@@ -881,6 +901,7 @@ ROUTER_OPTIONS = (
     "--router-id",
     "--standby-of",
     "--first-start-primary",
+    "--deployment-status",
 )
 # The narwhal-serve options a fleet may add, each whole or as --name=value. Anything else that
 # starts with a dash is refused: --help, --version and -h exit, -- ends option parsing, and an
@@ -896,7 +917,6 @@ ROUTER_SERVE_OPTIONS = (
     "--lease-ttl",
     "--lease-renew-interval",
     "--lease-safety-margin",
-    "--deployment-status",
     "--resume",
 )
 NEGATIVE_NUMBER = re.compile(r"-[0-9.]+")
@@ -1034,6 +1054,8 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
         f"{ROUTER_HOME}/journal.jsonl",
         "--kubernetes-lease",
         ROUTER_LEASE,
+        "--deployment-status",
+        f"{DEPLOYMENT_STATUS_MOUNT}/{DEPLOYMENT_STATUS_KEY}",
         # The kubelet expands $(NAME) in a command; a fleet's option stays as written.
         *(engine_set.escape(argument) for argument in settings.args),
     ]
@@ -1072,6 +1094,7 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
             {"name": API_VOLUME, "mountPath": TOKEN_MOUNT, "readOnly": True},
             {"name": ROUTER_VOLUME, "mountPath": ROUTER_HOME},
             {"name": TMP_VOLUME, "mountPath": TMP_MOUNT},
+            {"name": DEPLOYMENT_STATUS, "mountPath": DEPLOYMENT_STATUS_MOUNT, "readOnly": True},
         ],
     }
     token = {
@@ -1133,6 +1156,16 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
             },
             token,
             {"name": TMP_VOLUME, "emptyDir": {"sizeLimit": TMP_LIMIT}},
+            # Optional: a router started before the first status exports none, and the kubelet
+            # brings each new status into the volume without restarting the router.
+            {
+                "name": DEPLOYMENT_STATUS,
+                "configMap": {
+                    "name": DEPLOYMENT_STATUS,
+                    "optional": True,
+                    "defaultMode": 0o444,
+                },
+            },
         ],
     }
     documents = [

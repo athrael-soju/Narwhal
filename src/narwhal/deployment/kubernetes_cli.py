@@ -352,8 +352,7 @@ _FIELDS = (
     target.GPU_RESOURCE,
     target.RDMA_RESOURCE,
     target.RUNTIME_CLASS,
-    "NARWHAL_ENGINE_PORT",
-    "NARWHAL_ATTEST_PORT",
+    *(f"NARWHAL_{name}" for _, name in fleet_resource.PORT_FIELDS),
     API_KEY_SECRET_ENV,
     CONTROL_TOKEN_SECRET_ENV,
     "NARWHAL_FABRIC_INTERFACE",
@@ -371,14 +370,14 @@ _FIELDS = (
 )
 _PER_ENGINE = re.compile(
     r"NARWHAL_NODE_[1-9][0-9]*_(KUBERNETES_NODE|FABRIC_INTERFACE|RDMA_GID_INDEX|RDMA_ROCE_MODE"
-    r"|URL|ATTESTATION_URL)"
+    r"|URL|ATTESTATION_URL|ENGINE_PORT|ATTEST_PORT|KV_SIDE_CHANNEL_PORT|UCX_TCP_PORT_RANGE)"
 )
 # How the workstation reaches the cluster and where the export Jobs read: none is a field.
 _WORKSTATION = (target.NAMESPACE, target.CONTEXT, target.KUBECTL, target.STATE_CLAIM)
 # The fields every engine shares; a per-engine value that differs cannot be a fleet's.
 _SHARED = re.compile(
     r"NARWHAL_NODE_[1-9][0-9]*_(ENGINE_IMAGE|ENGINE_MODEL_NAME|MODEL_TREE_SHA256|MODEL_PATH"
-    r"|MODEL_SHA256|ENGINE_PORT|ATTEST_PORT)"
+    r"|MODEL_SHA256)"
 )
 
 
@@ -437,9 +436,17 @@ def build(env: Mapping[str, str], *, until: str | None = None) -> Built:
     _put(resources, "rdma", env.get(target.RDMA_RESOURCE))
     _put(resources, "runtimeClassName", env.get(target.RUNTIME_CLASS))
     _put(engines, "resources", resources)
-    ports: dict[str, Any] = {}
-    _put(ports, "engine", _number(env, "NARWHAL_ENGINE_PORT", problems))
-    _put(ports, "attestation", _number(env, "NARWHAL_ATTEST_PORT", problems))
+
+    def port_fields(prefix: str) -> dict[str, Any]:
+        found: dict[str, Any] = {}
+        for key, name in fleet_resource.PORT_FIELDS:
+            if key == "ucxTcpPortRange":
+                _put(found, key, env.get(prefix + name))
+            else:
+                _put(found, key, _number(env, prefix + name, problems))
+        return found
+
+    ports = port_fields("NARWHAL_")
     _put(engines, "ports", ports)
     if reference := env.get(API_KEY_SECRET_ENV):
         secret, _, key = reference.partition("/")
@@ -461,6 +468,9 @@ def build(env: Mapping[str, str], *, until: str | None = None) -> Built:
                 problems.append(f"{role}: the RDMA GID index must be a whole number")
         _put(rdma, "roceMode", discovery.value(env, n, "RDMA_ROCE_MODE"))
         _put(entry, "rdma", rdma)
+        # An engine's own ports, as engines that share a node need, where they differ.
+        own = {k: v for k, v in port_fields(f"NARWHAL_NODE_{n}_").items() if ports.get(k) != v}
+        _put(entry, "ports", own)
         nodes.append(entry)
     _put(engines, "nodes", nodes)
 

@@ -217,7 +217,7 @@ The teal line counts prefill engines, the blue line counts decode engines and th
 
 ## Deployment
 
-The **Deployment** row reads the status of the last `narwhal deploy run`, which each router exports from the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) the run uploads to it:
+The **Deployment** row reads the status of the last `narwhal deploy run`, or on Kubernetes the fleet controller's last pass, which each router exports from the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) the run gives it:
 
 | Panel | Shows |
 | --- | --- |

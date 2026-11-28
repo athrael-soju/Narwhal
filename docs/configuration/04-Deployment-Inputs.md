@@ -184,7 +184,8 @@ On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployme
 | `NARWHAL_MODEL_PATH`, `NARWHAL_MODEL_SHA256` | `engines.model.file`, the path below `/model`, and `engines.model.fileSha256` |
 | `NARWHAL_KUBERNETES_MODEL_VOLUME` | `engines.modelVolume` |
 | `NARWHAL_KUBERNETES_GPU_RESOURCE`, `NARWHAL_KUBERNETES_RDMA_RESOURCE`, `NARWHAL_KUBERNETES_RUNTIME_CLASS` | `engines.resources.gpu`, `rdma` and `runtimeClassName` |
-| `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT` | `engines.ports.engine` and `attestation`, shared by every engine |
+| `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT`, `NARWHAL_KV_SIDE_CHANNEL_PORT`, `NARWHAL_UCX_TCP_PORT_RANGE` | `engines.ports.engine`, `attestation`, `sideChannel` and `ucxTcpPortRange`, for every engine that sets no ports of its own |
+| `NARWHAL_NODE_<n>_ENGINE_PORT`, `NARWHAL_NODE_<n>_ATTEST_PORT`, `NARWHAL_NODE_<n>_KV_SIDE_CHANNEL_PORT`, `NARWHAL_NODE_<n>_UCX_TCP_PORT_RANGE` | `engines.nodes[n-1].ports`: engine `n`'s own ports, which engines that share a node need |
 | `NARWHAL_KUBERNETES_API_KEY_SECRET` | `engines.apiKeySecret`, from `<secret name>/<key>` |
 | `NARWHAL_NODE_<n>_KUBERNETES_NODE` | `engines.nodes[n-1].node`: the node engine `n` runs on. At least two engines |
 | `NARWHAL_NODE_<n>_FABRIC_INTERFACE` | `engines.nodes[n-1].fabricInterface` |
@@ -200,7 +201,7 @@ On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployme
 | `NARWHAL_STAGE_TIMEOUT_SECONDS`, `NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS` | `timeouts.defaultSeconds` and `timeouts.stages.<stage>` |
 | Any other engine or launch input, such as `NARWHAL_ENGINE_BACKEND` or `NARWHAL_TRANSFER_TRANSPORT` | One `engines.launch` entry each |
 
-The fleet refuses a launch name that another field sets, or that names a credential: the engine key and the control token stay in their Secrets. `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` choose the kubeconfig context and the `kubectl` executable, and `NARWHAL_KUBERNETES_STATE_CLAIM` names the state claim; none of them is a fleet field. The variables of the Helm-driven target, `NARWHAL_KUBERNETES_VALUES`, `NARWHAL_KUBERNETES_CHART`, `NARWHAL_KUBERNETES_RELEASE` and `NARWHAL_HELM`, are refused: the fleet holds what they gave.
+Engine pods and fabric Jobs run on the node's host network, so the controller refuses a fleet in which two engines on one node share a port or overlapping UCX TCP port ranges, or an engine port holds `fabric.testPort`. Engines on one node also take their own GPUs, with `NARWHAL_NODE_<n>_GPU_IDS` in `engines.launch` as on SSH hosts; the device plugin chooses which GPUs each pod gets, so the IDs set how many. The fleet refuses a launch name that another field sets, or that names a credential: the engine key and the control token stay in their Secrets. `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` choose the kubeconfig context and the `kubectl` executable, and `NARWHAL_KUBERNETES_STATE_CLAIM` names the state claim; none of them is a fleet field. The variables of the Helm-driven target, `NARWHAL_KUBERNETES_VALUES`, `NARWHAL_KUBERNETES_CHART`, `NARWHAL_KUBERNETES_RELEASE` and `NARWHAL_HELM`, are refused: the fleet holds what they gave.
 
 ### Fabric qualification inputs
 

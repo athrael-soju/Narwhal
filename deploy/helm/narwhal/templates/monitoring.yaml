@@ -25,8 +25,10 @@ for a router pair, so Prometheus scrapes each engine once. */}}
 {{- /* Each engine pod's attestation sidecar, at the address the fleet's engine URLs give it. */}}
 {{- $sidecars := list }}
 {{- with ($.Values.fleet).engines }}
-{{- range $n, $_ := .nodes }}
-{{- $sidecars = append $sidecars (printf "engine-%d.engines.%s.svc:%d" (add1 $n) $.Release.Namespace (int $.Values.fleet.engines.ports.attestation)) }}
+{{- $ports := .ports }}
+{{- range $n, $node := .nodes }}
+{{- $port := (($node.ports).attestation) | default $ports.attestation }}
+{{- $sidecars = append $sidecars (printf "engine-%d.engines.%s.svc:%d" (add1 $n) $.Release.Namespace (int $port)) }}
 {{- end }}
 {{- end }}
 {{- $sidecarTargets := "[]\n" }}

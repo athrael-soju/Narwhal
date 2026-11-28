@@ -95,6 +95,30 @@ class BuildTests(unittest.TestCase):
         again = fleet_resource.spec_env(stored, state_claim=STATE_CLAIM, policy=VolumePolicy())
         self.assertEqual({name: again.get(name) for name in env}, env)
 
+    def test_an_engine_with_its_own_ports_takes_them_back_as_its_own(self):
+        # Engines that share a node each set their own ports, as on one SSH host.
+        fleet = fleet_fixtures.fleet()
+        own = {
+            "engine": 8101,
+            "attestation": 8201,
+            "sideChannel": 5601,
+            "ucxTcpPortRange": "20100-20199",
+        }
+        fleet["spec"]["engines"]["nodes"][1]["ports"] = own
+        env = workstation_env(fleet)
+        self.assertEqual(env["NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT"], "5601")
+        built = kubernetes_cli.build(env)
+        self.assertEqual(built.dropped, ())
+        engines = built.fleet["spec"]["engines"]
+        self.assertEqual(engines["ports"], fleet["spec"]["engines"]["ports"])
+        self.assertEqual(engines["nodes"][1]["ports"], own)
+        self.assertNotIn("ports", engines["nodes"][0])
+        # Only the ports that differ from engines.ports are the engine's own.
+        env["NARWHAL_NODE_2_ENGINE_PORT"] = env["NARWHAL_ENGINE_PORT"]
+        env["NARWHAL_NODE_2_URL"] = env["NARWHAL_NODE_2_URL"].replace(":8101", ":8100")
+        partial = kubernetes_cli.build(env).fleet["spec"]["engines"]["nodes"][1]["ports"]
+        self.assertEqual(partial, {k: v for k, v in own.items() if k != "engine"})
+
     def test_a_variable_without_a_field_is_a_launch_input_unless_the_fleet_refuses_it(self):
         env = workstation_env(fleet_fixtures.fleet())
         env.update(

@@ -80,12 +80,12 @@ A stage is skipped when its record shows `passed`, its `definition` and `input_d
 
 ## Deployment status
 
-After each `narwhal deploy run`, passed or failed, the command builds a summary of the run, `narwhal.deployment-status` version 1, and copies it to `runs/deployment/deployment-status.json` under the install root of each router host. The routers export it as [deployment metrics](03-Metrics-and-Control.md#deployment-and-restart-metrics). The copy is skipped until every host's `install` has passed, and a failed copy prints a warning without failing the run.
+After each `narwhal deploy run`, passed or failed, the command builds a summary of the run, `narwhal.deployment-status` version 1, and copies it to `runs/deployment/deployment-status.json` under the install root of each router host. The routers export it as [deployment metrics](03-Metrics-and-Control.md#deployment-and-restart-metrics). The copy is skipped until every host's `install` has passed, and a failed copy prints a warning without failing the run. On Kubernetes the fleet controller builds the same document after each pass and writes it to the ConfigMap `deployment-status`, which the router pods mount at `/narwhal-deployment`; its `target` is `kubernetes`, and a failed write is logged without failing the pass.
 
 | Field | Content |
 | --- | --- |
 | `schema`, `schema_version` | `narwhal.deployment-status` and `1` |
-| `fleet`, `target`, `run_id` | `NARWHAL_FLEET_NAME`, the deployment target such as `ssh`, and the run's ID |
+| `fleet`, `target`, `run_id` | `NARWHAL_FLEET_NAME`, or on Kubernetes the chart's `monitoring.fleet`, which defaults to the release name; the deployment target such as `ssh`; and the run's ID |
 | `updated_at` | When a stage of the run last ended, Unix seconds |
 | `last_passed_at` | When the last run that passed every stage up to `monitoring`, or up to `trial` for a run with `--trial`, ended. A failed run keeps the previous value |
 | `qualified_at`, `profiled_at`, `calibrated_at` | When `preflight`, `profile` and `calibrate` last passed, or `null` |

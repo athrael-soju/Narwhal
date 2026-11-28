@@ -10,7 +10,7 @@ This page takes a fleet from hosts with nothing of Narwhal's on them to a servin
 | --- | --- | --- |
 | One SSH host | Two or more engines on one host, each with its own GPUs | One router on the same host, with no failover |
 | Several SSH hosts | Engines on two or more hosts | A primary and a standby router on two hosts, behind HAProxy, with a shared lease. Or one router, with no failover |
-| One Kubernetes node | Two or more engine pods on one node, which the controller cannot run yet, as [One node and several nodes](#one-node-and-several-nodes) explains | A router pair, both on that node |
+| One Kubernetes node | Two or more engine pods on one node, each with its own GPUs, HCA and ports | A router pair, both on that node |
 | Several Kubernetes nodes | Engine pods on two or more nodes | A router pair on two different nodes |
 
 The SSH layouts share every step below; the inputs file is where they differ. The Kubernetes layouts are at the [end of the page](#deploying-on-kubernetes).
@@ -287,6 +287,8 @@ fleet:
     ports:
       engine: 8001
       attestation: 9001
+      sideChannel: 5601
+      ucxTcpPortRange: 20000-20099
     nodes:
       - node: <node-a>
         fabricInterface: <interface>
@@ -329,7 +331,7 @@ fleet:
     key: token
 ```
 
-`images.narwhal` is the Narwhal image the controller runs, and the routers, gate Jobs and sidecars it makes run it too; the fleet names only the engine, HAProxy and fabric images. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
+`images.narwhal` is the Narwhal image the controller runs, and the routers, gate Jobs and sidecars it makes run it too; the fleet names only the engine, HAProxy and fabric images. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer, and `NARWHAL_NODE_<n>_GPU_IDS` to engines that share a node. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
 
 ### Installing and following the fleet
 
@@ -374,4 +376,28 @@ To stop the fleet and keep its volumes, set `fleet.stopped: true` in the values 
 
 On several nodes, each entry of `fleet.engines.nodes` names the node its engine runs on, and a topology spread constraint keeps the two router pods on different nodes whenever more than one node can take them, so losing one node leaves a router. The values file above is that layout.
 
-On one node, the routers both run on that node, and both entries of `fleet.engines.nodes` name it. A fleet needs at least two engines, though, and the controller cannot yet run two on one node. Every engine of a fleet listens on the same `engines.ports`, and engine pods run on the node's host network, so the second engine cannot bind its ports. Each engine's discovery Job also asks for every GPU of its node, and the two Jobs start together, so the kubelet refuses the second. Give each engine a node of its own. [Needs verification: task 22, on a live one-node cluster]
+On one node, the routers both run on that node, and both entries of `fleet.engines.nodes` name it. Engine pods run on the node's host network, so the second engine takes its own ports, as `NARWHAL_NODE_2_ENGINE_PORT` and its neighbours do on one SSH host, and each engine takes its own GPUs. The node needs a GPU share and an HCA from the device plugins for each engine. Replace `nodes` in the values file above, and add the GPU IDs to `launch`:
+
+```yaml
+    nodes:
+      - node: <node-a>
+        fabricInterface: <interface>
+      - node: <node-a>
+        fabricInterface: <interface>
+        ports:
+          engine: 8002
+          attestation: 9002
+          sideChannel: 5602
+          ucxTcpPortRange: 20100-20199
+    launch:
+      - name: NARWHAL_TRANSFER_TRANSPORT
+        value: ucx_rdma
+      - name: NARWHAL_TRANSFER_NET_DEVICES
+        value: mlx5_0:1
+      - name: NARWHAL_NODE_1_GPU_IDS
+        value: "0"
+      - name: NARWHAL_NODE_2_GPU_IDS
+        value: "1"
+```
+
+The device plugin picks which GPUs and HCA each pod gets, so the GPU IDs set how many each engine takes. The engines transfer KV between them over their HCAs, with `UCX_SHM_DEVICES=none` and no `cuda_ipc`, and with no second node there is no fabric edge for `fabric-edge` to measure. The controller refuses a fleet whose engines on one node share a port. [Needs verification: task 22, on a live one-node cluster]

@@ -118,6 +118,7 @@ TIMEOUT_ENV = "NARWHAL_STAGE_TIMEOUT_SECONDS"
 LAUNCH_REFUSED = (
     r"^NARWHAL_(NODE_[0-9]+_)?("
     r"KUBERNETES_.*|KUBECTL|HELM|ENGINE_(IMAGE|MODEL_NAME|PORT|LAUNCH_CONFIG)|ATTEST_PORT"
+    r"|KV_SIDE_CHANNEL_PORT|UCX_TCP_PORT_RANGE"
     r"|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*"
     r"|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*"
     r"|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT"
@@ -406,9 +407,49 @@ _LAUNCH = _array(
     map_keys=["name"],
 )
 
+# Each port field of an engine, and the variable it becomes: `NARWHAL_<name>` for the fleet,
+# `NARWHAL_NODE_<n>_<name>` for one engine, as an SSH host's per-node overrides.
+PORT_FIELDS = (
+    ("engine", "ENGINE_PORT"),
+    ("attestation", "ATTEST_PORT"),
+    ("sideChannel", "KV_SIDE_CHANNEL_PORT"),
+    ("ucxTcpPortRange", "UCX_TCP_PORT_RANGE"),
+)
+_PORT_RANGE = r"^[0-9]{1,5}-[0-9]{1,5}$"
+
+
+def _ports(description: str, *, required: bool) -> dict:
+    fields = {
+        "engine": _integer("The engine's HTTP port", 1, 65535),
+        "attestation": _integer("The attestation sidecar's HTTP port", 1, 65535),
+        "sideChannel": _integer(
+            "The port the engine's KV connector listens on for its peers' handshakes",
+            1,
+            65535,
+        ),
+        "ucxTcpPortRange": _string(
+            "LOW-HIGH, the ports UCX TCP listeners take", 11, pattern=_PORT_RANGE
+        ),
+    }
+    if not required:
+        return _object(description, fields)
+    return _object(
+        description,
+        fields,
+        required=list(fields),
+        rules=[
+            _rule(
+                "self.engine != self.attestation && self.engine != self.sideChannel "
+                "&& self.attestation != self.sideChannel",
+                "the engine, attestation and side channel ports must differ",
+            )
+        ],
+    )
+
+
 _NODE = _object(
     "One engine: the node its pod runs on, in role order, so the first entry is engine-1. "
-    "Two engines may share a node.",
+    "Two engines may share a node, each with its own ports.",
     {
         "node": _string("The Kubernetes node's name", 253, pattern=_DNS_SUBDOMAIN),
         "fabricInterface": _string(
@@ -426,6 +467,12 @@ _NODE = _object(
                     enum=["v2", "v1", "infiniband"],
                 ),
             },
+        ),
+        "ports": _ports(
+            "This engine's ports in place of engines.ports. Engine pods run on the node's host "
+            "network, so engines that share a node need ports no other engine there uses, which "
+            "the controller checks.",
+            required=False,
         ),
     },
     required=["node", "fabricInterface"],
@@ -480,16 +527,9 @@ _ENGINES = _object(
             required=["gpu", "rdma"],
             rules=[_rule("self.gpu != self.rdma", "gpu and rdma must name two resources")],
         ),
-        "ports": _object(
-            "The ports each engine pod serves on",
-            {
-                "engine": _integer("The engine's HTTP port", 1, 65535),
-                "attestation": _integer("The attestation sidecar's HTTP port", 1, 65535),
-            },
-            required=["engine", "attestation"],
-            rules=[
-                _rule("self.engine != self.attestation", "engine and attestation need two ports")
-            ],
+        "ports": _ports(
+            "The ports each engine pod serves on, unless its entry of nodes sets its own",
+            required=True,
         ),
         "nodes": _array("The engines, one entry each", _NODE, MAX_ENGINES, min_items=2),
         "apiKeySecret": _object(
@@ -534,7 +574,7 @@ _PROFILING = _object(
         "decodeConcurrency": _lengths("The concurrency levels of the decode sweep"),
         "warmupRequests": _integer("Requests sent before measuring", 0, 100_000),
     },
-    required=["prefillLens", "decodeInputLens"],
+    required=["prefillLens", "decodeInputLens", "warmupRequests"],
 )
 
 _CALIBRATION = _object(
@@ -546,7 +586,7 @@ _CALIBRATION = _object(
         ),
         "observationTimeoutS": _decimal("Seconds calibration waits for one observation"),
     },
-    required=["inputTokens", "observationTimeoutS"],
+    required=["inputTokens", "samples", "observationTimeoutS"],
 )
 
 _FABRIC = _object(
@@ -1041,8 +1081,8 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
     _set(env, RDMA_RESOURCE_ENV, resources, "rdma")
     _set(env, RUNTIME_CLASS_ENV, resources, "runtimeClassName")
     ports = _block(engines, "ports")
-    _set(env, "NARWHAL_ENGINE_PORT", ports, "engine")
-    _set(env, "NARWHAL_ATTEST_PORT", ports, "attestation")
+    for field, name in PORT_FIELDS:
+        _set(env, f"NARWHAL_{name}", ports, field)
     secret = _block(engines, "apiKeySecret")
     if secret:
         env[API_KEY_SECRET_ENV] = f"{secret.get('name', '')}/{secret.get('key', '')}"
@@ -1054,11 +1094,15 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
         rdma = _block(node, "rdma")
         _set(env, prefix + "RDMA_GID_INDEX", rdma, "gidIndex")
         _set(env, prefix + "RDMA_ROCE_MODE", rdma, "roceMode")
+        own = _block(node, "ports")
+        for field, name in PORT_FIELDS:
+            _set(env, prefix + name, own, field)
+        resolved = {**ports, **{k: v for k, v in own.items() if v is not None}}
         host = f"{role}.{ENGINE_SERVICE}.{namespace}.svc"
-        if ports.get("engine") is not None:
-            env[prefix + "URL"] = f"http://{host}:{ports['engine']}"
-        if ports.get("attestation") is not None:
-            env[prefix + "ATTESTATION_URL"] = f"http://{host}:{ports['attestation']}" + (
+        if resolved.get("engine") is not None:
+            env[prefix + "URL"] = f"http://{host}:{resolved['engine']}"
+        if resolved.get("attestation") is not None:
+            env[prefix + "ATTESTATION_URL"] = f"http://{host}:{resolved['attestation']}" + (
                 ATTESTATION_PATH
             )
 

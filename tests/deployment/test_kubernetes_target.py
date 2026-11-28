@@ -1655,6 +1655,9 @@ def edit(name: str, value: str) -> str:
         return value.rsplit(":", 1)[0] + ":" + "9" * 64
     if re.fullmatch(r"[0-9a-f]{64}", value):
         return "9" * 64
+    if re.fullmatch(r"[0-9]+-[0-9]+", value):
+        low, high = value.split("-")
+        return f"{low}-{int(high) + 1}"
     if re.fullmatch(r"[0-9]+(,[0-9]+)*", value):
         *rest, last = value.split(",")
         return ",".join([*rest, str(int(last) + 1)])
@@ -1663,6 +1666,138 @@ def edit(name: str, value: str) -> str:
     if "/" in value and name.endswith("_SECRET"):
         return "other-secret/other-key"
     return value + "x" if not value.startswith("http") else value.replace(":8", ":9")
+
+
+# engine-2's own ports, beside engine-1 on one node.
+OWN_PORTS = {
+    "engine": 8101,
+    "attestation": 8201,
+    "sideChannel": 5601,
+    "ucxTcpPortRange": "20100-20199",
+}
+
+
+class ColocatedTests(KubernetesTest):
+    """Two engines on one node, as an SSH host runs them: each with its own ports and GPUs."""
+
+    def setUp(self):
+        super().setUp()
+        self.node = NODES["engine-1"]
+        self.colocate(OWN_PORTS)
+
+    def colocate(self, ports: dict | None) -> None:
+        fleet = copy.deepcopy(self.rig.fleet)
+        nodes = fleet["spec"]["engines"]["nodes"]
+        nodes[1]["node"] = self.node
+        nodes[1].pop("ports", None)
+        if ports is not None:
+            nodes[1]["ports"] = ports
+        # As on an SSH host, each engine of a node takes its own GPUs.
+        fleet["spec"]["engines"]["launch"] = [
+            {"name": f"NARWHAL_NODE_{n}_GPU_IDS", "value": str(n - 1)} for n in (1, 2)
+        ]
+        self.rig.fleet = self.rig.store.put(fleet)
+        self.rig.env = kubernetes_target.settings_env(self.rig.fleet, self.rig.settings)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.dict(os.environ, self.rig.env, clear=True))
+
+    def test_two_engines_on_one_node_build_without_a_port_or_gpu_conflict(self):
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        # No directed edge joins two nodes, so no fabric sample runs, as on one SSH host.
+        self.assertEqual(
+            set(result["data"]["ran"]),
+            {key for key in every_stage() if not key.startswith("fabric-edge[")},
+        )
+        # One discovery Job inspects the node's GPUs for both engines; two Jobs that each
+        # take every GPU of the node could not both run. Each engine probes its own interface.
+        [discovery] = self.entries("discovery")
+        self.assertEqual(discovery["node"], self.node)
+        self.assertEqual(discovery["resources"], {"gpu.example.com/gpu": "2"})
+        probes = self.entries("fabric-probe")
+        self.assertEqual([entry["node"] for entry in probes], [self.node] * 2)
+        record = self.record()
+        for role in ENGINES:
+            inspected = self.run / record["stages"]["discover"]["directory"] / "inspection"
+            self.assertTrue((inspected / role / "observed.json").is_file(), role)
+        # Each engine pod runs on the node with its own GPUs and HCA, and its own ports.
+        for role in ENGINES:
+            self.assertEqual(self.rig.pods[role]["spec"]["nodeName"], self.node)
+        urls = {self.rig.env[f"NARWHAL_NODE_{n}_URL"] for n in (1, 2)}
+        sidecars = {self.rig.env[f"NARWHAL_NODE_{n}_ATTESTATION_URL"] for n in (1, 2)}
+        self.assertEqual(len(urls | sidecars), 4)
+        for workload in self.rig.workloads:
+            with self.subTest(f"{workload['kind']} {workload['metadata']['name']}"):
+                self.assertEqual(policy_refusals(workload), [])
+
+    def test_engines_that_share_a_node_and_a_port_are_refused_before_any_job(self):
+        self.colocate({"engine": 8101, "attestation": 8201, "sideChannel": 5601})
+        code, result = self.deploy("run")
+        self.assertEqual(code, 2, result)
+        [error] = result["errors"]
+        self.assertIn(
+            f"engine-2 and engine-1 run on node {self.node}, and engine-2's UCX TCP port range "
+            "overlaps engine-1's UCX TCP port range",
+            error["message"],
+        )
+        self.assertEqual(self.rig.jobs, {})
+        for ports, overlap in (
+            (None, "engine-2's engine port overlaps engine-1's engine port"),
+            ({**OWN_PORTS, "sideChannel": 8100}, "side channel port overlaps engine-1's engine"),
+            ({**OWN_PORTS, "ucxTcpPortRange": "20050-20149"}, "UCX TCP port range overlaps"),
+        ):
+            with self.subTest(ports=ports):
+                self.colocate(ports)
+                with self.assertRaisesRegex(kubernetes_target.InputError, overlap):
+                    kubernetes_target.inputs(self.rig.env)
+
+    def test_a_port_the_fabric_jobs_listen_on_is_refused(self):
+        self.colocate({**OWN_PORTS, "engine": 5201})
+        with self.assertRaisesRegex(
+            kubernetes_target.InputError, "engine port holds NARWHAL_FABRIC_TEST_PORT 5201"
+        ):
+            kubernetes_target.inputs(self.rig.env)
+
+
+class ReleaseTests(KubernetesTest):
+    def test_a_new_release_stops_the_engines_before_discovery_and_serves_again(self):
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        before = {role: self.rig.pods[role]["metadata"]["uid"] for role in ENGINES}
+        deletes = len(self.rig.store.deletes)
+        # The running engine pods hold their nodes' GPUs, which each discovery Job asks for:
+        # the kubelet refuses a pod that asks for more than the node has left.
+        with patch.object(kubernetes_target.provenance, "source_digest", return_value="9" * 64):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(set(result["data"]["ran"]), every_stage() - {"access"})
+        self.assertIn(
+            ("StatefulSet", "engine", "Background"),
+            [(d.kind, d.name, d.propagation) for d in self.rig.store.deletes[deletes:]],
+        )
+        after = {role: self.rig.pods[role]["metadata"]["uid"] for role in ENGINES}
+        self.assertFalse(set(before.values()) & set(after.values()))
+        self.assertTrue(all(_ready(self.rig.pods[role]) for role in ENGINES))
+
+    def test_without_the_stop_the_kubelet_refuses_discovery(self):
+        # What the stop prevents: a discovery Job beside a running engine pod.
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        with (
+            patch.object(kubernetes_target.KubernetesDeployment, "stop_engines"),
+            patch.object(kubernetes_target.provenance, "source_digest", return_value="9" * 64),
+        ):
+            code, result = self.deploy("run")
+        self.assertNotEqual(code, 0)
+        self.assertIn("OutOfgpu.example.com/gpu", json.dumps(result))
+
+
+def _ready(pod: dict) -> bool:
+    return any(
+        c.get("type") == "Ready" and c.get("status") == "True"
+        for c in (pod.get("status") or {}).get("conditions") or []
+    )
 
 
 class RbacTests(KubernetesTest):

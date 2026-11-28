@@ -6,16 +6,18 @@ policy, the NetworkPolicy and monitoring for the cluster's Prometheus Operator),
 `NarwhalFleet` with `kubectl apply --server-side` only, as a GitOps tool would. It prints one
 JSON line per check and fails on the first check that does not hold.
 
-Each worker advertises a fake GPU and a fake RDMA extended resource, so the fleet passes
-`access`. The stages after it need what kind cannot give: `discover` reads `nvidia-smi` and
+Each worker advertises a fake GPU and a fake RDMA extended resource for each engine it runs, so
+the fleet passes `access`. The fleet runs three engines, two of them on the first worker with
+their own ports. The stages after it need what kind cannot give: `discover` reads `nvidia-smi` and
 `/proc/driver/nvidia` in the engine image, and `engine-prepare` needs the launcher of an
 attested backend. So the controller is tested on the stages it can reach:
 
 - with `spec.until: access`, the fleet becomes Ready, and an SLO edit makes it Ready again
   without running `access` again. The API server refuses the fleet with its routers' control
   token in the engine key's Secret key;
-- with `spec.until: discover`, the discovery Jobs start and wait on a model volume whose
-  directory does not exist yet. An SLO edit leaves them running; a checkpoint digest edit
+- with `spec.until: discover`, one discovery Job for each worker, which takes all its GPUs,
+  and an interface probe for each engine start and wait on a model volume whose directory does
+  not exist yet. An SLO edit leaves them running; a checkpoint digest edit
   cancels the stage and starts it again with new Jobs;
 - deleting the controller pod mid-Job leaves the Jobs alone, and the next controller adopts
   them: the same Jobs, the same attempt, no duplicate and no stall;
@@ -108,6 +110,16 @@ MODEL_CACHE = ROOT / "local" / "cache" / "chart-e2e"
 SCHEMAS = ROOT / "local" / "schemas"
 ENGINES = 2
 ENGINE_CPUS = 4
+# The fleet's engines by worker: two share the first worker, as engines on one node do, and
+# one runs on the second.
+FLEET_ENGINES = (0, 0, 1)
+# engine-2's own ports beside engine-1's on the first worker.
+OWN_PORTS = {
+    "engine": 8101,
+    "attestation": 8201,
+    "sideChannel": 5601,
+    "ucxTcpPortRange": "20100-20199",
+}
 # The fake extended resources each worker advertises, as device plugins would.
 GPU = "gpu.example.com/gpu"
 RDMA = "rdma.example.com/hca"
@@ -468,9 +480,15 @@ def prepare(cluster: Cluster) -> None:
             "stringData": {CONTROL_SECRET["key"]: secrets.token_hex(32)},
         }
     )
+    # One GPU and one HCA for each engine of the worker.
+    devices = {node: str(FLEET_ENGINES.count(index)) for index, node in enumerate(cluster.workers)}
     for node in cluster.workers:
         patch = [
-            {"op": "add", "path": f"/status/capacity/{name.replace('/', '~1')}", "value": "1"}
+            {
+                "op": "add",
+                "path": f"/status/capacity/{name.replace('/', '~1')}",
+                "value": devices[node],
+            }
             for name in (GPU, RDMA)
         ]
         cluster.kubectl(
@@ -486,7 +504,8 @@ def prepare(cluster: Cluster) -> None:
         wait_for(
             f"{node} to offer {GPU} and {RDMA}",
             lambda node=node: all(
-                cluster.get("node", node)["status"].get("allocatable", {}).get(name) == "1"
+                cluster.get("node", node)["status"].get("allocatable", {}).get(name)
+                == devices[node]
                 for name in (GPU, RDMA)
             ),
             60,
@@ -622,8 +641,9 @@ def lease_holder(cluster: Cluster) -> str:
 
 
 def fleet_document(narwhal_image: str, cluster: Cluster, **changes: Any) -> dict:
-    """The NarwhalFleet the test applies: two engines on the two workers, the fake devices, and
-    a model claim whose directory is missing."""
+    """The NarwhalFleet the test applies: three engines on the two workers, two of them on the
+    first with their own ports and GPUs, the fake devices, and a model claim whose directory is
+    missing."""
     document = fleet_fixtures.fleet()
     document["metadata"] = {"name": fleet_resource.NAME, "namespace": NAMESPACE}
     spec = document["spec"]
@@ -636,7 +656,14 @@ def fleet_document(narwhal_image: str, cluster: Cluster, **changes: Any) -> dict
         "persistentVolumeClaim": {"claimName": FLEET_MODEL_CLAIM, "readOnly": True}
     }
     engines["resources"] = {"gpu": GPU, "rdma": RDMA}
-    engines["nodes"] = [{"node": node, "fabricInterface": "eth0"} for node in cluster.workers]
+    engines["nodes"] = [
+        {"node": cluster.workers[worker], "fabricInterface": "eth0"} for worker in FLEET_ENGINES
+    ]
+    engines["nodes"][1]["ports"] = dict(OWN_PORTS)
+    engines["launch"] = [
+        *engines["launch"],
+        *({"name": f"NARWHAL_NODE_{n}_GPU_IDS", "value": str(n - 1)} for n in (1, 2)),
+    ]
     # kind's default StorageClass gives each router its own volume.
     spec["routers"] = {"storageClassName": "standard", "size": "64Mi"}
     spec["controlTokenSecret"] = dict(CONTROL_SECRET)
@@ -721,13 +748,17 @@ def gate_jobs(cluster: Cluster) -> dict[str, dict]:
     return found
 
 
-def no_duplicates(jobs: dict[str, dict]) -> None:
-    """Fail when one gate on one node has more than one live Job."""
+def no_duplicates(cluster: Cluster, jobs: dict[str, dict]) -> None:
+    """Fail when one gate on one node has more live Jobs than it runs there: an interface probe
+    for each engine of the node, and one Job of every other gate."""
     counted: dict[tuple[str, str], list[str]] = {}
     for name, job in jobs.items():
         counted.setdefault((job["gate"], job["node"]), []).append(name)
+    probes = {node: FLEET_ENGINES.count(index) for index, node in enumerate(cluster.workers)}
     duplicates = {
-        f"{gate}@{node}": names for (gate, node), names in counted.items() if len(names) > 1
+        f"{gate}@{node}": names
+        for (gate, node), names in counted.items()
+        if len(names) > (probes.get(node, 1) if gate == "fabric-probe" else 1)
     }
     if duplicates:
         raise Failure(f"duplicate gate Jobs: {duplicates}")
@@ -739,15 +770,18 @@ def discovery_held(cluster: Cluster) -> dict[str, dict] | None:
     jobs = gate_jobs(cluster)
     discovery = [name for name, job in jobs.items() if job["gate"] == "discovery"]
     probes = [name for name, job in jobs.items() if job["gate"] == "fabric-probe"]
-    # The stage starts a discovery and an interface probe Job for each engine, one by one.
-    if len(discovery) != ENGINES or len(probes) != ENGINES:
+    # The stage starts one discovery Job for each node, which takes every GPU of the node, and
+    # an interface probe for each engine. Two discovery Jobs on the first worker could not
+    # both run: the kubelet would refuse the second.
+    nodes = len(set(FLEET_ENGINES))
+    if len(discovery) != nodes or len(probes) != len(FLEET_ENGINES):
         return None
     waiting = 0
     for pod in cluster.get("pods", "-l", GATE_SELECTOR)["items"]:
         owner = (pod["metadata"].get("ownerReferences") or [{}])[0].get("name")
         if owner in discovery and pod["status"].get("phase") == "Pending":
             waiting += 1
-    return jobs if waiting == ENGINES else None
+    return jobs if waiting == nodes else None
 
 
 def gitops(cluster: Cluster, fleet: Fleet, summary: Summary) -> None:
@@ -827,7 +861,7 @@ def edits(cluster: Cluster, fleet: Fleet, summary: Summary) -> dict[str, dict]:
     jobs = wait_for(
         "the discovery Jobs to wait for the model volume", lambda: discovery_held(cluster), 180
     )
-    no_duplicates(jobs)
+    no_duplicates(cluster, jobs)
     attempt = fleet.stage("discover").get("attempt")
     if fleet.access_mark() != access:
         raise Failure("extending until to discover ran access again")
@@ -862,7 +896,7 @@ def edits(cluster: Cluster, fleet: Fleet, summary: Summary) -> dict[str, dict]:
         return held if isinstance(later, int) and later > attempt else None
 
     replaced = wait_for("discover to run again with new Jobs", rerun, 180)
-    no_duplicates(replaced)
+    no_duplicates(cluster, replaced)
     if fleet.access_mark() != access:
         raise Failure("a checkpoint edit ran access again")
     fleet.not_stalled()
@@ -899,7 +933,7 @@ def restart(cluster: Cluster, fleet: Fleet, jobs: dict[str, dict], summary: Summ
     # Long enough for the adopted attempt to have made a Job again, if it would.
     time.sleep(10)
     kept = gate_jobs(cluster)
-    no_duplicates(kept)
+    no_duplicates(cluster, kept)
     if kept != jobs:
         raise Failure(
             f"the restarted controller changed the Jobs: {sorted(jobs)} became {sorted(kept)}"
@@ -956,7 +990,7 @@ def stop(cluster: Cluster, fleet: Fleet, summary: Summary) -> None:
         return discovery_held(cluster)
 
     jobs = wait_for("discover to run again after the stop", again, 180)
-    no_duplicates(jobs)
+    no_duplicates(cluster, jobs)
     if fleet.access_mark() != access:
         raise Failure("clearing spec.stopped ran access again")
     summary.passed(

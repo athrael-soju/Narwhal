@@ -90,9 +90,14 @@ spec:
         - action: keep
           sourceLabels: [__meta_kubernetes_pod_container_name]
           regex: attestation
+        {{- /* Each engine's sidecar listens on its own port, as engines on one node must. */}}
+        {{- $ports := .ports }}
+        {{- range $n, $node := .nodes }}
         - sourceLabels: [__meta_kubernetes_pod_name]
+          regex: {{ printf "engine-%d" (add1 $n) }}
           targetLabel: __address__
-          replacement: {{ printf "${1}.engines.%s.svc:%d" $namespace (int .ports.attestation) | quote }}
+          replacement: {{ printf "engine-%d.engines.%s.svc:%d" (add1 $n) $namespace (int ((($node.ports).attestation) | default $ports.attestation)) | quote }}
+        {{- end }}
         - targetLabel: job
           replacement: sidecars
         - action: labeldrop

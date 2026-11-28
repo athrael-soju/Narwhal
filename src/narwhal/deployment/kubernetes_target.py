@@ -74,6 +74,7 @@ from narwhal.runtime.kubernetes_api import (
 from ..serving.control_token import ROUTER_TOKEN_ENV
 from . import (
     cache_groups,
+    deployment_status,
     discovery,
     fabric,
     fleet_resource,
@@ -920,6 +921,66 @@ def _check_model_volume(env: Mapping[str, str], policy: VolumePolicy) -> None:
     check_model_volume({"spec": {"engines": {"modelVolume": source}}}, policy)
 
 
+_PORT_RANGE = re.compile(r"([0-9]{1,5})-([0-9]{1,5})")
+# Each port an engine pod binds on its node's host network, as `discovery.value` names it.
+_ENGINE_PORTS = (
+    ("ENGINE_PORT", "engine port"),
+    ("ATTEST_PORT", "attestation port"),
+    ("KV_SIDE_CHANNEL_PORT", "side channel port"),
+)
+
+
+def _overlaps(first: range, second: range) -> bool:
+    return first.start < second.stop and second.start < first.stop
+
+
+def port_problems(env: Mapping[str, str], nodes: Mapping[str, str]) -> list[str]:
+    """What keeps the engines' pods from binding their ports. Engine pods and fabric Jobs run on
+    the node's host network, so on one node no two engines may share a port or overlap their
+    UCX TCP port ranges, and none may take the fabric test port."""
+    problems: list[str] = []
+    taken: dict[str, list[tuple[str, str, range]]] = {}
+    test = env.get(fabric.TEST_PORT, "")
+    for role, node in nodes.items():
+        n = _node(role)
+        spans: list[tuple[str, range]] = []
+        for name, what in _ENGINE_PORTS:
+            value = discovery.value(env, n, name)
+            if not value.isdecimal() or not 1 <= int(value) <= 65535:
+                problems.append(f"{role}: set NARWHAL_{name} or NARWHAL_NODE_{n}_{name} to a port")
+                continue
+            port = int(value)
+            if any(port in span for _, span in spans):
+                problems.append(
+                    f"{role}: its engine, attestation and side channel ports must differ"
+                )
+            spans.append((what, range(port, port + 1)))
+        value = discovery.value(env, n, "UCX_TCP_PORT_RANGE")
+        bounds = _PORT_RANGE.fullmatch(value)
+        if bounds is None or not 1 <= int(bounds[1]) <= int(bounds[2]) <= 65535:
+            problems.append(
+                f"{role}: set NARWHAL_UCX_TCP_PORT_RANGE or NARWHAL_NODE_{n}_UCX_TCP_PORT_RANGE "
+                "to a port range LOW-HIGH"
+            )
+        else:
+            spans.append(("UCX TCP port range", range(int(bounds[1]), int(bounds[2]) + 1)))
+        for what, span in spans:
+            if test.isdecimal() and int(test) in span:
+                problems.append(
+                    f"{role}: its {what} holds {fabric.TEST_PORT} {test}, which the fabric Jobs "
+                    f"on node {node} listen on"
+                )
+            for other, other_what, other_span in taken.get(node, []):
+                if _overlaps(span, other_span):
+                    problems.append(
+                        f"{role} and {other} run on node {node}, and {role}'s {what} overlaps "
+                        f"{other}'s {other_what}; give each engine on one node its own ports in "
+                        "engines.nodes[].ports"
+                    )
+        taken.setdefault(node, []).extend((role, what, span) for what, span in spans)
+    return problems
+
+
 def inputs(env: Mapping[str, str], *, policy: VolumePolicy | None = None) -> dict[str, Input]:
     """The digest of every input fact of the Kubernetes graph, after checking each input.
 
@@ -995,6 +1056,7 @@ def inputs(env: Mapping[str, str], *, policy: VolumePolicy | None = None) -> dic
             problems.append(
                 f"{role}: set NARWHAL_FABRIC_INTERFACE or NARWHAL_NODE_{n}_FABRIC_INTERFACE"
             )
+    problems.extend(port_problems(env, nodes))
     problems.extend(
         f"set {name}; the engine pods read it"
         for name in (GPU_RESOURCE, RDMA_RESOURCE, MODEL_VOLUME, STATE_CLAIM)
@@ -1944,6 +2006,9 @@ class KubernetesDeployment:
     # discover
 
     def _discovery_gates(self, role: str) -> tuple[Gate, Gate, dict[str, Any]]:
+        """The inspection Job of `role`'s node, its interface probe Job and the inspection's
+        inputs. Every engine of a node takes the same inputs, so its first engine's Job
+        inspects the node for all of them."""
         env = self.env
         n = _node(role)
         node = self.node(role)
@@ -1963,7 +2028,6 @@ class KubernetesDeployment:
             "model_dir": MODEL,
             # The engine image mounts only the Job's keep directory of the state volume.
             "run_dir": kubernetes_objects.KEEP_MOUNT,
-            "interface": discovery.value(env, n, "FABRIC_INTERFACE"),
             "environment_prefixes": engine.environment_prefixes,
             "managed_environment": sorted(engine.managed_environment),
             "job_environment": job_env,
@@ -2008,7 +2072,7 @@ class KubernetesDeployment:
             runtime_class=env.get(RUNTIME_CLASS) or None,
             model_volume=json.loads(env[MODEL_VOLUME]),
         )
-        interface = shlex.quote(str(selected["interface"]))
+        interface = shlex.quote(discovery.value(env, n, "FABRIC_INTERFACE"))
         interfaces = Gate(
             "fabric-probe",
             f"{role}-interfaces",
@@ -2022,21 +2086,64 @@ class KubernetesDeployment:
         )
         return inspect_gate, interfaces, selected
 
+    def stop_engines(self, cluster: Cluster) -> None:
+        """Delete the engine StatefulSet and wait for its pods to go. Discovery's Jobs take
+        every GPU of their nodes, which running engine pods hold, so `discover` stops the
+        engines first, as `engine-inspect` does on SSH hosts. Every later stage reruns after
+        `discover`, and `install` and `engine-start` start them again."""
+        component = {kubernetes_objects.COMPONENT_LABEL: kubernetes_objects.ENGINE}
+        pods = {
+            pod["metadata"]["uid"]
+            for pod in cluster.list(POD, component)
+            if self.controls(cluster, pod)
+        }
+        sets = [
+            item["metadata"]["name"]
+            for item in cluster.list(STATEFUL_SET, component)
+            if controlled(self.owner(), item)
+        ]
+        if not pods and not sets:
+            return
+        self.announce("discover: stopping the engines, whose pods hold the GPUs it inspects")
+        # The garbage collector deletes the pods with their StatefulSet.
+        for name in sets:
+            self.remove(cluster, STATEFUL_SET, name)
+        self._wait_gone(
+            "the engine pods",
+            lambda: any(pod["metadata"].get("uid") in pods for pod in cluster.list(POD, component)),
+        )
+
     def discover(self, context: StageContext) -> None:
         env = self.env
         roles = self.engines()
+        self.stop_engines(self.cluster(context))
+        # One inspection Job for each node, which its engines share, and one interface probe
+        # for each engine: two Jobs that each take every GPU of one node could not both run.
+        by_node: dict[str, list[str]] = {}
+        for role in roles:
+            by_node.setdefault(self.node(role), []).append(role)
         pending = {role: self._discovery_gates(role) for role in roles}
-        gates = [gate for role in roles for gate in pending[role][:2]]
+        gates: list[Gate] = []
+        for node_roles in by_node.values():
+            gates.append(pending[node_roles[0]][0])
+            gates.extend(pending[role][1] for role in node_roles)
         names = self.start_gates(context, gates)
-        results = [
+        finished = [
             self.finish_gate(context, gate, name) for gate, name in zip(gates, names, strict=True)
         ]
-        for index, role in enumerate(roles):
-            remote.write(context.directory / "inspection" / role, results[2 * index].files)
+        results: dict[str, tuple[GateResult, GateResult]] = {}
+        at = 0
+        for node_roles in by_node.values():
+            inspected = finished[at]
+            for offset, role in enumerate(node_roles, start=1):
+                results[role] = (inspected, finished[at + offset])
+            at += 1 + len(node_roles)
+        for role in roles:
+            remote.write(context.directory / "inspection" / role, results[role][0].files)
         observations: dict[str, dict] = {}
         checkpoints: dict[str, dict] = {}
-        for index, role in enumerate(roles):
-            inspected, interfaces = results[2 * index], results[2 * index + 1]
+        for role in roles:
+            inspected, interfaces = results[role]
             observed = json.loads(inspected.files["observed.json"])
             checkpoint = json.loads(inspected.files["checkpoint.json"])
             status = _container(inspected.pod, GATE_CONTAINER) or {}
@@ -2576,6 +2683,8 @@ fi
         results = fabric.qualify_edge(
             plan, shell, edge, budgets, context.directory / "edge", retained
         )
+        # The routers export each edge's measured bandwidth against its budget from these.
+        _private(context.directory / deployment_status.EDGE_RESULTS, results)
         return Outcome({"link": {result["sample"]: result["link_sha256"] for result in results}})
 
     # Attestation.
@@ -2961,6 +3070,40 @@ fi
             {"router_identity": recorded},
             tuple({"name": name, "host": "cluster", **value} for name, value in recorded.items()),
         )
+
+    # The deployment status the routers export.
+
+    def publish_deployment_status(self, fleet_name: str) -> dict[str, Any] | None:
+        """Write the run's `narwhal.deployment-status` beside its record and to the ConfigMap
+        the routers mount, as an SSH run uploads it to each router host, and return it. Each
+        router exports it on /metrics; the kubelet brings a new one into its volume without
+        restarting it. A run with no record yet writes nothing, and a status the ConfigMap
+        already holds is not written again."""
+        if not (self.directory / run_record.RECORD).is_file():
+            return None
+        record = run_record.read(self.directory)
+        local = self.directory / deployment_status.LOCAL_NAME
+        previous = _json(local) if local.is_file() else None
+        status = deployment_status.build(
+            record,
+            self.directory,
+            KUBERNETES_GRAPH.order(),
+            record.get("until") or LAST_STAGE,
+            fleet_name,
+            TARGET,
+            previous,
+        )
+        if status != previous:
+            staged = local.with_name(local.name + ".tmp")
+            staged.unlink(missing_ok=True)
+            _private(staged, status)
+            staged.replace(local)
+        desired = kubernetes_objects.deployment_status(self.fleet(), status)
+        cluster = self.cluster()
+        live = cluster.get(CONFIG_MAP, kubernetes_objects.DEPLOYMENT_STATUS)
+        if live is None or live.get("data") != desired["data"]:
+            self.apply(cluster, desired)
+        return status
 
     def router_urls(self) -> list[str]:
         """Each router pod's own address. HAProxy forwards only the serving routes, so the

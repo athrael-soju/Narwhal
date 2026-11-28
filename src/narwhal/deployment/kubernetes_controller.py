@@ -229,7 +229,8 @@ _QUANTITY = re.compile(r"([0-9]+(?:\.[0-9]+)?)([kKMGTPE]i?)?")
 class Settings:
     """controller.json, as the narwhal chart writes it: the state claim, the engines'
     ServiceAccount, the sidecars' user, the cluster admin's model volume and RuntimeClass
-    allow-lists, and the admission policy that bounds the fleet's pods."""
+    allow-lists, the admission policy that bounds the fleet's pods, and the `fleet` label its
+    monitoring gives every series, which the deployment status names."""
 
     values: Mapping[str, Any]
     policy: VolumePolicy
@@ -241,6 +242,7 @@ class Settings:
     image: str = ""
     user: int = 0
     group: int = 0
+    fleet: str = ""
 
     @classmethod
     def of(cls, values: Mapping[str, Any]) -> Settings:
@@ -278,6 +280,9 @@ class Settings:
         ids = [values.get(name, 0) for name in ("runAsUser", "runAsGroup")]
         if not all(type(n) is int and 0 <= n < 2**31 for n in ids):
             problems.append("runAsUser and runAsGroup must be user and group IDs")
+        fleet = values.get("fleet", values.get("release", ""))
+        if not isinstance(fleet, str):
+            problems.append("fleet must be a string")
         if problems:
             raise ValueError("controller settings: " + "; ".join(problems))
         return cls(
@@ -289,6 +294,7 @@ class Settings:
             str(image),
             int(ids[0]),
             int(ids[1]),
+            str(fleet),
         )
 
     @classmethod
@@ -1204,6 +1210,7 @@ class Controller:
                             "requested_at": _requested(fleet),
                         },
                     )
+                self._deployment_status(deployment)
         except StageFailed as exc:
             entry = exc.record
             if entry["status"] in (FAILED, TIMEOUT):
@@ -1237,6 +1244,14 @@ class Controller:
             (directory / STALL_FILE).unlink()
         self._ready[uid] = generation
         return _Outcome()
+
+    def _deployment_status(self, deployment: KubernetesDeployment) -> None:
+        """Give the routers the pass's deployment status, passed or not. Best effort, as on SSH
+        hosts: a failed write keeps the status before, and the next pass writes it again."""
+        try:
+            deployment.publish_deployment_status(self.settings.fleet)
+        except (KubernetesError, OSError, ValueError, LookupError, TypeError) as exc:
+            log.warning("the deployment status was not written: %s", exc)
 
     # Status.
 
