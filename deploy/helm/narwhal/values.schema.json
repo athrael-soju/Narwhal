@@ -506,6 +506,49 @@
           "type": "string",
           "pattern": "^(|https?://[^\\s/@?#]+:[0-9]+(/[^\\s?#]*)?)$",
           "description": "Alertmanager that Prometheus sends alerts to; without one, alerts show only on the Prometheus alerts page"
+        },
+        "serviceMonitors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$",
+                "maxLength": 317
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9])?$"
+              },
+              "description": "Labels the cluster's Prometheus selects the monitors and rules by"
+            }
+          },
+          "description": "Leave Prometheus to the cluster's Prometheus Operator"
+        },
+        "dashboardConfigMap": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string",
+              "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$",
+              "maxLength": 317,
+              "description": "The label the Grafana dashboard sidecar watches"
+            },
+            "labelValue": {
+              "type": "string",
+              "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9])?$",
+              "description": "The value of that label"
+            }
+          },
+          "description": "Leave Grafana to the cluster: the dashboard as a ConfigMap for the Grafana sidecar"
         }
       },
       "required": [
@@ -520,43 +563,103 @@
       },
       "then": {
         "required": [
-          "prometheus",
           "grafana"
         ],
         "properties": {
-          "prometheus": {
-            "required": [
-              "image"
-            ],
-            "properties": {
-              "image": {
-                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
-              }
-            }
-          },
           "grafana": {
             "required": [
-              "image",
-              "dashboard",
-              "admin"
+              "dashboard"
             ],
             "properties": {
-              "image": {
-                "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
-              },
               "dashboard": {
                 "minLength": 1
-              },
-              "admin": {
-                "required": [
-                  "secretName",
-                  "userKey",
-                  "passwordKey"
-                ]
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "not": {
+                "properties": {
+                  "serviceMonitors": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "enabled"
+                    ]
+                  }
+                },
+                "required": [
+                  "serviceMonitors"
+                ]
+              }
+            },
+            "then": {
+              "required": [
+                "prometheus"
+              ],
+              "properties": {
+                "prometheus": {
+                  "required": [
+                    "image"
+                  ],
+                  "properties": {
+                    "image": {
+                      "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "properties": {
+                  "dashboardConfigMap": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "enabled"
+                    ]
+                  }
+                },
+                "required": [
+                  "dashboardConfigMap"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "grafana": {
+                  "required": [
+                    "image",
+                    "admin"
+                  ],
+                  "properties": {
+                    "image": {
+                      "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+                    },
+                    "admin": {
+                      "required": [
+                        "secretName",
+                        "userKey",
+                        "passwordKey"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "modelVolumeSources": {

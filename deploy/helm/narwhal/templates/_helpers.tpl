@@ -61,3 +61,29 @@ as, and its Role. */}}
 {{- range . }}{{ $lines = append $lines (printf "      %s" (quote .)) }}{{ end -}}
 {{- join ",\n" $lines -}}
 {{- end }}
+
+{{/* The rendered dashboard that Grafana serves, refused while it is not a rendered dashboard. */}}
+{{- define "narwhal.dashboard" -}}
+{{- $dashboard := .Values.monitoring.grafana.dashboard -}}
+{{- if contains "<<" $dashboard -}}
+{{- fail "monitoring.grafana.dashboard holds unrendered placeholders; write it with python -m narwhal.observability.stack.chart_dashboard" -}}
+{{- end -}}
+{{- if hasKey (fromJson $dashboard) "Error" -}}
+{{- fail "monitoring.grafana.dashboard is not JSON; write it with python -m narwhal.observability.stack.chart_dashboard" -}}
+{{- end -}}
+{{- $dashboard -}}
+{{- end -}}
+
+{{/* A job's relabel_configs in prometheus.yml as Prometheus Operator relabelings, with the
+fleet in place of <<fleet>>: {"configs", "fleet"}. */}}
+{{- define "narwhal.relabelings" -}}
+{{- $found := list -}}
+{{- range .configs -}}
+{{- $item := dict -}}
+{{- range $key, $value := . -}}
+{{- $_ := set $item (untitle (camelcase $key)) (ternary (replace "<<fleet>>" $.fleet (toString $value)) $value (kindIs "string" $value)) -}}
+{{- end -}}
+{{- $found = append $found $item -}}
+{{- end -}}
+{{- toJson $found -}}
+{{- end -}}
