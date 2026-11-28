@@ -19,12 +19,14 @@ from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
-from tools.observability.make_targets import TargetContract
-from tools.observability.start import cli as observe_cli
-from tools.observability.start import listeners as observe_listeners
-from tools.observability.start import readiness as observe_readiness
-from tools.observability.start import services as observe_services
-from tools.observability.start import stack as observe_stack
+import yaml
+
+from narwhal.observability.stack.make_targets import TargetContract
+from narwhal.observability.stack.start import cli as observe_cli
+from narwhal.observability.stack.start import listeners as observe_listeners
+from narwhal.observability.stack.start import readiness as observe_readiness
+from narwhal.observability.stack.start import services as observe_services
+from narwhal.observability.stack.start import stack as observe_stack
 
 
 def _container(
@@ -49,6 +51,9 @@ class FakeStack:
 
     def up(self) -> None:
         self.up_calls += 1
+
+    def protect_grafana(self) -> None:
+        pass
 
     def container(self, service: str) -> observe_services.Container | None:
         values = self.states.get(service, [None])
@@ -568,7 +573,9 @@ class ReadinessTests(unittest.TestCase):
         config = (observe_stack.BASE / "prometheus.yml").read_text()
         self.assertIn("/etc/prometheus/targets/router.json", config)
         self.assertIn("url: http://<<targets>>/narwhal/targets", config)
-        self.assertNotIn("static_configs:", config)
+        # The only static list is the Alertmanager's; every scrape target is discovered.
+        self.assertEqual(config.count("static_configs:"), 1)
+        self.assertIn("        - targets: [<<alertmanagers>>]", config)
 
     def test_start_writes_targets_after_listener_ownership_check(self) -> None:
         calls: list[str] = []
@@ -593,6 +600,8 @@ class ReadinessTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(calls, ["listeners", "targets http://127.0.0.1:18020/console", "up"])
+        # Once Grafana is ready, its admin password is set to the stack's private one.
+        stack.protect_grafana.assert_called_once_with()
 
     def test_start_stages_the_tool_target_from_the_environment(self) -> None:
         stack = mock.Mock(spec=observe_stack.Stack)
@@ -743,6 +752,53 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
         self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
 
+    def test_grafana_admin_password_is_random_private_and_never_on_a_command_line(self) -> None:
+        token = self._token()
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            calls.append((command, kwargs))
+            return CompletedProcess(command, 0, "", "")
+
+        stack = observe_stack.ComposeStack(runner, {}, token)
+        stack.up()
+        stack.up()
+        stack.protect_grafana()
+        private = token.parent / "grafana-admin-password"
+        mounted = token.parent / "mounts" / "grafana-secrets" / "grafana-admin-password"
+        password = private.read_text()
+        self.assertRegex(password, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(password, "admin")
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
+        # The Grafana user reads the copy; the mounts directory keeps other host users out.
+        self.assertEqual(mounted.read_text(), password)
+        self.assertEqual(stat.S_IMODE(mounted.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE((token.parent / "mounts").stat().st_mode), 0o700)
+        command, kwargs = calls[-1]
+        reset = ["exec", "-T", "grafana", "grafana", "cli", "admin", "reset-admin-password"]
+        self.assertEqual(command[-8:], [*reset, "--password-from-stdin"])
+        self.assertEqual(kwargs["input"], password + "\n")
+        for command, kwargs in calls:
+            self.assertNotIn(password, " ".join(command))
+            self.assertNotIn(password, json.dumps(kwargs.get("env") or {}))
+
+    def test_the_rendered_compose_gives_grafana_the_password_file_and_keeps_anonymous_viewers(
+        self,
+    ) -> None:
+        compose = yaml.safe_load(observe_stack.COMPOSE_FILE.read_text())
+        grafana = compose["services"]["grafana"]
+        environment = grafana["environment"]
+        self.assertEqual(
+            environment["GF_SECURITY_ADMIN_PASSWORD__FILE"],
+            "/run/secrets/narwhal/grafana-admin-password",
+        )
+        self.assertNotIn("GF_SECURITY_ADMIN_PASSWORD", environment)
+        self.assertIn("./mounts/grafana-secrets:/run/secrets/narwhal:ro", grafana["volumes"])
+        self.assertEqual(
+            (environment["GF_AUTH_ANONYMOUS_ENABLED"], environment["GF_AUTH_ANONYMOUS_ORG_ROLE"]),
+            ("true", "Viewer"),
+        )
+
     def test_a_changed_prometheus_config_or_rule_file_changes_the_compose_digest(self) -> None:
         config = self._token().parent / "prometheus.yml"
         rules = config.parent / "prometheus-alerts.yml"
@@ -877,6 +933,7 @@ class ReadinessTests(unittest.TestCase):
         with (
             mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
             mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(observe_cli, "compose_problem", return_value=None),
             mock.patch.object(
                 observe_cli, "start", side_effect=observe_services.StartupError("occupied")
             ),
@@ -885,6 +942,27 @@ class ReadinessTests(unittest.TestCase):
             code = observe_cli.main(["--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn("observability startup failed: occupied", stderr.getvalue())
+
+    def test_a_host_without_compose_v2_is_named_before_the_stack_starts(self) -> None:
+        def missing(command: list[str]) -> CompletedProcess[str]:
+            return CompletedProcess(command, 1, "", "docker: unknown command: docker compose\n")
+
+        problem = observe_stack.compose_problem(missing)
+        self.assertIn("docker: unknown command: docker compose", problem or "")
+        self.assertIn("docker-compose-plugin", problem or "")
+        self.assertIsNone(
+            observe_stack.compose_problem(lambda command: CompletedProcess(command, 0, "", ""))
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(observe_cli, "compose_problem", return_value="no compose"),
+            mock.patch.object(observe_cli, "start") as started,
+            redirect_stderr(stderr),
+        ):
+            code = observe_cli.main(["--router-url", "http://router:8000"])
+        self.assertEqual(code, 1)
+        started.assert_not_called()
+        self.assertIn("observability startup failed: no compose", stderr.getvalue())
 
     def test_compose_commands_have_explicit_deadlines(self) -> None:
         calls: list[tuple[list[str], object]] = []
@@ -911,6 +989,7 @@ class ReadinessTests(unittest.TestCase):
                     os.environ, {**env, "NARWHAL_TARGETS_URL": "http://lb:8000"}, clear=True
                 ),
                 mock.patch.object(observe_cli, "ComposeStack"),
+                mock.patch.object(observe_cli, "compose_problem", return_value=None),
                 mock.patch.object(observe_cli, "start") as start,
             ):
                 self.assertEqual(observe_cli.main(argv), 0)
@@ -935,6 +1014,7 @@ class ReadinessTests(unittest.TestCase):
         with (
             mock.patch.object(observe_cli, "load_contract", return_value=self.contract),
             mock.patch.object(observe_cli, "ComposeStack"),
+            mock.patch.object(observe_cli, "compose_problem", return_value=None),
             mock.patch.object(observe_cli, "start", side_effect=timeout),
             redirect_stderr(stderr),
         ):

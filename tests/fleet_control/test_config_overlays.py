@@ -16,16 +16,15 @@ import httpx
 
 from narwhal.config import FleetConfig
 from narwhal.contracts import canonical_digest
-from tests.fleet_control.test_service_core import FLEET, NOW, TOKEN, FakeRunner
-from tools.fleet_control import cli as control_cli
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control import cli as control_cli
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     ControlConfig,
     Hook,
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.overlays import (
+from narwhal.fleet_control.overlays import (
     COLD_RESTART_HOOK,
     FLEET_ENV,
     ROUTER_RESTART_HOOK,
@@ -34,7 +33,8 @@ from tools.fleet_control.overlays import (
     overlay_problems,
     overlay_routes,
 )
-from tools.fleet_control.service import ControlService
+from narwhal.fleet_control.service import ControlService
+from tests.fleet_control.test_service_core import FLEET, NOW, TOKEN, FakeRunner
 
 BASELINE = json.loads(FLEET.read_text())
 
@@ -138,7 +138,7 @@ class OverlayConfigTests(unittest.TestCase):
     def write(self, folder: str, document: dict[str, Any]) -> Path:
         path = Path(folder) / "fleet-control.local.json"
         path.write_text(
-            json.dumps({"fleet": "f", "hooks": {"restore": {"argv": ["x"]}}, **document})
+            json.dumps({"fleet": "/f", "hooks": {"restore": {"argv": ["x"]}}, **document})
         )
         return path
 

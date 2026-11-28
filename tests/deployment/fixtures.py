@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -236,3 +237,40 @@ def launcher_inputs(root):
         "NARWHAL_NODE_1_SSH_PASSWORD": "management-only-secret",
     }
     return record, env
+
+
+# The engine-host helpers that a deployment package takes from the wheel.
+WHEEL_HELPERS = (
+    "backends/vllm/cache_capture_hook.py",
+    "backends/trtllm/cache_capture_hook.py",
+    "backends/sglang/transfer_measure.py",
+)
+
+
+# A hash-checking lock in the form that `uv export --no-emit-project` writes.
+LOCK = """# via fastapi
+annotated-types==0.8.0 \\
+    --hash=sha256:{a} \\
+    --hash=sha256:{b}
+    # via pydantic
+uvloop==0.22.1 ; sys_platform != 'win32' \\
+    --hash=sha256:{a}
+""".format(a="a" * 64, b="b" * 64)
+
+
+def package_inputs(root, version="0.13.0"):
+    """Write a stand-in Narwhal wheel with the helper modules and a dependency lock, and return
+    the deployment inputs that name them."""
+    wheel = Path(root) / f"narwhal_inference-{version}-py3-none-any.whl"
+    package = Path(launch_start.__file__).resolve().parents[2]
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name in WHEEL_HELPERS:
+            archive.writestr(f"narwhal/{name}", (package / name).read_bytes())
+    lock = Path(root) / "requirements.lock"
+    lock.write_text(LOCK)
+    return {
+        "NARWHAL_WHEEL": str(wheel),
+        "NARWHAL_WHEEL_SHA256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "NARWHAL_REQUIREMENTS": str(lock),
+        "NARWHAL_REQUIREMENTS_SHA256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+    }

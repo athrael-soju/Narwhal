@@ -7,6 +7,7 @@ description: Restart Narwhal engines one at a time or in waves and detect proces
 Prerequisites:
 
 - a management host with `curl`, Python 3, and access to the router's private control endpoints
+- the router's [control token](../HTTP-API.md#control-token) in `NARWHAL_ROUTER_TOKEN`, which every drain and readmission below sends. The router's [role shell](../deploy/02-Install.md#opening-installed-role-shells) exports it
 - a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract) in the fleet configuration
 - external admission closed during replacement and profile activation
 
@@ -35,6 +36,7 @@ Drain `e0` with a 300-second deadline:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"engines":["e0"],"deadline_s":300}' \
   > "$RUN_DIR/individual-drain-response.json"
@@ -77,6 +79,7 @@ Request readmission for `e0`:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"engines":["e0"]}' \
   > "$RUN_DIR/individual-readmitted.json"
@@ -126,6 +129,8 @@ If the engine stays ejected with lifecycle state `active` while its attestation 
 
 1. Start the attestation sidecar through its process manager.
 2. Wait for the next recovery probe.
+
+In a Kubernetes engine pod, the kubelet restarts a failed engine container. The pod's attestation sidecar stops once the engine process it serves ends, and when the kubelet restarts it, it [captures the new engine container's attestation](../deploy/05-Attest.md#attesting-an-engine-pod) before it serves. Recovery then validates the engine as above.
 
 If a restarted engine on a host shared with other KV-transfer engines logs `waiting for KV peers to release it`:
 
@@ -179,6 +184,7 @@ Drain the wave with a 600-second deadline:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"wave":true,"deadline_s":600}' \
   > "$RUN_DIR/wave-drain-response.json"
@@ -219,6 +225,7 @@ Request whole-wave readmission:
 
 ```bash
 curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"wave":true}' > "$RUN_DIR/wave-readmitted.json"
 ```
@@ -277,6 +284,7 @@ Request the drain and save its response:
 ```bash
 curl -sS -o "$RUN_DIR/unplanned-drain.json" -w '%{http_code}\n' \
   -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
+  -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"wave":true,"deadline_s":600}' \
   > "$RUN_DIR/unplanned-drain-status.txt"

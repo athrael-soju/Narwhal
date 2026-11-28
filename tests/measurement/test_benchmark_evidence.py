@@ -9,13 +9,9 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from narwhal.deployment.reconcile import counter_deltas, metric_values, reconcile
 from tools.measurement import benchmark_runner
-from tools.measurement.benchmark_evidence import (
-    client_row,
-    counter_deltas,
-    metric_values,
-    reconcile,
-)
+from tools.measurement.benchmark_evidence import client_row
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request

@@ -1,0 +1,317 @@
+{{- /*
+The bundled Prometheus and Grafana. monitoring.serviceMonitors leaves Prometheus to the
+cluster, and monitoring.dashboardConfigMap leaves Grafana to it; cluster-monitoring.yaml then
+renders the monitors, alert rules and dashboard ConfigMap the cluster's own read instead.
+*/ -}}
+{{- with .Values.monitoring }}
+{{- if .enabled }}
+{{- $root := $ }}
+{{- $suffix := printf "%s.svc.%s" $.Release.Namespace $.Values.haproxy.clusterDomain }}
+{{- $dashboard := include "narwhal.dashboard" $ }}
+{{- if not (.serviceMonitors).enabled }}
+{{- $routers := list (printf "router-0.routers.%s:8000" $suffix) (printf "router-1.routers.%s:8000" $suffix) }}
+{{- /* The pair's engine targets come through the load balancer, as `make observe` reads them
+for a router pair, so Prometheus scrapes each engine once. */}}
+{{- $config := $.Files.Get "files/observability/prometheus.yml" }}
+{{- if not (contains "<<targets>>" $config) }}
+{{- fail "src/narwhal/observability/stack/prometheus.yml has no <<targets>> placeholder" }}
+{{- end }}
+{{- $config = replace "<<targets>>" (printf "haproxy.%s:8000" $suffix) $config }}
+{{- $config = replace "<<fleet>>" (.fleet | default $.Release.Name) $config }}
+{{- $alertmanager := urlParse (.alertmanagerUrl | default "http://none:0/") }}
+{{- $config = replace "<<alertmanager_scheme>>" $alertmanager.scheme $config }}
+{{- $config = replace "<<alertmanager_path>>" ($alertmanager.path | trimSuffix "/" | default "/") $config }}
+{{- $config = replace "<<alertmanagers>>" (ternary (quote $alertmanager.host) "" (ne .alertmanagerUrl "")) $config }}
+{{- /* Each engine pod's attestation sidecar, at the address the fleet's engine URLs give it. */}}
+{{- $sidecars := list }}
+{{- with ($.Values.fleet).engines }}
+{{- $ports := .ports }}
+{{- range $n, $node := .nodes }}
+{{- $port := (($node.ports).attestation) | default $ports.attestation }}
+{{- $sidecars = append $sidecars (printf "engine-%d.engines.%s.svc:%d" (add1 $n) $.Release.Namespace (int $port)) }}
+{{- end }}
+{{- end }}
+{{- $sidecarTargets := "[]\n" }}
+{{- if $sidecars }}
+{{- $sidecarTargets = printf "[\n  {\n    \"targets\": [\n%s\n    ]\n  }\n]\n" (include "narwhal.jsonLines" $sidecars) }}
+{{- end }}
+{{- /* The discovery files, byte for byte as src/narwhal/observability/stack/artifacts.py stages them. */}}
+{{- $routerTargets := printf "[\n  {\n    \"targets\": [\n      \"%s\",\n      \"%s\"\n    ]\n  }\n]\n" (index $routers 0) (index $routers 1) }}
+{{- $prometheus := dict
+  "prometheus.yml" $config
+  "prometheus-alerts.yml" ($.Files.Get "files/observability/prometheus-alerts.yml")
+  "router.json" $routerTargets
+  "sidecars.json" $sidecarTargets
+  "fleet-control.json" "[]\n"
+  "tools.json" "[]\n"
+  "fleet-control-token" ""
+}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "prometheus") | nindent 4 }}
+data:
+  {{- range $name, $data := $prometheus }}
+  {{ $name }}: {{ $data | toJson }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "prometheus") | nindent 4 }}
+spec:
+  replicas: 1
+  # One Prometheus owns its data volume at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" $root "component" "prometheus") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" $root "component" "prometheus") | nindent 8 }}
+      annotations:
+        # Prometheus reads its configuration and rules only at start.
+        {{ include "narwhal.group" $root }}/config-sha256: {{ toJson $prometheus | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: {{ .prometheus.image }}
+          # The flags of src/narwhal/observability/stack/compose.yml, listening on the pod address.
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=30d
+            - --web.listen-address=:9090
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+          {{- with .prometheus.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus
+            items:
+              - {key: prometheus.yml, path: prometheus.yml}
+              - {key: prometheus-alerts.yml, path: prometheus-alerts.yml}
+              - {key: router.json, path: targets/router.json}
+              - {key: sidecars.json, path: targets/sidecars.json}
+              - {key: fleet-control.json, path: targets/fleet-control.json}
+              - {key: tools.json, path: targets/tools.json}
+              - {key: fleet-control-token, path: fleet-control-token}
+        - name: data
+          {{- if .prometheus.storage }}
+          persistentVolumeClaim:
+            claimName: prometheus
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- with .prometheus.storage }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "prometheus") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .storageClassName }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "prometheus") | nindent 4 }}
+spec:
+  selector:
+    {{- include "narwhal.selector" (dict "root" $root "component" "prometheus") | nindent 4 }}
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+{{- end }}
+{{- if not (.dashboardConfigMap).enabled }}
+{{- $provisioning := dict
+  "dashboards.yml" ($.Files.Get "files/observability/grafana-dashboards.yml")
+  "datasources.yml" ($.Files.Get "files/observability/grafana-datasources.yml")
+}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "grafana") | nindent 4 }}
+data:
+  {{- range $name, $data := $provisioning }}
+  {{ $name }}: {{ $data | toJson }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "grafana") | nindent 4 }}
+data:
+  narwhal.json: {{ $dashboard | toJson }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "grafana") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" $root "component" "grafana") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" $root "component" "grafana") | nindent 8 }}
+      annotations:
+        {{ include "narwhal.group" $root }}/config-sha256: {{ printf "%s%s" (toJson $provisioning) $dashboard | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ .grafana.image }}
+          # The settings of src/narwhal/observability/stack/compose.yml, without the image
+          # renderer and with anonymous access off.
+          env:
+            # Only a release that sets monitoring.grafana.anonymous lets anyone view the
+            # dashboards without signing in, as make observe does on a workstation.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: {{ .grafana.anonymous | default false | toString | quote }}
+            {{- if .grafana.anonymous }}
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            {{- end }}
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: NARWHAL_PROMETHEUS_URL
+              value: {{ printf "http://prometheus.%s:9090" $suffix | quote }}
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .grafana.admin.secretName | quote }}
+                  key: {{ .grafana.admin.userKey | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .grafana.admin.secretName | quote }}
+                  key: {{ .grafana.admin.passwordKey | quote }}
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          {{- with .grafana.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: provisioning
+          configMap:
+            name: grafana-provisioning
+            items:
+              - {key: dashboards.yml, path: dashboards/narwhal.yml}
+              - {key: datasources.yml, path: datasources/prometheus.yml}
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          {{- if .grafana.storage }}
+          persistentVolumeClaim:
+            claimName: grafana
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- with .grafana.storage }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "grafana") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .storageClassName }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    {{- include "narwhal.labels" (dict "root" $root "component" "grafana") | nindent 4 }}
+spec:
+  selector:
+    {{- include "narwhal.selector" (dict "root" $root "component" "grafana") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+{{- end }}
+{{- end }}
+{{- end }}

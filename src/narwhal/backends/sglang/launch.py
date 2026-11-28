@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import EngineLauncher
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, dev, discovery
+from ...deployment.launch_engine.backend import (
+    EngineLauncher,
+    LiveProbe,
+    TransferMeasurement,
+)
+from ...deployment.launch_engine.check import CheckContext
+from . import attestation, dev, discovery, probe_reader
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
@@ -14,8 +21,9 @@ from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
 BOOTSTRAP_HOST_ENV = "NARWHAL_SGLANG_BOOTSTRAP_HOST"
 
 
-class SglangLauncher(EngineLauncher):
+class SglangLauncher(EngineLauncher, TransferMeasurement):
     runtime_script = LAUNCHER
+    transfer_tool = Path(__file__).with_name("transfer_measure.py")
     side_channel = "bootstrap"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES
@@ -25,7 +33,10 @@ class SglangLauncher(EngineLauncher):
     check_summary = "Runtime identity, package pins and server arguments passed."
     prefix_cache_name = "The radix cache"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
-    version_label = "SGLang"
+    probe_reader: ClassVar[ModuleType] = probe_reader
+    # SGLang publishes no process start over HTTP, and serves a completion only with a
+    # peer engine for the other leg.
+    live_probe = LiveProbe(None, completion=False)
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -76,14 +87,8 @@ class SglangLauncher(EngineLauncher):
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
 
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        return runtime_check.result(context, output)
-
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_server(run)
-
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         return policy.transfer_package(

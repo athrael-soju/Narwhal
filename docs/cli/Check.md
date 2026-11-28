@@ -61,7 +61,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | `model` | Each engine lists the fleet's `model` in `/v1/models`. |
 | `pace` | Each engine's best time over two cold one-token completions of a long prompt stays within 1.5 times the fleet median, with at least three timed engines, and within 1.5 times its own profile's prefill time. |
 | `tokenize` | Each engine returns an exact token count for the probe prompt. With `engine.tokenize` off, the gate is skipped. |
-| `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines. |
+| `hca`, `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines, and the [same-host HCA path](#same-host-hca-path) of engines that send KV through their HCA. |
 | `slo` | Each engine's profile meets the [SLO targets](#the-slo-gate). |
 
 Between `reach` and `calibration`, under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
@@ -77,6 +77,26 @@ A KV probe sends the prompt `"benchmark " * 64` and asks for four output tokens 
 On vLLM, `produce` runs a prefill on each engine and checks that it returns handoff parameters. `consume` then moves KV from producer to consumer, across every ordered pair that role pins permit or, with `--ring`, across rotating pairs that give every consumer a producer. On SGLang, `produce` defers to `consume`, which checks each pair's whole transfer.
 
 A probe passes when the consumer produces at least one token within `serving.request_timeout_s`. The first token must arrive within `engine.first_token_timeout_s`, or on SGLang within the smaller of that and 30 seconds. When the first token misses its deadline, `narwhal-check` fails the pair, reports the deadline, and leaves the transfer unconfirmed. Run [first-token calibration](#first-token-calibration) after a miss.
+
+### Same-host HCA path
+
+Before `produce`, preflight reads [`GET /v1/hca`](Attest.md#routes) from each live engine's attestation sidecar. A sidecar serves it for an engine whose launch sends KV through its HCA even to engines on its own host, and answers HTTP 404 for any other engine. The `hca` gate prints one `ok` line per engine that publishes its HCA, and fails an engine whose sidecar returns any other error. It prints nothing when no sidecar publishes an HCA.
+
+Only engines on one host need the transmit counter. When a sidecar cannot read it, preflight fails that engine only if another live engine shares its host and the two can send KV to each other:
+
+```text
+  FAIL  n1 HCA mlx5_0:1 counters are unreadable, and its same-host KV with n2 needs them: /sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: [Errno 2] No such file or directory
+```
+
+An engine without such a peer passes with `n1 sends KV through HCA mlx5_0:1 and has no same-host peer; the same-host HCA check does not apply`. A container that sees the host's RDMA devices from its own network namespace, under the kernel's shared RDMA namespace mode, has no port counters.
+
+Two engines that publish an HCA share a host when both readings name the same `host`, as a Kubernetes engine pod's sidecar names its node, or, when either names none, when they report the same `boot_id`. Nodes that run as containers on one kernel, such as kind nodes, share a boot ID, so the node name tells them apart. For each such pair that `consume` probes, preflight reads the producer's `port_xmit_data` before and after the transfer. The pair passes when the counter grew, and prints the bytes sent, four times the counter's growth:
+
+```text
+  ok    n1 -> n2 sent 1179648 bytes through n1's HCA
+```
+
+When the counter did not grow, the pair fails with `n1 -> n2: same-host KV left no traffic on n1's HCA mlx5_0:1, so UCX moved it through shared memory or CUDA IPC`. A transfer that changes the producer's HCA or host between the two readings fails too. When `--ring` probes no same-host pair from such an engine, preflight skips its check with `n2 HCA path: no probe sent KV from n2 to n1 on its host; run the full mesh to check it`.
 
 ## Recording and verifying KV evidence
 
@@ -207,6 +227,7 @@ The `slo` gate checks each engine's profile against the SLO targets. An engine w
 | Decode bounds | The profile's measured decode request or KV-token bound is missing. |
 | TPOT | The token interval at the profile's smallest measured decode cohort exceeds `slo.tpot_s`. |
 | TTFT | `slo.ttft_s` is at or below the profile's single-token prefill time. |
+| First-token budget | With a `measured` or `reused` calibration, `engine.first_token_timeout_s` plus the slowest profiled engine's prefill of the longest calibrated input plus `slo.router_overhead_s` exceeds `slo.ttft_s`. |
 
 ## Exit codes
 

@@ -33,6 +33,7 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.observability.tools import ToolActivity
+from narwhal.profiling.calibration import CalibrationCheck
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.probe.offline import merge_profiles
 from narwhal.profiling.store import ProfileStore
@@ -355,6 +356,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     ("model", set()),
                     ("pace", set()),
                     ("tokenize", None),
+                    ("hca", {"e0": "reading"}),
                     ("produce", {"e0": "descriptor"}),
                     ("consume", None),
                 ):
@@ -383,13 +385,23 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 )
                 client.aclose.assert_awaited_once()
                 store.assert_called_once_with(self.cfg, report)
-                slo.assert_called_once_with(self.cfg, "store", report)
+                slo.assert_called_once()
+                self.assertEqual(slo.call_args.args[:3], (self.cfg, "store", report))
+                self.assertEqual(slo.call_args.args[3].status, "uncalibrated")
                 self.assertEqual(
                     constructor.call_args.kwargs["prefill_timeout_s"], self.cfg.prefill_timeout_s
                 )
                 if blocked is None:
+                    calls["hca"].assert_awaited_once_with(self.cfg, {"e0", "e3"}, report)
                     calls["consume"].assert_awaited_once_with(
-                        self.cfg, {"e0", "e3"}, {"e0": "descriptor"}, client, report, False, 3
+                        self.cfg,
+                        {"e0", "e3"},
+                        {"e0": "descriptor"},
+                        client,
+                        report,
+                        False,
+                        3,
+                        hca={"e0": "reading"},
                     )
                     self.assertEqual(report.skipped, [])
                 else:
@@ -795,6 +807,178 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({body["cache_salt"] for body in produced}), 3)
         self.assertTrue(all(body["min_tokens"] == 4 and body["ignore_eos"] for body in decoded))
 
+    async def test_hca_gate_reads_each_sidecar_that_publishes_its_hca(self):
+        status = {"engine-0.invalid": 200, "engine-3.invalid": 404}
+
+        def sidecar(request):
+            self.assertEqual(request.url.path, "/v1/hca")
+            code = status[request.url.host]
+            if code != 200:
+                return httpx.Response(code, json={"detail": "HCA port unreadable: gone"})
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": "a", "port_xmit_data": 7}
+            return httpx.Response(200, json=reading)
+
+        report = Report()
+        ports = await transfer.gate_hca(
+            self.cfg, {"e0", "e3"}, report, httpx.MockTransport(sidecar)
+        )
+        self.assertEqual(set(ports), {"e0"})
+        self.assertEqual(report.failed, [])
+        status["engine-3.invalid"] = 503
+        report = Report()
+        ports = await transfer.gate_hca(
+            self.cfg, {"e0", "e3"}, report, httpx.MockTransport(sidecar)
+        )
+        self.assertEqual(set(ports), {"e0"})
+        self.assertEqual(len(report.failed), 1)
+        self.assertRegex(report.failed[0], r"^e3 HCA counters: .* HTTP 503: HCA port unreadable")
+
+    async def test_hca_gate_needs_the_counters_only_for_an_engine_with_a_same_host_peer(self):
+        missing = "/sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: missing"
+        boots = {"engine-0.invalid": "a", "engine-3.invalid": "b"}
+
+        def sidecar(request):
+            host = request.url.host
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": boots[host]}
+            if host == "engine-0.invalid":
+                reading.update(port_xmit_data=None, counter_error=missing)
+            else:
+                reading["port_xmit_data"] = 7
+            return httpx.Response(200, json=reading)
+
+        transport = httpx.MockTransport(sidecar)
+        report = Report()
+        with redirect_stdout(io.StringIO()) as printed:
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual((set(ports), report.failed), ({"e3"}, []))
+        self.assertIn(
+            "e0 sends KV through HCA mlx5_0:1 and has no same-host peer; the same-host HCA "
+            "check does not apply",
+            printed.getvalue(),
+        )
+        # On one host the pair's KV must be seen crossing the HCA, so the counter is needed.
+        boots["engine-3.invalid"] = "a"
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            ports = await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual(set(ports), {"e3"})
+        self.assertEqual(
+            report.failed,
+            [
+                "e0 HCA mlx5_0:1 counters are unreadable, and its same-host KV with e3 needs "
+                f"them: {missing}"
+            ],
+        )
+
+    async def test_hca_gate_tells_hosts_apart_by_the_node_each_reading_names(self):
+        # Kubernetes nodes that run in containers share their kernel, and with it a boot ID.
+        missing = "/sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: missing"
+        hosts = {"engine-0.invalid": "node-a", "engine-3.invalid": "node-b"}
+
+        def sidecar(request):
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": "shared", "port_xmit_data": None}
+            reading["counter_error"] = missing
+            if hosts[request.url.host] is not None:
+                reading["host"] = hosts[request.url.host]
+            return httpx.Response(200, json=reading)
+
+        transport = httpx.MockTransport(sidecar)
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual(report.failed, [])
+        for named in ("node-a", None):
+            # One node, or a reading that names no host, as on SSH hosts: the boot ID decides.
+            hosts["engine-3.invalid"] = named
+            hosts["engine-0.invalid"] = named
+            report = Report()
+            with redirect_stdout(io.StringIO()):
+                await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+            self.assertEqual(len(report.failed), 2, named)
+
+    async def test_consume_requires_same_host_kv_to_cross_the_producer_hca(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e0", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="p",
+        )
+
+        async def output(*args, **kwargs):
+            yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
+
+        def reading(boot, words=0):
+            return {"device": "mlx5_0", "port": 1, "boot_id": boot, "port_xmit_data": words}
+
+        src, dst = (spec.iid for spec in self.cfg.engines)
+        same = {src: reading("a"), dst: reading("a")}
+
+        async def consume(hca, readings, pairs=None):
+            client = HandoffClient(prefill=AsyncMock(return_value=result), decode=output)
+            report = Report()
+            reader = AsyncMock(side_effect=readings)
+            printed = io.StringIO()
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(transfer, "read_hca_counters", new=reader))
+                stack.enter_context(redirect_stdout(printed))
+                if pairs is not None:
+                    stack.enter_context(
+                        patch.object(
+                            transfer,
+                            "validation_pairs",
+                            side_effect=lambda specs, mesh=False: (
+                                validation_pairs(specs, True) if mesh else pairs
+                            ),
+                        )
+                    )
+                await gate_consume(
+                    self.cfg,
+                    {src, dst},
+                    {src: result, dst: result},
+                    client,
+                    report,
+                    pairs is None,
+                    hca=hca,
+                )
+            return report, reader, printed.getvalue()
+
+        def counters(*words):
+            return [reading("a", value) for value in words]
+
+        report, reader, printed = await consume(same, counters(10, 30, 5, 9))
+        self.assertEqual((report.failed, report.skipped), ([], []))
+        self.assertEqual(reader.await_count, 4)
+        self.assertIn(f"ok    {src} -> {dst} sent 80 bytes through {src}'s HCA", printed)
+        self.assertIn(f"ok    {dst} -> {src} sent 16 bytes through {dst}'s HCA", printed)
+
+        report, _, _ = await consume(same, counters(10, 10, 5, 9))
+        self.assertEqual(
+            report.failed,
+            [
+                f"{src} -> {dst}: same-host KV left no traffic on {src}'s HCA mlx5_0:1, so UCX "
+                "moved it through shared memory or CUDA IPC"
+            ],
+        )
+
+        report, reader, _ = await consume({src: reading("a"), dst: reading("b")}, [])
+        self.assertEqual((report.failed, report.skipped), ([], []))
+        reader.assert_not_awaited()
+
+        report, _, _ = await consume(same, counters(10, 30), pairs=[(src, dst)])
+        self.assertEqual(report.failed, [])
+        self.assertEqual(
+            report.skipped,
+            [
+                f"{dst} HCA path: no probe sent KV from {dst} to {src} on its host; "
+                "run the full mesh to check it"
+            ],
+        )
+
+        report, _, _ = await consume(same, [*counters(10), reading("b", 30), *counters(5, 9)])
+        self.assertEqual(len(report.failed), 1)
+        self.assertIn("no longer publishes HCA mlx5_0:1", report.failed[0])
+
     async def test_directed_kv_evidence_requires_a_live_transfer_and_stable_process(self):
         connector = NixlConnector()
         result = connector.prefill_result(
@@ -1131,6 +1315,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         ("model", set()),
                         ("pace", set()),
                         ("tokenize", None),
+                        ("hca", {}),
                         ("produce", {"e0": result, "e3": result}),
                     ):
                         stack.enter_context(
@@ -1582,6 +1767,55 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.failed, [])
         self.assertIn("tpot=1.00e-02q+1.00e-04b+0.0010", output.getvalue())
         self.assertIn("4890 batch tokens across 1 requests", output.getvalue())
+
+    def test_slo_gate_fits_the_deadline_longest_prefill_and_router_overhead_in_the_ttft(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5)
+        first, second = (spec.iid for spec in self.cfg.engines)
+        # The first engine is the fastest; the budget must price the slowest, the second.
+        store.put(profile(first))
+        store.put(profile(second, ttft_c=0.5))
+        slow = store.get(second).prefill_time(8192)
+        fast = store.get(first).prefill_time(8192)
+        self.assertGreater(slow, fast + 0.4)
+        self.assertGreater(slow, store.get(second).prefill_time(256))
+        calibration = CalibrationCheck("measured", longest_input_tokens=8192)
+        self.cfg.first_token_timeout_s = 1.0
+        fits = 1.0 + slow + 0.25
+        cases = (
+            (fits + 0.001, 0.25, True),
+            (fits + 0.001, 0.5, False),
+            # Enough for the fastest engine's prefill, too little for the slowest one's.
+            (fits - 0.01, 0.25, False),
+        )
+        for ttft, overhead, passes in cases:
+            with self.subTest(ttft=ttft, overhead=overhead):
+                self.cfg.slo = replace(self.cfg.slo, ttft_s=ttft, router_overhead_s=overhead)
+                report = Report()
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    gate_slo(self.cfg, store, report, calibration)
+                budget = (
+                    f"first-token deadline 1.000s + {second} prefill of 8192 tokens "
+                    f"{slow:.3f}s + router overhead {overhead:.3f}s"
+                )
+                if passes:
+                    self.assertEqual(report.failed, [])
+                    self.assertIn(budget, output.getvalue())
+                else:
+                    self.assertEqual(len(report.failed), 1)
+                    self.assertIn(budget, report.failed[0])
+                    self.assertIn(f"exceeds slo.ttft_s {ttft:.3f}s", report.failed[0])
+
+    def test_slo_gate_skips_the_first_token_budget_without_a_usable_calibration(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.cfg.slo = replace(self.cfg.slo, tpot_s=0.5, router_overhead_s=100.0)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        for calibration in (None, CalibrationCheck("uncalibrated"), CalibrationCheck("rejected")):
+            report = Report()
+            gate_slo(self.cfg, store, report, calibration)
+            self.assertEqual(report.failed, [])
 
     def test_slo_gate_accepts_a_flat_profile_at_the_measured_boundary(self):
         store = ProfileStore(self.cfg.profiles_path)

@@ -253,7 +253,10 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["run"])')
     ROUTER_URL='http://127.0.0.1:18000'
     IID='n3'
+    NARWHAL_ROUTER_TOKEN=$(cat "$instance/router-token")
     ```
+
+    The instance's router takes its [control token](HTTP-API.md#control-token) from `NARWHAL_ROUTER_TOKEN` when `up` runs with one set, and otherwise from `router-token` in the instance directory, which `up` writes once at mode 0600. With a token of your own exported, use it instead.
 
 2. Save the engine's entry from the run's fleet file:
 
@@ -271,6 +274,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
     ```
 
@@ -280,6 +284,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -H 'content-type: application/json' -d @"$RUN_DIR/$IID.json" \
       -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
     ```
@@ -304,8 +309,8 @@ The run directory that `status` prints holds:
 | Whole-device memory samples | `up-memory.jsonl`, `verify-memory.jsonl` |
 | Request journal | `journal.jsonl` |
 | Teardown record | `teardown.json` |
-| Model loading and engine requests | `engine-*/startup.log` |
-| Probe and fit outcomes | `profile-*.log` |
+| Model loading and engine requests | `launch/stages/engine-prepare/engine-*/attempt-*/engine-*/startup.log` |
+| Probe and fit outcomes | `launch/stages/profile/attempt-*/profile-*.log` |
 | Runtime, profile, and transfer checks | `verify-*/preflight.log` |
 
 Stop the instance. For an instance in another directory, such as `runs/dev-sglang` or `runs/dev-trtllm`, pass its `--instance` to both commands:
@@ -317,7 +322,7 @@ narwhal dev status
 
 `down` reports `stopped` for the recorded process groups.
 
-Each `up` writes a new run directory.
+The next `up` writes a new run directory. An `up` that failed or was interrupted instead [resumes](cli/Dev.md#resuming-an-interrupted-up) in its run directory.
 
 For a runtime change or engine restart:
 
@@ -327,13 +332,13 @@ For a runtime change or engine restart:
 
 ## Stage deadlines and recovery
 
-`dev up` and `dev verify` run subprocess stages with time budgets. `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the budget for every stage.
+The [stages](cli/Dev.md#resuming-an-interrupted-up) of `dev up`, and `dev verify`, run helper commands with time budgets. `NARWHAL_STAGE_TIMEOUT_SECONDS` sets the budget for every helper.
 
-`NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` sets the budget for one stage. `<NAME>` is the stage name in uppercase, with hyphens replaced by underscores.
+`NARWHAL_STAGE_<NAME>_TIMEOUT_SECONDS` sets the budget for one helper. `<NAME>` is the helper's name in uppercase, with hyphens replaced by underscores.
 
-Stages and default budgets:
+Helpers and default budgets:
 
-| Stage | Work | Default budget |
+| Helper | Work | Default budget |
 | --- | --- | --- |
 | `engine-<n>` | Runtime check for engine `n` | 300 seconds |
 | `native-start-shared` | Native shared startup | `runtime.ready_seconds` for each engine, 180 seconds by default |
@@ -350,13 +355,13 @@ NARWHAL_STAGE_NATIVE_START_SHARED_TIMEOUT_SECONDS=900 narwhal dev up
 NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 ```
 
-A stage budget covers the stage's work, helper imports, and subprocess startup. Each profiled role split gets a fresh stage budget.
+A budget covers the helper's work, its imports, and subprocess startup. Each profiled role split gets a fresh budget.
 
 Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
 
-`narwhal dev` stops the stage's supervised processes when:
+`narwhal dev` stops the helper's supervised processes, and the processes that the current stage of `up` started, when:
 
-- a stage budget expires
+- a helper's budget expires
 - `narwhal dev` receives SIGINT (Ctrl-C) during a stage
 - `narwhal dev` receives SIGTERM during a stage
 
@@ -367,24 +372,23 @@ Cleanup runs in two steps:
 
 Both grace periods add to the execution budget.
 
-Files next to each stage log:
+Files next to each helper log:
 
 | File | Content |
 | --- | --- |
-| `*.command.json` | The stage's command line |
-| `*.stdout`, `*.stderr` | The stage's private output |
+| `*.command.json` | The helper's command line |
+| `*.stdout`, `*.stderr` | The helper's private output |
 | `*.stage.json` | The budget, wall-clock start, elapsed time, exit status, process identities, cleanup escalation, and surviving PIDs |
 
-When `up` fails, startup rolls back and `lifecycle.json` records the original failure and teardown errors.
+When `up` fails, the failed stage stops what it started, the stages that passed keep their processes, and `lifecycle.json` records the failure.
 
 When `verify` fails, the attempt directory stays. `status` reports `degraded` with the reason until a later `verify` succeeds or `down` completes.
 
-Recover from a failed stage, with `PATH` as the instance directory:
+Recover from a failed stage of `up`, with `PATH` as the instance directory:
 
-1. Read the failed stage's output.
+1. Read the failed helper's output.
 2. Run `narwhal dev status --instance PATH`.
-3. Stop the process generation with `narwhal dev down --instance PATH`.
-4. Run `narwhal dev up --instance PATH`.
+3. Repair the cause and run `narwhal dev up --instance PATH`, which resumes at the failed stage. To start a new process generation instead, run `narwhal dev down --instance PATH` first.
 
 If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 

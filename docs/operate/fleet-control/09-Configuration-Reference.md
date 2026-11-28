@@ -16,7 +16,7 @@ The service validates the whole file at startup and reports every problem in one
 | `port`           | `8020`                   | Listener port, `1` through `65535`                                                                  |
 | `token_env`      | `NARWHAL_CONTROL_TOKEN`  | Environment variable that holds the bearer token                                                    |
 | `runs_dir`       | `runs/fleet-control`     | Directory for the action log and session run records                                                |
-| `fleet`          | `NARWHAL_FLEET` when set | Baseline fleet configuration file. Required when `NARWHAL_FLEET` is unset                           |
+| `fleet`          | `NARWHAL_FLEET` when set | Absolute path of the baseline fleet configuration file. Required when `NARWHAL_FLEET` is unset      |
 | `hooks`          | none; required           | Hook commands by name                                                                               |
 | `router`         | see [Router](#router)    | The router whose state, lifecycle and readiness routes the service calls                            |
 | `prometheus_url` | absent                   | Prometheus base URL, `http` or `https`, that the service asks for firing alerts                     |
@@ -65,11 +65,11 @@ Hooks run in the service's working directory, so relative paths in `argv` resolv
 
 ### Reference engine hook
 
-`tools/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches, for every engine backend that runs in a container, and refuses native launches. Use it for all four engine hooks, and pass the hook name without `engine_` as the action:
+`src/narwhal/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches, for every engine backend that runs in a container, and refuses native launches. Use it for all four engine hooks, and pass the hook name without `engine_` as the action:
 
 ```json
 "engine_start": {
-  "argv": [".venv/bin/python", "-m", "tools.fleet_control.engine_hook",
+  "argv": [".venv/bin/python", "-m", "narwhal.fleet_control.engine_hook",
            "--launch-dirs", "config/fleet-control.launch-dirs.json", "start"],
   "timeout_s": 900
 }
@@ -231,7 +231,7 @@ The example configuration embeds the **Requests**, **Latency**, **Time to first 
 | Variable                      | Read by                     | Meaning                                                                                                                          |
 | ----------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `NARWHAL_CONTROL_CONFIG`      | The service                 | Configuration file when `--config` is not given                                                                                  |
-| `NARWHAL_FLEET`               | The service                 | Baseline fleet configuration file when `fleet` is unset                                                                          |
+| `NARWHAL_FLEET`               | The service                 | Absolute path of the baseline fleet configuration file when `fleet` is unset                                                     |
 | `NARWHAL_CONTROL_TOKEN`       | The service, `make observe` | Bearer token. The service reads the variable that `token_env` names; `make observe` always reads `NARWHAL_CONTROL_TOKEN`         |
 | `NARWHAL_CONTROL_CONSOLE_URL` | `make observe`              | Console address that the dashboard's **Fleet control** link opens, when it differs from `http://127.0.0.1:18020/console`         |
 | `NARWHAL_CONTROL_METRICS_URL` | `make observe`              | Control service address as Prometheus reaches it, for the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) |

@@ -18,9 +18,9 @@ from unittest import mock
 
 import httpx
 
-from tools.fleet_control import cli as control_cli
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control import cli as control_cli
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     DEFAULT_HOST,
     ConfigError,
     ControlConfig,
@@ -29,8 +29,8 @@ from tools.fleet_control.config import (
     load_config,
     read_token,
 )
-from tools.fleet_control.jobs import Job
-from tools.fleet_control.service import ControlService
+from narwhal.fleet_control.jobs import Job
+from narwhal.fleet_control.service import ControlService
 from tools.maintenance.check_publication import private_path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,7 +91,7 @@ class ConfigTests(unittest.TestCase):
     def test_non_loopback_listener_is_refused(self) -> None:
         for host in ("0.0.0.0", "::", "example.invalid"):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as folder:
-                document = {"host": host, "fleet": "f", "hooks": {"restore": {"argv": ["x"]}}}
+                document = {"host": host, "fleet": "/f", "hooks": {"restore": {"argv": ["x"]}}}
                 with self.assertRaisesRegex(ConfigError, "host must be a loopback address"):
                     load_config(self.write(folder, document), {})
         for host in ("127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost"):

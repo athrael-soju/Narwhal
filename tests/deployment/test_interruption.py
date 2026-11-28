@@ -19,6 +19,11 @@ from narwhal.dev import lifecycle, template
 MODULE = "tests.deployment.interruption_harness"
 ROOT = Path(__file__).resolve().parents[2]
 
+# Seconds the controller has to reach the stage under test. It starts three cold interpreters
+# first, the controller, the helper and its worker, which takes far longer than a second on a
+# loaded host; a controller that exits early fails at once.
+BARRIER_S = 60
+
 
 @unittest.skipUnless(sys.platform == "linux", "Linux process ownership contract")
 class InterruptionTests(unittest.TestCase):
@@ -54,6 +59,8 @@ class InterruptionTests(unittest.TestCase):
                 ],
             },
         )
+        # up records the digest of every instance file as a run input.
+        lifecycle.write(root / "engine-launch.json", {})
 
     def live(self, root):
         processes = stages._processes()
@@ -66,20 +73,37 @@ class InterruptionTests(unittest.TestCase):
             and processes[item["pid"]][0] not in {"Z", "X"}
         }
 
+    def stage_workers(self, root):
+        """The live processes that stage evidence records, the stage workers among them."""
+        processes = stages._processes()
+        recorded = {}
+        for path in root.glob("run-*/**/*.stage.json"):
+            with contextlib.suppress(OSError, ValueError):
+                recorded.update(json.loads(path.read_text()).get("processes", {}))
+        return {
+            int(pid): ticks
+            for pid, ticks in recorded.items()
+            if int(pid) in processes
+            and processes[int(pid)][3] == ticks
+            and processes[int(pid)][0] not in {"Z", "X"}
+        }
+
     def cleanup(self, root, controller):
         if controller.poll() is None:
             controller.kill()
         controller.wait(timeout=3)
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
-            stages._signal(self.live(root), signal.SIGKILL)
+            # A stage worker waits for its release forever once its controller is gone.
+            survivors = {**self.live(root), **self.stage_workers(root)}
+            stages._signal(survivors, signal.SIGKILL)
             for path in (root / "registry").glob("pid-*.json"):
                 with contextlib.suppress(ChildProcessError):
                     os.waitpid(json.loads(path.read_text())["pid"], os.WNOHANG)
-            if not self.live(root):
+            if not survivors:
                 return
             time.sleep(0.02)
-        self.fail(f"harness cleanup survivors: {self.live(root)}")
+        self.fail(f"harness cleanup survivors: {self.live(root)} {self.stage_workers(root)}")
 
     def inspect(self, root, operation):
         result = subprocess.run(
@@ -94,7 +118,7 @@ class InterruptionTests(unittest.TestCase):
         return value
 
     def await_barrier(self, root, selected, controller):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + BARRIER_S
         while time.monotonic() < deadline:
             if controller.poll() is not None:
                 self.fail(
@@ -102,7 +126,9 @@ class InterruptionTests(unittest.TestCase):
                 )
             if selected in {"profiling", "verification"}:
                 evidence = list(root.glob("run-*/**/*.stage.json"))
-                if evidence and len(list((root / "registry").glob("pid-*.json"))) >= 5:
+                # The controller, the helper and its worker, and, once it runs, the router pair.
+                expected = 3 if selected == "profiling" else 5
+                if evidence and len(list((root / "registry").glob("pid-*.json"))) >= expected:
                     # Wait for the parent to observe the detached helper worker.
                     time.sleep(0.06)
                     return
@@ -129,13 +155,16 @@ class InterruptionTests(unittest.TestCase):
                 controller.send_signal(sig)
                 controller.wait(timeout=5)
                 self.assertNotEqual(controller.returncode, 0)
-                if sig == signal.SIGKILL or (sig == signal.SIGTERM and selected == "owned"):
+                if sig == signal.SIGKILL:
                     self.assertEqual(controller.returncode, -sig)
                 for path in root.glob("**/*.json"):
                     self.assertIsInstance(json.loads(path.read_text()), dict, str(path))
                 state = lifecycle.read(root / "lifecycle.json")
-                self.assertTrue(list(Path(state["run"]).glob("router.log")))
-                self.assertIn("retained service", (Path(state["run"]) / "router.log").read_text())
+                logs = list(Path(state["run"]).glob("launch/stages/router-start/*/router.log"))
+                # Profiling runs before the router starts.
+                self.assertEqual(len(logs), 0 if selected == "profiling" else 1)
+                if logs:
+                    self.assertIn("retained service", logs[0].read_text())
                 before = self.live(root)
                 status = self.inspect(root, "status")["result"]
                 self.assertIsNone(sibling.poll())

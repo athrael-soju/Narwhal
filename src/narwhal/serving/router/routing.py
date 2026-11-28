@@ -16,6 +16,7 @@ from ...config import EngineSpec, FleetConfig
 from ...contracts import STATE, versioned
 from ...engines.attestation import attested_launch
 from ...engines.client import EngineClient, client_options
+from ...engines.trust import EngineTrust
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
@@ -64,7 +65,7 @@ from .sizing import RequestSizer
 from .verification import SuspectVerifier
 
 if TYPE_CHECKING:
-    from ...runtime.lease import FileLease
+    from ...runtime.lease import RouterLease
 
 log = logging.getLogger("narwhal.router")
 
@@ -95,7 +96,7 @@ class NarwhalRouter:
         # Whether the standby's last probe found its primary controlling the fleet.
         self.primary_seen = False
         self.takeover_gap_s: float | None = None
-        self.lease: FileLease | None = None
+        self.lease: RouterLease | None = None
         self.lease_epoch = 0
         self.lease_holder = ""
         self._failover_blocked = ""
@@ -182,7 +183,15 @@ class NarwhalRouter:
         self.lifecycle_transport = transport
         self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
         self.backend = load_backend(cfg.backend)
-        self.engines = EngineClient(**client_options(cfg), transport=transport, dial=dial)
+        # The engine credential goes only to the engines this trusts: under a contract, those
+        # whose attestation verified for the process they run.
+        self.trust = EngineTrust(
+            attested=cfg.engine_contract is not None,
+            configured=(spec.url for spec in self.membership),
+        )
+        self.engines = EngineClient(
+            **client_options(cfg), transport=transport, dial=dial, trust=self.trust
+        )
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
         self.transfer_refresh = TransferRefresh()
@@ -367,6 +376,7 @@ class NarwhalRouter:
             self._forget_engine(spec)
         for spec in added:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
+            self.trust.configure(spec.url)
             # A probe that finished after an earlier departure leaves a verification time.
             self.verifier.verified_at.pop(spec.iid, None)
         # The monitor keeps the snapshot's order, which placement iterates.
@@ -394,6 +404,7 @@ class NarwhalRouter:
             table.pop(iid, None)
         self.role_switch.forget(spec.url)
         self.engines.kv.forget(spec.url)
+        self.trust.forget(spec.url)
         if self.transfer_refresh.held == iid:
             self.transfer_refresh.held = None
 
@@ -485,7 +496,7 @@ class NarwhalRouter:
         try:
             async with httpx.AsyncClient(
                 timeout=ROLE_SWITCH_TIMEOUT_S,
-                headers=self.cfg.engine_headers(),
+                headers=self.engines._auth(None, url),
                 transport=self.lifecycle_transport,
             ) as client:
                 change = switcher.refresh if refresh else switcher.switch

@@ -32,18 +32,21 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 from tools.measurement.router_benchmark.client import client_bodies
 from tools.measurement.router_benchmark.fleet import Shape, write_fleet
 from tools.measurement.router_benchmark.processes import (
     child_env,
     free_port,
     ready_line,
+    router_env,
 )
 
 SHIPPED_CONFIG = ROOT / "deploy" / "ha" / "haproxy.cfg"
 SIMULATED_ENGINE = ROOT / "tools" / "measurement" / "simulated_engine.py"
-DEFAULT_IMAGE = "haproxy:3.2-alpine"
+DEFAULT_IMAGE = (
+    "haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb"
+)
 SHAPE = Shape(
     engines=2,
     prefill_engines=1,
@@ -126,7 +129,7 @@ class Routers:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 cwd=self.out,
-                env=child_env(str(ROOT / "src")),
+                env=router_env(str(ROOT / "src")),
             )
         self.processes[name] = process
         return process
@@ -253,6 +256,25 @@ async def wait_holder(http: httpx.AsyncClient, routers: Routers, names: list[str
     raise RuntimeError(f"none of {names} was ready within 30 s")
 
 
+async def current_holder(http: httpx.AsyncClient, routers: Routers) -> str:
+    """Return the one router that answers `/ready` with HTTP 200, refusing two holders."""
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        ready = []
+        for name in ("router-a", "router-b"):
+            try:
+                if (await http.get(routers.url(name) + "/ready")).status_code == 200:
+                    ready.append(name)
+            except httpx.TransportError:
+                pass
+        if len(ready) == 2:
+            raise RuntimeError("both routers answer /ready as the holder")
+        if ready:
+            return ready[0]
+        await asyncio.sleep(0.02)
+    raise RuntimeError("no router was ready within 30 s")
+
+
 async def takeovers(
     args: argparse.Namespace,
     http: httpx.AsyncClient,
@@ -261,9 +283,11 @@ async def takeovers(
 ) -> list[dict]:
     """Stop the active router once per takeover and return each takeover's record."""
     records = []
-    active = "router-a"
     await asyncio.sleep(args.warmup)
     for _ in range(args.takeovers):
+        # Under load the standby can take the lease during the warmup, so stop whichever
+        # router holds it now rather than the one that started as the primary.
+        active = await current_holder(http, routers)
         standby = "router-b" if active == "router-a" else "router-a"
         old = routers.processes[active]
         signalled = time.time()

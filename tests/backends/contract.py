@@ -18,10 +18,14 @@ from narwhal.backends import load as load_backend
 from narwhal.backends import names
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
+from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import load, prepare
 from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.start import start
+from narwhal.engines.host_process import started_at_seconds
 from narwhal.engines.kv_events import CacheEvent
 from tests.deployment.fixtures import launcher_inputs
+from tests.deployment.pod_fixtures import RDMA_TRANSFER, kubernetes_env
 from tools.measurement import simulated_engine as sim
 
 
@@ -49,9 +53,13 @@ class ContractFixtures:
     launch_runtime: dict[str, Any] = field(default_factory=dict)
     # Stdout of the backend's runtime check probe for a launch plan.
     check_output: Callable[[dict], str] | None = None
-    # Writes the evidence a started container's captures leave in its launch directory.
-    attestation_evidence: Callable[[Path, dict, str], None] | None = None
+    # Writes the evidence a started container's captures leave in an attempt directory, given
+    # the launch directory, the attempt, the plan and the container ID.
+    attestation_evidence: Callable[[Path, Path, dict, str], None] | None = None
     startup_log: str = ""
+    # What the started engine answers its attestation captures, given an attempt that
+    # attestation_evidence wrote.
+    engine_answers: Callable[[Path], "EngineAnswers"] | None = None
     # Distributions an engine image reports to discovery, and the .env fields discovery reads.
     image_packages: dict[str, str] = field(default_factory=dict)
     discovery_settings: dict[str, str] = field(default_factory=dict)
@@ -64,6 +72,7 @@ LAUNCH_FIELDS = (
     "check_output",
     "attestation_evidence",
     "startup_log",
+    "engine_answers",
 )
 
 
@@ -81,6 +90,11 @@ def fixtures(backend: str) -> ContractFixtures:
 
 
 CONTAINER_ID = "c" * 64
+# A capture attempt's directory name, as `capture` names one.
+ATTEMPT = "20260101T000000Z-00000000"
+# The serving container's State.StartedAt, and the process start /metrics reports for it.
+CONTAINER_STARTED_AT = "2026-01-01T00:00:00.25Z"
+CONTAINER_STARTED_S = 1767225600.25
 MODEL_CONFIG = {
     "architectures": ["FixtureForCausalLM"],
     "num_attention_heads": 8,
@@ -116,7 +130,7 @@ def random_ids(value: Any) -> Any:
     return value
 
 
-def launch_record(runtime: dict, shared: dict | None) -> dict:
+def launch_record(runtime: dict, shared: dict | None, transfer: dict | None = None) -> dict:
     gpus = ["0"] if shared is not None else ["0", "1"]
     entry = {
         "accelerator": "synthetic-gpu",
@@ -125,7 +139,7 @@ def launch_record(runtime: dict, shared: dict | None) -> dict:
         "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
         "accelerator_devices": ["/dev/nvidiactl", *(f"/dev/nvidia{gpu}" for gpu in gpus)],
         "network_mode": "host",
-        "transfer": {"transport": "ucx_tcp", "net_devices": "fabric0", "devices": []},
+        "transfer": transfer or {"transport": "ucx_tcp", "net_devices": "fabric0", "devices": []},
         "sources": dict.fromkeys(
             ("allocation", "devices", "transfer"), "synthetic approved launch record"
         ),
@@ -145,10 +159,13 @@ def prepared(
     launcher: EngineLauncher,
     fixture: ContractFixtures,
     *,
-    native: bool,
+    backend: str = "container",
     **environment: str,
 ) -> tuple[Path, dict, str]:
-    """Prepare a two-GPU container launch, or a native launch on one shared GPU."""
+    """Prepare a two-GPU container or Kubernetes launch, or a native launch on a shared GPU.
+
+    The Kubernetes launch transfers KV over RDMA.
+    """
     _, env = launcher_inputs(root)
     config = root / "model" / "config.json"
     config.write_text(json.dumps(MODEL_CONFIG))
@@ -159,17 +176,22 @@ def prepared(
         env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = digest(capture.cache_hook)
     runtime = copy.deepcopy(fixture.launch_runtime)
     shared = None
-    if native:
+    transfer = None
+    if backend == "native":
         runtime["extra_args"] = [*runtime.get("extra_args", []), *fixture.memory_args]
         shared = {**SHARED_DEVICE, "gpu_memory_utilization": float(fixture.memory_fraction)}
         env.pop("NARWHAL_ENGINE_IMAGE")
         env["NARWHAL_MODEL_REVISION"] = "a" * 40
         env["NARWHAL_NODE_1_ATTESTATION_URL"] = "http://192.0.2.11:8010/v1/attestation"
+    elif backend == "kubernetes":
+        env = kubernetes_env(env)
+        transfer = dict(RDMA_TRANSFER)
     env.update(environment)
-    Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(launch_record(runtime, shared)))
+    record = launch_record(runtime, shared, transfer)
+    Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
     run = root / "launch"
     with contextlib.redirect_stdout(io.StringIO()) as printed:
-        prepare(run, env, backend="native" if native else "container")
+        prepare(run, env, backend=backend)
     return run, load(run), printed.getvalue()
 
 
@@ -197,15 +219,158 @@ class Stages:
             stdout = json.dumps([{"Id": self.plan["image"], "RepoDigests": []}])
         elif command[:2] in (["docker", "create"], ["docker", "start"]):
             stdout = CONTAINER_ID
+        elif command[:2] == ["docker", "inspect"] and "{{.State.StartedAt}}" in command:
+            stdout = CONTAINER_STARTED_AT
         return subprocess.CompletedProcess(command, 0, stdout, "")
 
 
+def capture_attempt(run: Path) -> Path:
+    """A capture attempt directory in the launch directory `run`."""
+    attempt = run / "attestation" / ATTEMPT
+    attempt.mkdir(parents=True)
+    return attempt
+
+
 def running_container(image_id: str) -> contextlib.AbstractContextManager:
-    inspected = {"Id": CONTAINER_ID, "Image": image_id, "State": {"Running": True}}
+    inspected = {
+        "Id": CONTAINER_ID,
+        "Image": image_id,
+        "State": {"Running": True, "StartedAt": CONTAINER_STARTED_AT},
+    }
     return patch(
         "narwhal.deployment.attestation_contract.evidence.subprocess.run",
         return_value=subprocess.CompletedProcess([], 0, json.dumps(inspected), ""),
     )
+
+
+@dataclass(frozen=True)
+class EngineAnswers:
+    """What a started engine answers its attestation captures."""
+
+    # JSON bodies, or text, by HTTP route.
+    routes: dict[str, Any]
+    # Stdout of each inspection script the captures run, by a tag the script's source holds.
+    scripts: dict[str, str] = field(default_factory=dict)
+    # Lines the runtime check's probe logged for the checked plan.
+    check_log: str = ""
+
+
+def started_container(root: Path, name: str) -> tuple[Path, Path]:
+    """Prepare, check and start a container engine of backend `name` in `root`. Return its
+    launch directory and an attempt, outside it, holding the captures the fixtures expect."""
+    fixture = fixtures(name)
+    launcher = load_backend(name).launcher
+    assert launcher is not None and fixture.check_output is not None
+    assert fixture.attestation_evidence is not None
+    run, plan, _ = prepared(root, launcher(), fixture, native=False)
+    stages = Stages(plan, fixture.check_output(plan))
+    with (
+        patch("narwhal.deployment.stages.run", side_effect=stages),
+        contextlib.redirect_stdout(io.StringIO()),
+    ):
+        check(run, plan)
+        start(run, load(run))
+    reference = root / "reference"
+    reference.mkdir()
+    fixture.attestation_evidence(run, reference, load(run), CONTAINER_ID)
+    (reference / "startup.log").write_text(fixture.startup_log)
+    return run, reference
+
+
+class LiveContainer:
+    """A started container as its attestation captures reach it: Docker inspection, logs and
+    exec, inspection containers of its image, and the engine's HTTP routes."""
+
+    def __init__(self, run: Path, image_id: str, answers: EngineAnswers, startup_log: str) -> None:
+        self.image_id = image_id
+        self.answers = answers
+        self.started_at = CONTAINER_STARTED_AT
+        # Log text by the container start that wrote it.
+        self.logs = [(CONTAINER_STARTED_AT, startup_log)]
+        # Routes that answer 503 once.
+        self.unavailable: set[str] = set()
+        self.calls: list[dict] = []
+        if answers.check_log:
+            with (run / "image-check.log").open("a") as log:
+                log.write(answers.check_log)
+
+    def restart(self, started_at: str, log: str) -> None:
+        self.started_at = started_at
+        self.logs.append((started_at, log))
+
+    def tagged(self, command: list[str]) -> list[str]:
+        return [
+            next((f"<script {tag}>" for tag in self.answers.scripts if tag in arg), arg)
+            if "\n" in arg
+            else arg
+            for arg in command
+        ]
+
+    def script(self, command: list[str]) -> str:
+        source = command[command.index("-c") + 1]
+        [tag] = [tag for tag in self.answers.scripts if tag in source]
+        return self.answers.scripts[tag]
+
+    def run(self, command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        self.calls.append({"command": self.tagged(command), "timeout": kwargs.get("timeout")})
+        if command[:2] == ["docker", "logs"]:
+            since = started_at_seconds(command[command.index("--since") + 1])
+            text = "".join(log for start, log in self.logs if started_at_seconds(start) >= since)
+            return subprocess.CompletedProcess(command, 0, text.encode(), None)
+        if command[:3] == ["docker", "inspect", "--format"] and command[4] == CONTAINER_ID:
+            if command[3] == "{{json .}}":
+                state = {"Running": True, "StartedAt": self.started_at}
+                stdout = json.dumps({"Id": CONTAINER_ID, "Image": self.image_id, "State": state})
+            elif command[3] == "{{.State.Running}} {{.State.StartedAt}}":
+                stdout = f"true {self.started_at}\n"
+            else:
+                raise AssertionError(f"unexpected inspection {command}")
+        elif command[:3] == ["docker", "exec", "--env"] or command[:2] == ["docker", "exec"]:
+            stdout = self.script(command)
+        else:
+            raise AssertionError(f"unexpected command {command}")
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    def stage(self, command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        self.calls.append({"command": self.tagged(command), "stage": kwargs.get("stage")})
+        if command[:2] != ["docker", "run"] or "--rm" not in command:
+            raise AssertionError(f"unexpected stage {command}")
+        return subprocess.CompletedProcess(command, 0, self.script(command), "")
+
+    def route(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.calls.append(
+            {
+                "request": f"{request.method} {path}",
+                "authorized": request.headers.get("authorization", "").startswith("Bearer "),
+            }
+        )
+        if path in self.unavailable:
+            self.unavailable.discard(path)
+            return httpx.Response(503, text="engine starting")
+        body = self.answers.routes[path]
+        if isinstance(body, str):
+            return httpx.Response(200, text=body)
+        return httpx.Response(200, json=body)
+
+    @contextlib.contextmanager
+    def serving(self) -> Any:
+        client, asynchronous = httpx.Client, httpx.AsyncClient
+
+        def connect(**kwargs: Any) -> httpx.Client:
+            return client(transport=httpx.MockTransport(self.route), **kwargs)
+
+        def connect_async(**kwargs: Any) -> httpx.AsyncClient:
+            kwargs["transport"] = httpx.MockTransport(self.route)
+            return asynchronous(**kwargs)
+
+        with (
+            patch("subprocess.run", side_effect=self.run),
+            patch("narwhal.deployment.stages.run", side_effect=self.stage),
+            patch("httpx.Client", connect),
+            patch("httpx.AsyncClient", connect_async),
+        ):
+            yield self
 
 
 class Engines:

@@ -128,7 +128,7 @@ def contract_free_router(case, root):
     return router
 
 
-def calibration_document(cfg, generations, starts, seconds=0.25):
+def calibration_document(cfg, generations, starts, seconds=0.25, input_tokens=(8,)):
     """Return complete first-token calibration evidence with every sample at `seconds`."""
     pairs = validation_pairs(cfg.engines, mesh=True)
     rounds = calibration.calibration_rounds(
@@ -149,7 +149,7 @@ def calibration_document(cfg, generations, starts, seconds=0.25):
         "process_starts": dict(starts),
         "changed_generations": [],
         "generation_errors": [],
-        "input_tokens": [8],
+        "input_tokens": list(input_tokens),
         "samples_per_group": 100,
         "observation_timeout_s": 10.0,
         "configured_deadline_s": cfg.first_token_timeout_s,
@@ -158,9 +158,9 @@ def calibration_document(cfg, generations, starts, seconds=0.25):
             {
                 "producer": src,
                 "consumer": dst,
-                "target_input_tokens": 8,
-                "actual_input_tokens_min": 8,
-                "actual_input_tokens_max": 8,
+                "target_input_tokens": length,
+                "actual_input_tokens_min": length,
+                "actual_input_tokens_max": length,
                 "completed": 100,
                 "failed": 0,
                 "p99_seconds": p99,
@@ -168,21 +168,23 @@ def calibration_document(cfg, generations, starts, seconds=0.25):
                 "candidate_deadline_s": candidate,
             }
             for src, dst in pairs
+            for length in input_tokens
         ],
         "attempts": [
             {
                 "producer": src,
                 "consumer": dst,
-                "target_input_tokens": 8,
+                "target_input_tokens": length,
                 "requested_output_tokens": 4,
                 "attempt": attempt,
                 "round": None if attempt == 1 else numbers[(src, dst)],
-                "actual_input_tokens": 8,
+                "actual_input_tokens": length,
                 "prefill_seconds": 0.05,
                 "first_token_seconds": seconds,
                 "status": "completed",
             }
             for src, dst in pairs
+            for length in input_tokens
             for attempt in range(1, 101)
         ],
     }

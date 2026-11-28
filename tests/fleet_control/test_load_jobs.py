@@ -18,25 +18,25 @@ from unittest import mock
 
 import httpx
 
-from tools.fleet_control import cli as control_cli
-from tools.fleet_control.aiperf import (
+from narwhal.fleet_control import cli as control_cli
+from narwhal.fleet_control.aiperf import (
     AIPerfRunner,
     command,
     runner_for,
     summarize,
     workload_routes,
 )
-from tools.fleet_control.app import create_app
-from tools.fleet_control.config import (
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.config import (
     ConfigError,
     ControlConfig,
     Hook,
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.live import LiveRecords, live_routes
-from tools.fleet_control.service import ControlService
-from tools.fleet_control.workloads import (
+from narwhal.fleet_control.live import LiveRecords, live_routes
+from narwhal.fleet_control.service import ControlService
+from narwhal.fleet_control.workloads import (
     KINDS,
     LoadConfig,
     MixEntry,

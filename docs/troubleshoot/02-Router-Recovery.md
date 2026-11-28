@@ -28,7 +28,7 @@ When both routers return HTTP 503 from `/ready`, read the refusal reasons. If a 
 
 ### State handoff is stale or incompatible
 
-The standby's `/ready` returns HTTP 503 with reason `no fresh handoff` when the previous lease epoch's state handoff expired or the previous router exited before persisting one. A contract version mismatch or a wrong epoch in the state handoff also returns HTTP 503 from the standby's `/ready`.
+The standby's `/ready` returns HTTP 503 with reason `no fresh handoff` when the previous lease epoch's state handoff expired or the previous router exited before persisting one. On a Kubernetes Lease, once the Lease has been absent, or expired for longer than `--standby-max-handoff-age`, the standby claims it as a [cold start](../cli/Serve.md#standby-takeover-and-lease-fencing) and the reason clears. A contract version mismatch or a wrong epoch in the state handoff also returns HTTP 503 from the standby's `/ready`.
 
 1. Keep client traffic stopped.
 2. Restore a compatible router release.

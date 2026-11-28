@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
+from typing import ClassVar
 
+from ...deployment.attestation_contract.capture import Capture, CaptureContext
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import (
     CacheCapture,
@@ -10,12 +13,14 @@ from ...deployment.launch_engine.backend import (
     CacheRegistration,
     EngineLauncher,
     LiveModelDimensions,
+    LiveProbe,
     ModelFormats,
 )
-from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, captures, dev, discovery
+from ...deployment.launch_engine.check import CheckContext
+from . import attestation, captures, dev, discovery, inspections, probe_reader
 from . import check as runtime_check
 from . import plan as policy
+from .identity import parse_process_start
 from .runtime import LAUNCHER
 
 
@@ -40,7 +45,9 @@ class VllmLauncher(
     prefix_cache_name = "Prefix caching"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     fleet_settings = discovery.FLEET_SETTINGS
-    version_label = "API"
+    probe_reader: ClassVar[ModuleType] = probe_reader
+    live_probe = LiveProbe(parse_process_start, completion=True)
+    pod_inspections: ClassVar[ModuleType] = inspections
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -105,9 +112,6 @@ class VllmLauncher(
     def runtime_probe(self, context: CheckContext) -> list[str]:
         return runtime_check.probe(context)
 
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        return runtime_check.result(context, output)
-
     def measure_cache(self, run: Path, plan: dict) -> None:
         captures.measure_cache(run, plan)
 
@@ -117,20 +121,14 @@ class VllmLauncher(
     def model_dimensions(self, run: Path, plan: dict) -> None:
         captures.model_dimensions(run, plan)
 
-    def handshake_policy(self, run: Path, plan: dict) -> None:
-        captures.handshake_policy(run, plan)
+    def cache_layout(self, source: Path) -> str:
+        return captures.resolved_layout(source)
 
-    def registration_layout(self, run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
-        captures.registration_layout(run, plan, source, from_runtime)
+    def capture_model_dimensions(self, run: Path, out: Path) -> Path:
+        return attestation.capture_model_dimensions(run, out)
 
-    def capture_connector(self, run: Path) -> Path:
-        return attestation.capture_nixl(run)
-
-    def capture_model_dimensions(self, run: Path) -> Path:
-        return attestation.capture_model_dimensions(run)
-
-    def capture_native(self, run: Path) -> Path:
-        return attestation.capture_native(run)
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        return attestation.attestation_captures(context)
 
     def transfer_package(self, plan: dict) -> str | None:
         return attestation.nixl_package(plan)

@@ -15,14 +15,14 @@ from pathlib import Path
 
 import httpx
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 from tools.measurement.simulated_engine import SIMULATED_VERSION
 
 from .client import client_argv, sleep_until
 from .cpus import Allocation
 from .files import open_private, write_private
 from .fleet import Shape, engine_roles, write_fleet
-from .processes import ROOT, Children, child_env, free_port, ready_line
+from .processes import ROOT, Children, child_env, free_port, ready_line, router_env
 from .render import report_text
 from .report import REPORT_KIND, VERSION, rate_row, select_point, stop_reason
 from .sampling import edge_sample, steady_sample
@@ -258,7 +258,7 @@ class Run:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 cwd=self.out,
-                env=child_env(str(self.router_src)),
+                env=router_env(str(self.router_src)),
             )
         self.children.record()
         deadline = time.monotonic() + 60.0

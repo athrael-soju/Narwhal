@@ -15,9 +15,9 @@ import httpx
 
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document
+from narwhal.deployment import load_trial as trial
 from narwhal.dev import lifecycle
 from narwhal.provenance import stamp
-from tools.measurement import load_trial as trial
 
 
 def plan(root):

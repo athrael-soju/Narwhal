@@ -13,16 +13,27 @@ from pathlib import Path
 
 
 def main() -> None:
-    """Run the helper while keeping forked workers attached after their leader exits."""
+    """Run the helper while keeping forked workers attached after their leader exits.
+
+    The helper starts only once the controller has recorded this worker in the stage's
+    evidence and written the start file. A worker whose controller is gone before then exits
+    without starting it, so no helper runs that recovery could not find.
+    """
     result = Path(sys.argv[1])
     release = Path(sys.argv[2])
+    start = Path(sys.argv[3])
+    controller = int(sys.argv[4])
+    while not start.exists():
+        if os.getppid() != controller:
+            sys.exit(1)
+        time.sleep(0.005)
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0):
         raise OSError(ctypes.get_errno(), "could not enable isolated helper reaping")
     # The supervisor survives TERM; caught handlers reset to default in the exec'd helper.
     signal.signal(signal.SIGTERM, lambda signum, frame: None)
     signal.signal(signal.SIGINT, lambda signum, frame: None)
-    child = subprocess.Popen(sys.argv[3:])
+    child = subprocess.Popen(sys.argv[5:])
     code = child.wait()
     temporary = result.with_suffix(".pending")
     with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:

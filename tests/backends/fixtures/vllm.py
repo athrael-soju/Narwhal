@@ -4,10 +4,11 @@ from pathlib import Path
 
 import msgpack
 
+from narwhal.backends.vllm.attestation import MODEL_DIMENSIONS_CAPTURE_TAG, NIXL_CAPTURE_TAG
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
-from tests.backends.contract import ContractFixtures
+from tests.backends.contract import CONTAINER_STARTED_S, ContractFixtures, EngineAnswers
 from tests.deployment.fixtures import runtime, vllm_check_output
 
 
@@ -59,18 +60,41 @@ def check_output(plan: dict) -> str:
     return vllm_check_output(plan, packages=plan["expected_packages"], ucx="1.22.0")
 
 
-def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
+def attestation_evidence(run: Path, attempt: Path, plan: dict, container_id: str) -> None:
     plan_hash = digest(run / "launch.json")
     image = plan["image"]
     ranks = range(int(option(plan["args"], "--tensor-parallel-size") or 1))
+    (run / "cache-layout.json").write_text(
+        json.dumps(
+            {
+                "plan_sha256": plan_hash,
+                "image": image,
+                "model_config_sha256": plan["model_config_sha256"],
+                "launch_config_sha256": plan["launch_sha256"],
+                "ranks": [
+                    {
+                        "rank": rank,
+                        "kv_cache_layout": "NHD",
+                        "layers": [{"kind": "FullAttentionSpec"}],
+                    }
+                    for rank in ranks
+                ],
+            }
+        )
+        + "\n"
+    )
+    binding = {"image_id": image, "container_id": container_id}
     captures = {
-        "model-dimensions.json": {
+        "model-dimensions.live.json": {
             "plan_sha256": plan_hash,
             "image": image,
             "model_config_sha256": plan["model_config_sha256"],
             "revision": plan["revision"],
+            "launcher_sha256": plan["launcher_sha256"],
             "contract": {"kv_heads": 8, "head_size": 64, "hidden_layers": 4},
             "model_architecture": "FixtureForCausalLM",
+            "model_revision": plan.get("model_revision", ""),
+            **binding,
         },
         "cache-registration.json": {
             "plan_sha256": plan_hash,
@@ -78,21 +102,10 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
             "kv_cache_layout": "NHD",
             "cross_layers_blocks": False,
         },
-        "cache-layout.json": {
-            "plan_sha256": plan_hash,
-            "image": image,
-            "model_config_sha256": plan["model_config_sha256"],
-            "launch_config_sha256": plan["launch_sha256"],
-            "ranks": [
-                {"rank": rank, "kv_cache_layout": "NHD", "layers": [{"kind": "FullAttentionSpec"}]}
-                for rank in ranks
-            ],
-        },
         "nixl-connector-version.json": {
             "plan_sha256": plan_hash,
-            "image_id": image,
-            "container_id": container_id,
             "nixl_connector_version": 9,
+            **binding,
         },
         "transfer-mode.json": {
             "plan_sha256": plan_hash,
@@ -108,8 +121,39 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
         "version.json": {"version": "0.29.0"},
     }
     for name, value in captures.items():
-        (run / name).write_text(json.dumps(value) + "\n")
-    (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
+        (attempt / name).write_text(json.dumps(value) + "\n")
+    (attempt / "metrics.txt").write_text(f"process_start_time_seconds {CONTAINER_STARTED_S}\n")
+
+
+# The connector class the runtime check resolves for NixlConnector, as its probe logs it.
+RESOLVED_CONNECTOR = "vllm.distributed.kv_transfer.kv_connector.v1.nixl.connector.NixlPullConnector"
+
+
+def engine_answers(reference: Path) -> EngineAnswers:
+    def captured(name: str, *bound: str) -> dict:
+        record = json.loads((reference / name).read_text())
+        return {key: value for key, value in record.items() if key not in bound}
+
+    binding = ("plan_sha256", "image_id", "container_id")
+    # Each inspection prints one tagged record, as its script in the image would.
+    printed = {
+        MODEL_DIMENSIONS_CAPTURE_TAG: captured(
+            "model-dimensions.live.json", "image_id", "container_id", "model_revision"
+        ),
+        NIXL_CAPTURE_TAG: captured("nixl-connector-version.json", *binding),
+        "NARWHAL_CACHE_REGISTRATION=": captured("cache-registration.json", "plan_sha256", "image"),
+        "NARWHAL_HANDSHAKE_POLICY=": captured(
+            "handshake-policy.json", "plan_sha256", "image", "connector_config"
+        ),
+    }
+    return EngineAnswers(
+        routes={
+            "/version": captured("version.json"),
+            "/metrics": (reference / "metrics.txt").read_text(),
+        },
+        scripts={tag: f"\n{tag}{json.dumps(record)}\n" for tag, record in printed.items()},
+        check_log=json.dumps({"connector": RESOLVED_CONNECTOR}) + "\n",
+    )
 
 
 _STORED = stored([11, 12], range(1, 9))
@@ -144,5 +188,10 @@ FIXTURES = ContractFixtures(
     launch_runtime=runtime(),
     check_output=check_output,
     attestation_evidence=attestation_evidence,
-    startup_log="Using FLASH_ATTN attention backend.\n",
+    startup_log=(
+        "Using FLASH_ATTN attention backend.\n"
+        "[factory.py:62] Creating v1 connector with name: NixlPullConnector and engine_id: "
+        "00000000-0000-4000-8000-000000000001\n"
+    ),
+    engine_answers=engine_answers,
 )

@@ -76,13 +76,17 @@ nav:
       - Recovery and qualification: dev/Recovery-and-Qualification.md
   - Deploying a fleet:
       - Overview: Deploy.md
+      - Getting started: deploy/Getting-Started.md
+      - Command reference: cli/Deploy.md
       - Discovering the deployment: deploy/01-Discover.md
-      - Installing the approved revision: deploy/02-Install.md
+      - Installing Narwhal on the hosts: deploy/02-Install.md
       - Validating and starting engines: deploy/03-Validate-Engines.md
       - Qualifying the transfer fabric: deploy/04-Qualify-Fabric.md
       - Attesting live engines: deploy/05-Attest.md
       - Profiling and preflight: deploy/06-Profile-and-Preflight.md
       - Serving and measuring: deploy/07-Serve-and-Measure.md
+      - Deploying on Kubernetes: deploy/Kubernetes.md
+      - NarwhalFleet reference: deploy/NarwhalFleet.md
   - Deployment operations:
       - Measuring a fleet:
           - Overview: Measure.md
@@ -148,6 +152,7 @@ nav:
           - Command results: Command-Results.md
           - narwhal diagnostics: Diagnostic-Bundles.md
           - narwhal dev: cli/Dev.md
+          - narwhal deploy: cli/Deploy.md
           - narwhal-engine: cli/Engine.md
           - narwhal-attest: cli/Attest.md
           - narwhal-serve: cli/Serve.md
@@ -170,3 +175,4 @@ nav:
           - Metrics and role controller state: telemetry/03-Metrics-and-Control.md
           - Engine monitoring and failures: telemetry/04-Failures.md
           - Interface versions and compatibility: telemetry/05-Compatibility.md
+          - Deployment run record: telemetry/06-Deployment-Runs.md

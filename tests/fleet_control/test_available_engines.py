@@ -15,13 +15,13 @@ from unittest import mock
 
 import httpx
 
+from narwhal.fleet_control import engines as engines_module
+from narwhal.fleet_control.app import create_app
+from narwhal.fleet_control.engines import EngineActions
+from narwhal.fleet_control.signals import FleetSignals, metrics, signal_routes
+from narwhal.observability.stack.artifacts import render_dashboard
 from tests.fleet_control.test_engine_actions import TOKEN, EngineCase, FakeRouter
 from tests.fleet_control.test_membership_actions import MemberRouter
-from tools.fleet_control import engines as engines_module
-from tools.fleet_control.app import create_app
-from tools.fleet_control.engines import EngineActions
-from tools.fleet_control.signals import FleetSignals, metrics, signal_routes
-from tools.observability.artifacts import render_dashboard
 
 GAUGE = "narwhal_control_engine_available"
 STARTING = "narwhal_control_engine_starting"
@@ -418,7 +418,7 @@ class BaselineJoinTests(AvailableCase):
         self.assertEqual((await self.available())["engines"], [engine("e1")])
 
 
-PAGE = Path(__file__).resolve().parents[2] / "tools/fleet_control/console.html"
+PAGE = Path(__file__).resolve().parents[2] / "src/narwhal/fleet_control/console.html"
 
 
 def page_function(name: str) -> str:
@@ -519,7 +519,9 @@ class JoinGateTests(unittest.TestCase):
         self.assertIn("setControl(button, reason)", render)
 
 
-DASHBOARD = Path(__file__).resolve().parents[2] / "tools/observability/grafana-narwhal.json"
+DASHBOARD = (
+    Path(__file__).resolve().parents[2] / "src/narwhal/observability/stack/grafana-narwhal.json"
+)
 
 
 class AvailableEnginesPanelTests(unittest.TestCase):

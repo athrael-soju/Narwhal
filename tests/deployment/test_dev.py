@@ -13,7 +13,7 @@ import unittest
 from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 
@@ -21,9 +21,10 @@ from narwhal.backends.sglang import dev as sglang_dev
 from narwhal.backends.sglang import plan as sglang_plan
 from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
-from narwhal.deployment import stages
+from narwhal.deployment import run_record, stages, supervision
 from narwhal.deployment.launch_engine.plan import option
-from narwhal.dev import lifecycle, template
+from narwhal.deployment.supervision import ProcessGroup
+from narwhal.dev import launch, lifecycle, template
 from narwhal.dev.cli import main
 from narwhal.profiling.probe.sweep import Sweep, bounded_sweep
 
@@ -32,6 +33,40 @@ from .fixtures import process_group_with_worker
 
 def synthetic_identity(pid=1):
     return {"pid": pid, "boot_id": "synthetic-boot", "start_ticks": 0}
+
+
+def launch_directory(run, number, attempt=1):
+    """Engine `number`'s launch directory in an up run, as its prepare attempt writes it."""
+    engine = f"engine-{number}"
+    return run / "launch" / "stages" / "engine-prepare" / engine / f"attempt-{attempt}" / engine
+
+
+def stubbed_launch(stack, command):
+    """Run up's stages without engines: `command` stands in for every helper command."""
+
+    def helper(root, module, args, log, default_timeout=300):
+        if log.startswith("native-start"):
+            runs = [Path(args[i + 1]) for i, arg in enumerate(args) if arg == "--run"]
+            for number, engine_run in enumerate(runs, 1):
+                lifecycle.write(engine_run / "native-process.json", synthetic_identity(number))
+
+    command.side_effect = helper
+    document = type(
+        "Document", (), {"contract": type("Contract", (), {"fields": dict}), "launch": {}}
+    )
+    for patched in (
+        patch.object(vllm_dev, "check_plugin"),
+        patch.object(lifecycle, "_check_free_ports"),
+        patch.object(launch, "_check_free_ports"),
+        patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+        patch.object(launch, "finalize_fleet"),
+        patch.object(launch, "published_attempt"),
+        patch.object(launch.AttestationDocument, "load", return_value=document),
+        patch.object(launch.SUPERVISOR, "start", return_value=ProcessGroup(1, "synthetic-boot", 0)),
+        patch.object(launch, "_wait"),
+        patch.object(lifecycle, "_run", command),
+    ):
+        stack.enter_context(patched)
 
 
 class DevTests(unittest.TestCase):
@@ -317,8 +352,8 @@ class DevTests(unittest.TestCase):
         self.initialize_sglang(spec)
         fleet = FleetConfig.load(self.root / "fleet.json")
         self.assertEqual((fleet.backend, fleet.connector), ("sglang", "mooncake"))
-        launch = lifecycle.read(self.root / "engine-launch.json")
-        runtime = launch["engines"]["engine-1"]["runtime"]
+        allocation = lifecycle.read(self.root / "engine-launch.json")
+        runtime = allocation["engines"]["engine-1"]["runtime"]
         self.assertEqual(runtime["backend"], "sglang")
         self.assertIn("--mem-fraction-static", runtime["extra_args"])
         self.assertEqual(runtime["extra_args"][-2:], ["--decode-attention-backend", "flashinfer"])
@@ -330,7 +365,7 @@ class DevTests(unittest.TestCase):
         run.mkdir()
         (run / "profiles-1p1d.json").write_text("{}")
         with patch.object(lifecycle, "_run") as command:
-            lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
+            launch._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
         args = command.call_args.args[2]
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
@@ -462,16 +497,16 @@ class DevTests(unittest.TestCase):
                 if key_env == "CUSTOM_ENGINE_KEY":
                     fleet["engine"]["engine_api_key_env"] = key_env
                     lifecycle.write(self.root / "fleet.json", fleet)
-                run = self.root / key_env
-                run.mkdir()
 
                 def inspect_preparation(
-                    root, module, args, log, default_timeout=300, run=run, key_env=key_env
+                    root, module, args, log, default_timeout=300, key_env=key_env
                 ):
                     if log != "native-start-shared":
                         return
                     runs = [Path(args[i + 1]) for i, arg in enumerate(args) if arg == "--run"]
-                    cfg = FleetConfig.load(run / "fleet.json")
+                    # The changed fleet file reruns the package stage when the up resumes.
+                    package = sorted((root.parents[1] / "package").glob("attempt-*"))[-1]
+                    cfg = FleetConfig.load(package / "fleet.json")
                     self.assertEqual(cfg.engine_api_key_env, key_env)
                     for engine_run in runs:
                         values = dict(
@@ -492,16 +527,16 @@ class DevTests(unittest.TestCase):
                             "CUSTOM_ENGINE_KEY": "synthetic-custom-key",
                         },
                     ),
+                    patch.object(vllm_dev, "check_plugin"),
+                    patch.object(lifecycle, "_check_free_ports"),
+                    patch.object(
+                        lifecycle, "memory_samples", return_value=contextlib.nullcontext()
+                    ),
                     patch.object(lifecycle, "_run", side_effect=inspect_preparation),
+                    contextlib.redirect_stderr(io.StringIO()),
                     self.assertRaises(Prepared),
                 ):
-                    lifecycle._launch(
-                        self.root,
-                        run,
-                        lifecycle.instance(self.root),
-                        self.spec,
-                        {"run": str(run), "processes": []},
-                    )
+                    lifecycle.up(self.root)
 
     def test_four_engine_profiles_cover_both_adjacent_splits(self):
         self.initialize()
@@ -509,7 +544,7 @@ class DevTests(unittest.TestCase):
         run = self.root / "run-profiles"
         run.mkdir()
         with patch.object(lifecycle, "_run") as command:
-            lifecycle._profiles(run, fleet, self.spec)
+            launch._profiles(run, fleet, self.spec)
         measured = {
             tuple(e["role"] for e in lifecycle.read(path)["engines"])
             for path in run.glob("profile-*.fleet.json")
@@ -536,24 +571,20 @@ class DevTests(unittest.TestCase):
         run.mkdir()
         (run / "profiles-2p2d.json").write_text('{"profiles": []}')
         with patch.object(lifecycle, "_run") as command:
-            lifecycle._profiles(run, fleet, spec)
+            launch._profiles(run, fleet, spec)
         self.assertEqual([call.args[3] for call in command.call_args_list], ["profile-2p2d"])
         self.assertNotIn("--colocated", command.call_args.args[2])
         self.assertEqual((run / "profiles.json").read_text(), '{"profiles": []}')
 
     def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
         self.initialize()
+        command = MagicMock()
         with (
-            patch.object(vllm_dev, "check_plugin"),
-            patch.object(lifecycle, "_check_free_ports"),
-            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
-            patch.object(lifecycle, "finalize_fleet"),
-            patch.object(lifecycle, "_spawn", return_value={"identity": synthetic_identity()}),
-            patch.object(lifecycle, "_wait"),
-            patch.object(lifecycle, "_run") as command,
+            contextlib.ExitStack() as stack,
             contextlib.redirect_stdout(io.StringIO()) as output,
             contextlib.redirect_stderr(io.StringIO()) as progress,
         ):
+            stubbed_launch(stack, command)
             self.assertEqual(main(["dev", "up", "--instance", str(self.root)]), 0)
 
         result = json.loads(output.getvalue())
@@ -575,6 +606,21 @@ class DevTests(unittest.TestCase):
             + [f"attest-{number}" for number in (1, 2, 3, 4)]
             + ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
         )
+        run = Path(result["run"])
+        self.assertEqual(
+            [
+                call.args[1:3]
+                for call in command.call_args_list
+                if call.args[3].startswith("attest")
+            ],
+            [
+                (
+                    "narwhal.deployment.attestation_contract.cli",
+                    ["capture", "--run", str(launch_directory(run, number))],
+                )
+                for number in (1, 2, 3, 4)
+            ],
+        )
         budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
         self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
         start = next(
@@ -582,6 +628,49 @@ class DevTests(unittest.TestCase):
         )
         self.assertEqual(start[start.index("--ready-seconds") + 1], "180")
         self.assertEqual(budgets["engine-1"], {})
+
+    def test_an_interrupted_up_resumes_at_the_stage_it_left(self):
+        self.initialize()
+        command = MagicMock()
+
+        def interrupted(root, module, args, log, default_timeout=300):
+            if log == "profile-2p2d":
+                raise KeyboardInterrupt()
+            helper(root, module, args, log, default_timeout)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            stubbed_launch(stack, command)
+            helper = command.side_effect
+            command.side_effect = interrupted
+            with self.assertRaises(KeyboardInterrupt):
+                lifecycle.up(self.root)
+            state = lifecycle.read(self.root / "lifecycle.json")
+            self.assertEqual(state["phase"], "failed")
+            # The sidecars and the router were never stopped; the engines' records stay.
+            self.assertEqual(
+                [record["name"] for record in state["processes"]],
+                [f"sidecar-{number}" for number in (1, 2, 3, 4)],
+            )
+            record = run_record.read(Path(state["run"]) / launch.RECORD)
+            self.assertEqual(record["stages"]["profile"]["status"], "cancelled")
+            self.assertEqual(record["stages"]["engine-start"]["status"], "passed")
+            # The recorded processes still run, so only the stages from profile on run again.
+            running = supervision.Observation("running", "running")
+            stack.enter_context(patch.object(launch.SUPERVISOR, "check", return_value=running))
+            command.reset_mock()
+            command.side_effect = helper
+            progress = stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            self.assertEqual(lifecycle.up(self.root)["run"], state["run"])
+        self.assertEqual(
+            [call.args[3] for call in command.call_args_list],
+            ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"],
+        )
+        self.assertEqual(progress.getvalue().splitlines()[0], f"resuming {state['run']} at profile")
+        record = run_record.read(Path(state["run"]) / launch.RECORD)
+        self.assertEqual(record["stages"]["profile"]["attempt"], 2)
+        self.assertEqual(record["stages"]["engine-start"]["attempt"], 1)
+        self.assertEqual(lifecycle.read(self.root / "lifecycle.json")["phase"], "launched")
 
     def test_reference_sweep_fits_engine_context_and_concurrency(self):
         profile = self.spec["profile"]
@@ -819,10 +908,10 @@ class DevTests(unittest.TestCase):
             spec = lifecycle.read(self.root / "template.json")
             spec["ports"]["router"] = occupied.getsockname()[1]
             lifecycle.write(self.root / "template.json", spec)
-            with patch.object(lifecycle, "_launch") as launch:
+            with patch.object(launch, "run") as launched:
                 with self.assertRaisesRegex(ValueError, "unavailable"):
                     lifecycle.up(self.root)
-                launch.assert_not_called()
+                launched.assert_not_called()
         self.assertFalse((self.root / "lifecycle.json").exists())
 
     def test_port_closed_by_its_server_stays_available(self):
@@ -852,27 +941,32 @@ class DevTests(unittest.TestCase):
         self.addCleanup(cleanup)
         return process
 
-    def test_partial_startup_stops_the_process_it_created(self):
+    def test_down_stops_an_engine_that_a_failed_start_recorded(self):
         self.initialize()
         process = self.child()
         identity = lifecycle.native_engine.process_identity(process.pid)
 
-        def failed_launch(root, run, config, spec, state):
-            engine = run / "engine-1"
-            engine.mkdir()
-            lifecycle.write(engine / "native-process.json", identity)
-            raise ValueError("engine-2 model load failed")
+        def failed_start(root, module, args, log, default_timeout=300):
+            if log.startswith("native-start"):
+                engine = Path(args[args.index("--run") + 1])
+                lifecycle.write(engine / "native-process.json", identity)
+                raise lifecycle.LifecycleOperationError("engine-2 model load failed")
 
+        command = MagicMock()
         with (
-            patch.object(lifecycle, "_launch", side_effect=failed_launch),
-            patch.object(lifecycle, "_check_free_ports"),
-            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
-            self.assertRaisesRegex(ValueError, "engine-2 model load failed"),
+            contextlib.ExitStack() as stack,
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaisesRegex(lifecycle.LifecycleOperationError, "engine-2 model load failed"),
         ):
+            stubbed_launch(stack, command)
+            command.side_effect = failed_start
             lifecycle.up(self.root)
+        # A failed up keeps what its stages recorded, so the next up can resume.
+        self.assertEqual(lifecycle.read(self.root / "lifecycle.json")["phase"], "failed")
+        self.assertIsNone(process.poll())
+        self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
         process.wait(timeout=5)
         self.assertIsNotNone(process.returncode)
-        self.assertEqual(lifecycle.read(self.root / "lifecycle.json")["phase"], "stopped")
 
     def test_stale_pid_record_cannot_stop_a_reused_process(self):
         self.initialize()
@@ -906,14 +1000,14 @@ class DevTests(unittest.TestCase):
                     "processes": [{"name": "router", "identity": identity}],
                 },
             )
-            terminate = lifecycle.native_engine._terminate
+            terminate = lifecycle.native_engine.terminate
             with patch.object(
                 lifecycle.native_engine,
-                "_terminate",
-                side_effect=lambda owned: terminate(owned, grace_seconds=0.05),
+                "terminate",
+                side_effect=lambda owned, grace: terminate(owned, grace_seconds=0.05),
             ):
                 self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
-            self.assertEqual(lifecycle.native_engine._group_members(identity), {})
+            self.assertEqual(lifecycle.native_engine.group_members(identity), {})
             self.assertEqual(lifecycle.read(run / "teardown.json")["stopped"], ["router"])
 
     def test_exited_leader_keeps_surviving_workers_visible_in_status_and_down(self):
@@ -945,7 +1039,7 @@ class DevTests(unittest.TestCase):
             state = lifecycle.read(self.root / "lifecycle.json")
             self.assertEqual(state["phase"], "degraded")
             self.assertIn(str(worker), state["errors"][0])
-            self.assertIn(worker, lifecycle.native_engine._group_members(identity))
+            self.assertIn(worker, lifecycle.native_engine.group_members(identity))
 
     def test_saved_ready_state_requires_current_kv_evidence(self):
         self.initialize()
@@ -963,7 +1057,7 @@ class DevTests(unittest.TestCase):
         lifecycle.write(self.root / "lifecycle.json", state)
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle.httpx, "Client", return_value=httpx.Client(transport=transport)),
             patch.object(
                 lifecycle, "verify_directed_kv_evidence", return_value=["consumer process changed"]
@@ -988,15 +1082,18 @@ class DevTests(unittest.TestCase):
     def test_startup_timeout_retains_failure_and_allows_status_down(self):
         self.initialize()
 
-        def launch(root, run, config, spec, state):
-            self.timeout_helper(run, "native-start-shared")
+        def start(root, module, args, log, default_timeout=300):
+            if log == "native-start-shared":
+                self.timeout_helper(root, log)
 
+        command = MagicMock()
         with (
-            patch.object(lifecycle, "_launch", side_effect=launch),
-            patch.object(lifecycle, "_check_free_ports"),
-            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            contextlib.ExitStack() as stack,
+            contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(stages.StageTimeout),
         ):
+            stubbed_launch(stack, command)
+            command.side_effect = start
             lifecycle.up(self.root)
         state = lifecycle.read(self.root / "lifecycle.json")
         self.assertEqual(state["failure"]["stage"], "native-start-shared")
@@ -1068,7 +1165,7 @@ class DevTests(unittest.TestCase):
         )
         client = httpx.Client
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "_run") as preflight,
             patch.object(
@@ -1135,7 +1232,7 @@ class DevTests(unittest.TestCase):
 
         client = httpx.Client
         with (
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=True),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "_run"),
             patch.object(
@@ -1204,8 +1301,8 @@ class DevTests(unittest.TestCase):
         state.update(phase="degraded", verification_failure=failure)
         lifecycle.write(self.root / "lifecycle.json", state)
         with (
-            patch.object(lifecycle.native_engine, "_group_members", return_value={1: {}}),
-            patch.object(lifecycle.native_engine, "_terminate", side_effect=ValueError("owned")),
+            patch.object(lifecycle.native_engine, "group_members", return_value={1: {}}),
+            patch.object(lifecycle.native_engine, "terminate", side_effect=ValueError("owned")),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 1)
@@ -1213,8 +1310,8 @@ class DevTests(unittest.TestCase):
         self.assertEqual(state["phase"], "degraded")
         self.assertEqual(state["verification_failure"], failure)
         with (
-            patch.object(lifecycle.native_engine, "_group_members", return_value={}),
-            patch.object(lifecycle.native_engine, "_owns_process", return_value=False),
+            patch.object(lifecycle.native_engine, "group_members", return_value={}),
+            patch.object(lifecycle.native_engine, "owns_process", return_value=False),
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(main(["dev", "down", "--instance", str(self.root)]), 0)
@@ -1276,7 +1373,7 @@ class DevTests(unittest.TestCase):
             )
             with (
                 self.subTest(result=result),
-                patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+                patch.object(lifecycle.native_engine, "owns_process", return_value=True),
                 patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
                 patch.object(lifecycle, "_run"),
                 patch.object(
@@ -1330,8 +1427,8 @@ class DevTests(unittest.TestCase):
         run = self.launched_instance()
         state_path = self.root / "lifecycle.json"
         state = lifecycle.read(state_path)
-        engine = run / "engine-1"
-        engine.mkdir()
+        engine = launch_directory(run, 1)
+        engine.mkdir(parents=True)
         identity_path = engine / "native-process.json"
         invalid = [({}, "pid")]
         invalid.extend(
@@ -1360,9 +1457,9 @@ class DevTests(unittest.TestCase):
                 for action in ("status", "down"):
                     with (
                         self.subTest(location=location, identity=identity, action=action),
-                        patch.object(lifecycle.native_engine, "_owns_process") as owns,
-                        patch.object(lifecycle.native_engine, "_group_members") as groups,
-                        patch.object(lifecycle.native_engine, "_terminate") as terminate,
+                        patch.object(lifecycle.native_engine, "owns_process") as owns,
+                        patch.object(lifecycle.native_engine, "group_members") as groups,
+                        patch.object(lifecycle.native_engine, "terminate") as terminate,
                         contextlib.redirect_stdout(io.StringIO()) as stdout,
                         contextlib.redirect_stderr(io.StringIO()) as stderr,
                     ):

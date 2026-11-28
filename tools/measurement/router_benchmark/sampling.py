@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from tools.measurement.benchmark_evidence import metric_values
+from narwhal.deployment.reconcile import metric_values
 from tools.measurement.simulated_engine import LATE_TICKS_METRIC
 
 from .cpus import Allocation, cpu_times, proc_seconds

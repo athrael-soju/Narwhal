@@ -19,8 +19,14 @@ from narwhal.backends.vllm.runtime import (
     runtime_model_dimensions,
     write_once,
 )
+from narwhal.deployment.fabric_budget import (
+    Workload,
+    budget,
+    record_edge,
+    runtime_payload,
+    write_private,
+)
 from tests.deployment.fixtures import VLLM_HOOK, launcher_inputs, patched_docker
-from tools.deployment.fabric_budget import main, runtime_payload
 
 
 def allocation():
@@ -161,48 +167,25 @@ class CacheSizingTests(unittest.TestCase):
                 runtime_payload(value, 2, 1024)
 
     def test_runtime_budget_binds_sources_and_recompares_retained_sample(self):
-        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()):
+        with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            model, launch, record, out = [
-                root / name for name in ("model", "launch", "layout", "budget")
-            ]
-            model.write_text('{"layer_types": ["attention", "mamba"]}')
-            launch.write_text('{"tensor_parallel_size": 2}')
+            model = b'{"layer_types": ["attention", "mamba"]}'
+            launch = b'{"tensor_parallel_size": 2}'
             value = layout()
             value.update(
-                model_config_sha256=digest(model),
-                launch_config_sha256=digest(launch),
+                model_config_sha256=hashlib.sha256(model).hexdigest(),
+                launch_config_sha256=hashlib.sha256(launch).hexdigest(),
                 image="sha256:" + "a" * 64,
                 plan_sha256="b" * 64,
             )
-            record.write_text(json.dumps(value))
-            args = [
-                "calculate",
-                "--model-config",
-                str(model),
-                "--launch-config",
-                str(launch),
-                "--runtime-layout",
-                str(record),
-                "--prompt-tokens",
-                "1024",
-                "--handoffs-per-s",
-                "1",
-                "--burst",
-                "1",
-                "--transfer-budget-s",
-                "1",
-                "--headroom",
-                "1.25",
-                "--out",
-                str(out),
-            ]
-            self.assertEqual(main(args), 0)
-            budget = json.loads(out.read_text())
-            self.assertEqual(budget["payload_bytes_per_handoff"], 15360)
-            self.assertAlmostEqual(budget["required_gbps"], 0.0001536)
-            self.assertEqual(budget["runtime_layout_sha256"], digest(record))
-            self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+            record = json.dumps(value).encode()
+            workload = Workload(1024, 1, 1, 1, 1.25)
+            result = budget(model, launch, workload, runtime_layout=record)
+            self.assertEqual(result["payload_bytes_per_handoff"], 15360)
+            self.assertAlmostEqual(result["required_gbps"], 0.0001536)
+            self.assertEqual(result["runtime_layout_sha256"], hashlib.sha256(record).hexdigest())
+            out = root / "budget.json"
+            write_private(out, result)
             sample = root / "retained-sample.json"
             sample.write_text(
                 json.dumps(
@@ -213,13 +196,30 @@ class CacheSizingTests(unittest.TestCase):
                 )
             )
             original = sample.read_bytes()
-            self.assertEqual(main(["compare", "--budget", str(out), "--iperf", str(sample)]), 0)
+            route = '{"dev": "fabric0", "dst": "192.0.2.2", "from": "192.0.2.1"}'
+            link = root / "link.json"
+            link.write_text(
+                json.dumps(
+                    {
+                        "source_host": "node-1",
+                        "destination_host": "node-2",
+                        "source_address": "192.0.2.1",
+                        "destination_address": "192.0.2.2",
+                        "source_interface": "fabric0",
+                        "destination_interface": "fabric0",
+                        "source_route": route,
+                        "destination_route": route,
+                        "transport": "ucx_tcp",
+                        "tool_version": "iperf 3.16 / iperf 3.16",
+                        "test_parameters": {"duration_s": 10},
+                    }
+                )
+            )
+            evidence = record_edge(link, out, sample, "engine-1", root / "edge.json")
+            self.assertTrue(evidence["passed"])
             self.assertEqual(sample.read_bytes(), original)
-            out.unlink()
-            launch.write_text('{"tensor_parallel_size": 8}')
-            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                main(args)
-            self.assertFalse(out.exists())
+            with self.assertRaisesRegex(ValueError, "differs from the model or launch record"):
+                budget(model, b'{"tensor_parallel_size": 8}', workload, runtime_layout=record)
 
     def test_runtime_probe_collects_final_allocation_then_shuts_down(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -403,6 +403,8 @@ class CacheSizingTests(unittest.TestCase):
                 config = SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
                 self.assertEqual(core._initialize_kv_caches(config), "model-ready")
                 captured = output.read_text()
+                # A Kubernetes pod's attestation sidecar, another user, reads the record.
+                self.assertEqual(output.stat().st_mode & 0o777, 0o644)
                 # A restart of the same launch keeps the first capture.
                 self.assertEqual(Core()._initialize_kv_caches(config), "model-ready")
                 self.assertEqual(output.read_text(), captured)

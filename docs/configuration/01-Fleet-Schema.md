@@ -77,6 +77,8 @@ A fleet needs six fields:
 
 Set both targets from measurements on the deployed engine shape.
 
+`slo.router_overhead_s`, default `0`, is the time in seconds that the router adds to a request before its first token. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) checks that the first-token deadline, the slowest engine's prefill of the longest calibrated input and this overhead fit within `slo.ttft_s`.
+
 Each engine entry takes these fields:
 
 | Field             | Default    | Notes                                                                                              |
@@ -156,18 +158,11 @@ The attestation generator derives each field from the deployed engine. Fields th
 
 On SGLang and TensorRT-LLM, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
 
-Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
-
-Check the resolved `head_size` dimensions against the live engine. On vLLM, also check these values:
-
-- `connector_version`
-- `cross_layers_blocks`
-- the resolved `transfer_mode` class and mode
-- `enforce_handshake_compat`, both the configured value and the installed default
+[Capturing the attestation](../deploy/05-Attest.md#capturing-the-attestation) reads every contract value from the deployed engine. On vLLM, the model dimensions come from the live engine, `connector_version` and the `enforce_handshake_compat` default from the installed connector, `cross_layers_blocks` from the live cache layout, and `transfer_mode` from the connector class the factory resolved and the startup log confirms.
 
 ### Attestation
 
-The [attestation generator](../deploy/05-Attest.md) writes `engine-attestation.json` into the engine's launch directory.
+The [attestation capture](../deploy/05-Attest.md) writes `engine-attestation.json` into an attempt directory under the engine's launch directory, and `published-attestation.json` names the attempt the sidecar serves.
 
 To fill in the fleet contract, start the sidecars and run [`finalize-fleet`](../deploy/05-Attest.md#finalizing-the-fleet-contract) in the router shell.
 

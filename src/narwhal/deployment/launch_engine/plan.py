@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hmac
 import json
 import os
 import re
@@ -21,19 +22,34 @@ from .backend import (
     plan_launcher,
 )
 from .checkpoint import checkpoint_status, file_status, inspect_checkpoint, json_digest
-from .runtime import code_digest, digest, regular_file_digest, write_private
+from .runtime import (
+    KEYED,
+    code_digest,
+    digest,
+    keyed_digest,
+    regular_file_digest,
+    salt_file,
+    write_private,
+)
 from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
+# Launch backends: Docker on the host, a Kubernetes engine pod, or the host's Python runtime.
+BACKENDS = ("container", "kubernetes", "native")
+# The variable a Kubernetes container that calls an engine holds the engine API key in, from
+# its Secret.
+API_KEY_ENV = "NARWHAL_ENGINE_KEY"
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
-# A container engine reads NARWHAL_MODEL_DIR at this path.
+# An engine in an image reads NARWHAL_MODEL_DIR at this path, and its hook files at HOOK_MOUNT.
 MODEL_MOUNT = "/model"
+HOOK_MOUNT = "/narwhal-hooks"
 KV_EVENTS_MOUNT = "/narwhal-kv-events"
+# A pod engine advertises its pod address, which Kubernetes substitutes for this reference.
+POD_ADDRESS_ENV = "NARWHAL_POD_IP"
+POD_ADDRESS = f"$({POD_ADDRESS_ENV})"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
 MAX_SOCKET_PATH_BYTES = 107
-# First UCX release that unmaps CUDA IPC rkeys when the transfer library removes a remote agent.
-UCX_PEER_RELEASE = (1, 22)
 SECRET_WORDS = ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH")
 MAX_DISCOVERED_CONTEXT = 16384
 # Files the launch itself writes into the hook directory.
@@ -130,16 +146,29 @@ def discovered_launch_settings(setting: Callable[[str, str], str]) -> dict:
     return fields
 
 
+def gpu_transport(role: str, transfer: Mapping, visibility: str) -> str:
+    """Return the UCX GPU transport of a launch record, or its default when it names none.
+
+    `ucx_rdma` takes the GPU runtime's copy transport, `cuda_copy` or `rocm_copy`: without GPU
+    IPC, and with the shared-memory devices off, engines on one host move KV over their HCAs.
+    """
+    rocm = visibility == "ROCR_VISIBLE_DEVICES"
+    allowed: tuple[str, ...]
+    if transfer.get("transport") == "ucx_rdma":
+        allowed = ("rocm_copy",) if rocm else ("cuda_copy",)
+    else:
+        allowed = ("rocm",) if rocm else ("cuda", "cuda_copy")
+    value = transfer.get("gpu_tls", allowed[0])
+    if value not in allowed:
+        raise ValueError(
+            f"{role}: transfer.gpu_tls is incompatible with the GPU runtime and transport; "
+            f"use {' or '.join(allowed)}"
+        )
+    return value
+
+
 def ipc_cache_off(ipc_cache: str | None) -> bool:
     return ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
-
-
-def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
-    try:
-        version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
-    except ValueError:
-        return False
-    return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
 
 
 def publishes_kv_events(engine: EngineLauncher, runtime: dict) -> bool:
@@ -170,7 +199,8 @@ def kv_events_policy(
 
 
 def kv_events_directory(plan: dict) -> None:
-    if plan.get("kv_events") is None:
+    # A Kubernetes engine binds its sockets in a volume of its pod, not on this host.
+    if plan.get("kv_events") is None or plan.get("backend") == "kubernetes":
         return
     directory = Path(plan["kv_events"]["socket_dir"])
     for path in (directory.parent, directory):
@@ -295,16 +325,64 @@ def read_env(path: Path) -> dict[str, str]:
     return dict(line.split("=", 1) for line in path.read_text().splitlines())
 
 
+# The launch directory's salt, which keys the plan's digest of its engine environment.
+ENV_SALT = "env.salt"
+
+
+def env_digest(run: Path, plan: dict, *, create: bool = False) -> str:
+    """The digest a plan keeps of its engine environment file, which holds the credential.
+
+    A container or native plan keys it under the launch directory's `env.salt`, so a copy of
+    `launch.json` cannot check a guessed credential. A Kubernetes plan keeps its SHA-256.
+    """
+    plain = digest(run / env_file_name(plan))
+    if plan.get("backend") == "kubernetes":
+        return plain
+    secret = salt_file(run / ENV_SALT, create=create)
+    if secret is None:
+        raise ValueError(f"{run / ENV_SALT} is missing; prepare a fresh launch directory")
+    return keyed_digest(secret, "sha256:" + plain)
+
+
+def env_matches(run: Path, plan: dict) -> bool:
+    """Whether the engine environment file still has the digest the plan recorded.
+
+    A plan an earlier version prepared keeps the file's unkeyed SHA-256.
+    """
+    recorded = plan.get("env_sha256")
+    if not isinstance(recorded, str):
+        return False
+    if not recorded.startswith(KEYED):
+        return digest(run / env_file_name(plan)) == recorded
+    return hmac.compare_digest(env_digest(run, plan), recorded)
+
+
 def launch_headers(run: Path, plan: dict) -> dict[str, str] | None:
-    key = read_env(run / env_file_name(plan)).get(plan_launcher(plan).api_key_env, "")
+    """The engine's authorization header. A Kubernetes plan keeps no key in its launch files: the
+    pod or Job that calls the engine holds the key from its Secret in `API_KEY_ENV`."""
+    if plan.get("backend") == "kubernetes":
+        named = plan.get("kubernetes", {}).get("api_key_secret")
+        key = os.environ.get(API_KEY_ENV, "") if named else ""
+        if named and not key:
+            raise ValueError(f"the engine needs its API key; this container has no {API_KEY_ENV}")
+    else:
+        key = read_env(run / env_file_name(plan)).get(plan_launcher(plan).api_key_env, "")
     return {"Authorization": f"Bearer {key}"} if key else None
 
 
 def build(
     record: dict, env: dict[str, str], output: Path, *, backend: str = "container"
 ) -> tuple[dict, dict[str, str]]:
-    if backend not in {"container", "native"}:
+    """Return a launch plan and its engine environment for one launch backend.
+
+    The `container` and `kubernetes` backends serve the engine from its image, with the model
+    at MODEL_MOUNT and the hook files at HOOK_MOUNT. A Kubernetes engine takes its GPUs and its
+    HCA from device plugins, so the plan names neither, and advertises its pod address.
+    """
+    if backend not in BACKENDS:
         raise ValueError(f"unsupported engine launch backend: {backend}")
+    in_image = backend != "native"
+    pod = backend == "kubernetes"
     runtime = record["runtime"]
     engine = launcher(runtime.get("backend"))
     engine.validate_runtime(runtime)
@@ -312,7 +390,16 @@ def build(
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("select an engine role")
     node = role.split("-")[1]
-    image = env["NARWHAL_ENGINE_IMAGE"] if backend == "container" else ""
+    transfer = record["transfer"]
+    if pod and transfer["transport"] != "ucx_rdma":
+        raise ValueError(f"{role}: a Kubernetes engine transfers KV over ucx_rdma")
+    if pod and record.get("shared_device") is not None:
+        raise ValueError(f"{role}: a Kubernetes engine takes its GPUs whole, without shared_device")
+    image = env["NARWHAL_ENGINE_IMAGE"] if in_image else ""
+    if pod and not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
+        raise ValueError(
+            "NARWHAL_ENGINE_IMAGE must be a registry digest, <repository>@sha256:<hex>"
+        )
     if backend == "container" and not re.fullmatch(
         r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", image
     ):
@@ -327,31 +414,24 @@ def build(
         raise ValueError(
             f"engine, attestation and {engine.side_channel} ports must be distinct valid TCP ports"
         )
-    source = env[f"NARWHAL_NODE_{node}_IP"]
+    source = POD_ADDRESS if pod else env[f"NARWHAL_NODE_{node}_IP"]
     endpoint = urlsplit(env[f"NARWHAL_NODE_{node}_URL"])
     if endpoint.scheme != "http" or endpoint.port != port or not endpoint.hostname:
         raise ValueError("the engine URL must select HTTP and NARWHAL_ENGINE_PORT")
     bind_host = (
-        endpoint.hostname
-        if backend == "native"
-        else ("::" if ":" in endpoint.hostname else "0.0.0.0")
+        endpoint.hostname if not in_image else ("::" if ":" in endpoint.hostname else "0.0.0.0")
     )
     values = dict(runtime.get("environment", {}))
-    values.update(record["environment"])
-    gpu_transport = record["transfer"].get(
-        "gpu_tls", "rocm" if record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES" else "cuda"
-    )
-    allowed_gpu_tls = (
-        {"rocm"}
-        if record["gpu_visibility_env"] == "ROCR_VISIBLE_DEVICES"
-        else {"cuda", "cuda_copy"}
-    )
-    if gpu_transport not in allowed_gpu_tls:
-        raise ValueError(f"{role}: transfer.gpu_tls is incompatible with the GPU runtime")
-    net_transport = "tcp" if record["transfer"]["transport"] == "ucx_tcp" else "rc"
+    if not pod:
+        values.update(record["environment"])
+    visibility = record["gpu_visibility_env"]
+    gpu_tls = gpu_transport(role, transfer, visibility)
+    rdma = transfer["transport"] == "ucx_rdma"
     values.update(
         {
-            "UCX_TLS": f"{net_transport},sm,self,{gpu_transport}",
+            "UCX_TLS": f"{'rc' if rdma else 'tcp'},sm,self,{gpu_tls}",
+            # Engines on one host then reach each other only through their HCAs.
+            **({"UCX_SHM_DEVICES": "none"} if rdma else {}),
             "UCX_TCP_PORT_RANGE": env["NARWHAL_UCX_TCP_PORT_RANGE"],
             **engine.engine_env(
                 source, side_port, env.get("NARWHAL_ENGINE_API_KEY", ""), bind_host
@@ -360,70 +440,69 @@ def build(
     )
     if any(any(c in value for c in "\r\n\0") for value in values.values()):
         raise ValueError("engine environment values must fit one line")
-    hook_root = "/narwhal-hooks" if backend == "container" else str(output / "hook")
+    hook_root = HOOK_MOUNT if in_image else str(output / "hook")
     values["PYTHONPATH"] = hook_root + (
         ":" + values["PYTHONPATH"] if values.get("PYTHONPATH") else ""
     )
     model_dir = str(Path(env["NARWHAL_MODEL_DIR"]).resolve())
     model_file = env.get("NARWHAL_MODEL_PATH")
     model_path = os.path.abspath(model_file or model_dir)
-    if backend == "native" or model_file:
+    if not in_image or model_file:
         if isinstance(engine, ModelFormats):
             engine.check_model(runtime, model_path)
-        elif backend == "container" or Path(model_path).is_file():
+        elif in_image or Path(model_path).is_file():
             label = engine_backend(runtime.get("backend")).label
             raise ValueError(f"{label} launches take a model directory, not a model file")
-    if backend == "native":
-        model_ref = model_path
-    else:
+    if in_image:
         model_ref = container_model_file(model_dir, model_path) if model_file else MODEL_MOUNT
+    else:
+        model_ref = model_path
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
-    socket_dir = KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
+    # A pod engine binds its sockets in a volume of its own pod.
+    socket_dir = Path(KV_EVENTS_MOUNT) if pod else KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
     kv_events = kv_events_policy(
         engine,
         runtime,
         socket_dir,
-        KV_EVENTS_MOUNT if backend == "container" else str(socket_dir),
+        KV_EVENTS_MOUNT if in_image else str(socket_dir),
     )
-    common = [
-        "--network",
-        "host",
-        "--ipc",
-        "host",
-        "--ulimit",
-        "memlock=-1:-1",
-        "--env-file",
-        str(output / "container.env"),
-        "--mount",
-        f"type=bind,src={model_dir},dst={MODEL_MOUNT},readonly",
-        "--mount",
-        f"type=bind,src={output / 'cache'},dst=/root/.cache",
-        "--mount",
-        f"type=bind,src={output / 'hook'},dst=/narwhal-hooks,readonly",
-    ]
-    if backend == "container":
-        if kv_events is not None:
-            common.extend(["--mount", f"type=bind,src={socket_dir},dst={KV_EVENTS_MOUNT}"])
-        for device in record["accelerator_devices"] + record["transfer"]["devices"]:
-            common.extend(["--device", device])
-        if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
-            common.extend(["--gpus", "all"])
-            # UCX CUDA IPC reaches a colocated engine only from the same PID namespace, and tells
-            # peers apart by host PID. In separate namespaces, UCX 1.23 sends KV over TCP.
-            visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
-            if len(visible) > len(record["gpu_ids"]) or record.get("shared_device") is not None:
-                common.extend(["--pid", "host"])
-        else:
-            common.extend(["--security-opt", "seccomp=unconfined"])
-    else:
-        common = []
     # CUDA IPC peers keep this engine's KV memory mapped until the engine evicts it.
-    ipc_peers = gpu_transport == "cuda" and (
+    ipc_peers = gpu_tls == "cuda" and (
         record.get("shared_device") is not None
         or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
     )
+    common = []
+    if backend == "container":
+        common = [
+            "--network",
+            "host",
+            "--ipc",
+            "host",
+            "--ulimit",
+            "memlock=-1:-1",
+            "--env-file",
+            str(output / "container.env"),
+            "--mount",
+            f"type=bind,src={model_dir},dst={MODEL_MOUNT},readonly",
+            "--mount",
+            f"type=bind,src={output / 'cache'},dst=/root/.cache",
+            "--mount",
+            f"type=bind,src={output / 'hook'},dst={HOOK_MOUNT},readonly",
+        ]
+        if kv_events is not None:
+            common.extend(["--mount", f"type=bind,src={socket_dir},dst={KV_EVENTS_MOUNT}"])
+        for device in record["accelerator_devices"] + transfer["devices"]:
+            common.extend(["--device", device])
+        if visibility == "CUDA_VISIBLE_DEVICES":
+            common.extend(["--gpus", "all"])
+            # UCX CUDA IPC reaches a colocated engine only from the same PID namespace, and tells
+            # peers apart by host PID. In separate namespaces, UCX 1.23 sends KV over TCP.
+            if ipc_peers:
+                common.extend(["--pid", "host"])
+        else:
+            common.extend(["--security-opt", "seccomp=unconfined"])
     # With the UCX IPC cache off, eviction releases a stopped peer's memory.
     evict_peers = ipc_peers and ipc_cache_off(values.get("UCX_CUDA_IPC_CACHE"))
     args, connector = engine.serve(
@@ -468,6 +547,7 @@ def build(
         "expected_packages": runtime["expected_packages"],
         **({"runtime_pins": pins} if (pins := engine.runtime_pins(runtime)) else {}),
         "endpoint": endpoint.geturl(),
+        "served_model_name": env["NARWHAL_ENGINE_MODEL_NAME"],
         "attestation_port": attest_port,
         "side_channel_port": side_port,
         "ucx_tls": values["UCX_TLS"],
@@ -475,8 +555,24 @@ def build(
         **({"shared_device": shared} if shared is not None else {}),
         "revision": env["NARWHAL_DEPLOYMENT_REVISION"],
     }
-    if backend == "container" and model_file:
+    if in_image and model_file:
         plan["model_path"] = model_path
+    if pod:
+        plan["backend"] = "kubernetes"
+        # The pod's attestation sidecar serves this route, so the plan pins it.
+        name = f"NARWHAL_NODE_{node}_ATTESTATION_URL"
+        route = urlsplit(env.get(name, ""))
+        if (
+            route.scheme != "http"
+            or route.path != "/v1/attestation"
+            or not route.hostname
+            or route.port != attest_port
+        ):
+            raise ValueError(
+                f"{name} must name the sidecar route, http://<pod>:<NARWHAL_ATTEST_PORT>"
+                "/v1/attestation"
+            )
+        plan["attestation_url"] = route.geturl()
     if backend == "native":
         model_revision = env.get("NARWHAL_MODEL_REVISION", "")
         if not re.fullmatch(r"[0-9a-f]{40}|sha256:[0-9a-f]{64}", model_revision):
@@ -495,15 +591,16 @@ def build(
     return plan, values
 
 
-def check_model_file(plan: dict, env: dict[str, str], backend: str) -> bool:
+def check_model_file(plan: dict, env: Mapping[str, str], backend: str) -> bool:
     """Check the planned model file before `prepare` hashes it, and return whether one is named.
 
-    A container launch requires NARWHAL_MODEL_SHA256; a native launch checks it when it is set.
+    A launch from an image requires NARWHAL_MODEL_SHA256; a native launch checks it when it is
+    set.
     """
     if "model_path" not in plan:
         return False
     path = Path(plan["model_path"])
-    container = backend == "container"
+    container = backend != "native"
     pinned = env.get("NARWHAL_MODEL_SHA256", "")
     if not path.is_file():
         if container:
@@ -523,22 +620,42 @@ def check_model_file(plan: dict, env: dict[str, str], backend: str) -> bool:
     return True
 
 
-def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
-    source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
-    record = json.loads(source.read_text())
-    plan, values = build(record, env, output.resolve(), backend=backend)
-    if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
-        raise ValueError("model config differs from its supplied hash")
+def verify_model(plan: dict, env: Mapping[str, str], backend: str) -> ModelFiles:
+    """Hash the plan's model files and check them against the supplied pins.
+
+    Prepare and host inspection both call this, so both follow the same links and refuse the
+    same entries outside the model directory.
+    """
+    config = Path(env["NARWHAL_MODEL_DIR"]) / "config.json"
+    if digest(config) != env["NARWHAL_MODEL_CONFIG_SHA256"]:
+        raise ValueError(f"{config} differs from NARWHAL_MODEL_CONFIG_SHA256")
     names_file = check_model_file(plan, env, backend)
-    # Later stages compare file status instead of reading the model files again.
     files = model_files(plan)
     pinned = env.get("NARWHAL_MODEL_TREE_SHA256")
     if pinned and files.directory != pinned:
         raise ValueError("model directory files differ from NARWHAL_MODEL_TREE_SHA256")
     supplied = env.get("NARWHAL_MODEL_SHA256")
     if names_file and supplied and files.model_file != supplied:
-        raise ValueError("model file differs from its supplied hash")
-    plan.update(model_tree_sha256=files.tree, model_status_sha256=files.status)
+        raise ValueError(f"{plan['model_path']} differs from NARWHAL_MODEL_SHA256")
+    return files
+
+
+def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
+    source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
+    record = json.loads(source.read_text())
+    plan, values = build(record, env, output.resolve(), backend=backend)
+    files = verify_model(plan, env, backend)
+    plan["model_tree_sha256"] = files.tree
+    pod = backend == "kubernetes"
+    if pod:
+        # The engine pod serves its own copy of the model, which an init container hashes.
+        from . import kubernetes
+
+        plan["kubernetes"] = kubernetes.pod_settings(env, record, plan)
+        probe = kubernetes.runtime_probe(output.resolve(), plan, values)
+    else:
+        # Later stages compare file status instead of reading the model files again.
+        plan["model_status_sha256"] = files.status
     engine = plan_launcher(plan)
     capture = cache_capture(engine) is not None
     if capture:
@@ -548,7 +665,8 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
             raise ValueError("cache capture hook differs from its delivered hash")
     script = engine.runtime_script
     output.mkdir(mode=0o700, parents=True)
-    (output / "cache").mkdir(mode=0o700)
+    if not pod:
+        (output / "cache").mkdir(mode=0o700)
     (output / "hook").mkdir(mode=0o700)
     kv_events_directory(plan)
     if capture:
@@ -557,10 +675,10 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     for file_name, content in plan.get("config_files", {}).items():
         write_private(output / "hook" / file_name, content)
         (output / "hook" / file_name).chmod(0o644)
-    env_file = "container.env" if backend == "container" else "engine.env"
+    env_file = env_file_name(plan)
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
     plan.update(
-        env_sha256=digest(output / env_file),
+        env_sha256=env_digest(output, plan, create=True),
         launch_sha256=digest(source),
         launcher_sha256=digest(script),
         launcher_code_sha256=code_digest(script),
@@ -570,7 +688,7 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
             cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
         )
     plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
-    if names_file:
+    if files.model_file is not None:
         plan["model_sha256"] = files.model_file
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
@@ -578,8 +696,13 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         if (output / "hook" / name).exists():
             (output / "hook" / name).chmod(0o644)
     (output / "hook").chmod(0o755)
-    check_name = "image" if backend == "container" else "native runtime"
-    print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
+    if pod:
+        kubernetes.write_manifests(output, plan, probe)
+        step = "review launch.json and kubernetes.json, then check the engine pod's records"
+    else:
+        check_name = "native runtime" if backend == "native" else "image"
+        step = f"review launch.json and run the {check_name} check"
+    print(f"Prepared {record['role']}; {step}.")
 
 
 def _outside_model_dir(plan: dict) -> Path | None:
@@ -715,6 +838,6 @@ def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
     if not isinstance(plan, dict):
         raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
-    if digest(run / env_file_name(plan)) != plan.get("env_sha256"):
+    if not env_matches(run, plan):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan

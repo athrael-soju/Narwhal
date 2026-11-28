@@ -515,7 +515,7 @@ Example settings with `--output-tokens 256`:
 | `router.log` | Router output |
 | `engine-<iid>.log` | Simulated-engine output |
 | `rates/warmup/` | Warmup client rows |
-| `rates/<rate>/client-<i>.jsonl` | One row per offer with the `load_trial.py` request fields |
+| `rates/<rate>/client-<i>.jsonl` | One row per offer with the `narwhal.deployment.load_trial` request fields |
 | `rates/<rate>/client-<i>.log` | Client output |
 | `rates/<rate>/samples.json` | Raw samples |
 | `report.json` | Report document |

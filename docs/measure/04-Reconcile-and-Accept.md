@@ -45,7 +45,7 @@ Before assigning a serving throughput ceiling, compare:
 
 Each trial writes to a new directory with mode `0700` and creates its files with mode `0600`.
 
-The trial `manifest.json` records the management checkout Git revision and the helper SHA-256. The router journal `meta` row records the installed router package version, Git description, and source digest.
+The trial `manifest.json` records the Narwhal version, the Git description when the client runs from a checkout, the package's source digest and the helper SHA-256. The router journal `meta` row records the installed router package version, Git description, and source digest.
 
 ## Confirming KV transfer after load
 

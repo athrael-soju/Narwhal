@@ -12,6 +12,8 @@ Returns the `narwhal.handoff` schema version `1` document.
 
 The high-availability (HA) standby router polls this route before takeover. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
+The read needs no token. The router signs each document it returns in the `X-Narwhal-Handoff-Signature` header: `sha256=` and the hex HMAC-SHA256, under the router's [control token](../HTTP-API.md#control-token), of the JSON array `["narwhal.handoff", epoch, holder, at]`, a newline and the response body. The standby shadows only a document whose signature matches its own control token, so both routers of a pair need the same token. It also refuses a document older than the newest one it accepted, or whose `at` is more than the handoff age (`--standby-max-handoff-age`, 30 s by default) from its own clock. A refused document counts as a missed probe, and the standby logs the reason once each time it changes.
+
 ### Handoff fields
 
 The handoff document carries these fields:
@@ -90,7 +92,7 @@ A router from a release without engine membership ignores `membership` and refus
 
 ### `GET /narwhal/lifecycle`
 
-`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document. On a router that does not control the fleet, `GET /narwhal/lifecycle` returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead, and the two actions return HTTP `503` with the lifecycle document.
+`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document. On a router that does not control the fleet, `GET /narwhal/lifecycle` returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead, and the two actions return HTTP `503` with the lifecycle document. Both actions need the router's [control token](../HTTP-API.md#control-token); without it they return HTTP `401` before any other check.
 
 | Field                   | Meaning                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------- |
@@ -154,6 +156,7 @@ The drain route returns these error statuses:
 
 |  HTTP | Meaning                                                                  |
 | :---: | ------------------------------------------------------------------------ |
+| `401` | No [control token](../HTTP-API.md#control-token), or another one         |
 | `409` | Named engine set violates a drain rule                                   |
 | `409` | Unknown engine ID, or a `deadline_s` that is zero, negative, or infinite |
 | `409` | Another lifecycle action is active                                       |
@@ -205,6 +208,7 @@ A failed readmission returns one of these statuses:
 
 |  HTTP | Meaning                                                                      |
 | :---: | ---------------------------------------------------------------------------- |
+| `401` | No [control token](../HTTP-API.md#control-token), or another one             |
 | `409` | Named engine set violates a readmission rule                                 |
 | `409` | A named engine is `active`, `draining`, `deadline_exceeded`, or `validating` |
 | `409` | A named engine with `restart_required: true` has a null `old_process_start`  |

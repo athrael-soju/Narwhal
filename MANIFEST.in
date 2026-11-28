@@ -1,4 +1,7 @@
-# Explicit paths keep private fleet overrides and run artifacts out of the sdist.
+# Explicit paths keep private fleet overrides, Helm values and run artifacts out of the sdist.
+# deploy/ is listed file by file because an untracked values file there would match a pattern.
+# The package modules and the package data in pyproject.toml join the sdist without a line here.
+# tests/maintenance/test_supply_chain.py fails when a tracked file under deploy/ is missing.
 include LICENSE NOTICE CITATION.cff CHANGELOG.md CONTRIBUTING.md
 include Makefile .gitignore .pre-commit-config.yaml .env.example
 include .release-please-manifest.json release-please-config.json
@@ -6,14 +9,34 @@ include constraints-dev.txt
 include mkdocs.yml
 include config/engine-attestation.example.json config/engine-launch.example.json
 include config/fleet.example.json config/hosts.example.json config/fleet-control.example.json
-include tools/fleet_control/console.html
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
 recursive-include docs/assets *.html *.js
 recursive-include overrides *.html *.py
-recursive-include deploy *.cfg *.py *.txt Dockerfile
-recursive-include tools *.py *.json *.yml *.md
+include deploy/ha/haproxy.cfg
+include deploy/helm/narwhal/Chart.yaml deploy/helm/narwhal/README.md
+include deploy/helm/narwhal/values.yaml deploy/helm/narwhal/values.schema.json
+include deploy/helm/narwhal/files/observability/grafana-dashboards.yml
+include deploy/helm/narwhal/files/observability/grafana-datasources.yml
+include deploy/helm/narwhal/files/observability/prometheus-alerts.yml
+include deploy/helm/narwhal/files/observability/prometheus.yml
+include deploy/helm/narwhal/templates/_fleet.tpl deploy/helm/narwhal/templates/_group.tpl
+include deploy/helm/narwhal/templates/_helpers.tpl deploy/helm/narwhal/templates/access.yaml
+include deploy/helm/narwhal/templates/admission-policy.yaml
+include deploy/helm/narwhal/templates/cluster-monitoring.yaml
+include deploy/helm/narwhal/templates/controller.yaml
+include deploy/helm/narwhal/templates/direct-engines.yaml
+include deploy/helm/narwhal/templates/fleet.yaml deploy/helm/narwhal/templates/monitoring.yaml
+include deploy/helm/narwhal/templates/network-policy.yaml
+include deploy/helm/narwhal/templates/router-access.yaml
+include deploy/helm/narwhal/templates/storage.yaml
+include deploy/helm/narwhal-crds/Chart.yaml deploy/helm/narwhal-crds/README.md
+include deploy/helm/narwhal-crds/values.yaml
+include deploy/helm/narwhal-crds/templates/narwhalfleets.yaml
+include deploy/vllm-gguf/Dockerfile deploy/vllm-gguf/requirements.txt
+include deploy/vllm-gguf/check_packages.py deploy/vllm-gguf/install_plugin_sources.py
+recursive-include tools *.py
 recursive-include tests *.py
 include tests/data/fleet.json
 recursive-include tests/characterization/golden *.json
-recursive-include src/narwhal py.typed *.json icon.png
+recursive-include tests/deployment/golden *.json

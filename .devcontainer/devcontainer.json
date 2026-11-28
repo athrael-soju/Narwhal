@@ -1,11 +1,11 @@
 {
   "name": "Narwhal",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm@sha256:810cf704128b9d4fa64dc14576335655340871e7a2c046bb08f7952549cb92c5",
   "hostRequirements": {
     "cpus": 2,
     "memory": "8gb"
   },
-  "postCreateCommand": "make setup",
+  "postCreateCommand": "make setup chart-tools",
   "remoteEnv": {
     "PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}"
   },

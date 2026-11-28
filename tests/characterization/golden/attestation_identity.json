@@ -63,26 +63,22 @@
     "process_start_time_seconds": 100.0,
     "requests": [
       {
-        "headers": {
-          "authorization": "Bearer fixture-key"
-        },
+        "headers": {},
         "json": null,
         "method": "GET",
-        "url": "http://stub-0:8000/version"
-      },
-      {
-        "headers": {
-          "authorization": "Bearer fixture-key"
-        },
-        "json": null,
-        "method": "GET",
-        "url": "http://stub-0:8000/metrics"
+        "url": "http://stub-0:8010/v1/attestation"
       },
       {
         "headers": {},
         "json": null,
         "method": "GET",
-        "url": "http://stub-0:8010/v1/attestation"
+        "url": "http://stub-0:8000/version"
+      },
+      {
+        "headers": {},
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8000/metrics"
       }
     ]
   },
@@ -95,33 +91,25 @@
   ],
   "capture_requests": [
     {
-      "headers": {
-        "authorization": "Bearer fixture-key"
-      },
+      "headers": {},
       "json": null,
       "method": "GET",
       "url": "http://stub-0:8000/version"
     },
     {
-      "headers": {
-        "authorization": "Bearer fixture-key"
-      },
+      "headers": {},
       "json": null,
       "method": "GET",
       "url": "http://stub-0:8000/metrics"
     },
     {
-      "headers": {
-        "authorization": "Bearer fixture-key"
-      },
+      "headers": {},
       "json": null,
       "method": "GET",
       "url": "http://stub-1:8000/version"
     },
     {
-      "headers": {
-        "authorization": "Bearer fixture-key"
-      },
+      "headers": {},
       "json": null,
       "method": "GET",
       "url": "http://stub-1:8000/metrics"

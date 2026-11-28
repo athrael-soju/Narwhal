@@ -26,7 +26,15 @@ def document(config: FleetConfig) -> dict[str, Any]:
     out = {
         "model": config.model,
         "engines": [engine_row(e) for e in config.engines],
-        "slo": {"ttft_s": config.slo.ttft_s, "tpot_s": config.slo.tpot_s},
+        "slo": {
+            "ttft_s": config.slo.ttft_s,
+            "tpot_s": config.slo.tpot_s,
+            **(
+                {"router_overhead_s": config.slo.router_overhead_s}
+                if config.slo.router_overhead_s
+                else {}
+            ),
+        },
         "controller": {
             "monitor_interval_s": config.monitor_interval_s,
             "monitor_failure_limit": config.monitor_failure_limit,

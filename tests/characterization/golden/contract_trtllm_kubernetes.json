@@ -1,0 +1,856 @@
+{
+  "check": {
+    "checked": {
+      "backend": "kubernetes",
+      "engine_version": "1.4.0rc3",
+      "kv_events": null,
+      "model_status_sha256": "<sha256>",
+      "node": "gpu-node-a",
+      "plan_sha256": "<sha256>",
+      "planned_image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "pod_uid": "<uuid>",
+      "prefix_caching": true,
+      "transfer_device": {
+        "hca": "hca0",
+        "port": 1,
+        "ucx_net_devices": "hca0:1",
+        "verbs_device": "uverbs0"
+      }
+    },
+    "printed": "Runtime identity, package pins and server configuration passed.\nKV block reuse is on; cache-event publication is disabled.\n"
+  },
+  "engine": {
+    "UCX_NET_DEVICES": "hca0:1",
+    "argv": [
+      "python3",
+      "-m",
+      "launch_engine",
+      "serve",
+      "serve",
+      "/model",
+      "--backend",
+      "pytorch",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--served_model_name",
+      "synthetic",
+      "--tensor_parallel_size",
+      "2",
+      "--kv_cache_dtype",
+      "auto",
+      "--max_seq_len",
+      "4096",
+      "--max_batch_size",
+      "64",
+      "--num_serve_frontends",
+      "1",
+      "--max_num_tokens",
+      "8192",
+      "--config",
+      "/narwhal-hooks/engine.json"
+    ]
+  },
+  "prepare": {
+    "env": [
+      "NARWHAL_TRTLLM_TRANSFER_HOST=$(NARWHAL_POD_IP)",
+      "NARWHAL_TRTLLM_TRANSFER_PORT=5600",
+      "PYTHONPATH=/narwhal-hooks",
+      "TRTLLM_FIXTURE_FLAG=1",
+      "UCX_SHM_DEVICES=none",
+      "UCX_TCP_PORT_RANGE=39000-39999",
+      "UCX_TLS=rc,sm,self,cuda_copy"
+    ],
+    "manifests": {
+      "configMaps": [
+        {
+          "apiVersion": "v1",
+          "data": [
+            "engine.json",
+            "launch.json",
+            "launch_engine.py",
+            "sitecustomize.py"
+          ],
+          "immutable": true,
+          "kind": "ConfigMap",
+          "metadata": {
+            "name": "<name>-hooks"
+          }
+        },
+        {
+          "apiVersion": "v1",
+          "data": [
+            "checkpoint.py",
+            "pod.py",
+            "probe_reader.py",
+            "verdict.py"
+          ],
+          "immutable": true,
+          "kind": "ConfigMap",
+          "metadata": {
+            "name": "narwhal-pod-<digest>"
+          }
+        }
+      ],
+      "podSpec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "command": [
+              "python3",
+              "-I",
+              "-B",
+              "-c",
+              [
+                "import hashlib, json, os, runpy, sys",
+                "pins = json.loads(sys.argv[1])",
+                "for root, files in sorted(pins.items()):",
+                "    present = sorted(name for name in os.listdir(root) if not name.startswith('..'))",
+                "    if present != sorted(files):",
+                "        sys.exit(f'narwhal: {root} holds {present}, not {sorted(files)}')",
+                "    for name, pinned in sorted(files.items()):",
+                "        path = os.path.join(root, name)",
+                "        with open(path, 'rb') as stream:",
+                "            if hashlib.sha256(stream.read()).hexdigest() != pinned:",
+                "                sys.exit(f'narwhal: {path} differs from its pinned SHA-256')",
+                "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
+                "runpy.run_path(sys.argv[0], run_name='__main__')"
+              ],
+              "{\"/narwhal-hooks\": {\"engine.json\": \"<sha256>\", \"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
+              "serve",
+              "-m",
+              "launch_engine",
+              "serve",
+              "serve",
+              "/model",
+              "--backend",
+              "pytorch",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "8000",
+              "--served_model_name",
+              "synthetic",
+              "--tensor_parallel_size",
+              "2",
+              "--kv_cache_dtype",
+              "auto",
+              "--max_seq_len",
+              "4096",
+              "--max_batch_size",
+              "64",
+              "--num_serve_frontends",
+              "1",
+              "--max_num_tokens",
+              "8192",
+              "--config",
+              "/narwhal-hooks/engine.json"
+            ],
+            "env": [
+              {
+                "name": "NARWHAL_POD_IP",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "status.podIP"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_UID",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.uid"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_TRTLLM_API_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "api-key",
+                    "name": "engine-credential"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_TRTLLM_TRANSFER_HOST",
+                "value": "$(NARWHAL_POD_IP)"
+              },
+              {
+                "name": "NARWHAL_TRTLLM_TRANSFER_PORT",
+                "value": "5600"
+              },
+              {
+                "name": "PYTHONPATH",
+                "value": "/narwhal-hooks"
+              },
+              {
+                "name": "TRTLLM_FIXTURE_FLAG",
+                "value": "1"
+              },
+              {
+                "name": "UCX_SHM_DEVICES",
+                "value": "none"
+              },
+              {
+                "name": "UCX_TCP_PORT_RANGE",
+                "value": "39000-39999"
+              },
+              {
+                "name": "UCX_TLS",
+                "value": "rc,sm,self,cuda_copy"
+              }
+            ],
+            "image": "registry.example/engine@sha256:<sha256>",
+            "name": "engine",
+            "ports": [
+              {
+                "containerPort": 8000,
+                "name": "http"
+              },
+              {
+                "containerPort": 5600,
+                "name": "kv-side-channel"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "gpu.example.com/gpu": "2",
+                "rdma.example.com/hca": "1"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "add": [
+                  "IPC_LOCK"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/narwhal-hooks",
+                "name": "narwhal-hooks",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-pod",
+                "name": "narwhal-pod",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/model",
+                "name": "model",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/root/.cache",
+                "name": "cache"
+              },
+              {
+                "mountPath": "/dev/shm",
+                "name": "shm"
+              },
+              {
+                "mountPath": "/narwhal-engine",
+                "name": "narwhal-engine"
+              },
+              {
+                "mountPath": "/narwhal-state",
+                "name": "narwhal-state",
+                "readOnly": true,
+                "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              }
+            ]
+          },
+          {
+            "command": [
+              "python3",
+              "-I",
+              "-m",
+              "narwhal.deployment.attestation_contract.cli",
+              "serve",
+              "--run",
+              "/narwhal-launch",
+              "--pod-evidence",
+              "/narwhal-state"
+            ],
+            "env": [
+              {
+                "name": "NARWHAL_POD_IP",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "status.podIP"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_UID",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.uid"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.name"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_ENGINE_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "api-key",
+                    "name": "engine-credential"
+                  }
+                }
+              }
+            ],
+            "image": "registry.example/narwhal@sha256:<sha256>",
+            "name": "attestation",
+            "ports": [
+              {
+                "containerPort": 8010,
+                "name": "attestation"
+              }
+            ],
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "runAsGroup": 10002,
+              "runAsNonRoot": true,
+              "runAsUser": 10002,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/narwhal-hooks",
+                "name": "narwhal-hooks",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/model",
+                "name": "model",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-engine",
+                "name": "narwhal-engine"
+              },
+              {
+                "mountPath": "/narwhal-state",
+                "name": "narwhal-state",
+                "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              },
+              {
+                "mountPath": "/narwhal-launch",
+                "name": "narwhal-state",
+                "readOnly": true,
+                "subPathExpr": "engines/engine-1/launches/$(NARWHAL_POD_UID)"
+              },
+              {
+                "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                "name": "narwhal-api",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "dnsPolicy": "ClusterFirstWithHostNet",
+        "enableServiceLinks": false,
+        "hostNetwork": true,
+        "initContainers": [
+          {
+            "command": [
+              "python3",
+              "-I",
+              "-B",
+              "-c",
+              [
+                "import hashlib, json, os, runpy, sys",
+                "pins = json.loads(sys.argv[1])",
+                "for root, files in sorted(pins.items()):",
+                "    present = sorted(name for name in os.listdir(root) if not name.startswith('..'))",
+                "    if present != sorted(files):",
+                "        sys.exit(f'narwhal: {root} holds {present}, not {sorted(files)}')",
+                "    for name, pinned in sorted(files.items()):",
+                "        path = os.path.join(root, name)",
+                "        with open(path, 'rb') as stream:",
+                "            if hashlib.sha256(stream.read()).hexdigest() != pinned:",
+                "                sys.exit(f'narwhal: {path} differs from its pinned SHA-256')",
+                "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
+                "runpy.run_path(sys.argv[0], run_name='__main__')"
+              ],
+              "{\"/narwhal-hooks\": {\"engine.json\": \"<sha256>\", \"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
+              "checkpoint",
+              "10002"
+            ],
+            "env": [
+              {
+                "name": "NARWHAL_POD_IP",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "status.podIP"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_UID",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.uid"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              }
+            ],
+            "image": "registry.example/engine@sha256:<sha256>",
+            "name": "checkpoint",
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "add": [
+                  "CHOWN",
+                  "FOWNER"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "runAsUser": 0,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/narwhal-hooks",
+                "name": "narwhal-hooks",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-pod",
+                "name": "narwhal-pod",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/model",
+                "name": "model",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-state",
+                "name": "narwhal-state",
+                "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              }
+            ]
+          },
+          {
+            "command": [
+              "python3",
+              "-I",
+              "-B",
+              "-c",
+              [
+                "import hashlib, json, os, runpy, sys",
+                "pins = json.loads(sys.argv[1])",
+                "for root, files in sorted(pins.items()):",
+                "    present = sorted(name for name in os.listdir(root) if not name.startswith('..'))",
+                "    if present != sorted(files):",
+                "        sys.exit(f'narwhal: {root} holds {present}, not {sorted(files)}')",
+                "    for name, pinned in sorted(files.items()):",
+                "        path = os.path.join(root, name)",
+                "        with open(path, 'rb') as stream:",
+                "            if hashlib.sha256(stream.read()).hexdigest() != pinned:",
+                "                sys.exit(f'narwhal: {path} differs from its pinned SHA-256')",
+                "sys.argv = ['/narwhal-pod/pod.py', *sys.argv[2:]]",
+                "runpy.run_path(sys.argv[0], run_name='__main__')"
+              ],
+              "{\"/narwhal-hooks\": {\"engine.json\": \"<sha256>\", \"launch.json\": \"<sha256>\", \"launch_engine.py\": \"<sha256>\", \"sitecustomize.py\": \"<sha256>\"}, \"/narwhal-pod\": {\"checkpoint.py\": \"<sha256>\", \"pod.py\": \"<sha256>\", \"probe_reader.py\": \"<sha256>\", \"verdict.py\": \"<sha256>\"}}",
+              "runtime-check",
+              "300",
+              "/narwhal-hooks/launch_engine.py",
+              "_check",
+              "{\"tensorrt_llm\": \"1.4.0rc3\"}",
+              "[\"serve\", \"/model\", \"--backend\", \"pytorch\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\", \"--served_model_name\", \"synthetic\", \"--tensor_parallel_size\", \"2\", \"--kv_cache_dtype\", \"auto\", \"--max_seq_len\", \"4096\", \"--max_batch_size\", \"64\", \"--num_serve_frontends\", \"1\", \"--max_num_tokens\", \"8192\", \"--config\", \"/narwhal-hooks/engine.json\"]"
+            ],
+            "env": [
+              {
+                "name": "NARWHAL_POD_IP",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "status.podIP"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_POD_UID",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "metadata.uid"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_NODE_NAME",
+                "valueFrom": {
+                  "fieldRef": {
+                    "fieldPath": "spec.nodeName"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_TRTLLM_API_KEY",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "api-key",
+                    "name": "engine-credential"
+                  }
+                }
+              },
+              {
+                "name": "NARWHAL_TRTLLM_TRANSFER_HOST",
+                "value": "$(NARWHAL_POD_IP)"
+              },
+              {
+                "name": "NARWHAL_TRTLLM_TRANSFER_PORT",
+                "value": "5600"
+              },
+              {
+                "name": "PYTHONPATH",
+                "value": "/narwhal-hooks"
+              },
+              {
+                "name": "TRTLLM_FIXTURE_FLAG",
+                "value": "1"
+              },
+              {
+                "name": "UCX_SHM_DEVICES",
+                "value": "none"
+              },
+              {
+                "name": "UCX_TCP_PORT_RANGE",
+                "value": "39000-39999"
+              },
+              {
+                "name": "UCX_TLS",
+                "value": "rc,sm,self,cuda_copy"
+              }
+            ],
+            "image": "registry.example/engine@sha256:<sha256>",
+            "name": "runtime-check",
+            "resources": {
+              "limits": {
+                "gpu.example.com/gpu": "2",
+                "rdma.example.com/hca": "1"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "add": [
+                  "IPC_LOCK"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/narwhal-hooks",
+                "name": "narwhal-hooks",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/narwhal-pod",
+                "name": "narwhal-pod",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/model",
+                "name": "model",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/root/.cache",
+                "name": "cache"
+              },
+              {
+                "mountPath": "/dev/shm",
+                "name": "shm"
+              },
+              {
+                "mountPath": "/narwhal-state",
+                "name": "narwhal-state",
+                "subPathExpr": "engines/engine-1/$(NARWHAL_POD_UID)"
+              }
+            ]
+          }
+        ],
+        "serviceAccountName": "narwhal-attestation",
+        "shareProcessNamespace": true,
+        "volumes": [
+          {
+            "configMap": {
+              "defaultMode": 292,
+              "name": "<name>-hooks"
+            },
+            "name": "narwhal-hooks"
+          },
+          {
+            "configMap": {
+              "defaultMode": 292,
+              "name": "narwhal-pod-<digest>"
+            },
+            "name": "narwhal-pod"
+          },
+          {
+            "name": "model",
+            "persistentVolumeClaim": {
+              "claimName": "models",
+              "readOnly": true
+            }
+          },
+          {
+            "name": "narwhal-state",
+            "persistentVolumeClaim": {
+              "claimName": "narwhal-state"
+            }
+          },
+          {
+            "emptyDir": {},
+            "name": "cache"
+          },
+          {
+            "emptyDir": {
+              "medium": "Memory"
+            },
+            "name": "shm"
+          },
+          {
+            "emptyDir": {},
+            "name": "narwhal-engine"
+          },
+          {
+            "name": "narwhal-api",
+            "projected": {
+              "defaultMode": 292,
+              "sources": [
+                {
+                  "serviceAccountToken": {
+                    "expirationSeconds": 3600,
+                    "path": "token"
+                  }
+                },
+                {
+                  "configMap": {
+                    "items": [
+                      {
+                        "key": "ca.crt",
+                        "path": "ca.crt"
+                      }
+                    ],
+                    "name": "kube-root-ca.crt"
+                  }
+                },
+                {
+                  "downwardAPI": {
+                    "items": [
+                      {
+                        "fieldRef": {
+                          "fieldPath": "metadata.namespace"
+                        },
+                        "path": "namespace"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "role": {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "rules": [
+          {
+            "apiGroups": [
+              ""
+            ],
+            "resources": [
+              "pods"
+            ],
+            "verbs": [
+              "get"
+            ]
+          }
+        ]
+      },
+      "roleBinding": {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "roleRef": {
+          "apiGroup": "rbac.authorization.k8s.io",
+          "kind": "Role",
+          "name": "narwhal-attestation-pod-reader"
+        },
+        "subjects": [
+          {
+            "kind": "ServiceAccount",
+            "name": "narwhal-attestation"
+          }
+        ]
+      },
+      "serviceAccount": {
+        "apiVersion": "v1",
+        "automountServiceAccountToken": false,
+        "kind": "ServiceAccount",
+        "metadata": {
+          "name": "narwhal-attestation"
+        }
+      }
+    },
+    "plan": {
+      "args": [
+        "-m",
+        "launch_engine",
+        "serve",
+        "serve",
+        "/model",
+        "--backend",
+        "pytorch",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--served_model_name",
+        "synthetic",
+        "--tensor_parallel_size",
+        "2",
+        "--kv_cache_dtype",
+        "auto",
+        "--max_seq_len",
+        "4096",
+        "--max_batch_size",
+        "64",
+        "--num_serve_frontends",
+        "1",
+        "--max_num_tokens",
+        "8192",
+        "--config",
+        "/narwhal-hooks/engine.json"
+      ],
+      "attestation_port": 8010,
+      "attestation_url": "http://engine-1.engines.example.svc:8010/v1/attestation",
+      "backend": "kubernetes",
+      "cache_capture_code_sha256": "<sha256>",
+      "cache_capture_sha256": "<sha256>",
+      "common": [],
+      "config_files": {
+        "engine.json": "{\n  \"cache_transceiver_config\": {\n    \"backend\": \"UCX\",\n    \"kv_transfer_timeout_ms\": 60000,\n    \"transceiver_runtime\": \"CPP\"\n  },\n  \"cuda_graph_config\": {\n    \"enable_padding\": true,\n    \"max_batch_size\": 64\n  },\n  \"disable_overlap_scheduler\": true,\n  \"dtype\": \"bfloat16\",\n  \"enable_chunked_prefill\": true,\n  \"enable_iter_perf_stats\": true,\n  \"kv_cache_config\": {\n    \"use_kv_cache_manager_v2\": false\n  },\n  \"return_perf_metrics\": true\n}\n"
+      },
+      "connector": {
+        "kv_lease_s": 60,
+        "transceiver_runtime": "CPP",
+        "transfer_backend": "UCX"
+      },
+      "cuda_ipc_peers": false,
+      "endpoint": "http://engine-1.engines.example.svc:8000",
+      "engine": "trtllm",
+      "env_sha256": "<sha256>",
+      "expected_packages": {
+        "tensorrt_llm": "1.4.0rc3"
+      },
+      "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "kubernetes": {
+        "api_key_secret": {
+          "key": "api-key",
+          "name": "engine-credential"
+        },
+        "gpu_resource": "gpu.example.com/gpu",
+        "gpus": 2,
+        "hca": "hca0",
+        "hca_port": 1,
+        "model_volume": {
+          "persistentVolumeClaim": {
+            "claimName": "models",
+            "readOnly": true
+          }
+        },
+        "pod_files_sha256": "<sha256>",
+        "rdma_resource": "rdma.example.com/hca",
+        "runtime_check_seconds": 300.0,
+        "seccomp_unconfined": false,
+        "service_account": "narwhal-attestation",
+        "sidecar_image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sidecar_user": 10002,
+        "state_claim": "narwhal-state"
+      },
+      "kv_events": null,
+      "launch_sha256": "<sha256>",
+      "launcher_code_sha256": "<sha256>",
+      "launcher_sha256": "<sha256>",
+      "model_config_sha256": "51f95475923702b855b9c8bc342c5692adec323205052b4725a937b7bc0ee5f4",
+      "model_dir": "<root>/kubernetes/model",
+      "model_tree_sha256": "413737766b3bdb858a6539c383d76feb4fe2e896c85b37ea7c249802827129bf",
+      "name": "<name>",
+      "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "role": "engine-1",
+      "served_model_name": "synthetic",
+      "side_channel_port": 5600,
+      "ucx_tls": "rc,sm,self,cuda_copy"
+    },
+    "printed": "Prepared engine-1; review launch.json and kubernetes.json, then check the engine pod's records.\n"
+  }
+}

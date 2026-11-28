@@ -92,6 +92,13 @@
       "engine": "e0",
       "headers": {},
       "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
       "path": "/version"
     },
     {
@@ -103,7 +110,7 @@
     },
     {
       "body": null,
-      "engine": "e0",
+      "engine": "e3",
       "headers": {},
       "method": "GET",
       "path": "/v1/attestation"
@@ -121,13 +128,6 @@
       "headers": {},
       "method": "GET",
       "path": "/metrics"
-    },
-    {
-      "body": null,
-      "engine": "e3",
-      "headers": {},
-      "method": "GET",
-      "path": "/v1/attestation"
     },
     {
       "body": {
@@ -286,6 +286,13 @@
       "engine": "e0",
       "headers": {},
       "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
       "path": "/version"
     },
     {
@@ -297,7 +304,7 @@
     },
     {
       "body": null,
-      "engine": "e0",
+      "engine": "e3",
       "headers": {},
       "method": "GET",
       "path": "/v1/attestation"
@@ -315,13 +322,6 @@
       "headers": {},
       "method": "GET",
       "path": "/metrics"
-    },
-    {
-      "body": null,
-      "engine": "e3",
-      "headers": {},
-      "method": "GET",
-      "path": "/v1/attestation"
     }
   ]
 }

@@ -12,6 +12,7 @@ config/engine-launch.*.json
 config/hosts.*.json
 config/fleet-control.*.json
 config/deployment.env
+config/helm/
 !config/hosts.example.json
 !config/fleet-control.example.json
 !config/fleet.example.json

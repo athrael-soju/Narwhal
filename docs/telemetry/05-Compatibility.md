@@ -6,7 +6,7 @@ description: Check the schema versions of Narwhal interfaces and documents befor
 
 ## Checking interface compatibility before deployment
 
-Validation fails when a document's schema name or version differs from the pair its Narwhal reader supports.
+Validation fails when a document's schema name differs from the one its Narwhal reader supports, or its version is not one the reader accepts.
 
 Print the installed contract manifest:
 
@@ -40,6 +40,9 @@ Interface versions in this release:
 | Command result | `narwhal.command-result` | 1 | `command_result` |
 | Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
+| Deployment run record | `narwhal.deployment-run` | 3 | `deployment_run` |
+| Deployment status | `narwhal.deployment-status` | 1 | `deployment_status` |
+| Capacity trial definition | `narwhal.capacity-trial` | 1 | `trial` |
 
 To compare manifests:
 
@@ -61,11 +64,13 @@ To compare manifests:
 
 3. Keep the previous release's code, configuration, profiles, and state together as a [rollback set](../operate/04-Upgrade-and-Validate.md#rolling-back).
 
-When the manifests are identical, installed-release documents pass validation on the candidate. When `schema` or `write` changes for an interface, that interface's installed-release documents fail validation on the candidate.
+When the manifests are identical, installed-release documents pass validation on the candidate. When `schema` changes for an interface, or the candidate's `read` leaves out the installed release's `write`, that interface's installed-release documents fail validation on the candidate.
 
 ## Schema version changes
 
 The schema version of each interface, including the [command result](../Command-Results.md) envelope, changes when a field is renamed, removed, or retyped. A metrics version also changes when an existing series gains a label or changes what it counts.
+
+Deployment run record version `3` keeps the digests of inputs and output files as HMAC-SHA256 under the run directory's `run.salt`, and names an output's digest `hmac_sha256` in place of `sha256`. A version `3` runner reads a version `2` record and keys its digests in place the next time it writes the record, so no stage reruns for the upgrade. A release that writes version `2` refuses a version `3` record with `deployment_run schema version 3 is newer than this build`, so to roll back, restore the run directory from before the upgrade. See [Deployment run record](06-Deployment-Runs.md).
 
 Metrics version `3` leaves the request totals a router adopts from a state handoff out of its counters, so each counter counts the requests of one router process. It also adds the `narwhal_router_role` gauge, and `narwhal_standby_refusals_total`, which counts the requests a standby shadowing a live primary refuses in place of `narwhal_offered_total` and `narwhal_rejected_total`. See [Prometheus metrics](03-Metrics-and-Control.md#prometheus-metrics).
 

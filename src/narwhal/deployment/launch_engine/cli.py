@@ -12,15 +12,15 @@ from ...backends import names
 from ...cli_support import add_version_argument
 from .. import native_engine
 from ..attestation_contract.evidence import model_dimensions
+from . import kubernetes, validation
 from .backend import (
     CacheCapture,
     CacheMeasurement,
-    CacheRegistration,
     engine_backend,
     plan_launcher,
 )
 from .check import check
-from .plan import load, prepare
+from .plan import BACKENDS, load, prepare
 from .start import READY_SECONDS, start, start_shared
 
 
@@ -37,35 +37,23 @@ CAPTURE_ACTIONS: dict[str, tuple[str, str, type]] = {
         "container only",
         CacheMeasurement,
     ),
-    "handshake-policy": (
-        "Inspect the installed connector compatibility policy using a checked plan; write "
-        "handshake-policy.json",
-        "container and native",
-        CacheRegistration,
-    ),
     "capture-cache": (
         "Capture cache-layout.json from the serving engine of a checked plan",
         "container; native on TensorRT-LLM",
         CacheCapture,
     ),
-    "cache-registration": (
-        "Resolve cache block grouping from a checked plan and a startup log or runtime "
-        "layout; write cache-registration.json",
-        "container and native",
-        CacheRegistration,
-    ),
 }
 
 
 ACTIONS = (
+    "inspect-host",
     "prepare",
     "check",
     "measure-cache",
     "model-dimensions",
-    "handshake-policy",
     "start",
+    "probe",
     "capture-cache",
-    "cache-registration",
     "start-shared",
     "start-native",
     "stop-native",
@@ -84,19 +72,22 @@ def capture_backends(capability: type) -> list[str]:
 
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare, inspect and launch pinned engines with container or native backends."
+        description="Prepare, inspect and launch pinned engines with container, Kubernetes or "
+        "native backends."
     )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     add_version_argument(parser)
     descriptions = {
         "prepare": "Pin launch inputs from NARWHAL_ENGINE_LAUNCH_CONFIG and the deployment "
-        "environment into a fresh directory; supports container and native backends.",
+        "environment into a fresh directory; supports container, Kubernetes and native "
+        "backends, and renders a Kubernetes plan's engine pod into kubernetes.json.",
         "check": "Check the prepared model, tokenizer, runtime packages and connector; "
-        "write checked.json for the plan's container or native backend.",
+        "write checked.json for the plan's container or native backend, or from the records "
+        "of a Kubernetes plan's engine pod.",
         "model-dimensions": "Inspect model dimensions using a checked plan; "
         "write model-dimensions.json (container only).",
         "start": "Start one serving container from a checked plan and record container.id; "
-        "verify HTTP readiness separately (container only).",
+        "with --ready-seconds, wait for its health endpoint (container only).",
         "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
         "engine's readiness and memory allowance, and record shared-start.json "
         "(container and native).",
@@ -105,6 +96,7 @@ def _main(argv: list[str]) -> int:
         "native-start.json (native only).",
         "stop-native": "Stop owned process groups after validating the recorded native "
         "process identities in the run directory (native only).",
+        **validation.DESCRIPTIONS,
     }
     capturing = {
         name: capture_backends(capability) for name, (_, _, capability) in CAPTURE_ACTIONS.items()
@@ -123,28 +115,25 @@ def _main(argv: list[str]) -> int:
     preparation.add_argument("--out", type=Path, required=True, help="fresh launch directory")
     preparation.add_argument(
         "--backend",
-        choices=("container", "native"),
+        choices=BACKENDS,
         default="container",
         help="launch backend (default: %(default)s)",
     )
+    public["check"].add_argument(
+        "--pod-evidence",
+        type=Path,
+        help="directory with the engine pod's checkpoint.json and runtime-check.json; "
+        "required for a Kubernetes plan and refused for the others",
+    )
     for command in ("check", "model-dimensions", "start", *capture_actions):
-        if command == "cache-registration":
-            continue
         public[command].add_argument(
             "--run", type=Path, required=True, help="prepared launch directory"
         )
-    if "cache-registration" in public:
-        registration = public["cache-registration"]
-        registration.add_argument(
-            "--run", type=Path, required=True, help="checked launch directory"
-        )
-        source = registration.add_mutually_exclusive_group(required=True)
-        source.add_argument(
-            "--startup-log", type=Path, help="serving log with a resolved KV layout"
-        )
-        source.add_argument(
-            "--runtime-layout", type=Path, help="captured runtime cache layout JSON"
-        )
+    public["start"].add_argument(
+        "--ready-seconds",
+        type=int,
+        help="wait this many seconds, at least 1, for the engine's health endpoint",
+    )
     shared = public["start-shared"]
     shared.add_argument(
         "--run",
@@ -184,10 +173,17 @@ def _main(argv: list[str]) -> int:
     public["stop-native"].add_argument(
         "--run", type=Path, required=True, help="native launch directory with process records"
     )
+    validation.add_arguments(public)
     args = parser.parse_args(argv)
-    if args.command in ("start-shared", "start-native") and args.ready_seconds < 1:
+    if (
+        args.command in ("start", "start-shared", "start-native")
+        and args.ready_seconds is not None
+        and args.ready_seconds < 1
+    ):
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     results.set_operation(args.command)
+    if args.command in validation.DESCRIPTIONS:
+        return validation.run(args, parser)
     roots = [args.out] if args.command == "prepare" else args.run
     if not isinstance(roots, list):
         roots = [roots]
@@ -195,6 +191,7 @@ def _main(argv: list[str]) -> int:
     for root in roots:
         for name in (
             "launch.json",
+            kubernetes.MANIFESTS,
             "checked.json",
             "runtime-check.log",
             "container.id",
@@ -203,8 +200,6 @@ def _main(argv: list[str]) -> int:
             "native-start.json",
             "cache-layout.json",
             "model-dimensions.json",
-            "cache-registration.json",
-            "handshake-policy.json",
         ):
             results.add_artifact(name.removesuffix(".json"), root / name)
     os.umask(0o077)
@@ -237,14 +232,24 @@ def _main(argv: list[str]) -> int:
                 if results.json_mode():
                     raise
                 parser.exit(2, f"{context}: load run {run}: {error}\n")
+            pod = plan.get("backend") == "kubernetes"
+            if (args.command == "check") and pod != (args.pod_evidence is not None):
+                raise ValueError(
+                    "--pod-evidence names the records of a Kubernetes plan's engine pod; "
+                    + ("pass it" if pod else "this plan runs its check on this host")
+                )
+            if pod and args.command != "check":
+                raise ValueError(
+                    f"{args.command} does not apply to a Kubernetes plan; the kubelet starts "
+                    "its engine pod"
+                )
+            if pod:
+                kubernetes.check(run, plan, args.pod_evidence.resolve())
+                return 0
             native_capture = args.command == "capture-cache" and getattr(
                 plan_launcher(plan), "native_capture", False
             )
-            if (
-                plan.get("backend") == "native"
-                and not native_capture
-                and args.command not in {"check", "cache-registration", "handshake-policy"}
-            ):
+            if plan.get("backend") == "native" and not native_capture and args.command != "check":
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )
@@ -256,24 +261,17 @@ def _main(argv: list[str]) -> int:
                         f"{label} does not support {args.command}; it applies to "
                         f"{', '.join(capturing[args.command])}"
                     )
-                if args.command == "cache-registration":
-                    cast(CacheRegistration, engine).registration_layout(
-                        run,
-                        plan,
-                        args.runtime_layout or args.startup_log,
-                        args.runtime_layout is not None,
-                    )
-                elif args.command == "handshake-policy":
-                    cast(CacheRegistration, engine).handshake_policy(run, plan)
-                elif args.command == "measure-cache":
+                if args.command == "measure-cache":
                     cast(CacheMeasurement, engine).measure_cache(run, plan)
                 else:
                     cast(CacheCapture, engine).capture_cache(run, plan)
                 return 0
+            if args.command == "start":
+                start(run, plan, args.ready_seconds)
+                return 0
             {
                 "check": check,
                 "model-dimensions": model_dimensions,
-                "start": start,
             }[args.command](run, plan)
     except (
         ValueError,

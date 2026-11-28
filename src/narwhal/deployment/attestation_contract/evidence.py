@@ -6,10 +6,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...engines import host_process
+from ...engines.host_process import started_at_seconds
 from ..launch_engine.backend import LiveModelDimensions, plan_launcher
 from ..launch_engine.check import read_checked
+from ..launch_engine.kubernetes import UID
+from ..launch_engine.plan import env_file_name, read_env
 from ..launch_engine.runtime import digest, write_private
 from ..native_engine import native_identity, process_identity
+from .pod_engine import PodEngine, live_pod, model_config
+
+# A live engine: the serving container's ID, a native engine's process identity, or the
+# engine container of a Kubernetes pod.
+LiveEngine = str | dict | PodEngine
 
 
 def read_json(path: Path) -> dict:
@@ -43,6 +52,12 @@ def checked_plan(run: Path) -> tuple[dict, dict, str]:
             or checked.get("expected_packages") != plan.get("expected_packages")
         ):
             raise ValueError("Native runtime check differs from the serving plan")
+    elif plan.get("backend") == "kubernetes":
+        # The pod reports the image it runs; the attestation reads it from the pod.
+        if checked.get("backend") != "kubernetes" or not re.fullmatch(
+            UID, str(checked.get("pod_uid"))
+        ):
+            raise ValueError("Runtime check names no engine pod of the Kubernetes plan")
     elif not re.fullmatch(r"sha256:[0-9a-f]{64}", checked.get("image_id", "")):
         raise ValueError("Image check lacks an immutable image ID")
     return plan, checked, plan_hash
@@ -56,14 +71,60 @@ def live_container(run: Path, checked: dict) -> str:
         ["docker", "inspect", "--format", "{{json .}}", cid],
         capture_output=True,
         text=True,
+        timeout=15,
         check=True,
     )
     observed = json.loads(result.stdout)
     if observed.get("Id") != cid or observed.get("Image") != checked["image_id"]:
         raise ValueError("Serving container differs from the checked image or recorded ID")
-    if observed.get("State", {}).get("Running") is not True:
-        raise ValueError("Serving container must be running before attestation")
+    state = observed.get("State", {})
+    if state.get("Running") is not True:
+        raise ValueError("Serving container is not running; inspect its logs")
+    recorded = container_start(run)
+    if recorded["container_id"] != cid or state.get("StartedAt") != recorded["started_at"]:
+        raise ValueError(
+            "Serving container started again after narwhal-engine started it; its evidence "
+            "describes an earlier process, so prepare, check and start a fresh launch"
+        )
     return cid
+
+
+def container_start(run: Path) -> dict:
+    """The container start that narwhal-engine recorded in container-start.json."""
+    path = run / "container-start.json"
+    if not path.is_file():
+        raise ValueError(
+            "container-start.json is missing; start the engine with this release's narwhal-engine"
+        )
+    record = read_json(path)
+    started_at_seconds(record["started_at"])
+    return record
+
+
+# The serving process is the container's first process, so the process start in /metrics and
+# the container's State.StartedAt name one moment. /metrics derives the start from the kernel's
+# boot time, which has one-second resolution.
+CONTAINER_START_TOLERANCE_S = 2.0
+
+
+def require_process_start(
+    run: Path, plan: dict, identity: LiveEngine, process_start: float
+) -> None:
+    """Require an engine's reported process start to be the start of the recorded process."""
+    if plan.get("backend") == "native":
+        if process_start != read_native_start(run)["process_start_time_seconds"]:
+            raise ValueError("HTTP process start differs from the native launch record")
+        return
+    if isinstance(identity, PodEngine):
+        # The engine is the first process of its container, which the pod's identity names.
+        started = identity.identity.process_start_time_seconds
+    else:
+        started = started_at_seconds(container_start(run)["started_at"])
+    if abs(process_start - started) > CONTAINER_START_TOLERANCE_S:
+        raise ValueError(
+            f"HTTP process start {process_start} is not the container start {started}; "
+            "the endpoint serves another process"
+        )
 
 
 def live_native(run: Path, plan: dict, checked: dict) -> dict:
@@ -90,20 +151,57 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
     return process
 
 
-def live_identity(run: Path, plan: dict, checked: dict) -> dict | str:
+def live_identity(run: Path, plan: dict, checked: dict) -> LiveEngine:
+    """The live engine of a checked plan, through the identity source of its launch backend:
+    the native process, the Docker container, or the Kubernetes pod."""
     if plan.get("backend") == "native":
         return live_native(run, plan, checked)
+    if plan.get("backend") == "kubernetes":
+        return live_pod(checked)
     return live_container(run, checked)
 
 
 def live_binding(
-    plan: dict, checked: dict, identity: dict | str, *, model_revision: bool = False
+    plan: dict, checked: dict, identity: LiveEngine, *, model_revision: bool = False
 ) -> dict:
+    if isinstance(identity, PodEngine):
+        return identity.binding()
     if plan.get("backend") != "native":
         return {"image_id": checked["image_id"], "container_id": identity}
     if model_revision:
         return {"process": identity, "model_revision": plan["model_revision"]}
     return {"process": identity}
+
+
+def engine_image(checked: dict, identity: LiveEngine) -> str:
+    """The immutable image ID the engine runs: the one its pod reports, or the one the image
+    check observed; a native engine runs none."""
+    if isinstance(identity, PodEngine):
+        return identity.identity.image_id
+    return "" if isinstance(identity, dict) else str(checked["image_id"])
+
+
+def engine_process_start(identity: LiveEngine) -> float:
+    """Seconds since the epoch at which the live engine's process started."""
+    if isinstance(identity, PodEngine):
+        return identity.identity.process_start_time_seconds
+    if isinstance(identity, dict):
+        return host_process.native_start(identity["pid"])
+    return host_process.container_start(identity)
+
+
+def engine_environment(run: Path, plan: dict, identity: LiveEngine) -> dict[str, str]:
+    """The engine's launch environment as the engine received it: a pod's holds its address
+    where the launch names the pod address."""
+    values = read_env(run / env_file_name(plan))
+    return identity.environment(values) if isinstance(identity, PodEngine) else values
+
+
+def planned_model_config(plan: dict) -> Path:
+    """The model configuration the engine serves: in its pod, or in the model directory."""
+    if plan.get("backend") == "kubernetes":
+        return model_config()
+    return Path(plan["model_dir"]) / "config.json"
 
 
 def parse_tagged_capture(output: str, tag: str, label: str) -> dict:
@@ -160,9 +258,10 @@ def model_contract(config: dict) -> dict[str, Any]:
     return {"contract": values, "model_architecture": architectures[0]}
 
 
-def config_model_dimensions(run: Path, plan: dict) -> Path:
-    destination = run / "model-dimensions.json"
-    path = Path(plan["model_dir"]) / "config.json"
+def config_model_dimensions(run: Path, plan: dict, out: Path) -> Path:
+    """Write model-dimensions.json into `out` from the launch's model configuration."""
+    destination = out / "model-dimensions.json"
+    path = planned_model_config(plan)
     if digest(path) != plan["model_config_sha256"]:
         raise ValueError("Model configuration changed after launch preparation")
     record = {
@@ -187,12 +286,12 @@ def model_dimensions(run: Path, plan: dict) -> None:
         engine.model_dimensions(run, plan)
     else:
         checked_plan(run)
-        config_model_dimensions(run, plan)
+        config_model_dimensions(run, plan, run)
 
 
-def capture_model_dimensions(run: Path) -> Path:
+def capture_model_dimensions(run: Path, out: Path) -> Path:
     plan, _, _ = checked_plan(run)
     engine = plan_launcher(plan)
     if isinstance(engine, LiveModelDimensions):
-        return engine.capture_model_dimensions(run)
-    return config_model_dimensions(run, plan)
+        return engine.capture_model_dimensions(run, out)
+    return config_model_dimensions(run, plan, out)

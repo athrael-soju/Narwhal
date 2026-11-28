@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.deployment import stages
 from narwhal.deployment.launch_engine import cli as engine_cli
 from narwhal.deployment.launch_engine.plan import append_private, load
@@ -199,6 +200,9 @@ class RuntimeCheckCliTests(unittest.TestCase):
             self.assertIn("prepare: artifact already exists:", diagnostic)
             self.assertIn(str(run), diagnostic)
 
+    def test_a_native_inspection_keeps_an_existing_log(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, _ = self.prepare(Path(folder), "native")
             plan = load(run)
             (run / "checked.json").write_text(
                 json.dumps(
@@ -212,12 +216,14 @@ class RuntimeCheckCliTests(unittest.TestCase):
             )
             log = run / "handshake-policy.log"
             log.write_text("prior inspection")
-            with patch.object(
-                stages,
-                "run",
-                return_value=subprocess.CompletedProcess([], 0, "inspection", ""),
+            with (
+                patch.object(
+                    stages,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0, "inspection", ""),
+                ),
+                self.assertRaisesRegex(FileExistsError, "inspection log already exists"),
             ):
-                diagnostic = self.failed_cli(["handshake-policy", "--run", str(run)])
-            self.assertIn("handshake-policy: artifact already exists:", diagnostic)
-            self.assertIn(str(log), diagnostic)
+                handshake_policy(run, plan, run)
             self.assertEqual(log.read_text(), "prior inspection")
+            self.assertFalse((run / "handshake-policy.json").exists())

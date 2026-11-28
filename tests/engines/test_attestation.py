@@ -1,23 +1,31 @@
+import asyncio
+import contextlib
 import copy
+import io
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
 from narwhal.backends.vllm.identity import parse_process_start
 from narwhal.config import FleetConfig
 from narwhal.contracts import ATTESTATION, versioned
+from narwhal.engines import attestation
 from narwhal.engines.attestation import (
     AttestationDocument,
     EngineIdentity,
+    HcaPort,
     _payload_digest,
     build_app,
     fetch_engine_identity,
     launch_digest,
     make_attestation,
+    read_hca_counters,
     verify_attestation,
 )
 from narwhal.engines.kv_events import StoredBlocks
@@ -188,6 +196,25 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             failed = True
             self.assertEqual((await client.get("/health")).status_code, 503)
 
+    async def test_sidecar_metrics_report_its_unit_and_pod_restarts(self):
+        transport = httpx.MockTransport(lambda request: httpx.Response(503))
+        app = build_app(
+            self.document,
+            "http://engine",
+            self.identity,
+            transport=transport,
+            supervised=lambda: {"sidecar": 2},
+            kubelet=lambda: {"engine": 1, "attestation": 0},
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://sidecar"
+        ) as client:
+            response = await client.get("/metrics")
+        # The counts answer even while the engine does not.
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('narwhal_supervisor_restarts{process="sidecar"} 2', response.text)
+        self.assertIn('narwhal_kubelet_restarts{container="engine"} 1', response.text)
+
     async def test_sidecar_serves_residency_only_with_an_event_feed(self):
         start = 100
 
@@ -226,6 +253,138 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
 
+    async def test_an_hca_reading_names_the_host_it_was_given(self):
+        with tempfile.TemporaryDirectory() as folder:
+            boot = Path(folder) / "boot_id"
+            boot.write_text("boot-a\n")
+            with (
+                patch.object(attestation, "INFINIBAND", Path(folder)),
+                patch.object(attestation, "BOOT_ID", boot),
+            ):
+                reading = HcaPort("mlx5_0", 1, host="node-a").counters()
+                self.assertNotIn("host", HcaPort("mlx5_0", 1).counters())
+        self.assertEqual((reading["host"], reading["boot_id"]), ("node-a", "boot-a"))
+        for host, valid in (("node-a", True), ("", False), (7, False)):
+            payload = {**reading, "host": host}
+            transport = httpx.MockTransport(lambda request, p=payload: httpx.Response(200, json=p))
+            with self.subTest(host=host):
+                if valid:
+                    found = await read_hca_counters(
+                        "http://sidecar/v1/attestation", transport=transport
+                    )
+                    self.assertEqual(found["host"], "node-a")
+                else:
+                    with self.assertRaisesRegex(ValueError, "returned no HCA counters"):
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation", transport=transport
+                        )
+
+    async def test_hca_reading_without_a_counter_field_is_refused(self):
+        payload = {"device": "mlx5_0", "port": 1, "boot_id": "boot-a", "counter_error": "gone"}
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        with self.assertRaisesRegex(ValueError, "returned no HCA counters"):
+            await read_hca_counters("http://sidecar/v1/attestation", transport=transport)
+
+    async def test_sidecar_serves_hca_counters_only_for_its_hca_port(self):
+        start = 100
+
+        def handle(request):
+            return vllm_identity_engine(request, self.identity.version, start)
+
+        transport = httpx.MockTransport(handle)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            counters = root / "mlx5_0/ports/1/counters"
+            counters.mkdir(parents=True)
+            (counters / "port_xmit_data").write_text("4096\n")
+            boot = root / "boot_id"
+            boot.write_text("boot-a\n")
+            hca = HcaPort.parse("mlx5_0:1")
+            apps = {
+                "hca": build_app(
+                    self.document, "http://engine", self.identity, transport=transport, hca=hca
+                ),
+                "none": build_app(
+                    self.document, "http://engine", self.identity, transport=transport
+                ),
+            }
+            with (
+                patch.object(attestation, "INFINIBAND", root),
+                patch.object(attestation, "BOOT_ID", boot),
+            ):
+                async with (
+                    httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=apps["hca"]), base_url="http://sidecar"
+                    ) as client,
+                    httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=apps["none"]), base_url="http://sidecar"
+                    ) as none,
+                ):
+                    self.assertEqual(
+                        (await client.get("/v1/hca")).json(),
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": 4096,
+                        },
+                    )
+                    self.assertEqual(
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["hca"]),
+                        ),
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": 4096,
+                        },
+                    )
+                    self.assertEqual((await none.get("/v1/hca")).status_code, 404)
+                    self.assertIsNone(
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["none"]),
+                        )
+                    )
+                    # Without the counter, as for a device another network namespace sees,
+                    # the port and host still publish, with the reason.
+                    (counters / "port_xmit_data").unlink()
+                    unreadable = await client.get("/v1/hca")
+                    self.assertEqual(unreadable.status_code, 200)
+                    reading = await read_hca_counters(
+                        "http://sidecar/v1/attestation",
+                        transport=httpx.ASGITransport(app=apps["hca"]),
+                    )
+                    assert reading is not None
+                    self.assertEqual(
+                        {k: reading[k] for k in ("device", "port", "boot_id", "port_xmit_data")},
+                        {
+                            "device": "mlx5_0",
+                            "port": 1,
+                            "boot_id": "boot-a",
+                            "port_xmit_data": None,
+                        },
+                    )
+                    self.assertIn("counters/port_xmit_data", reading["counter_error"])
+                    boot.write_text("")
+                    blank = await client.get("/v1/hca")
+                    self.assertEqual(blank.status_code, 503)
+                    self.assertIn("HCA port unreadable", blank.json()["detail"])
+                    with self.assertRaisesRegex(ValueError, "HTTP 503: HCA port unreadable"):
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation",
+                            transport=httpx.ASGITransport(app=apps["hca"]),
+                        )
+                    boot.write_text("boot-a\n")
+                    (counters / "port_xmit_data").write_text("4096\n")
+                    start = 101
+                    self.assertEqual((await client.get("/v1/hca")).status_code, 503)
+        for value in ("mlx5_0", "mlx5_0:0", "mlx5_0:1,mlx5_1:1", "mlx 5:1"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "DEVICE:PORT"):
+                HcaPort.parse(value)
+
     async def test_residency_events_report_the_state_of_their_changes(self):
 
         def handle(request):
@@ -257,3 +416,110 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             (events["sequence"], events["block_size"], events["reason"], len(events["changes"])),
             (1, 4, "complete event history", 1),
         )
+
+
+# The route and field each backend whose identity needs the key publishes its version in.
+KEYED_IDENTITY = {"sglang": ("/server_info", "version"), "llamacpp": ("/props", "build_info")}
+
+
+class KeyedEngineSidecarTests(unittest.TestCase):
+    """An engine that serves its identity only with its key still gets attested."""
+
+    def setUp(self):
+        contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
+        self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "launch"))
+        self.version = contract.engine_version
+
+    def engine(self, backend, seen):
+        path, field = KEYED_IDENTITY[backend]
+
+        def handle(request):
+            seen.append(request.headers.get("authorization"))
+            if request.headers.get("authorization") != "Bearer engine-key":
+                return httpx.Response(401, json={"error": "Unauthorized"})
+            if request.url.path != path:
+                return httpx.Response(404)
+            return httpx.Response(200, json={field: self.version})
+
+        return httpx.MockTransport(handle)
+
+    def run_sidecar(self, backend, argv, **kwargs):
+        """Run `main` against the fake engine; return its status, stderr, the headers the engine
+        saw, and the served app's /health status."""
+        seen: list[str | None] = []
+        transport = self.engine(backend, seen)
+        client = httpx.AsyncClient
+        served = {}
+        with (
+            patch.object(attestation.AttestationDocument, "load", return_value=self.document),
+            patch.object(attestation, "process_clock", return_value=lambda: 100.0),
+            patch.object(
+                attestation.httpx,
+                "AsyncClient",
+                lambda **options: client(**{**options, "transport": transport}),
+            ),
+            patch.object(attestation.uvicorn, "run", lambda app, **_: served.update(app=app)),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            status = attestation.main(
+                [
+                    "--document",
+                    "document.json",
+                    "--engine-base",
+                    "http://engine",
+                    "--backend",
+                    backend,
+                    "--engine-pid",
+                    "1",
+                    *argv,
+                ],
+                **kwargs,
+            )
+            health = None
+            if "app" in served:
+
+                async def probe():
+                    async with client(
+                        transport=httpx.ASGITransport(app=served["app"]),
+                        base_url="http://sidecar",
+                    ) as sidecar:
+                        return (await sidecar.get("/health")).status_code
+
+                health = asyncio.run(probe())
+        return status, stderr.getvalue(), seen, health
+
+    def test_sidecar_sends_the_engine_key_it_is_given_on_every_engine_request(self):
+        for backend in KEYED_IDENTITY:
+            with self.subTest(backend=backend):
+                status, _, seen, health = self.run_sidecar(
+                    backend, [], engine_headers={"Authorization": "Bearer engine-key"}
+                )
+                self.assertEqual((status, health), (0, 200))
+                # Startup and /health each read the identity with the key.
+                self.assertEqual(seen, ["Bearer engine-key"] * 2)
+
+    def test_sidecar_reads_the_engine_key_from_the_variable_it_names(self):
+        for backend in KEYED_IDENTITY:
+            with (
+                self.subTest(backend=backend),
+                patch.dict(os.environ, {"ENGINE_KEY": "engine-key"}),
+            ):
+                status, _, seen, health = self.run_sidecar(
+                    backend, ["--engine-key-env", "ENGINE_KEY"]
+                )
+                self.assertEqual((status, health), (0, 200))
+                self.assertEqual(seen, ["Bearer engine-key"] * 2)
+
+    def test_an_unset_key_variable_is_an_argument_error(self):
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit) as exit:
+            self.run_sidecar("sglang", ["--engine-key-env", "ENGINE_KEY"])
+        self.assertEqual(exit.exception.code, 2)
+
+    def test_a_refused_key_fails_startup_without_logging_the_key(self):
+        status, stderr, seen, health = self.run_sidecar(
+            "sglang", [], engine_headers={"Authorization": "Bearer wrong-key"}
+        )
+        self.assertEqual((status, health), (1, None))
+        self.assertIn("401 Unauthorized", stderr)
+        self.assertNotIn("wrong-key", stderr)
+        self.assertEqual(seen, ["Bearer wrong-key"])

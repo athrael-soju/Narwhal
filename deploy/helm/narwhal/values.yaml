@@ -1,0 +1,113 @@
+# Every value without a default is a deployment input; values.schema.json refuses a release
+# that leaves one out. Keep a filled values file in the ignored config/helm/ directory.
+
+images:
+  # The Narwhal image by registry digest, <repository>@sha256:<hex>. The controller runs it,
+  # and so do the routers, gate Jobs, export Jobs and attestation sidecars it makes.
+  narwhal: ""
+
+# The fleet controller, which runs the stage graph for the namespace's NarwhalFleet and owns
+# the engines, gate Jobs and HAProxy it derives.
+controller:
+  # The non-root user and group the controller runs as. They own the run directories on the
+  # state volume.
+  runAsUser: 10001
+  runAsGroup: 10001
+  # Seconds between checks of the engine API key's HMAC, which each start a Job. An edit of
+  # the fleet or a new requested-at annotation also checks it.
+  keyCheckPeriodSeconds: 900
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+
+# The non-root user each engine pod's attestation sidecar runs as. The engine runs as root
+# with only IPC_LOCK, so it can neither read the sidecar's token nor rewrite its evidence.
+sidecarUser: 10002
+
+# The NarwhalFleet the chart installs, as its spec; `kubectl explain narwhalfleet.spec` describes
+# each field. Leave it out to apply the fleet with narwhal deploy or a GitOps tool.
+# fleet: {}
+
+# Engines that start directly from their image, as narwhal dev starts them on a host, with no
+# launch plan or attestation; direct_values derives them. They serve on CPUs, for a chart test
+# or a development cluster. Their fleet has no engine_contract.
+directEngines: {}
+
+# The state volume: the controller's run directories, the fleet file, profiles, calibration and
+# every stage's evidence. The controller's engine pods, routers and gate Jobs on different nodes
+# share it. helm uninstall keeps the claim.
+state:
+  claimName: narwhal-state
+  storageClassName: ""
+  size: ""
+
+haproxy:
+  # The cluster's DNS domain, in the addresses Prometheus scrapes.
+  clusterDomain: cluster.local
+
+# The cluster admin's allow-lists for a fleet's model volume. The controller refuses a fleet
+# whose model volume uses a source this list leaves out, and the admission policy refuses a pod
+# whose model volume does.
+modelVolumeSources: [persistentVolumeClaim]
+# With hostPath listed above, the host directories the volume may be or lie in, such as
+# ["/srv/models"], matched by whole path segments. Empty turns hostPath off.
+modelHostPathPrefixes: []
+# With nfs listed above, the NFS servers the volume may name. Empty turns nfs off.
+modelNfsServers: []
+# With csi listed above, the CSI drivers the volume may use. Empty turns csi off.
+modelCsiDrivers: []
+# The RuntimeClasses a pod in the namespace may name, such as ["nvidia"] for nodes whose
+# default container runtime exposes no GPUs. Empty allows only the default runtime.
+runtimeClassNames: []
+
+# The NetworkPolicy that admits connections to the routers only from HAProxy, the gate Jobs,
+# the other router and monitoring. HAProxy forwards only the serving routes, so only those
+# reach the control routes.
+networkPolicy:
+  enabled: true
+  # More NetworkPolicy peers that may scrape the routers, such as a cluster Prometheus:
+  # [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}].
+  monitoring: []
+
+# Prometheus and Grafana, from the configuration files `make observe` uses. Prometheus scrapes
+# both routers and finds the engines through the load balancer's /narwhal/targets.
+monitoring:
+  enabled: false
+  # The fleet label of every series Prometheus scrapes. Empty for the release name.
+  fleet: ""
+  # The Alertmanager Prometheus sends alerts to, such as http://alertmanager.monitoring:9093.
+  # Without one, alerts show only on the Prometheus alerts page.
+  alertmanagerUrl: ""
+  # Leave Prometheus to the cluster's Prometheus Operator: the chart runs no Prometheus and
+  # renders ServiceMonitor, PodMonitor and ScrapeConfig objects and the alert rules as a
+  # PrometheusRule. Needs dashboardConfigMap, since the chart's Grafana reads its own Prometheus.
+  serviceMonitors:
+    enabled: false
+    # Labels for those objects, which the cluster's Prometheus selects them by, such as
+    # {"release": "kube-prometheus-stack"}.
+    labels: {}
+  # Leave Grafana to the cluster: the chart runs no Grafana and renders the dashboard as a
+  # ConfigMap with the label the Grafana dashboard sidecar watches.
+  dashboardConfigMap:
+    enabled: false
+    label: grafana_dashboard
+    labelValue: "1"
+  prometheus:
+    # The Prometheus image by registry digest. Required with monitoring.
+    image: ""
+    # {"storageClassName", "size"} for a data claim; without it, data lives as long as the pod.
+    # storage: {}
+    resources: {}
+  grafana:
+    # The Grafana image by registry digest. Required with monitoring.
+    image: ""
+    # The rendered dashboard. Pass it with
+    # --set-file monitoring.grafana.dashboard=<file from python -m narwhal.observability.stack.chart_dashboard>.
+    dashboard: ""
+    # The Secret that holds the Grafana admin login: {"secretName", "userKey", "passwordKey"}.
+    admin: {}
+    # Let anyone who reaches Grafana view the dashboards without signing in, as make observe
+    # does on a workstation.
+    anonymous: false
+    # storage: {}
+    resources: {}

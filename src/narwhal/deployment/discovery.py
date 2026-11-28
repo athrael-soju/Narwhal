@@ -1,0 +1,610 @@
+"""Derive private deployment records from the workstation environment and host inspection."""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import ipaddress
+import json
+import posixpath
+import re
+import shlex
+from collections.abc import Mapping
+from dataclasses import asdict
+from functools import partial
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from ..types import RoleModel
+from .engine_launch import load_launches
+from .hosts import SSH, Host, load_hosts, parallel, write_private
+from .launch_engine import checkpoint as checkpoint_manifest
+from .launch_engine.accelerators import gpu_inventory
+from .launch_engine.backend import ModelFormats, engine_backend
+from .launch_engine.plan import conv_state_layers
+from .role_env import select_values, write_environment
+
+# The remote probe applies the launcher's own convolutional-state rule and GPU inventory.
+PROBE = (
+    inspect.getsource(conv_state_layers)
+    + inspect.getsource(gpu_inventory)
+    + r'''
+import hashlib, json, re, subprocess, sys
+from pathlib import Path
+
+inputs = json.load(sys.stdin)
+
+
+def command(args):
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError("Inspection failed: " + args[0])
+    return result.stdout
+
+
+image = json.loads(command(["docker", "image", "inspect", inputs["image"]]))[0]
+model_path = Path(inputs["model_dir"]) / "config.json"
+model_bytes = model_path.read_bytes()
+model = json.loads(model_bytes)
+tokenizer_path = Path(inputs["model_dir"]) / "tokenizer_config.json"
+tokenizer = json.loads(tokenizer_path.read_text()) if tokenizer_path.is_file() else {}
+
+
+def has_custom_code(value):
+    if isinstance(value, dict):
+        return bool(value.get("auto_map")) or any(has_custom_code(item) for item in value.values())
+    if isinstance(value, list):
+        return any(has_custom_code(item) for item in value)
+    return False
+
+
+requires_trust_remote_code = has_custom_code(model) or has_custom_code(tokenizer)
+packages_code = """
+import json, re, sys
+from importlib.metadata import distributions
+wanted = re.compile(sys.argv[1])
+print(json.dumps({d.metadata['Name'].lower(): d.version for d in distributions()
+                  if wanted.fullmatch(d.metadata['Name'].lower())}))
+"""
+packages = json.loads(
+    command(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "python3",
+            image["Id"],
+            "-c",
+            packages_code,
+            inputs["packages"],
+        ]
+    )
+)
+runtime, gpus, common_devices = gpu_inventory(command)
+interfaces = json.loads(command(["ip", "-json", "address", "show", "dev", inputs["interface"]]))
+if not interfaces:
+    raise RuntimeError("Selected fabric interface is unavailable")
+if not Path(inputs["run_dir"]).is_dir():
+    raise RuntimeError("Selected run directory is unavailable")
+allowed = tuple(inputs["environment_prefixes"])
+environment = {}
+for entry in image.get("Config", {}).get("Env", []) or []:
+    name, _, value = entry.partition("=")
+    if (
+        name.startswith(allowed) or name in ("LD_LIBRARY_PATH", "PYTHONPATH")
+    ) and name not in inputs["managed_environment"]:
+        if not any(
+            word in name
+            for word in ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH", "SKIP_COMPAT")
+        ):
+            environment[name] = value
+text_model = model.get("text_config", model)
+print(
+    json.dumps(
+        {
+            "hostname": command(["hostname"]).strip(),
+            "image_id": image["Id"],
+            "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
+            "requires_trust_remote_code": requires_trust_remote_code,
+            "conv_state_layers": conv_state_layers(model),
+            "multimodal": any(key in model for key in ("vision_config", "audio_config")),
+            "model_dtype": text_model.get(
+                "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
+            ),
+            "max_model_len": text_model.get("max_position_embeddings", 16384),
+            "packages": packages,
+            "runtime": runtime,
+            "gpus": gpus,
+            "common_devices": common_devices,
+            "interfaces": interfaces,
+            "image_environment": environment,
+        }
+    )
+)
+'''
+)
+
+
+def value(env: Mapping[str, str], node: int, field: str, default: str = "") -> str:
+    return env.get(f"NARWHAL_NODE_{node}_{field}", env.get(f"NARWHAL_{field}", default))
+
+
+def fabric_address(env: Mapping[str, str], node: int, interfaces: list[dict]) -> str:
+    name = f"NARWHAL_NODE_{node}_IP"
+    candidates = set()
+    for interface in interfaces:
+        for entry in interface.get("addr_info", []):
+            raw = entry.get("local", "")
+            try:
+                address = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if entry.get("scope") == "global" and not (
+                address.is_loopback or address.is_link_local or address.is_multicast
+            ):
+                candidates.add(str(address))
+    override = env.get(name, "")
+    if override:
+        try:
+            selected = str(ipaddress.ip_address(override))
+        except ValueError as error:
+            raise ValueError(f"{name} must contain an IP address") from error
+        if selected not in candidates:
+            raise ValueError(f"{name} must match an address on the selected fabric interface")
+        return selected
+    if len(candidates) != 1:
+        raise ValueError(f"{name} needs an explicit selection from the fabric interface addresses")
+    return candidates.pop()
+
+
+def service_url(env: Mapping[str, str], node: int, field: str) -> str:
+    name = f"NARWHAL_NODE_{node}_{field}"
+    supplied = env.get(name, "")
+    suffix = "/v1/attestation" if field == "ATTESTATION_URL" else ""
+    if supplied:
+        parsed = urlsplit(supplied)
+        try:
+            valid_port = parsed.port is not None
+        except ValueError:
+            valid_port = False
+        if (
+            parsed.scheme != "http"
+            or not parsed.hostname
+            or not valid_port
+            or parsed.path != suffix
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(f"{name} must be an HTTP service URL with its declared port")
+        return supplied
+    address_name = f"NARWHAL_NODE_{node}_IP"
+    address = env.get(address_name, "")
+    try:
+        version = ipaddress.ip_address(address).version
+    except ValueError as error:
+        raise ValueError(
+            f"{address_name} must contain the service and fabric IP address"
+        ) from error
+    port_field = "ATTEST_PORT" if field == "ATTESTATION_URL" else "ENGINE_PORT"
+    port_name = f"NARWHAL_NODE_{node}_{port_field}"
+    port_value = value(env, node, port_field)
+    if not port_value.isdecimal() or not 1 <= int(port_value) <= 65535:
+        raise ValueError(f"{port_name} or NARWHAL_{port_field} must contain a TCP port")
+    host = f"[{address}]" if version == 6 else address
+    return f"http://{host}:{port_value}{suffix}"
+
+
+def model_file(env: Mapping[str, str], node: int, model_dir: str) -> str | None:
+    """Return the path of NARWHAL_MODEL_PATH relative to NARWHAL_MODEL_DIR, when it is set."""
+    path = value(env, node, "MODEL_PATH")
+    if not path:
+        return None
+    relative = posixpath.relpath(posixpath.normpath(path), posixpath.normpath(model_dir))
+    if not posixpath.isabs(path) or relative == "." or relative.split("/")[0] == "..":
+        raise ValueError(
+            f"engine-{node}: set NARWHAL_MODEL_PATH to an absolute file path in NARWHAL_MODEL_DIR"
+        )
+    return relative
+
+
+def derive_hosts(env: Mapping[str, str]) -> list[Host]:
+    nodes = sorted(
+        int(match[1])
+        for name in env
+        if (match := re.fullmatch(r"NARWHAL_NODE_([1-9][0-9]*)_SSH", name))
+    )
+    if not nodes:
+        raise ValueError("Set NARWHAL_NODE_<n>_SSH for each engine")
+    groups: dict[str, Host] = {}
+    router_name = (
+        "NARWHAL_ROUTER_SSH" if env.get("NARWHAL_ROUTER_SSH") else f"NARWHAL_NODE_{nodes[0]}_SSH"
+    )
+    roles = [*((f"engine-{n}", f"NARWHAL_NODE_{n}_SSH") for n in nodes), ("router", router_name)]
+    if env.get("NARWHAL_STANDBY_ROUTER_SSH"):
+        # A router pair: its standby on another host, and the load balancer in front of both,
+        # on the primary router's host unless the inventory names its own.
+        if env["NARWHAL_STANDBY_ROUTER_SSH"] == env.get(router_name):
+            raise ValueError(
+                f"Set NARWHAL_STANDBY_ROUTER_SSH to another host than {router_name}'s, so one "
+                "host's loss leaves a router"
+            )
+        balancer = "NARWHAL_LOAD_BALANCER_SSH"
+        roles += [
+            ("standby-router", "NARWHAL_STANDBY_ROUTER_SSH"),
+            ("load-balancer", balancer if env.get(balancer) else router_name),
+        ]
+    for role, name in roles:
+        destination = env.get(name, "")
+        if not destination or destination.startswith("-") or any(c.isspace() for c in destination):
+            raise ValueError(f"Set {name} to an SSH alias or user@host")
+        if destination in groups:
+            old = groups[destination]
+            password = old.password_env
+            if password is None and env.get(name + "_PASSWORD"):
+                password = name + "_PASSWORD"
+            groups[destination] = Host(old.id, old.ssh_env, password, (*old.roles, role))
+        else:
+            password = name + "_PASSWORD" if env.get(name + "_PASSWORD") else None
+            identifier = role.replace("engine-", "node-")
+            groups[destination] = Host(identifier, name, password, (role,))
+    return list(groups.values())
+
+
+def build_records(
+    hosts: list[Host], env: Mapping[str, str], observations: dict, out: Path
+) -> tuple[dict, dict, dict, dict[str, str]]:
+    launches: dict[str, dict] = {}
+    engines: list[dict] = []
+    sources: dict[str, dict] = {}
+    derived: dict[str, str] = {}
+    shapes: set[tuple[str, int, int]] = set()
+    model_files: set[str | None] = set()
+    backend = engine_backend(env.get("NARWHAL_ENGINE_BACKEND"))
+    connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
+    backend.connector(connector)
+    engine = backend.engine_launcher()
+    pin = backend.role_switcher(connector).model is RoleModel.FIXED
+    for key in env:
+        match = re.fullmatch(r"NARWHAL_NODE_[0-9]+_(.+)", key)
+        if match and match[1] in engine.fleet_settings:
+            raise ValueError(f"set NARWHAL_{match[1]} once for the fleet, not {key}")
+    for host in hosts:
+        roles = [r for r in host.roles if r.startswith("engine-")]
+        allocated: set[str] = set()
+        for role in roles:
+            node = int(role.split("-")[1])
+            observed = observations[role]
+            derived[f"NARWHAL_NODE_{node}_IP"] = fabric_address(env, node, observed["interfaces"])
+            digest = value(env, node, "MODEL_CONFIG_SHA256")
+            if digest and digest != observed["model_sha256"]:
+                raise ValueError(f"{role}: model-config hash differs from the environment pin")
+            file_digest = observed.get("model_file_sha256")
+            pinned = value(env, node, "MODEL_SHA256")
+            if pinned and pinned != file_digest:
+                raise ValueError(f"{role}: model-file hash differs from the environment pin")
+            model_files.add(file_digest)
+            gpu_ids = value(env, node, "GPU_IDS")
+            if len(roles) > 1 and not gpu_ids:
+                raise ValueError(f"Set NARWHAL_NODE_{node}_GPU_IDS for colocated engine roles")
+            ids = gpu_ids.split(",") if gpu_ids else [g["id"] for g in observed["gpus"]]
+            selected = [g for g in observed["gpus"] if g["id"] in ids or g.get("uuid") in ids]
+            if len(selected) != len(ids) or len(set(ids)) != len(ids):
+                raise ValueError(f"{role}: GPU_IDS must select distinct detected GPUs")
+            physical = {g["id"] for g in selected}
+            if allocated & physical:
+                raise ValueError(f"{role}: colocated GPU allocations overlap")
+            allocated |= physical
+            tp = int(value(env, node, "TENSOR_PARALLEL_SIZE", str(len(selected))))
+            products = {g["name"] for g in selected}
+            if len(products) != 1:
+                raise ValueError(f"{role}: allocated GPUs must share one product")
+            product = products.pop()
+            shapes.add((product, len(selected), tp))
+            try:
+                runtime = engine.discovered_runtime(observed, partial(value, env, node), connector)
+            except ValueError as error:
+                raise ValueError(f"{role}: {error}") from None
+            engine.validate_runtime(runtime)
+            transport = value(env, node, "TRANSFER_TRANSPORT", "ucx_tcp")
+            net = value(env, node, "TRANSFER_NET_DEVICES", value(env, node, "FABRIC_INTERFACE"))
+            devices = json.loads(value(env, node, "TRANSFER_DEVICES", "[]"))
+            if transport == "ucx_rdma" and not devices:
+                raise ValueError(
+                    f"{role}: set NARWHAL_TRANSFER_DEVICES or NARWHAL_NODE_{node}_TRANSFER_DEVICES "
+                    "to the RDMA device paths a ucx_rdma engine opens, such as "
+                    '["/dev/infiniband/uverbs0"]'
+                )
+            sources[role] = {
+                "inspection": str(out / f"{role}.json"),
+                "policy": "workstation .env and documented discovery defaults",
+            }
+            launches[role] = {
+                "accelerator": product,
+                "gpu_ids": ids,
+                "tensor_parallel_size": tp,
+                "gpu_visibility_env": "ROCR_VISIBLE_DEVICES"
+                if observed["runtime"] == "rocm"
+                else "CUDA_VISIBLE_DEVICES",
+                "accelerator_devices": observed["common_devices"] + [g["device"] for g in selected],
+                "network_mode": "host",
+                "transfer": {"transport": transport, "net_devices": net, "devices": devices},
+                "sources": {
+                    "allocation": sources[role]["inspection"],
+                    "devices": sources[role]["inspection"],
+                    "transfer": sources[role]["policy"],
+                    "runtime": sources[role]["inspection"],
+                },
+                "runtime": runtime,
+            }
+            for field, content in (
+                ("ENGINE_IMAGE", observed["image_id"]),
+                ("MODEL_CONFIG_SHA256", observed["model_sha256"]),
+                ("MODEL_SHA256", file_digest),
+            ):
+                if content:
+                    derived[f"NARWHAL_NODE_{node}_{field}"] = content
+            for field in ("URL", "ATTESTATION_URL"):
+                derived[f"NARWHAL_NODE_{node}_{field}"] = service_url(
+                    {**env, **derived}, node, field
+                )
+            engines.append(
+                {
+                    "iid": f"n{node}",
+                    "url": "${NARWHAL_NODE_" + str(node) + "_URL}",
+                    "attestation_url": "${NARWHAL_NODE_" + str(node) + "_ATTESTATION_URL}",
+                    "role": "decode",
+                    **({"pin": True} if pin else {}),
+                }
+            )
+    if len(model_files) > 1:
+        raise ValueError("Every engine must serve the same model file")
+    if len(shapes) != 1 or len(engines) < 2:
+        raise ValueError(
+            "This fleet requires at least two replicas with matching GPU and TP shapes"
+        )
+    engines[0]["role"] = "prefill"
+    product, count, tp = shapes.pop()
+    model = env.get("NARWHAL_ENGINE_MODEL_NAME")
+    if not model:
+        raise ValueError("Set NARWHAL_ENGINE_MODEL_NAME in .env")
+    fleet = {
+        "schema": "narwhal.fleet",
+        "schema_version": 2,
+        "model": model,
+        "hardware": {
+            "accelerator": product,
+            "accelerators_per_engine": count,
+            "tensor_parallel": tp,
+        },
+        "engines": engines,
+        "slo": {
+            "ttft_s": float(env.get("NARWHAL_TTFT_S", "10")),
+            "tpot_s": float(env.get("NARWHAL_TPOT_S", "0.125")),
+        },
+        "controller": {
+            "min_prefill": 1,
+            "min_decode": 1,
+            "thresholds": {"expand": 1.0, "shrink": 0.5},
+        },
+        "profiles": {"path": "runs/profiles.json"},
+    }
+    section = {
+        field: env[name]
+        for field, name in (
+            ("backend", "NARWHAL_ENGINE_BACKEND"),
+            ("connector", "NARWHAL_ENGINE_CONNECTOR"),
+        )
+        if env.get(name)
+    }
+    if env.get("NARWHAL_ENGINE_KEY"):
+        section["engine_api_key_env"] = "NARWHAL_ENGINE_KEY"
+    if section:
+        fleet["engine"] = section
+    return (
+        fleet,
+        {"schema": "narwhal.engine-launch", "schema_version": 1, "engines": launches},
+        sources,
+        derived,
+    )
+
+
+def expected_tree(env: Mapping[str, str], node: int) -> str:
+    """Return the checkpoint tree digest that engine `node` must serve."""
+    expected = value(env, node, "MODEL_TREE_SHA256")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError(
+            f"engine-{node}: set NARWHAL_MODEL_TREE_SHA256 to the checkpoint's "
+            "model_tree_sha256, 64 lowercase hex digits"
+        )
+    return expected
+
+
+def discover(env: Mapping[str, str], out: Path) -> Path:
+    """Inspect every host and write the generated configuration; return deployment.env."""
+    hosts = derive_hosts(env)
+    engine = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).engine_launcher()
+    paths = {
+        name: Path(env.get(name, default))
+        for name, default in (
+            ("NARWHAL_HOSTS", "config/hosts.local.json"),
+            ("NARWHAL_FLEET", "config/fleet.json"),
+            ("NARWHAL_LAUNCH_CONFIG", "config/engine-launch.local.json"),
+        )
+    }
+    trust = Path(env.get("NARWHAL_SSH_KNOWN_HOSTS", ""))
+    if not env.get("NARWHAL_SSH_KNOWN_HOSTS") or not trust.is_file():
+        raise ValueError(
+            "Set NARWHAL_SSH_KNOWN_HOSTS to the known-hosts file with every host's verified key"
+        )
+    source_path = paths["NARWHAL_LAUNCH_CONFIG"].with_name("engine-launch.sources.json")
+    derived_path = paths["NARWHAL_FLEET"].with_name("deployment.env")
+    outputs = [*paths.values(), source_path, derived_path]
+    if len({p.resolve() for p in [*outputs, trust]}) != 6:
+        raise ValueError("Select distinct private configuration output paths")
+    if out.exists() or any(p.exists() for p in outputs):
+        raise ValueError(
+            "Archive previous generated configuration and choose a fresh discovery directory"
+        )
+    trees = {
+        role: expected_tree(env, int(role.split("-")[1]))
+        for host in hosts
+        for role in host.roles
+        if role.startswith("engine-")
+    }
+    env = {**env, **{name: str(path) for name, path in paths.items()}}
+    out.mkdir(mode=0o700, parents=True)
+    ssh = SSH(env, out / "logs")
+    observations = {}
+    checkpoint_jobs: dict[tuple[str, str], tuple[Host, Path, list[str]]] = {}
+    model_files = {}
+    for host in hosts:
+        ssh.run(host, "access", "management access", "hostname")
+        print(f"{host.id}: host key matched the known-hosts file; SSH login verified", flush=True)
+        for role in host.roles:
+            if not role.startswith("engine-"):
+                continue
+            node = int(role.split("-")[1])
+            fields = {
+                "image": "ENGINE_IMAGE",
+                "model_dir": "MODEL_DIR",
+                "run_dir": "RUN_DIR",
+                "interface": "FABRIC_INTERFACE",
+            }
+            selected = {name: value(env, node, field) for name, field in fields.items()}
+            if not all(selected.values()):
+                raise ValueError(
+                    f"{role}: set image, model, run directory and fabric interface in .env"
+                )
+            if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", selected["image"]):
+                raise ValueError(f"{role}: pin ENGINE_IMAGE to an image ID or registry digest")
+            packages = engine.image_packages
+            model_files[role] = model_file(env, node, selected["model_dir"])
+            if model_files[role] is not None:
+                if not isinstance(engine, ModelFormats):
+                    label = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).label
+                    raise ValueError(
+                        f"{role}: {label} serves a model directory; unset NARWHAL_MODEL_PATH"
+                    )
+                if engine.model_file_packages:
+                    packages += "|" + engine.model_file_packages
+            inputs = {
+                **selected,
+                "environment_prefixes": engine.environment_prefixes,
+                "managed_environment": sorted(engine.managed_environment),
+                "packages": packages,
+            }
+            payload = out / f"{role}-inputs.json"
+            write_private(payload, json.dumps(inputs).encode())
+            observed = json.loads(
+                ssh.run(
+                    host,
+                    "discover",
+                    "inspect GPU and image",
+                    "python3 -c " + shlex.quote(PROBE),
+                    payload=payload,
+                )
+            )
+            observations[role] = observed
+            key = (host.id, selected["model_dir"])
+            if key not in checkpoint_jobs:
+                checkpoint_jobs[key] = (host, payload, [])
+            checkpoint_jobs[key][2].append(role)
+            print(f"{role}: GPU devices, image packages and model inspected", flush=True)
+    checkpoint_script = Path(checkpoint_manifest.__file__).read_text()
+
+    def inspect_checkpoint(job: tuple[Host, Path, list[str]]) -> dict:
+        host, payload, _ = job
+        manifest: dict = json.loads(
+            ssh.run(
+                host,
+                "discover",
+                "hash checkpoint files",
+                "python3 -c " + shlex.quote(checkpoint_script),
+                payload=payload,
+                reason=checkpoint_manifest.FAILURE,
+            )
+        )
+        return manifest
+
+    checkpoints = {}
+    jobs = list(checkpoint_jobs.values())
+    for job, checkpoint in parallel(ssh, inspect_checkpoint, jobs, 6):
+        for role in job[2]:
+            checkpoints[role] = checkpoint
+            observed = observations[role]
+            observed["model_tree_sha256"] = checkpoint["model_tree_sha256"]
+            observed["model_file_count"] = checkpoint["file_count"]
+            relative = model_files[role]
+            if relative is not None:
+                files = {row["path"]: row["sha256"] for row in checkpoint["files"]}
+                if relative not in files:
+                    raise ValueError(
+                        f"{role}: NARWHAL_MODEL_PATH names no file in NARWHAL_MODEL_DIR"
+                    )
+                observed.update(model_file=relative, model_file_sha256=files[relative])
+            write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
+            write_private(
+                out / f"{role}-checkpoint.json", json.dumps(checkpoint, indent=2).encode()
+            )
+            print(f"{role}: checkpoint files hashed", flush=True)
+    baseline_role = next(iter(checkpoints))
+    baseline = checkpoints[baseline_role]
+    baseline_files = {row["path"]: row for row in baseline["files"]}
+    for role, checkpoint in checkpoints.items():
+        if checkpoint["model_tree_sha256"] == baseline["model_tree_sha256"]:
+            continue
+        files = {row["path"]: row for row in checkpoint["files"]}
+        differing = next(
+            (
+                path
+                for path in sorted(baseline_files.keys() | files.keys())
+                if baseline_files.get(path) != files.get(path)
+            ),
+            "<manifest digest>",
+        )
+        raise ValueError(
+            f"{role}: checkpoint file {differing} differs from {baseline_role}; "
+            "inspect the private per-engine checkpoint manifests"
+        )
+    for role, checkpoint in checkpoints.items():
+        if checkpoint["model_tree_sha256"] != trees[role]:
+            raise ValueError(
+                f"{role}: checkpoint tree digest {checkpoint['model_tree_sha256']} differs from "
+                f"NARWHAL_MODEL_TREE_SHA256; inspect {out / f'{role}-checkpoint.json'}"
+            )
+    fleet, launches, sources, derived = build_records(hosts, env, observations, out)
+    derived.update({name: str(path) for name, path in paths.items()})
+    role_env = {
+        r: select_values("engine", int(r.split("-")[1]), fleet, {**env, **derived})
+        for r in launches["engines"]
+    }
+    select_values("router", None, fleet, {**env, **derived})
+    candidate = out / "engine-launch.json"
+    write_private(candidate, json.dumps(launches, indent=2).encode())
+    load_launches(candidate, list(launches["engines"]), role_env)
+    inventory = {"hosts": [asdict(h) for h in hosts]}
+    candidate_hosts = out / "hosts.json"
+    write_private(candidate_hosts, json.dumps(inventory, indent=2).encode())
+    load_hosts(candidate_hosts, env)
+    for path, document in (
+        (paths["NARWHAL_HOSTS"], inventory),
+        (paths["NARWHAL_FLEET"], fleet),
+        (paths["NARWHAL_LAUNCH_CONFIG"], launches),
+        (source_path, sources),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_private(path, (json.dumps(document, indent=2) + "\n").encode())
+    write_environment(derived_path, derived)
+    manifest = {
+        "files": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [*outputs, trust]},
+        "roles": list(launches["engines"]),
+        "model_tree_sha256": baseline["model_tree_sha256"],
+        "model_file_count": baseline["file_count"],
+    }
+    write_private(out / "manifest.json", json.dumps(manifest, indent=2).encode())
+    return derived_path

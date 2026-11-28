@@ -10,6 +10,7 @@ TEST_ARGS ?=
 DOCS_PORT ?= 8000
 
 .PHONY: setup sync test unit lint format types links publication versions boundary check docs-build observe
+.PHONY: chart-tools chart-check chart-e2e-tools chart-e2e
 .PHONY: coverage
 .PHONY: docs-setup docs-serve
 .PHONY: help fix
@@ -44,6 +45,9 @@ help:
 	  '  docs-setup   Install constrained documentation dependencies' \
 	  '  docs-serve   Preview docs at http://127.0.0.1:8000/Narwhal/' \
 	  '  docs-build   Build documentation in strict mode' \
+	  '  chart-tools  Install the pinned helm and kubeconform into local/bin' \
+	  '  chart-check  Lint, render and validate the Helm charts, and run their tests' \
+	  '  chart-e2e    Run both charts and the fleet controller on kind, and fail over its routers' \
 	  '  observe      Start provisioned Prometheus and Grafana services' \
 	  '  help         Show this command list without setting up an environment' \
 	  '' \
@@ -52,7 +56,9 @@ help:
 	  '  VENV_PYTHON    Existing Python for package targets (.venv/bin/python)' \
 	  '  TEST_ARGS      unittest discovery options for test only (empty)' \
 	  '  DOCS_PORT      Loopback preview port for docs-serve (8000)' \
-	  '  COVERAGE_ARGS  Arguments for the coverage runner (empty)'
+	  '  COVERAGE_ARGS  Arguments for the coverage runner (empty)' \
+	  '  HELM           helm for chart-check (local/bin/helm)' \
+	  '  KUBECONFORM    kubeconform for chart-check (local/bin/kubeconform)'
 
 test: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m unittest discover -s tests -t . $(TEST_ARGS)
@@ -104,4 +110,50 @@ docs-build: $(BOOTSTRAP)
 
 # Start the provisioned Prometheus and Grafana services.
 observe: $(BOOTSTRAP)
-	$(VENV_PYTHON) -m tools.observability.start.cli
+	$(VENV_PYTHON) -m narwhal.observability.stack.start.cli
+
+# The Helm charts. The main chart is rendered for the synthetic fleet of the chart tests, with
+# the bundled Prometheus and Grafana and with the cluster's, and validated against the
+# Kubernetes API schemas of CHART_KUBE_VERSION and the pinned Prometheus Operator CRDs that
+# tools/maintenance/operator_schemas.py writes. kubeconform has no schema for a
+# CustomResourceDefinition, so the CRD chart's test compares its rendered CRD with the one
+# fleet_resource defines. It has none for the NarwhalFleet either, which helm checks against
+# the same schema in the chart's values.schema.json.
+CHART := deploy/helm/narwhal
+CRD_CHART := deploy/helm/narwhal-crds
+CHART_TOOLS := local/bin
+CHART_SCHEMAS := local/schemas
+CHART_OUT := runs/chart
+CHART_KUBE_VERSION ?= 1.31.0
+HELM ?= $(CHART_TOOLS)/helm
+KUBECONFORM ?= $(CHART_TOOLS)/kubeconform
+
+chart-tools:
+	$(PYTHON) tools/maintenance/chart_tools.py $(CHART_TOOLS)
+
+chart-check: $(BOOTSTRAP) chart-tools
+	mkdir -p $(CHART_OUT)
+	$(HELM) lint --strict $(CRD_CHART)
+	$(HELM) template narwhal-crds $(CRD_CHART) --kube-version $(CHART_KUBE_VERSION) \
+	  > $(CHART_OUT)/crds.manifests.yaml
+	$(VENV_PYTHON) tools/maintenance/operator_schemas.py $(CHART_SCHEMAS)
+	$(VENV_PYTHON) -m tests.deployment.chart_fixtures $(CHART_OUT)/values.json \
+	  $(CHART_OUT)/direct-values.json $(CHART_OUT)/cluster-values.json
+	for fleet in values direct-values cluster-values; do \
+	  $(HELM) lint --strict $(CHART) --namespace example -f $(CHART_OUT)/$$fleet.json && \
+	  $(HELM) template narwhal $(CHART) --namespace example --kube-version $(CHART_KUBE_VERSION) \
+	    -f $(CHART_OUT)/$$fleet.json > $(CHART_OUT)/$$fleet.manifests.yaml && \
+	  $(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) \
+	    -schema-location default \
+	    -schema-location '$(CHART_SCHEMAS)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+	    -skip NarwhalFleet $(CHART_OUT)/$$fleet.manifests.yaml || exit 1; \
+	done
+	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart \
+	  tests.deployment.test_crd_chart
+
+chart-e2e-tools:
+	$(PYTHON) tools/maintenance/chart_tools.py --e2e $(CHART_TOOLS)
+
+# Needs Docker and about 3 GB of memory; creates and deletes its own kind cluster.
+chart-e2e: $(BOOTSTRAP) chart-e2e-tools
+	$(VENV_PYTHON) tools/maintenance/chart_e2e.py --tools $(CHART_TOOLS)

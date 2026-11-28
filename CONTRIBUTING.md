@@ -53,12 +53,14 @@ These targets run the checks:
 | `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
 | `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                                                 |
 | `make types`               | Runs mypy on the `narwhal` package in `src/` with the settings in `pyproject.toml`, and fails on untyped function definitions                  |
-| `make publication`         | Scans the Git index for private files and private key material                                                                                 |
+| `make publication`         | Scans the Git index for private files, files that `.gitignore` ignores, and private key material                                               |
 | `make versions`            | Checks that the `pyproject.toml` version has the form `MAJOR.MINOR.PATCH` and equals the `CITATION.cff` version                                |
 | `make boundary`            | Fails when a module in `src/narwhal/` outside `backends/` imports a backend package or names an engine-specific term                           |
 | `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                                                |
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
 | `make test`                | Runs the unit suite                                                                                                                            |
+| `make chart-check`         | Installs the pinned helm and kubeconform into `local/bin`, then lints the Helm chart, validates its manifests and runs the chart tests          |
+| `make chart-e2e`           | Installs the pinned kind and kubectl too, then runs both charts and the fleet controller on kind and fails over its router pair                 |
 
 Stage new files with `git add` before running `make publication`.
 
@@ -83,6 +85,7 @@ To run the remote CI on a pull request, tick **Run CI** in its description. The 
 On the GitHub-hosted runners, the suite covers:
 
 - `make check`
+- `make chart-check`
 - the unit suite and installed-wheel checks on Python 3.11, 3.12, and 3.13
 - the documentation build and unit suite from an extracted source distribution on Python 3.12
 
@@ -96,11 +99,13 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-`tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
+Run `make chart-check` after a change to either chart under `deploy/helm`, to `deployment/fleet_resource.py`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `src/narwhal/observability/stack` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the fleet controller, to the chart's controller, RBAC, admission policy or direct engines, to the router or HAProxy objects, or to the router lease. It needs Docker and about 3 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
+
+`tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `src/narwhal/observability/stack/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
 To measure the router's per-request bookkeeping cost before and after a change, run `python tools/measurement/bookkeeping_bench.py`. It prints one JSON line per measurement with the median microseconds per call. `--calls` sets the calls per round, default 20000, and `--rounds` sets the rounds, default 7.
 
-To count client errors through `deploy/ha/haproxy.cfg` across router takeovers, pull `haproxy:3.2-alpine` and run `python tools/measurement/takeover_check.py --out runs/takeover/<name>`. It starts two simulated engines, a router pair and HAProxy in Docker, offers 2 requests per second of open-loop load through HAProxy, and stops the active router with SIGTERM twice, restarting it as a standby as soon as it exits. `--signal KILL` sends SIGKILL, `--restart-after` restarts the stopped router that many seconds after the new holder is ready, and `--takeover-after` sets the standby's failed probes before it takes over, default 4, 0.25 seconds apart, to delay the new holder. `--both` also stops the standby with SIGTERM and restarts both routers at once, each a standby of the other. The check also exits 1 when both routers report ready at once. The check writes `report.json`, the per-request rows and the HAProxy log to the `--out` directory, and exits 1 when a client request fails, apart from a request in flight on a killed router. When the image is present, `tests/measurement/test_takeover_check.py` runs three cases. The first is a SIGTERM takeover with an immediate restart and a 3-second gap. The second is a SIGKILL takeover by the standby. The third is a `--both` restart after a SIGKILL. Without the image, the test skips.
+To count client errors through `deploy/ha/haproxy.cfg` across router takeovers, pull the HAProxy image that `DEFAULT_IMAGE` in `tools/measurement/takeover_check.py` pins by digest, and run `python tools/measurement/takeover_check.py --out runs/takeover/<name>`. It starts two simulated engines, a router pair and HAProxy in Docker, offers 2 requests per second of open-loop load through HAProxy, and stops the active router with SIGTERM twice, restarting it as a standby as soon as it exits. `--signal KILL` sends SIGKILL, `--restart-after` restarts the stopped router that many seconds after the new holder is ready, and `--takeover-after` sets the standby's failed probes before it takes over, default 4, 0.25 seconds apart, to delay the new holder. `--both` also stops the standby with SIGTERM and restarts both routers at once, each a standby of the other. The check also exits 1 when both routers report ready at once. The check writes `report.json`, the per-request rows and the HAProxy log to the `--out` directory, and exits 1 when a client request fails, apart from a request in flight on a killed router. When the image is present, `tests/measurement/test_takeover_check.py` runs three cases. The first is a SIGTERM takeover with an immediate restart and a 3-second gap. The second is a SIGKILL takeover by the standby. The third is a `--both` restart after a SIGKILL. Without the image, the test skips.
 
 Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 
@@ -109,7 +114,7 @@ Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 3. Qualify directed links against the live cache.
 4. Attest and profile those processes.
 5. Run preflight.
-6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack-on-the-router) with `make observe`. Keep it running until the fleet stops.
+6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack) with `make observe`. Keep it running until the fleet stops.
 7. Run routed load through the private path.
 8. Check the behaviour under test in the **Narwhal Orchestrator** dashboard, and keep screenshots of those panels with the private records.
 
@@ -182,7 +187,7 @@ Each area of the Python package lives in one package or module:
 | Prometheus metrics and request journals                                             | `observability/`                                      |
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
 | Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
-| Engine launch plans, runtime checks, stage supervision, and attestation capture     | `deployment/`                                         |
+| Engine launch plans and checks, stage runs, process supervision, attestation capture, and `narwhal deploy` | `deployment/` |
 | Engine backend registry and backend implementations                                 | `backends/`, `backends/<name>/`                       |
 | Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
@@ -248,31 +253,68 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/exposition.py`                                        | Prometheus text lines and SLO-scaled histograms                          |
 | `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
+| `deployment/graph.py`                                                        | Stage graphs: stages, facts and rerun rules                              |
+| `deployment/deploy_graph.py`                                                 | The fleet deployment stage graph                                         |
+| `deployment/dev_graph.py`                                                    | The `narwhal dev up` stage graphs                                        |
+| `deployment/run_record.py`                                                   | Run record contract and the run directory lock                           |
+| `deployment/runner.py`                                                       | Stage runner: skips, reruns, attempts and cancellation                   |
+| `deployment/hosts.py`                                                        | Host inventory, SSH with pinned host keys, and remote command time limits |
+| `deployment/discovery.py`                                                    | Host discovery and the generated deployment configuration                |
+| `deployment/role_env.py`                                                     | Role environments and the helper snapshots of each backend               |
+| `deployment/install.py`                                                      | Deployment packages and their installation on SSH hosts                  |
+| `deployment/cache_groups.py`                                                 | Cache-equivalence groups of the engine roles                             |
+| `deployment/fabric_budget.py`                                                | Fabric workload budgets, link records and edge evidence                  |
+| `deployment/fabric.py`                                                       | Fabric qualification: transfer measurement, budgets and directed edges   |
+| `deployment/cli.py`                                                          | `narwhal deploy`                                                         |
+| `deployment/trial.py`                                                        | The capacity trial's definition, prerequisites and Prometheus series checks |
+| `deployment/load_trial.py`                                                   | Synthetic load client of the capacity trial and the measurement tools    |
+| `deployment/reconcile.py`                                                    | Join of client offers to router journals and counters                    |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
+| `deployment/launch_engine/accelerators.py`                                   | GPU inventory, also run by discovery on engine hosts                     |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
-| `deployment/launch_engine/backend.py`                                        | Launcher, cache capture and model dimension interfaces for backends      |
+| `deployment/launch_engine/verdict.py`                                        | Verdict on runtime probe output, also run in a Kubernetes engine pod     |
+| `deployment/launch_engine/inspection.py`                                     | Engine host inspection before launch                                     |
+| `deployment/launch_engine/probe.py`                                          | Live HTTP probe of a started engine                                      |
+| `deployment/launch_engine/evidence.py`                                       | Evidence and failed checks of `inspect-host` and `probe`                 |
+| `deployment/launch_engine/validation.py`                                     | `narwhal-engine inspect-host` and `probe`                                |
+| `deployment/launch_engine/backend.py`                                        | Launcher, live probe, cache capture, transfer measurement and model dimension interfaces for backends |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
+| `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
+| `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |
+| `deployment/launch_engine/engine_set.py`                                     | The engine StatefulSet's values, from every engine's Kubernetes launch plan |
+| `deployment/direct_engine_set.py`                                            | The Helm chart's direct engine values, from a backend's direct start         |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
+| `deployment/fleet_resource.py`                                               | The `NarwhalFleet` API group, CRD schema and printer columns, and the variables a fleet's spec gives |
+| `deployment/kubernetes_graph.py`                                             | The Kubernetes stage graph                                               |
+| `deployment/kubernetes_target.py`                                            | The Kubernetes stages' actions, live checks, Job adoption and stop       |
+| `deployment/kubernetes_objects.py`                                           | The engine, gate Job, router and HAProxy objects the controller derives, and their pruning |
+| `deployment/kubernetes_gate.py`                                              | What a gate Job runs around its command, and the files its log returns   |
+| `deployment/kubernetes_controller.py`                                        | The fleet controller: its loop, Lease, status and stop                   |
+| `runtime/kubernetes_api.py`                                                  | The in-cluster Kubernetes API client, informer and workqueue             |
+| `runtime/kubernetes_lease.py`                                                | The router and controller election on a `coordination.k8s.io` Lease      |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
-| `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |
+| `deployment/attestation_contract/capture.py`                                 | One engine's attestation captures, in attempts, and the published one    |
+| `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving and verification                             |
 | `deployment/attestation_contract/fleet.py`                                   | Router engine contract finalization                                      |
 | `deployment/attestation_contract/cli.py`                                     | Contract tool command                                                    |
 
-`make observe` runs `tools/observability/start/cli.py`:
+`make observe` runs `src/narwhal/observability/stack/start/cli.py`:
 
 | Module                                      | Contents                                         |
 | ------------------------------------------- | ------------------------------------------------ |
-| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router targets |
-| `tools/observability/start/services.py`     | Listener and service contracts                   |
-| `tools/observability/start/stack.py`        | Docker Compose control                           |
-| `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |
-| `tools/observability/start/readiness.py`    | Service, dashboard and target readiness          |
-| `tools/observability/start/cli.py`          | Startup sequence and command                     |
+| `src/narwhal/observability/stack/make_targets.py`       | Router origin validation and the Prometheus router targets |
+| `src/narwhal/observability/stack/start/services.py`     | Listener and service contracts                   |
+| `src/narwhal/observability/stack/start/stack.py`        | Docker Compose control                           |
+| `src/narwhal/observability/stack/start/listeners.py`    | Listener occupancy and owner diagnostics         |
+| `src/narwhal/observability/stack/start/readiness.py`    | Service, dashboard and target readiness          |
+| `src/narwhal/observability/stack/start/cli.py`          | Startup sequence and command                     |
+
+`src/narwhal/observability/stack/chart_dashboard.py` renders the same dashboard for the Helm chart's Grafana.
 
 The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurement/router_benchmark/cli.py`:
 
@@ -290,27 +332,27 @@ The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurem
 | `tools/measurement/router_benchmark/run.py`        | One run: engines, router, rate sweep and report               |
 | `tools/measurement/router_benchmark/cli.py`        | Options and command                                           |
 
-The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `tools/fleet_control/cli.py`:
+The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `src/narwhal/fleet_control/cli.py`:
 
 | Module                               | Contents                                                                |
 | ------------------------------------ | ----------------------------------------------------------------------- |
-| `tools/fleet_control/config.py`      | Private configuration, hooks, router, console settings and the token    |
-| `tools/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
-| `tools/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
-| `tools/fleet_control/records.py`     | Action log and per-session run records                                  |
-| `tools/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
-| `tools/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
-| `tools/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
-| `tools/fleet_control/engine_hook.py` | Reference engine hook for container launches                            |
-| `tools/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
-| `tools/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
-| `tools/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
-| `tools/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
-| `tools/fleet_control/live.py`        | Live load-job results from AIPerf's per-request records                 |
-| `tools/fleet_control/signals.py`     | Router readiness, firing alerts and the service's Prometheus metrics    |
-| `tools/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
-| `tools/fleet_control/console.html`   | Console page                                                            |
-| `tools/fleet_control/cli.py`         | Options and command                                                     |
+| `src/narwhal/fleet_control/config.py`      | Private configuration, hooks, router, console settings and the token    |
+| `src/narwhal/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
+| `src/narwhal/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
+| `src/narwhal/fleet_control/records.py`     | Action log and per-session run records                                  |
+| `src/narwhal/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
+| `src/narwhal/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
+| `src/narwhal/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
+| `src/narwhal/fleet_control/engine_hook.py` | Reference engine hook for container launches                            |
+| `src/narwhal/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
+| `src/narwhal/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
+| `src/narwhal/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
+| `src/narwhal/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
+| `src/narwhal/fleet_control/live.py`        | Live load-job results from AIPerf's per-request records                 |
+| `src/narwhal/fleet_control/signals.py`     | Router readiness, firing alerts and the service's Prometheus metrics    |
+| `src/narwhal/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
+| `src/narwhal/fleet_control/console.html`   | Console page                                                            |
+| `src/narwhal/fleet_control/cli.py`         | Options and command                                                     |
 
 ### Working files and deployment artifacts
 
@@ -324,10 +366,11 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Fleet control configurations and hooks    | The ignored `config/fleet-control.*.json` pattern                                                |
 | Fleet control action log and run records  | `runs/fleet-control/`                                                                            |
 | Benchmark plans and evidence output       | `runs/`                                                            |
+| Helm values files of a deployment         | The ignored `config/helm/` directory                                                             |
 
 The plan's `evidence.identity` holds the engine image reference and the host and GPU map (`gpu_allocation`), and the collector copies it into the point's `evidence.json`. A benchmark point's `summary.shareable.json` is the one evidence file meant for publication. The collector builds it from a fixed list of fields, so it holds no URLs, credentials, private file paths or request failure text. It names engines `engine-1`, `engine-2` and onward in order of first appearance, replaces the engine image reference and GPU allocation with SHA-256 digests, and keeps `narwhal_revision`, `model_id`, `benchmark_client_version`, `engine_version`, `checkpoint_revision` and `gpu_shape` exactly as supplied in the plan. Review those labels for sensitive data before you publish the file.
 
-Site automation provides host credentials, the source distribution, network configuration, and engine process launch. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
+Site automation provides the hosts, their credentials and packages, the network configuration, and the staged checkpoint and engine image, as the [production boundary](docs/operate/01-Start-Routers.md#production-boundary) lists. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
 
 ## Issues
 
@@ -422,4 +465,4 @@ The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each 
 
 ## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
+Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`, those in `docs/deploy/Kubernetes.md` from `kubernetes_graph.py`, and those in `docs/cli/Dev.md` from `dev_graph.py`: after changing a graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The field tables in `docs/deploy/NarwhalFleet.md` come from `SCHEMA` in `src/narwhal/deployment/fleet_resource.py`: after changing it, run `.venv/bin/python tools/maintenance/crd_schema.py` for the charts and `.venv/bin/python tools/maintenance/fleet_reference_doc.py` for the page. The unit suite fails while a page or chart differs from its source. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.

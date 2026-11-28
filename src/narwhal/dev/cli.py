@@ -38,12 +38,14 @@ def _gpu_list(value: str) -> list[str]:
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="narwhal",
-        description="Run a local development fleet, inspect fleet files and collect diagnostics",
+        description="Deploy a fleet to SSH hosts or a Kubernetes cluster, run a local "
+        "development fleet, inspect fleet files and collect diagnostics",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Documentation: https://athrael-soju.github.io/Narwhal/CLI-Reference/\n\n"
             "Installed commands:\n"
-            "  narwhal          Run a dev fleet, inspect fleet files and collect diagnostics\n"
+            "  narwhal          Deploy to SSH hosts, run a dev fleet, inspect fleet files and "
+            "collect diagnostics\n"
             "  narwhal-engine   Prepare and launch checked engine processes\n"
             "  narwhal-check    Run deployment preflight gates\n"
             "  narwhal-attest   Serve engine identity and attestation for one engine\n"
@@ -55,10 +57,12 @@ def _main(argv: list[str]) -> int:
     results.add_format(parser)
     commands = parser.add_subparsers(dest="command", required=True)
     from ..config import cli as config_cli
+    from ..deployment import cli as deploy_cli
     from ..diagnostics import bundle
 
     config_cli.configure_parser(commands.add_parser("config", help="Inspect fleet files offline"))
     bundle.add_commands(commands)
+    deploy_cli.add_commands(commands)
     dev = commands.add_parser(
         "dev",
         help="Run a development fleet on one Linux or WSL2 workstation",
@@ -292,6 +296,8 @@ def _main(argv: list[str]) -> int:
         return config_cli.run(args)
     if args.command == "diagnostics":
         return bundle.run(args)
+    if args.command == "deploy":
+        return deploy_cli.run(args)
     results.set_operation("dev " + args.action)
     root = args.instance.expanduser().resolve()
     results.set_data({"instance": str(root)})

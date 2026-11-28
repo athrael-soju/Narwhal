@@ -36,7 +36,7 @@ For vLLM, SGLang or TensorRT-LLM engines, run `narwhal dev init` in place of `na
 | --- | --- | --- |
 | `setup` | Downloads the engine build and model file that a template pins into `assets` under the instance directory, checks their SHA-256 values, and runs the `init` checks for a template that starts its engines directly. On a stopped instance, an option that differs from the instance changes it in place and keeps the downloaded files. | `initialized`, `reconfigured`, or `reused` |
 | `init` | Checks the model files, runtime packages, the GGUF plugin hashes that a vLLM template pins, GPU, network interface and ports, then writes `template.json`, `instance.json`, `engine-launch.json` and `fleet.json` to the instance directory. | `initialized`, or `reused` |
-| `up` | Checks the model, tokenizer and GGUF plugin hashes, then prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, sends short requests to every engine at once, writes a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) for each engine from its replies, and starts the router. While another instance's fleet is up, `up` starts nothing and names that instance; `--alongside` starts the fleet beside it. When the instance does not exist, or a `setup` option is given, `up` runs `setup` with those options first; an instance from `init` takes no `setup` option. | `launched` |
+| `up` | Checks the model, tokenizer and GGUF plugin hashes, then prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, sends short requests to every engine at once, writes a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) for each engine from its replies, and starts the router. While another instance's fleet is up, `up` starts nothing and names that instance; `--alongside` starts the fleet beside it. After a failed or interrupted `up`, `up` [resumes](#resuming-an-interrupted-up) at the stage that did not pass. When the instance does not exist, or a `setup` option is given, `up` runs `setup` with those options first; an instance from `init` takes no `setup` option. | `launched` |
 | `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. For llama.cpp engines, sends one routed completion that must return text and checks `/ready`. | `ready` |
 | `ask` | Takes one prompt as its argument, after `--` when the prompt starts with a hyphen. Sends it through the router with temperature 0, unless the template's request settings name a temperature, so the same prompt gets the same reply. Prints the reply, its time to first token, its tokens per second and the engine that served each leg. With `--repeat`, sends that many requests, of the given prompt or of the built-in prompts when none is given, and prints the time to first token and the time per output token at the median and the 95th percentile, the throughput and the count of failed requests. | `answered`, or `completed` |
 | `watch` | Redraws, from the router's `/narwhal/state` and `/metrics`, each engine's role and requests in flight, the time to first token and the time per output token at the median and the 95th percentile, the throughput, each engine's role history, the role switches and the role controller's last decision. The router measures both times: time to first token from the request's arrival to the end of prefill, and time per output token as the mean interval between output tokens after prefill. They differ from the client's view that `ask` reports. Output tokens are counted when a request completes. It runs until interrupted and prints the view in place of a result document. With `--once` or `--format json` it takes two readings one interval apart and prints that frame as its result. | `observed` |
@@ -52,13 +52,15 @@ For vLLM, SGLang or TensorRT-LLM engines, run `narwhal dev init` in place of `na
 | `launched` | Every engine, sidecar and router process is running, every engine and the router answer `/health`, and the router answers `/ready`. |
 | `ready` | The `launched` conditions hold, and the KV evidence of the last `verify` still verifies against the running engines. |
 | `degraded` | `problems` lists a failed condition, a surviving process, or a failed `verify`. |
-| `stopped` | The last generation stopped and none of its processes survive, or `up` has never run. |
+| `stopped` | The last generation stopped, or a failed `up` left none of its processes running, and none of them survive. Or `up` has never run. |
 
-`up` requires an instance that has never started or whose last generation stopped, through `down` or the rollback of a failed `up`. When the engines share a GPU and the template's `profile` sets neighbour traffic, as the vLLM templates do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the SGLang template or engines on their own GPUs, `up` profiles only the opening split. On SGLang, the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
+`up` starts a new run on an instance that has never started or whose last generation `down` stopped, and resumes the run of a failed or interrupted `up`. On an instance whose fleet is up, it refuses. When the engines share a GPU and the template's `profile` sets neighbour traffic, as the vLLM templates do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the SGLang template or engines on their own GPUs, `up` profiles only the opening split. On SGLang, the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
 
 Running `init` on an existing instance changes nothing. When the settings you supply match the saved instance, `init` reports `reused`. When a setting conflicts, `init` exits with code `2` and lists the conflicting options. To change a setting, run `init` with a new `--instance` directory.
 
 To authenticate engine requests, export `NARWHAL_ENGINE_API_KEY` before `up` and keep it set for later commands. `up` passes it to the engines, and sets `engine.engine_api_key_env` in the fleet configuration so that the profiler, preflight and router send it.
+
+The router needs a [control token](../HTTP-API.md#control-token) for its join, removal, drain and readmission routes. `up` passes it `NARWHAL_ROUTER_TOKEN` when that holds a valid token, and otherwise the instance's own, which it draws once and keeps at mode 0600 in `router-token` in the instance directory. Send it with a control request as `Authorization: Bearer $(cat <instance>/router-token)`.
 
 A failed `verify` writes its reason, evidence directory and failure time to `verification_failure` in `lifecycle.json` and to `failure.json` in its evidence directory. `status` reports `degraded` with that `verification_failure` until a later `verify` succeeds or `down` stops every process.
 
@@ -151,24 +153,79 @@ The command exits with code `0` when the replay passes and `2` when it fails.
 
 ## Run directories and recovery
 
-Each `up` writes a `run-*` directory in the instance. It holds:
+A fresh `up` writes a `run-*` directory in the instance. It holds:
 
-- the router's fleet configuration with the engine contract
-- the command line and log of each stage
-- one launch directory per engine
-- the profiles
+- `fleet.json`, the router's fleet configuration, with the engine contract for engines from `init`
+- the request journal in `journal.jsonl` and the router's state in `router-state.json`
 - whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`, with one row per GPU and its `gpu_uuid` under `--gpus`
-- the request journal
+- `launch`, the stage runner's directory, with the [run record](../telemetry/06-Deployment-Runs.md) in `run.json`
 
-On vLLM, each launch directory also holds the engine's `cache-layout.json`.
+Each stage attempt writes its command lines, logs and outputs to its own directory: `launch/stages/<stage>/attempt-<n>`, or `launch/stages/<stage>/engine-<n>/attempt-<n>` for a stage that runs once for each engine. Engine `n`'s launch directory is `engine-<n>` in its `engine-prepare` attempt directory, and on vLLM it also holds the engine's `cache-layout.json`. The profiles are in the `profile` attempt directory.
 
 Each `verify` writes a `verify-*` directory in the run directory with the preflight log, the KV evidence in `kv.json`, the routed response in `completion.json`, and the router and engine metrics.
 
-When `up` fails, it stops the processes it started and records the failure in `lifecycle.json`. To recover:
+### Resuming an interrupted `up`
+
+When a stage of `up` fails, or SIGINT or SIGTERM interrupts it, that stage stops the processes it started and `up` exits. The stages that passed keep their engines, sidecars and router running, and `lifecycle.json` records the failure with the phase `failed`. The next `up` resumes in the same run directory and prints `resuming <run directory> at <stage>` to stderr before the first stage it runs. It skips a stage whose last attempt passed, whose recorded inputs still match, whose output files still match their recorded digests and whose processes still run. An `up` that was killed outright resumes the same way.
+
+To recover:
 
 1. Read the log of the stage that the error names.
 2. Repair the cause.
-3. Run `narwhal dev down` and confirm that it reports `stopped`.
-4. Run `narwhal dev up`.
+3. Run `narwhal dev up`.
+
+To start afresh instead, run `narwhal dev down` first. It stops every process of the run, and the next `up` writes a new run directory. A change to the instance's settings through `setup`, or through an option of `up`, also needs `down` first.
+
+A change reruns the stages its row lists, and a changed output file reruns its stage and every stage after it. A launch directory starts its engine once, so when an engine of the fleet has stopped, every engine is prepared, checked and started again in fresh launch directories. For engines from `init`:
+
+<!-- Generated from LAUNCHED_GRAPH in src/narwhal/deployment/dev_graph.py by tools/maintenance/stage_graph_doc.py. Edit the graph, then run the tool. -->
+
+| Stage | Runs | After | Gate section |
+| --- | --- | --- | --- |
+| `package` | Once per run |  | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
+| `engine-prepare` | Once for each engine | `package` | [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
+| `engine-check` | Once for each engine | `engine-prepare` | [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
+| `engine-start` | Once per run | `engine-check` | [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
+| `attest-capture` | Once for each engine | `engine-start` | [Capturing the attestation](../deploy/05-Attest.md#capturing-the-attestation) |
+| `sidecar-start` | Once for each engine | `attest-capture` | [Starting the sidecar](../deploy/05-Attest.md#starting-the-sidecar) |
+| `finalize-fleet` | Once per run | `sidecar-start` | [Finalizing the fleet contract](../deploy/05-Attest.md#finalizing-the-fleet-contract) |
+| `profile` | Once per run | `finalize-fleet` | [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
+| `router-start` | Once per run | `profile` | [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
+
+| Change | Recorded as | Reruns |
+| --- | --- | --- |
+| Instance settings | The SHA-256 of `instance.json`, `template.json`, `fleet.json` and `engine-launch.json` | `package` and every stage after it |
+| Narwhal source | The SHA-256 of the installed package's Python files | `package` and every stage after it |
+| Engine API key | The key that the fleet's `engine.engine_api_key_env` names, or `NARWHAL_ENGINE_API_KEY`, as an HMAC under the run directory's `run.salt` | `package` and every stage after it |
+| Launch directory used by a start whose engines no longer all run | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check` for that engine; `engine-start` |
+| An engine process restarted | Each engine's PID, boot ID and start ticks, checked live on every run | `attest-capture`, `sidecar-start`, `finalize-fleet` |
+| Attested binding digest of an engine | The `launch_digest`, or the `attestation_digest` when the attestation has no launch evidence | `profile`, `router-start` |
+| Engine contract fields of an engine | The `EngineContract` fields of its attestation | `attest-capture` for every engine; `finalize-fleet`, `profile`, `router-start` |
+| Attestation sidecar restarted | The sidecar's recorded process identity, checked live on every run | `sidecar-start` for that engine; `finalize-fleet` |
+| Router restarted | The router's recorded process identity, checked live on every run | `router-start` |
+
+<!-- End of the generated stage tables. -->
+
+For llama.cpp engines from `setup`:
+
+<!-- Generated from DIRECT_GRAPH in src/narwhal/deployment/dev_graph.py by tools/maintenance/stage_graph_doc.py. Edit the graph, then run the tool. -->
+
+| Stage | Runs | After | Gate section |
+| --- | --- | --- | --- |
+| `package` | Once per run |  | [Building the deployment package](../deploy/02-Install.md#building-the-deployment-package) |
+| `engine-start` | Once per run | `package` | [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) |
+| `profile` | Once per run | `engine-start` | [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) |
+| `router-start` | Once per run | `profile` | [Starting the router pair](../deploy/07-Serve-and-Measure.md#starting-the-router-pair) |
+
+| Change | Recorded as | Reruns |
+| --- | --- | --- |
+| Instance settings | The SHA-256 of `instance.json`, `template.json` and `fleet.json` | `package` and every stage after it |
+| Narwhal source | The SHA-256 of the installed package's Python files | `package` and every stage after it |
+| An engine process restarted | Each engine's PID, boot ID and start ticks, checked live on every run | `profile`, `router-start` |
+| Router restarted | The router's recorded process identity, checked live on every run | `router-start` |
+
+<!-- End of the generated stage tables. -->
+
+The gate sections describe the stage of the same name in [a fleet deployment](../Deploy.md#rerunning-after-a-change).
 
 To find a stage's time budget or handle processes that survive `down`, follow [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery).

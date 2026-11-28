@@ -1,0 +1,872 @@
+"""Engine pause, resume, stop, start, drain, readmit, join and leave, and available engines."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import os
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import load as load_backend
+from narwhal.engines.dialect import EngineDialect
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV, headers
+
+from .app import API, action_reply
+from .config import Hook
+from .hooks import HookResult
+from .records import Action, Session
+from .service import ActionError, ControlService, Operation, refused
+
+log = logging.getLogger(__name__)
+
+# Hook for each hook action.
+HOOK_ACTIONS = {
+    "pause": "engine_pause",
+    "resume": "engine_resume",
+    "stop": "engine_stop",
+    "start": "engine_start",
+}
+LIFECYCLE_ACTIONS = {
+    "drain": "/narwhal/lifecycle/drain",
+    "readmit": "/narwhal/lifecycle/readmit",
+}
+# Leave drains the engine and removes it from the router's membership.
+ACTIONS = (*HOOK_ACTIONS, *LIFECYCLE_ACTIONS, "leave")
+# Optional request fields each action accepts beyond the engine it names.
+ACTION_PARAMS: dict[str, frozenset[str]] = {
+    "drain": frozenset({"deadline_s"}),
+    "leave": frozenset({"deadline_s"}),
+}
+STATE_PATH = "/narwhal/state"
+MEMBERSHIP_PATH = "/narwhal/engines"
+MEMBERSHIP_SCHEMA = "narwhal.membership"
+# The router's default drain deadline for a leave, in seconds.
+LEAVE_DEADLINE_S = 300.0
+# Timeout for router state reads, in seconds.
+STATE_TIMEOUT_S = 10.0
+# Wait before repeating a router read refused with HTTP 503, in seconds.
+READ_RETRY_S = 0.5
+# Actions that wait for the engine to return to service.
+RETURNING_ACTIONS = frozenset({"start", "resume"})
+RETURN_POLL_S = 2.0
+# Bound on each request that reads which baseline engines are available, in seconds.
+AVAILABILITY_TIMEOUT_S = 2.0
+# How long one availability reading serves the console and the metrics, in seconds.
+AVAILABILITY_TTL_S = 10.0
+
+
+class StateUnavailable(Exception):
+    """The router's state document could not be read."""
+
+
+@dataclass(frozen=True)
+class AvailableEngine:
+    """A baseline engine outside the router's membership, and whether it answers."""
+
+    iid: str
+    backend: str
+    engine: bool
+    sidecar: bool
+    # Why the engine cannot be probed, such as an endpoint that does not resolve.
+    error: str = ""
+    # Fleet control started the engine less than `router.timeout_s` ago, and the engine or its
+    # sidecar does not respond yet.
+    starting: bool = False
+
+    @property
+    def available(self) -> bool:
+        """Return whether the engine's API and its attestation sidecar both respond."""
+        return self.engine and self.sidecar
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "iid": self.iid,
+            "backend": self.backend,
+            "engine": self.engine,
+            "sidecar": self.sidecar,
+            "available": self.available,
+            "starting": self.starting,
+            "error": self.error or None,
+        }
+
+
+@dataclass(frozen=True)
+class Availability:
+    """The baseline engines outside the membership, or why the membership could not be read."""
+
+    engines: tuple[AvailableEngine, ...]
+    error: str = ""
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "engines": [engine.document() for engine in self.engines],
+            "error": self.error or None,
+        }
+
+
+async def _responds(client: httpx.AsyncClient, url: str) -> bool:
+    """Return whether `url` answers HTTP 200 within the availability timeout."""
+    if not url:
+        return False
+    try:
+        response = await client.get(url, timeout=AVAILABILITY_TIMEOUT_S)
+    except httpx.HTTPError:
+        return False
+    return response.status_code == 200
+
+
+class EngineActions:
+    """Run engine actions through the service so each one is recorded.
+
+    `router_token` is the router's control token, by default `NARWHAL_ROUTER_TOKEN`, which
+    every request to the router carries.
+    """
+
+    def __init__(
+        self,
+        service: ControlService,
+        transport: httpx.AsyncBaseTransport | None = None,
+        poll_s: float = RETURN_POLL_S,
+        read_retry_s: float = READ_RETRY_S,
+        router_token: str | None = None,
+    ) -> None:
+        self.service = service
+        self._transport = transport
+        if router_token is None:
+            router_token = os.environ.get(ROUTER_TOKEN_ENV, "")
+        self._headers = headers(router_token) if router_token else {}
+        self._poll_s = poll_s
+        self._read_retry_s = read_retry_s
+        service.members = self.live_members
+        # The latest availability reading and its monotonic time.
+        self._availability: tuple[float, Availability | None] | None = None
+        self._availability_lock = asyncio.Lock()
+        # Counts engine actions that ended, so a reading that started before one is not kept.
+        self._actions_ended = 0
+        # The monotonic time of each engine start hook that succeeded and whose engine has not
+        # responded since.
+        self._started: dict[str, float] = {}
+
+    async def available(self, current: Mapping[str, Any] | None = None) -> Availability | None:
+        """Return the baseline engines outside the router's membership and whether each answers.
+
+        `current`, a membership the caller has just read, saves reading it again. Return None
+        when the router has no membership route. A reading serves for `AVAILABILITY_TTL_S`,
+        and every engine action starts a new one.
+        """
+        async with self._availability_lock:
+            cached = self._availability
+            if cached is not None and time.monotonic() - cached[0] < AVAILABILITY_TTL_S:
+                return cached[1]
+            ended = self._actions_ended
+            reading = await self._read_availability(current)
+            if ended == self._actions_ended:
+                self._availability = (time.monotonic(), reading)
+            return reading
+
+    async def _read_availability(self, current: Mapping[str, Any] | None) -> Availability | None:
+        if current is None:
+            try:
+                async with self._client() as client:
+                    reads = self.read_deadline(timeout_s=AVAILABILITY_TIMEOUT_S)
+                    current = await self.membership(client, deadline=reads)
+            except ActionError as exc:
+                return Availability((), str(exc))
+            if current is None:
+                return None
+        session = self.service.session
+        try:
+            baseline: Mapping[str, Any] = (
+                session.baseline
+                if session is not None
+                else json.loads(self.service.config.fleet.read_text(encoding="utf-8"))
+            )
+            entries = [
+                entry
+                for entry in baseline["engines"]
+                if str(entry["iid"]) not in current["engines"]
+            ]
+            backend = str((baseline.get("engine") or {}).get("backend", DEFAULT_BACKEND))
+        except (OSError, ValueError, LookupError, TypeError, AttributeError) as exc:
+            return Availability((), f"baseline fleet configuration is unreadable: {exc}")
+        try:
+            health = load_backend(backend).dialect.health_path
+        except ValueError:
+            health = EngineDialect.health_path
+        async with httpx.AsyncClient(transport=self._transport) as client:
+            found = await asyncio.gather(
+                *(self._probe(client, entry, backend, health) for entry in entries)
+            )
+        return Availability(tuple(found))
+
+    async def _probe(
+        self, client: httpx.AsyncClient, entry: Mapping[str, Any], backend: str, health: str
+    ) -> AvailableEngine:
+        iid = str(entry["iid"])
+        try:
+            resolved = self.service.resolved(entry, {})
+        except ActionError as exc:
+            return AvailableEngine(iid, backend, False, False, str(exc))
+        url = str(resolved.get("url") or "").rstrip("/")
+        attestation = str(resolved.get("attestation_url") or "")
+        engine, sidecar = await asyncio.gather(
+            _responds(client, url + health if url else ""), _responds(client, attestation)
+        )
+        error = "" if attestation else "attestation_url is not configured"
+        return AvailableEngine(
+            iid, backend, engine, sidecar, error, self._starting(iid, engine and sidecar)
+        )
+
+    def _starting(self, iid: str, responds: bool) -> bool:
+        """Return whether `iid` started within `router.timeout_s` and does not respond yet."""
+        started = self._started.get(iid)
+        if started is None:
+            return False
+        if responds or time.monotonic() - started >= self.service.config.router.timeout_s:
+            del self._started[iid]
+            return False
+        return True
+
+    async def join_baseline(self, iid: str) -> Action:
+        """Join baseline engine `iid` with its baseline entry, references resolved, as an
+        exclusive action."""
+
+        async def operate(session: Session | None) -> Mapping[str, Any] | None:
+            assert session is not None
+            spec = self.service.resolved(baseline_engine(session, iid), {"engine": iid})
+            return await self._join(spec)(session)
+
+        return await self.service.act(
+            "engine.join", {"engine": iid, "baseline": True}, operate, exclusive=True
+        )
+
+    async def live_members(self) -> dict[str, Mapping[str, Any]] | None:
+        """Return the router's member engine entries, or None when they cannot be read."""
+        try:
+            async with self._client() as client:
+                current = await self.membership(client)
+        except ActionError:
+            return None
+        return None if current is None else current["engines"]
+
+    def _client(self) -> httpx.AsyncClient:
+        router = self.service.config.router
+        return httpx.AsyncClient(
+            base_url=router.url,
+            timeout=router.timeout_s,
+            transport=self._transport,
+            headers=self._headers,
+        )
+
+    async def act(self, iid: str, action: str, params: Mapping[str, Any]) -> Action:
+        """Run `action` on engine `iid` and record it with the engine's state around it."""
+        name = f"engine.{action}"
+        return await self.service.act(
+            name, {"engine": iid, **params}, self._operation(iid, action, params)
+        )
+
+    async def within(
+        self, iid: str, action: str, engine: Mapping[str, Any] | None = None
+    ) -> Action:
+        """Run and record `action` on engine `iid` within a running exclusive action.
+
+        `engine` names an engine entry outside the router's membership, such as one that left.
+        """
+        name = f"engine.{action}"
+        return await self.service._perform(
+            name, {"engine": iid}, self._operation(iid, action, {}, engine), True
+        )
+
+    def _refreshing(self, operation: Operation) -> Operation:
+        """Return `operation`, after which the next availability read probes again."""
+
+        async def operate(session: Session | None) -> Mapping[str, Any] | None:
+            try:
+                return await operation(session)
+            finally:
+                self._actions_ended += 1
+                self._availability = None
+
+        return operate
+
+    def _operation(
+        self,
+        iid: str,
+        action: str,
+        params: Mapping[str, Any],
+        known: Mapping[str, Any] | None = None,
+    ) -> Operation:
+        async def operate(session: Session | None) -> Mapping[str, Any]:
+            assert session is not None
+            _check_params(action, params)
+            hook = self._hook(action) if action in HOOK_ACTIONS else None
+            async with self._client() as client:
+                # The reads before the action share one read deadline.
+                reads = self.read_deadline()
+                engine = known or await self.member(client, session, iid, deadline=reads)
+                before = await self.engine_state(client, iid, deadline=reads)
+                try:
+                    if hook is not None:
+                        effect = await self._run_hook(hook, session, engine, action)
+                        if action == "start":
+                            self._started[iid] = time.monotonic()
+                        # An engine outside the membership returns through a join.
+                        if action in RETURNING_ACTIONS and known is None:
+                            effect["service"] = await self._await_service(
+                                client, iid, before, effect
+                            )
+                    else:
+                        effect = await self._lifecycle(client, iid, action, params)
+                except ActionError as exc:
+                    after = await self.engine_state(client, iid)
+                    exc.result = {
+                        "engine": iid,
+                        "before": before,
+                        **(exc.result or {}),
+                        "after": after,
+                    }
+                    raise
+                after = await self.engine_state(client, iid)
+            return {"engine": iid, "before": before, **effect, "after": after}
+
+        return self._refreshing(operate)
+
+    async def join(self, spec: Mapping[str, Any]) -> Action:
+        """Ask the router to validate `spec` and add it to the fleet, as an exclusive action."""
+        return await self.service.act(
+            "engine.join",
+            {"engine": spec.get("iid"), "spec": dict(spec)},
+            self._join(spec),
+            exclusive=True,
+        )
+
+    async def leave(self, iid: str, params: Mapping[str, Any]) -> Action:
+        """Drain engine `iid` and remove it from the fleet, as an exclusive action."""
+        return await self.service.act(
+            "engine.leave", {"engine": iid, **params}, self._leave(iid, params), exclusive=True
+        )
+
+    async def join_within(self, spec: Mapping[str, Any]) -> Action:
+        """Run and record a join within a running exclusive action."""
+        params = {"engine": spec.get("iid"), "spec": dict(spec)}
+        return await self.service._perform("engine.join", params, self._join(spec), True)
+
+    async def leave_within(self, iid: str) -> Action:
+        """Run and record a leave within a running exclusive action."""
+        return await self.service._perform(
+            "engine.leave", {"engine": iid}, self._leave(iid, {}), True
+        )
+
+    def _join(self, spec: Mapping[str, Any]) -> Operation:
+        async def operate(session: Session | None) -> Mapping[str, Any]:
+            assert session is not None
+            iid = spec.get("iid")
+            if not isinstance(iid, str) or not iid:
+                raise refused("the engine entry needs an iid", 422)
+            async with self._client() as client:
+                before = await self.membership(client)
+                try:
+                    response = await client.post(MEMBERSHIP_PATH, json=dict(spec))
+                except httpx.HTTPError as exc:
+                    raise ActionError(
+                        f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
+                    ) from exc
+                document = _document(response)
+                error = _lifecycle_error(response)
+                effect: dict[str, Any] = {
+                    "engine": iid,
+                    "router": {
+                        "path": MEMBERSHIP_PATH,
+                        "status": response.status_code,
+                        "error": error,
+                        "join": document.get("join"),
+                    },
+                    "generation": {
+                        "before": None if before is None else before["generation"],
+                        "after": document.get("generation"),
+                    },
+                }
+                if response.status_code != 200:
+                    raise ActionError(
+                        f"router refused join of {iid} with HTTP {response.status_code}: {error}",
+                        status=_relayed(response.status_code),
+                        result=effect,
+                    )
+                effect["after"] = await self.engine_state(client, iid)
+            return effect
+
+        return self._refreshing(operate)
+
+    def _leave(self, iid: str, params: Mapping[str, Any]) -> Operation:
+        async def operate(session: Session | None) -> Mapping[str, Any]:
+            assert session is not None
+            _check_params("leave", params)
+            deadline = float(params.get("deadline_s", LEAVE_DEADLINE_S))
+            async with self._client() as client:
+                reads = self.read_deadline()
+                current = await self.membership(client, deadline=reads)
+                if current is None:
+                    raise ActionError("router membership is unavailable")
+                spec = current["engines"].get(iid)
+                if spec is None:
+                    raise refused(f"engine {iid!r} is not in the router's membership", 404)
+                before = await self.engine_state(client, iid, deadline=reads)
+                path = f"{MEMBERSHIP_PATH}/{iid}"
+                try:
+                    response = await client.delete(path, params={"deadline_s": deadline})
+                except httpx.HTTPError as exc:
+                    raise ActionError(f"router {path} failed: {type(exc).__name__}: {exc}") from exc
+                effect: dict[str, Any] = {
+                    "engine": iid,
+                    "spec": spec,
+                    "before": before,
+                    "router": {
+                        "path": path,
+                        "status": response.status_code,
+                        "error": _lifecycle_error(response),
+                    },
+                }
+                if response.status_code not in (200, 202):
+                    raise ActionError(
+                        f"router refused leave of {iid} with HTTP {response.status_code}: "
+                        f"{effect['router']['error']}",
+                        status=_relayed(response.status_code),
+                        result=effect,
+                    )
+                effect["removal"] = await self._await_removal(client, iid, deadline, effect)
+            return effect
+
+        return self._refreshing(operate)
+
+    async def _await_removal(
+        self, client: httpx.AsyncClient, iid: str, deadline_s: float, effect: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Wait for the drain deadline plus `router.timeout_s` until the router removes `iid`.
+
+        Each poll's reads share one read deadline, which the wait's own end bounds.
+        """
+        limit = deadline_s + self.service.config.router.timeout_s
+        started = time.monotonic()
+        while True:
+            reads = self.read_deadline(until=started + limit)
+            try:
+                current = await self.membership(client, deadline=reads)
+            except ActionError:
+                current = None
+            if current is not None and iid not in current["engines"]:
+                waited = round(time.monotonic() - started, 3)
+                return {"removed": True, "waited_s": waited, "generation": current["generation"]}
+            state = await self.engine_state(client, iid, deadline=reads)
+            waited = round(time.monotonic() - started, 3)
+            if (state.get("lifecycle") or {}).get("state") == "deadline_exceeded":
+                # The router hands the engine to the operator; the leave completes when its
+                # resident work ends.
+                raise ActionError(
+                    f"{iid} still has resident work after its drain deadline",
+                    status=504,
+                    result={**effect, "removal": {"removed": False, "waited_s": waited}},
+                )
+            if waited >= limit:
+                raise ActionError(
+                    f"the router did not remove {iid} within {limit:g}s",
+                    status=504,
+                    result={**effect, "removal": {"removed": False, "waited_s": waited}},
+                )
+            await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
+
+    async def membership(
+        self, client: httpx.AsyncClient, *, deadline: float | None = None
+    ) -> dict[str, Any] | None:
+        """Return the router's membership generation and engine entries.
+
+        Return None when the router has no membership route. Raise ActionError with HTTP 502
+        when the router does not answer or answers with anything else, naming the router's
+        reason when it does not control the fleet. `deadline` bounds the read, as in `_read`.
+        """
+        try:
+            response = await self._read(client, MEMBERSHIP_PATH, deadline)
+        except httpx.HTTPError as exc:
+            raise ActionError(
+                f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.status_code in (404, 405):
+            return None
+        if response.status_code == 503:
+            raise ActionError(f"router {MEMBERSHIP_PATH} answered {_refusal(response)}")
+        try:
+            document = response.json()
+            if response.status_code != 200 or document.get("schema") != MEMBERSHIP_SCHEMA:
+                raise ValueError(f"HTTP {response.status_code}")
+            return {
+                "generation": document["generation"],
+                "engines": {str(row["iid"]): row for row in document["engines"]},
+            }
+        except (ValueError, LookupError, TypeError, AttributeError) as exc:
+            raise ActionError(
+                f"router {MEMBERSHIP_PATH} answered no membership document: {exc}"
+            ) from exc
+
+    async def member(
+        self,
+        client: httpx.AsyncClient,
+        session: Session,
+        iid: str,
+        *,
+        deadline: float | None = None,
+    ) -> Mapping[str, Any]:
+        """Return engine `iid` from the router's membership, or from the baseline file when
+        the router does not answer with one."""
+        current = await self.membership(client, deadline=deadline)
+        if current is None:
+            return baseline_engine(session, iid)
+        engine = current["engines"].get(iid)
+        if engine is None:
+            raise refused(f"engine {iid!r} is not in the router's membership", 404)
+        return engine
+
+    def _hook(self, action: str) -> Hook:
+        name = HOOK_ACTIONS[action]
+        hook = self.service.config.hooks.get(name)
+        if hook is None:
+            raise refused(f"no {name!r} hook is configured", 501)
+        return hook
+
+    async def _run_hook(
+        self, hook: Hook, session: Session, engine: Mapping[str, Any], action: str
+    ) -> dict[str, Any]:
+        env = {
+            "NARWHAL_CONTROL_ACTION": action,
+            "NARWHAL_CONTROL_ENGINE": str(engine["iid"]),
+            "NARWHAL_CONTROL_ENGINE_URL": str(engine.get("url", "")),
+        }
+        try:
+            result = await self.service.run_hook(hook, session, env)
+        except OSError as exc:
+            raise ActionError(f"{hook.name} hook could not start: {exc}") from exc
+        effect = {"hook": result.document(session.directory)}
+        if not result.ok:
+            raise ActionError(f"{hook.name} hook {hook_failure(hook, result)}", result=effect)
+        return effect
+
+    async def _await_service(
+        self,
+        client: httpx.AsyncClient,
+        iid: str,
+        before: Mapping[str, Any],
+        effect: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Wait up to `router.timeout_s` until the router neither ejects nor quarantines `iid`."""
+        limit = self.service.config.router.timeout_s
+        started = time.monotonic()
+        seen = before.get("event")
+        while True:
+            reads = self.read_deadline(until=started + limit)
+            state = await self.engine_state(client, iid, deadline=reads)
+            waited = round(time.monotonic() - started, 3)
+            report = {"in_service": False, "waited_s": waited}
+            if "error" not in state:
+                if not state["ejected"] and not state["quarantined"]:
+                    return {**report, "in_service": True}
+                problem = _return_blocked(iid, state, seen)
+                if problem:
+                    raise ActionError(problem, result={**effect, "service": report})
+            if waited >= limit:
+                held = "ejects" if state.get("ejected", True) else "quarantines"
+                reason = state.get("error") or f"the router still {held} {iid}"
+                raise ActionError(
+                    f"{iid} did not return to service within {limit:g}s: {reason}",
+                    status=504,
+                    result={**effect, "service": report},
+                )
+            await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
+
+    async def _lifecycle(
+        self, client: httpx.AsyncClient, iid: str, action: str, params: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        path = LIFECYCLE_ACTIONS[action]
+        body = {"engines": [iid], **params}
+        try:
+            response = await client.post(path, json=body)
+        except httpx.HTTPError as exc:
+            raise ActionError(f"router {path} failed: {type(exc).__name__}: {exc}") from exc
+        error = _lifecycle_error(response)
+        effect = {
+            "router": {"path": path, "body": body, "status": response.status_code, "error": error}
+        }
+        if response.status_code != 200:
+            raise ActionError(
+                f"router refused {action} with HTTP {response.status_code}: {error}", result=effect
+            )
+        return effect
+
+    async def engine_state(
+        self, client: httpx.AsyncClient, iid: str, *, deadline: float | None = None
+    ) -> dict[str, Any]:
+        """Return the router's view of one engine, or the reason it could not be read."""
+        try:
+            return (await self._slices(client, [iid], deadline))[iid]
+        except StateUnavailable as exc:
+            return {"error": str(exc)}
+
+    async def fleet_state(
+        self, iids: list[str], *, deadline: float | None = None
+    ) -> dict[str, Any]:
+        """Return the router's view of each named engine."""
+        async with self._client() as client:
+            try:
+                return await self._slices(client, iids, deadline)
+            except StateUnavailable as exc:
+                raise ActionError(str(exc)) from exc
+
+    def read_deadline(
+        self, until: float | None = None, *, timeout_s: float = STATE_TIMEOUT_S
+    ) -> float:
+        """Return the monotonic deadline of one operation's router reads.
+
+        It is `timeout_s`, at most `router.timeout_s`, from now, or `until` when that comes
+        first.
+        """
+        end = time.monotonic() + min(timeout_s, self.service.config.router.timeout_s)
+        return end if until is None else min(end, until)
+
+    async def _read(
+        self, client: httpx.AsyncClient, path: str, deadline: float | None = None
+    ) -> httpx.Response:
+        """GET `path`, repeating an HTTP 503 until `deadline` passes.
+
+        A router that does not control the fleet, such as a standby the load balancer still
+        routes to during a takeover, answers 503. Without `deadline`, the read has the state
+        read timeout. Return the last response.
+        """
+        if deadline is None:
+            deadline = self.read_deadline()
+        while True:
+            response = await client.get(path, timeout=max(deadline - time.monotonic(), 0.05))
+            remaining = deadline - time.monotonic()
+            if response.status_code != 503 or remaining <= 0:
+                return response
+            await asyncio.sleep(min(self._read_retry_s, remaining))
+
+    async def _slices(
+        self, client: httpx.AsyncClient, iids: list[str], deadline: float | None = None
+    ) -> dict[str, Any]:
+        try:
+            response = await self._read(client, STATE_PATH, deadline)
+            if response.status_code == 503:
+                raise StateUnavailable(f"router state unavailable: {_refusal(response)}")
+            response.raise_for_status()
+            state = response.json()
+            return {iid: engine_slice(state, iid) for iid in iids}
+        except (httpx.HTTPError, ValueError, LookupError, TypeError, AttributeError) as exc:
+            raise StateUnavailable(
+                f"router state unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
+
+
+def baseline_engines(session: Session) -> dict[str, Mapping[str, Any]]:
+    """Return the engines of the session's baseline fleet configuration, keyed by ID."""
+    return {str(engine["iid"]): engine for engine in session.baseline["engines"]}
+
+
+def configured_engines(fleet: Path) -> list[str]:
+    """Return the engine IDs of the configured baseline fleet file, for reads outside a session."""
+    document = json.loads(fleet.read_text(encoding="utf-8"))
+    return [str(engine["iid"]) for engine in document["engines"]]
+
+
+def baseline_engine(session: Session, iid: str) -> Mapping[str, Any]:
+    """Return one baseline engine, refusing an ID the baseline does not configure."""
+    engine = baseline_engines(session).get(iid)
+    if engine is None:
+        raise refused(f"engine {iid!r} is not in the baseline fleet configuration", 404)
+    return engine
+
+
+def engine_slice(state: Mapping[str, Any], iid: str) -> dict[str, Any]:
+    """Return one engine's part of a `narwhal.state` document."""
+    pools = state["pools"]
+    lifecycle = state["lifecycle"]
+    events = [e for e in lifecycle.get("events", []) if isinstance(e, dict) and e.get("iid") == iid]
+    return {
+        "known": iid in state["resident"],
+        "role": next((role for role in ("prefill", "decode") if iid in pools[role]), None),
+        "ejected": iid in state["ejected"],
+        "draining": iid in state.get("draining", []),
+        "quarantined": iid in state.get("quarantined", []),
+        "probation": iid in state.get("probation", []),
+        "pinned": iid in state.get("pinned", []),
+        "resident": state["resident"].get(iid),
+        "breaker": state.get("breaker", {}).get("failures", {}).get(iid),
+        "lifecycle": lifecycle["engines"].get(iid),
+        "process_start": lifecycle.get("process_starts", {}).get(iid),
+        "router": lifecycle["router"],
+        "wave": lifecycle["wave"],
+        "event": _event(events[-1]) if events else None,
+    }
+
+
+def _event(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: event.get(key) for key in ("action", "at", "error")}
+
+
+def _return_blocked(iid: str, state: Mapping[str, Any], seen: object) -> str:
+    """Return why the router will not readmit `iid` without an operator, or an empty string."""
+    lifecycle = state.get("lifecycle") or {}
+    if lifecycle.get("state") == "blocked":
+        return f"the router blocked readmission of {iid}: {lifecycle.get('error') or 'no reason'}"
+    event = state.get("event")
+    if (
+        event != seen
+        and isinstance(event, dict)
+        and event.get("action") == "profile_recovery_blocked"
+    ):
+        return f"{iid} needs fresh profiles before the router readmits it: {event.get('error')}"
+    return ""
+
+
+def hook_failure(hook: Hook, result: HookResult) -> str:
+    """Describe why a hook run did not succeed."""
+    if result.timed_out:
+        return f"timed out after {hook.timeout_s:g}s"
+    return f"exited {result.exit_code}"
+
+
+def _check_params(action: str, params: Mapping[str, Any]) -> None:
+    unknown = sorted(set(params) - ACTION_PARAMS.get(action, frozenset()))
+    if unknown:
+        raise refused(f"{action} does not accept {', '.join(unknown)}", 422)
+    deadline = params.get("deadline_s")
+    if deadline is not None and (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, int | float)
+        or not math.isfinite(deadline)
+        or deadline <= 0
+    ):
+        raise refused("deadline_s must be a positive number of seconds", 422)
+
+
+def _document(response: httpx.Response) -> dict[str, Any]:
+    try:
+        document = response.json()
+    except ValueError:
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _relayed(status: int) -> int:
+    """Return the control status for a router refusal: client errors pass through."""
+    return status if status in (404, 409, 422, 503) else 502
+
+
+def _refusal(response: httpx.Response) -> str:
+    """Describe an HTTP 503 read refusal with the message and reason the router gives."""
+    try:
+        error = response.json()["error"]
+        message, reason = error["message"], error.get("reason")
+    except (ValueError, LookupError, TypeError):
+        return f"HTTP {response.status_code}"
+    return f"HTTP {response.status_code}: {message}" + (f" ({reason})" if reason else "")
+
+
+def _lifecycle_error(response: httpx.Response) -> str:
+    try:
+        document = response.json()
+    except ValueError:
+        return response.text[:500]
+    if not isinstance(document, dict):
+        return ""
+    error = document.get("error")
+    if isinstance(error, str) and error:
+        return error
+    detail = document.get("detail")
+    if isinstance(detail, str):
+        return detail
+    return json.dumps(detail)[:500] if detail is not None else ""
+
+
+def engine_routes(actions: EngineActions) -> APIRouter:
+    """Return the engine state route, one POST route per engine action and the join routes."""
+    routes = APIRouter(prefix=f"{API}/engines")
+    service = actions.service
+
+    @routes.get("")
+    async def engines() -> JSONResponse:
+        problem = ""
+        # The membership and state reads share one read deadline.
+        reads = actions.read_deadline()
+        async with actions._client() as client:
+            try:
+                current = await actions.membership(client, deadline=reads)
+            except ActionError as exc:
+                # Each baseline engine's state then reports the router error.
+                current, problem = None, str(exc)
+        if current is not None:
+            reading = await actions.available(current)
+        else:
+            reading = Availability((), problem) if problem else None
+        available = None if reading is None else reading.document()
+        if current is not None:
+            iids = list(current["engines"])
+            return JSONResponse(
+                {
+                    "generation": current["generation"],
+                    "engines": await actions.fleet_state(iids, deadline=reads),
+                    "available": available,
+                }
+            )
+        if service.session is not None:
+            iids = list(baseline_engines(service.session))
+        else:
+            try:
+                iids = configured_engines(service.config.fleet)
+            except (OSError, ValueError, LookupError, TypeError) as exc:
+                log.error("baseline fleet configuration is unreadable: %s", exc)
+                detail = "baseline fleet configuration is unreadable"
+                return JSONResponse({"detail": detail}, status_code=500)
+        engines = await actions.fleet_state(iids, deadline=reads)
+        return JSONResponse({"engines": engines, "available": available})
+
+    def add(action: str) -> None:
+        async def run(iid: str, request: Request) -> JSONResponse:
+            raw = await request.body()
+            try:
+                params = json.loads(raw) if raw else {}
+            except ValueError:
+                params = None
+            if not isinstance(params, dict):
+                return JSONResponse({"detail": f"{action} parameters must be a JSON object"}, 422)
+            if action == "leave":
+                return action_reply(await actions.leave(iid, params))
+            return action_reply(await actions.act(iid, action, params))
+
+        routes.add_api_route(f"/{{iid}}/{action}", run, methods=["POST"], name=f"engine_{action}")
+
+    for action in ACTIONS:
+        add(action)
+
+    @routes.post("/{iid}/join")
+    async def join_baseline(iid: str) -> JSONResponse:
+        return action_reply(await actions.join_baseline(iid))
+
+    @routes.post("/join")
+    async def join(request: Request) -> JSONResponse:
+        try:
+            spec = await request.json()
+        except ValueError:
+            spec = None
+        if not isinstance(spec, dict):
+            return JSONResponse({"detail": "join takes an engine entry as a JSON object"}, 422)
+        return action_reply(await actions.join(spec))
+
+    return routes

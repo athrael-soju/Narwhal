@@ -192,34 +192,63 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         observe.assert_called()
         self.assertGreaterEqual(observe.call_args.args[0], 0.0)
 
+    async def _busy_after_wake(self, woke):
+        """Wake the monitoring loop once and return the busy seconds it then reports."""
+        woke.clear()
+        self.router.control_wakeup.set()
+        await asyncio.wait_for(woke.wait(), timeout=5.0)
+        return self.router.monitoring.event_loop_busy_s
+
+    async def _woken_monitor_loop(self, **kwargs):
+        """Start a monitoring loop that wakes only when the test sets the control wakeup."""
+        self.router.cfg.monitor_interval_s = 3600.0
+        woke = asyncio.Event()
+
+        async def urgent(_router):
+            woke.set()
+
+        self.enterContext(patch.object(monitoring, "urgent_control_once", side_effect=urgent))
+        task = asyncio.create_task(monitoring.monitor_loop(self.router, **kwargs))
+
+        async def stop():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        self.addAsyncCleanup(stop)
+        return woke
+
+    async def test_event_loop_busy_reports_cpu_seconds_since_the_loop_started(self):
+        """Each wake publishes the CPU source's advance since the monitoring loop began."""
+        cpu = [40.0]
+        woke = await self._woken_monitor_loop(cpu_time=lambda: cpu[0])
+        self.assertEqual(await self._busy_after_wake(woke), 0.0)
+        cpu[0] = 40.25
+        self.assertEqual(await self._busy_after_wake(woke), 0.25)
+        self.assertEqual(await self._busy_after_wake(woke), 0.25)
+        cpu[0] = 42.0
+        self.assertEqual(await self._busy_after_wake(woke), 2.0)
+
     async def test_event_loop_busy_rises_with_loop_cpu_and_holds_while_idle(self):
         """Loop-thread CPU raises the counter; sleeping and worker threads leave it flat."""
-        self.router.cfg.monitor_interval_s = 0.01
-        ledger = self.router.monitoring
 
         def spin(seconds):
             start = time.thread_time()
             while time.thread_time() - start < seconds:
                 pass
 
-        with patch.object(monitoring, "monitor_once", new=AsyncMock()):
-            task = asyncio.create_task(monitoring.monitor_loop(self.router))
-            await asyncio.sleep(0.05)
-            b0 = ledger.event_loop_busy_s
-            spin(0.1)
-            await asyncio.sleep(0.05)
-            b1 = ledger.event_loop_busy_s
-            self.assertGreaterEqual(b1 - b0, 0.09)
-            await asyncio.sleep(0.3)
-            b2 = ledger.event_loop_busy_s
-            self.assertLess(b2 - b1, 0.05)
-            await asyncio.to_thread(spin, 0.2)
-            await asyncio.sleep(0.05)
-            b3 = ledger.event_loop_busy_s
-            self.assertLess(b3 - b2, 0.05)
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        # The loop wakes only when the test asks, so each window holds one wake of overhead.
+        woke = await self._woken_monitor_loop()
+        b0 = await self._busy_after_wake(woke)
+        spin(0.2)
+        b1 = await self._busy_after_wake(woke)
+        self.assertGreaterEqual(b1 - b0, 0.2)
+        await asyncio.sleep(0.3)
+        b2 = await self._busy_after_wake(woke)
+        self.assertLess(b2 - b1, 0.02)
+        await asyncio.to_thread(spin, 0.3)
+        b3 = await self._busy_after_wake(woke)
+        self.assertLess(b3 - b2, 0.02)
 
     async def test_urgent_control_preserves_demand_sampling_cadence(self):
         """Scheduled monitoring passes retain ownership of demand sampling."""

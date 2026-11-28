@@ -10,12 +10,11 @@ The service must be running, as in [Setting up the control service](01-Set-Up-th
 
 ## Reaching the console through the tunnel
 
-1. On the workstation, open a terminal in the checkout with `.env` loaded.
+1. On the workstation, open a terminal in the management checkout with `.env` and `config/deployment.env` loaded.
 2. Open the tunnel with the control port and Grafana, and keep the terminal open:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py tunnel --role router \
-      --forward 18020:8020 --forward 13000:3000
+    narwhal deploy tunnel --forward 18020:8020 --forward 13000:3000
     ```
 
 3. Open `http://127.0.0.1:18020/console` in a browser on the workstation.

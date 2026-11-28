@@ -364,9 +364,15 @@ class DiagnosticBundleTests(unittest.IsolatedAsyncioTestCase):
         run = instance / "run-one"
         run.mkdir()
         (run / "router.log").write_text("selected run")
+        attempt = run / "launch/stages/engine-prepare/engine-1/attempt-1/engine-1"
+        attempt.mkdir(parents=True)
+        (attempt / "startup.log").write_text("selected engine")
+        (run / "launch/run.json").write_text('{"stages": {}}')
         (instance / "lifecycle.json").write_text(json.dumps({"run": str(run)}))
         manifest = await self.collect(instance=instance)
         self.assertIn(b"selected run", self.exported(manifest))
+        self.assertIn(b"selected engine", self.exported(manifest))
+        self.assertIn(b'"stages"', self.exported(manifest))
         sibling = self.root / "sibling"
         sibling.mkdir()
         (sibling / "router.log").write_text("sibling private data")

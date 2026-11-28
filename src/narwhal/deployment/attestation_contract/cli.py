@@ -6,52 +6,56 @@ from pathlib import Path
 
 import httpx
 
-from ..launch_engine.backend import EngineLauncher, plan_launcher
-from .document import generate
-from .evidence import capture_model_dimensions, read_json
+from .capture import capture
 from .fleet import finalize_fleet
-from .sidecar import serve
-
-
-def _launcher(run: Path) -> EngineLauncher:
-    return plan_launcher(read_json(run / "launch.json"))
+from .sidecar import serve, verify
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Derive engine attestation and the router contract from checked "
-        "deployment evidence."
+        description="Capture engine attestation evidence, serve and verify the attestation, and "
+        "derive the router contract."
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    capture = commands.add_parser("capture-connector")
-    capture.add_argument("--run", required=True, type=Path)
-    native = commands.add_parser("native-capture")
-    native.add_argument("--run", required=True, type=Path)
-    dimensions = commands.add_parser("capture-model-dimensions")
-    dimensions.add_argument("--run", required=True, type=Path)
-    engine = commands.add_parser("generate")
-    engine.add_argument("--run", required=True, type=Path)
-    engine.add_argument("--startup-log", required=True, type=Path)
-    serve_command = commands.add_parser("serve")
-    serve_command.add_argument("--run", required=True, type=Path)
-    fleet = commands.add_parser("finalize-fleet")
-    fleet.add_argument("--fleet", required=True, type=Path)
+    captured = commands.add_parser(
+        "capture",
+        help="run every attestation capture of a started engine and write its document",
+    )
+    captured.add_argument("--run", required=True, type=Path, help="engine launch directory")
+    captured.add_argument(
+        "--representative-layout",
+        help="cache layout of the engine whose fabric budget this engine inherits",
+    )
+    served = commands.add_parser("serve", help="serve the engine's attestation document")
+    served.add_argument("--run", required=True, type=Path, help="engine launch directory")
+    verified = commands.add_parser(
+        "verify", help="check the running sidecar against the live engine"
+    )
+    verified.add_argument("--run", required=True, type=Path, help="engine launch directory")
+    verified.add_argument(
+        "--into",
+        type=Path,
+        help="the directory to keep the check in, in place of the attestation's own directory",
+    )
+    for command in (captured, served, verified):
+        command.add_argument(
+            "--pod-evidence",
+            type=Path,
+            help="the engine pod's directory of the state volume, which holds its attestation; "
+            "required for a Kubernetes plan and refused for the others",
+        )
+    fleet = commands.add_parser("finalize-fleet", help="write or check the fleet's engine contract")
+    fleet.add_argument("--fleet", required=True, type=Path, help="router fleet file")
     args = parser.parse_args(argv)
     try:
-        if args.command == "capture-connector":
-            result = _launcher(args.run).capture_connector(args.run)
-            print(f"Captured pinned connector protocol in {result}")
-        elif args.command == "native-capture":
-            result = _launcher(args.run).capture_native(args.run)
-            print(f"Captured native engine attestation in {result}")
-        elif args.command == "capture-model-dimensions":
-            result = capture_model_dimensions(args.run)
-            print(f"Captured live model dimensions in {result}")
-        elif args.command == "generate":
-            result = generate(args.run, args.startup_log)
+        if args.command == "capture":
+            result = capture(args.run, args.representative_layout, pod_evidence=args.pod_evidence)
             print(f"Generated private engine attestation in {result}")
         elif args.command == "serve":
-            return serve(args.run)
+            return serve(args.run, args.pod_evidence)
+        elif args.command == "verify":
+            result = verify(args.run, args.pod_evidence, args.into)
+            print(f"Sidecar attestation matches the live engine and contract; captures in {result}")
         else:
             contract = finalize_fleet(args.fleet)
             print(f"Router fleet contract verified across live sidecars: {contract.fingerprint()}")

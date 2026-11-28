@@ -4,14 +4,30 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from ..attestation_contract.capture import Capture, CaptureContext
     from ..attestation_contract.document import AttestationContext, AttestationEvidence
-    from .check import CheckContext, ProbeResult
+    from .check import CheckContext
     from .settings import LaunchSettings
+
+
+@dataclass(frozen=True)
+class LiveProbe:
+    """What `narwhal-engine probe` reads from a live engine after its health, version and models.
+
+    `process_start` reads the process start from the engine's /metrics text; None means the
+    engine publishes no process start there. `completion` is False for an engine that serves a
+    completion only with a peer engine for the other leg.
+    """
+
+    process_start: Callable[[str], float] | None
+    completion: bool
 
 
 class EngineLauncher(ABC):
@@ -25,12 +41,21 @@ class EngineLauncher(ABC):
     environment_prefixes: ClassVar[tuple[str, ...]]
     managed_environment: ClassVar[frozenset[str]]
     launch_settings: ClassVar[LaunchSettings]
-    # Runtime check output: the pass summary, the cache line's name and the version label.
+    # Runtime check output: the pass summary and the cache line's name.
     check_summary: ClassVar[str]
     prefix_cache_name: ClassVar[str]
-    version_label: ClassVar[str]
+    # Standalone module that reads the probe's output. It defines VERSION_LABEL and
+    # probe_result(plan, environment, output), and imports only the standard library, so a
+    # Kubernetes engine pod runs it as the offline check does.
+    probe_reader: ClassVar[ModuleType]
+    # Standalone module that defines inspections(plan, plan_sha256), the interpreter arguments
+    # of each attestation inspection that runs with the engine image's Python, by name. It
+    # imports only the standard library, so a Kubernetes engine container runs each one before
+    # its engine starts. None when the backend's captures run no such inspection.
+    pod_inspections: ClassVar[ModuleType | None] = None
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
+    live_probe: ClassVar[LiveProbe]
     # Discovery settings that take one value for the fleet; a NARWHAL_NODE_<n>_ override is
     # refused.
     fleet_settings: ClassVar[frozenset[str]] = frozenset()
@@ -85,13 +110,8 @@ class EngineLauncher(ABC):
         """Return the interpreter arguments of the in-image probe; raise for a failed input."""
 
     @abstractmethod
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
-
-    @abstractmethod
-    def capture_connector(self, run: Path) -> Path: ...
-
-    @abstractmethod
-    def capture_native(self, run: Path) -> Path: ...
+    def attestation_captures(self, context: CaptureContext) -> list[Capture]:
+        """The backend's attestation captures, in order, for a container or native engine."""
 
     @abstractmethod
     def transfer_package(self, plan: dict) -> str | None:
@@ -122,6 +142,17 @@ class CacheCapture(ABC):
     def capture_cache(self, run: Path, plan: dict) -> None: ...
 
 
+class TransferMeasurement(ABC):
+    """Optional launcher capability: KV handoff payloads measured between two live engines.
+
+    Engine hosts run `transfer_tool` as a copy checked by its SHA-256, with the host's own
+    Python and only the standard library. It writes the transfer record that the fabric
+    budget's `calculate --transfer-record` sizes a budget from.
+    """
+
+    transfer_tool: ClassVar[Path]
+
+
 class CacheMeasurement(ABC):
     """Optional capability: the KV cache layout from a temporary sizing container."""
 
@@ -130,15 +161,12 @@ class CacheMeasurement(ABC):
 
 
 class CacheRegistration(ABC):
-    """Optional capability: the connector's cache block registration and handshake policy."""
+    """Optional capability: the connector registers the KV cache in one resolved layout."""
 
     @abstractmethod
-    def registration_layout(
-        self, run: Path, plan: dict, source: Path, from_runtime: bool
-    ) -> None: ...
-
-    @abstractmethod
-    def handshake_policy(self, run: Path, plan: dict) -> None: ...
+    def cache_layout(self, source: Path) -> str:
+        """The KV cache layout that the live cache layout record `source` resolved across the
+        engine's ranks."""
 
 
 class LiveModelDimensions(ABC):
@@ -149,7 +177,8 @@ class LiveModelDimensions(ABC):
         """Write model-dimensions.json from the engine image."""
 
     @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path: ...
+    def capture_model_dimensions(self, run: Path, out: Path) -> Path:
+        """Write model-dimensions.live.json into `out` from the live engine of `run`."""
 
 
 class ModelFormats(ABC):
@@ -165,6 +194,10 @@ class ModelFormats(ABC):
 
 def cache_capture(engine: EngineLauncher) -> CacheCapture | None:
     return engine if isinstance(engine, CacheCapture) else None
+
+
+def transfer_measurement(engine: EngineLauncher) -> TransferMeasurement | None:
+    return engine if isinstance(engine, TransferMeasurement) else None
 
 
 def run_import_check(script: str, label: str, *, traceback_fails: bool = False) -> None:

@@ -140,7 +140,7 @@ The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest
 
 ## Bringing up a fleet
 
-Run the deployment gates in [Deploying a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. The [documentation site](https://athrael-soju.github.io/Narwhal/) has the rest.
+`narwhal deploy run` takes engine hosts with a staged checkpoint and engine image to a serving fleet, from a management workstation. [Getting started](https://athrael-soju.github.io/Narwhal/deploy/Getting-Started/) walks through it on one host or several, and the [documentation site](https://athrael-soju.github.io/Narwhal/) has the rest.
 
 ## Contributing
 

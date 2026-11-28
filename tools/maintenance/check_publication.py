@@ -46,8 +46,15 @@ def private_path(name: str) -> bool:
     )
 
 
+def ignored_paths() -> set[str]:
+    """Return the tracked paths that the ignore rules match, after their `!` exceptions."""
+    listed = git("ls-files", "--cached", "--ignored", "--exclude-standard", "-z", "--full-name")
+    return {name.decode(errors="surrogateescape") for name in listed.split(b"\0") if name}
+
+
 def main() -> int:
     root = Path(git("rev-parse", "--show-toplevel").decode().strip())
+    ignored = ignored_paths()
     failed = False
     for entry in git("ls-files", "--stage", "-z", "--full-name").split(b"\0"):
         if not entry:
@@ -60,6 +67,8 @@ def main() -> int:
             reasons.append("unmerged index entry")
         if private_path(name):
             reasons.append("private file path")
+        if name in ignored:
+            reasons.append("path .gitignore ignores")
         if mode != b"160000":
             content = git("cat-file", "blob", oid.decode())
             if PRIVATE_KEY.search(content):

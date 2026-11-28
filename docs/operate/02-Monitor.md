@@ -48,15 +48,17 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | Retries, failures, refusals, and rejections | Which protection path is active? |
 | Role changes, reversals, and blocked decisions | Is the role controller holding a stable role assignment? |
 
-`tools/observability/prometheus-alerts.yml` defines these alert rules:
+`src/narwhal/observability/stack/prometheus-alerts.yml` defines these alert rules:
 
 | Alert | Condition | Duration | Severity |
 | --- | --- | :---: | --- |
 | `NarwhalRouterDown` | A router scrape fails while no router is [active](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges) | 2m | `page` |
 | `NarwhalStandbyRouterDown` | A router scrape fails while another router is active | 2m | `warn` |
-| `NarwhalNoRouterReady` | Prometheus scrapes more than one router, none reports `narwhal_router_ready` `1`, and `NarwhalRouterDown` does not cover it | 1m | `page` |
+| `NarwhalNoRouterReady` | Prometheus scrapes at least one router of the fleet, none reports `narwhal_router_ready` `1`, and `NarwhalRouterDown` does not cover it | 1m | `page` |
 | `NarwhalMultipleRoutersReady` | More than one router reports `narwhal_router_ready` `1` | 30s | `page` |
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
+| `NarwhalHostDown` | An attestation sidecar scrape fails: its engine host, engine or sidecar is down, after a reboot too | 1m | `page` |
+| `NarwhalWatchdog` | Always, for each fleet, while Prometheus evaluates the rules | none | `watchdog` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
 | `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
 | `NarwhalRejectedRising` | Rejected requests above 1% of offered requests over 5m | 5m | `warn` |
@@ -69,7 +71,11 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 
 `NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The request rate rules also sum over the routers of a pair, since each router counts the requests it answered. No rule reads `narwhal_standby_refusals_total`, which counts the requests a standby refuses while its last probe found its primary controlling the fleet, because the load balancer retries those on the primary. Every other refusal counts in `narwhal_rejected_total`, including those of a standby that waits for a killed primary's lease to expire and of a fenced or single router.
 
-A stopped single router raises `NarwhalRouterDown` only, and a single router that is not ready raises no router alert. The router rules count only samples scraped in the last 30 seconds.
+Prometheus takes the sidecar targets from the deployment rather than from the router, so `NarwhalHostDown` fires while no router lists the engine, and the router targets come from a file too, so `NarwhalRouterDown` fires after the router host reboots. Prometheus sends firing alerts to the Alertmanager that `NARWHAL_ALERTMANAGER_URL` names, as in [Starting Prometheus and Grafana](../observability/01-Start-and-Verify.md#starting-prometheus-and-grafana). Without one, the Prometheus alerts page at `/alerts` is the only place they show.
+
+Every rule matches and aggregates within one `fleet`, so one fleet's active router never hides another fleet's outage. A fleet with one router and no standby raises neither `NarwhalStandbyRouterDown` nor `NarwhalMultipleRoutersReady`: its router exports lease epoch `0` and the `active` role, `NarwhalRouterDown` pages when it stops, and `NarwhalNoRouterReady` pages when it answers but admits nothing for a minute. `narwhal deploy` runs Prometheus on the primary router's host, so while that host is down no rule fires, `NarwhalRouterDown` included. Route `NarwhalWatchdog`, which always fires, to a dead man's switch outside the fleet that pages when the alert stops arriving. `NarwhalRouterDown` still fires on its own while that host is up and the pair has no active router, for example when the primary router has stopped and the standby's host reboots.
+
+A stopped single router raises `NarwhalRouterDown` only, and a single router that answers but is not ready raises `NarwhalNoRouterReady`. The router rules count only samples scraped in the last 30 seconds.
 
 `NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch` among the routers scraped in the last 30 seconds: the lease holder, or the router that held the lease last.
 

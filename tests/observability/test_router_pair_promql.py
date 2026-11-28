@@ -11,6 +11,7 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from narwhal.observability.stack import artifacts
 from tests.observability.test_engine_state_promql import (
     RUN_TIMEOUT_S,
     SHIPPED,
@@ -18,7 +19,6 @@ from tests.observability.test_engine_state_promql import (
     UNAVAILABLE,
     promtool,
 )
-from tools.observability import artifacts
 
 STEP = 5
 LENGTH = 1200
@@ -537,9 +537,18 @@ class RouterAlertTests(PromtoolCase):
         down = {**A, "alertname": "NarwhalRouterDown", "severity": "page"}
         self.check_alerts(routers, {375: {}, 450: {"NarwhalRouterDown": [down]}})
 
-    def test_a_single_router_that_is_not_ready_raises_no_router_alert(self):
+    def test_a_single_router_that_answers_but_is_not_ready_pages(self):
+        # A fleet's only router that admits nothing is an outage, as for a pair.
         routers = [Router(A, [Phase(0, 300, "active", ready=1), Phase(300, LENGTH, "active")])]
-        self.check_alerts(routers, {450: {}, 900: {}})
+        none_ready = {"alertname": "NarwhalNoRouterReady", "severity": "page"}
+        self.check_alerts(
+            routers,
+            {
+                345: {},
+                375: {"NarwhalNoRouterReady": [none_ready]},
+                900: {"NarwhalNoRouterReady": [none_ready]},
+            },
+        )
 
     def test_the_last_samples_of_a_router_no_longer_scraped_count_for_nothing(self):
         """A recreated Prometheus answers the previous origin's samples for 5 minutes."""
@@ -558,9 +567,14 @@ class RouterAlertTests(PromtoolCase):
             Router(B, [Phase(300, LENGTH, "standby")]),
         ]
         self.check_alerts([previous, *pair], {at: {} for at in (450, 500, 580)})
-        # With no active router, the stale `up` of 0 would page as a stopped router.
+        # With no active router, the stale `up` of 0 would page as a stopped router. The fenced
+        # router admits nothing, which pages as no router ready, and only that.
         single = [Router(A, [Phase(300, LENGTH, "fenced")])]
-        self.check_alerts([previous, *single], {at: {} for at in (450, 500, 580)})
+        none_ready = {"alertname": "NarwhalNoRouterReady", "severity": "page"}
+        self.check_alerts(
+            [previous, *single],
+            {at: {"NarwhalNoRouterReady": [none_ready]} for at in (450, 500, 580)},
+        )
 
     def test_gauge_alerts_ignore_the_lease_epoch_of_a_router_no_longer_scraped(self):
         """The previous origin's higher epoch stays in the lookback without hiding the holder."""

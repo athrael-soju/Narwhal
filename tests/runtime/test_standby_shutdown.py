@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -20,6 +21,7 @@ from narwhal.runtime.lease import FileLease
 from narwhal.runtime.standby import lease_role, standby_loop
 from narwhal.serving.app import create_app
 from narwhal.types import Role
+from tests import CONTROL_TOKEN, handoff_response
 
 
 class FleetCase(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +90,7 @@ class StandbyRoleTests(FleetCase):
                 return httpx.Response(503, json={"control_ready": False})
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
-            return httpx.Response(200, json=document)
+            return handoff_response(document)
 
         async def until(condition):
             for _ in range(2000):
@@ -105,6 +107,7 @@ class StandbyRoleTests(FleetCase):
                 probe_interval_s=0.005,
                 takeover_after=2,
                 transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
             )
         )
         try:
@@ -143,8 +146,8 @@ class StandbyRoleTests(FleetCase):
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
             if upgraded:
-                return httpx.Response(200, json={**document, "schema_version": 99})
-            return httpx.Response(200, json=document)
+                return handoff_response({**document, "schema_version": 99})
+            return handoff_response(document)
 
         loop = asyncio.create_task(
             standby_loop(
@@ -153,6 +156,7 @@ class StandbyRoleTests(FleetCase):
                 router.lease,
                 probe_interval_s=0.005,
                 transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
             )
         )
         for _ in range(2000):
@@ -164,6 +168,168 @@ class StandbyRoleTests(FleetCase):
         with self.assertRaises(ContractVersionError):
             await asyncio.wait_for(loop, timeout=10)
         self.assertFalse(router.primary_seen)
+
+
+class SignedHandoffTests(FleetCase):
+    """A standby shadows only a handoff the primary signed under the pair's control token, at
+    or after the newest one it accepted and within the handoff age."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        owner = FileLease(self.root / "lease.json", "primary", 30)
+        self.assertTrue(owner.claim())
+        self.addCleanup(owner.release)
+        self.primary = create_app(self.cfg).state.router
+        self.addAsyncCleanup(self.primary.engines.aclose)
+        self.primary.lease_epoch, self.primary.lease_holder = owner.epoch, owner.holder
+        self.standby = create_app(self.cfg).state.router
+        self.addAsyncCleanup(self.standby.engines.aclose)
+        self.standby.standby = True
+        self.standby.lease = FileLease(self.root / "lease.json", "standby", 30)
+
+    def document(self, served, age_s=0.0):
+        self.primary.served = served
+        return {**state.snapshot(self.primary), "at": time.time() - age_s}
+
+    async def shadow(self, answers):
+        """Serve each of `answers` to one handoff read in turn, the last one from then on;
+        return whether the standby vouched for the primary after each, and the handoff it
+        saved."""
+        reads, seen = [], []
+
+        def transport(request):
+            if request.url.path == "/ready":
+                # Each probe follows the standby's verdict on the read before it.
+                if reads:
+                    seen.append(self.standby.primary_seen)
+                return httpx.Response(200, json={"ready": True})
+            # The standby reads the handoff without the token: only the primary signs.
+            self.assertNotIn("authorization", request.headers)
+            reads.append(None)
+            return answers[min(len(reads), len(answers)) - 1]
+
+        loop = asyncio.create_task(
+            standby_loop(
+                self.standby,
+                "http://primary",
+                self.standby.lease,
+                probe_interval_s=0.005,
+                takeover_after=10_000,
+                transport=httpx.MockTransport(transport),
+                token=CONTROL_TOKEN,
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while len(seen) < len(answers) + 2:
+                    await asyncio.sleep(0.001)
+        finally:
+            loop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await loop
+        self.assertTrue(self.standby.standby)
+        return seen, state.load(self.cfg.state_path)
+
+    async def test_a_signed_current_handoff_is_shadowed(self):
+        seen, saved = await self.shadow([handoff_response(self.document(9))])
+        self.assertTrue(all(seen))
+        self.assertEqual(saved["counters"]["served"], 9)
+
+    async def test_a_forged_handoff_is_refused(self):
+        document = self.document(9)
+        body = json.dumps(document).encode()
+        signed = handoff_response(document)
+        tampered = json.dumps({**document, "ejected": ["p", "d"]}).encode()
+        forged = {
+            "unsigned": httpx.Response(200, json=document),
+            "signed with another token": handoff_response(document, token="0" * 64),
+            "a signature of another body": httpx.Response(
+                200,
+                content=tampered,
+                headers={state.SIGNATURE_HEADER: signed.headers[state.SIGNATURE_HEADER]},
+            ),
+            "an empty signature": httpx.Response(
+                200, content=body, headers={state.SIGNATURE_HEADER: ""}
+            ),
+            # An unsigned version it cannot read would otherwise end the shadowing.
+            "an unsigned newer version": httpx.Response(
+                200, json={**document, "schema_version": 99}
+            ),
+        }
+        for name, answer in forged.items():
+            with self.subTest(name):
+                self.cfg.state_path.unlink(missing_ok=True)
+                seen, saved = await self.shadow([answer])
+                self.assertFalse(any(seen))
+                self.assertIsNone(saved)
+
+    async def test_a_replayed_earlier_handoff_is_refused(self):
+        earlier = handoff_response(self.document(3, age_s=1.0))
+        later = handoff_response(self.document(9))
+        seen, saved = await self.shadow([later, earlier])
+        self.assertEqual(seen[0], True)
+        self.assertFalse(any(seen[1:]))
+        self.assertEqual(saved["counters"]["served"], 9)
+
+    async def test_a_handoff_older_than_the_handoff_age_is_refused(self):
+        seen, saved = await self.shadow([handoff_response(self.document(9, age_s=31.0))])
+        self.assertFalse(any(seen))
+        self.assertIsNone(saved)
+
+    async def test_the_primary_signs_its_handoff_and_reads_need_no_token(self):
+        app = create_app(self.cfg)
+        router = app.state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
+            response = await client.get("/narwhal/handoff")
+        self.assertEqual(response.status_code, 200)
+        signature = response.headers[state.SIGNATURE_HEADER]
+        self.assertNotIn(CONTROL_TOKEN, signature)
+        doc = state.verified(response.content, signature, CONTROL_TOKEN)
+        self.assertEqual(doc["schema"], "narwhal.handoff")
+        with self.assertRaises(state.HandoffRefused):
+            state.verified(response.content, signature, "0" * 64)
+
+
+class ClaimFirstTests(FleetCase):
+    async def start(self, holder_first: bool):
+        if holder_first:
+            peer = FileLease(self.root / "lease.json", "peer", 30)
+            self.assertTrue(peer.claim())
+            self.addCleanup(peer.release)
+        probes = []
+
+        def transport(request):
+            probes.append(request.url.path)
+            return httpx.Response(503, json={"ready": False, "control_ready": False})
+
+        app = create_app(
+            self.cfg,
+            standby_of="http://peer",
+            claim_first=True,
+            standby_probe_interval_s=0.01,
+            standby_transport=httpx.MockTransport(transport),
+            lease=FileLease(self.root / "lease.json", "primary", 30),
+        )
+        return app, probes
+
+    async def test_a_first_start_that_loses_the_claim_shadows_its_peer(self):
+        app, probes = await self.start(holder_first=True)
+        async with app.router.lifespan_context(app):
+            async with asyncio.timeout(2):
+                while "/ready" not in probes:
+                    await asyncio.sleep(0.01)
+            self.assertTrue(app.state.router.standby)
+            self.assertEqual(app.state.router.failover_blocked, "")
+
+    async def test_a_first_start_that_wins_the_claim_runs_no_takeover_loop(self):
+        app, probes = await self.start(holder_first=False)
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0.1)
+            self.assertFalse(app.state.router.standby)
+            self.assertEqual(app.state.router.lease_holder, "primary")
+        self.assertEqual(probes, [])
 
 
 class ShutdownHandoffTests(FleetCase):
@@ -181,7 +347,7 @@ class ShutdownHandoffTests(FleetCase):
             if request.url.path == "/ready":
                 return httpx.Response(200, json={"ready": True})
             self.assertEqual(request.url.path, "/narwhal/handoff")
-            return httpx.Response(200, json=document)
+            return handoff_response(document)
 
         app = create_app(
             self.cfg,
@@ -250,7 +416,7 @@ class YieldControlTests(FleetCase):
             router = app.state.router
             self.assertTrue(lease.owned)
             router.served = 5
-            app.state.yield_control()
+            await app.state.yield_control()
             self.assertTrue(router.standby)
             self.assertEqual(router.failover_blocked, "shutting down")
             self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 5)
@@ -265,7 +431,7 @@ class YieldControlTests(FleetCase):
     async def test_a_router_without_a_lease_keeps_control_through_the_drain(self):
         app = create_app(self.cfg)
         async with app.router.lifespan_context(app):
-            app.state.yield_control()
+            await app.state.yield_control()
             self.assertFalse(app.state.router.standby)
             app.state.router.served = 3
         self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 3)

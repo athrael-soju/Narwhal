@@ -102,6 +102,7 @@
         "name": "<name>",
         "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "role": "engine-1",
+        "served_model_name": "synthetic",
         "side_channel_port": 5600,
         "ucx_tls": "tcp,sm,self,cuda"
       },
@@ -189,6 +190,17 @@
           ],
           "log": "<root>/container/launch/launch.log",
           "stage": "docker-start"
+        },
+        {
+          "command": [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.StartedAt}}",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          ],
+          "log": "<root>/container/launch/launch.log",
+          "stage": "docker-inspect"
         }
       ],
       "printed": "Container started; follow its logs and verify the HTTP endpoints.\n"
@@ -284,6 +296,7 @@
         "python_executable": "<python>",
         "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "role": "engine-1",
+        "served_model_name": "synthetic",
         "shared_device": {
           "device_allowance": 0.9,
           "gpu_memory_utilization": 0.4,

@@ -35,7 +35,7 @@ For a plan with an `evidence` object, run the runner on a host that reads the ro
           "id": "rate-0_5",
           "workload": {"file": "runs/load-trial-EXAMPLE/workload/workload.json", "rate_rps": 0.5, "requests": 200},
           "client_argv": [
-            ".venv/bin/python", "tools/measurement/load_trial.py", "run",
+            ".venv/bin/python", "-m", "narwhal.deployment.load_trial", "run",
             "--base", "{base}", "--expected-model", "{model}",
             "--workload", "runs/load-trial-EXAMPLE/workload/workload.json",
             "--rate", "0.5", "--requests", "200",
@@ -49,7 +49,7 @@ For a plan with an `evidence` object, run the runner on a host that reads the ro
           "id": "rate-1",
           "workload": {"file": "runs/load-trial-EXAMPLE/workload/workload.json", "rate_rps": 1, "requests": 200},
           "client_argv": [
-            ".venv/bin/python", "tools/measurement/load_trial.py", "run",
+            ".venv/bin/python", "-m", "narwhal.deployment.load_trial", "run",
             "--base", "{base}", "--expected-model", "{model}",
             "--workload", "runs/load-trial-EXAMPLE/workload/workload.json",
             "--rate", "1", "--requests", "200",

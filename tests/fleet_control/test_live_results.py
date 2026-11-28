@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from tools.fleet_control.live import LiveRecords, percentile
+from narwhal.fleet_control.live import LiveRecords, percentile
 
 SECOND = 1_000_000_000
 

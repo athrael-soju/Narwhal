@@ -1,0 +1,1034 @@
+"""`narwhal deploy plan|run|status|down` over the whole graph, against stubbed hosts and engines."""
+
+import contextlib
+import hashlib
+import io
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from narwhal.deployment import deploy, discovery, run_record
+from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.dev import cli
+from narwhal.observability.stack.start import cli as stack_cli
+from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
+from tests.deployment.deploy_hosts import Fleet
+
+ENGINES = ("engine-1", "engine-2")
+EDGES = ("node-1-to-node-2", "node-2-to-node-1")
+# The primary router's host, then the standby's.
+ROUTERS = ("node-1", "node-2")
+UNITS = 4
+
+
+def assert_stack_accepts(test: unittest.TestCase, command: str) -> None:
+    """Start the monitoring stack from the stage's command line, up to its containers.
+
+    The stack's own option parser and target contract read the arguments, with only the
+    listener variables the stage sets in the environment, as on the router host.
+    """
+    words = shlex.split(command)
+    module = words.index("narwhal.observability.stack.start.cli")
+    listeners = dict(word.split("=", 1) for word in words[1 : words.index(".venv/bin/python")])
+    stderr = io.StringIO()
+    with (
+        patch.dict(os.environ, listeners, clear=True),
+        patch.object(stack_cli, "compose_problem", return_value=None),
+        patch.object(stack_cli, "start") as start,
+        contextlib.redirect_stderr(stderr),
+    ):
+        code = stack_cli.main(words[module + 1 :])
+    test.assertEqual(code, 0, stderr.getvalue())
+    start.assert_called_once()
+
+
+def every_stage() -> set[str]:
+    keys = {"discover", "package", "cache-groups", "profile", "calibrate", "fleet-limits"}
+    keys |= {"lease-check", "load-balancer", "monitoring"}
+    keys |= {f"access[{host}]" for host in ("node-1", "node-2")}
+    keys |= {f"install[{host}]" for host in ("node-1", "node-2")}
+    for stage in (
+        "engine-inspect",
+        "engine-prepare",
+        "engine-check",
+        "engine-start",
+        "engine-probe",
+        "cache-capture",
+        "attest-capture",
+        "sidecar-start",
+        "sidecar-verify",
+    ):
+        keys |= {f"{stage}[{engine}]" for engine in ENGINES}
+    keys |= {"fabric-budget[engine-1]"} | {f"fabric-edge[{edge}]" for edge in EDGES}
+    for stage in ("fleet-inventory", "finalize-fleet", "preflight", "router-start"):
+        keys |= {f"{stage}[{host}]" for host in ROUTERS}
+    return keys
+
+
+class DeployTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.fleet = Fleet(self.root)
+        self.run = self.fleet.run_directory
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.fleet.patched())
+        self.env = dict(self.fleet.env)
+        stack.enter_context(patch.dict(os.environ, self.env, clear=True))
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, cwd)
+
+    def deploy(self, action: str, *args: str) -> tuple[int, dict]:
+        out = io.StringIO()
+        self.stderr = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(self.stderr):
+            code = cli.main(["deploy", action, "--run", str(self.run), *args, "--format", "json"])
+        return code, json.loads(out.getvalue())
+
+    def ran(self, result: dict) -> set[str]:
+        return set(result["data"]["ran"])
+
+    def test_run_reaches_a_ready_router_and_a_rerun_repeats_nothing(self):
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (0, "success"), result)
+        self.assertEqual(self.ran(result), every_stage())
+        for name in ("sidecar-1", "sidecar-2"):
+            self.assertEqual(self.fleet.calls[f"start {name}"], 1)
+        self.assertEqual(self.fleet.calls["start router"], 2)
+        self.assertEqual(len(self.fleet.units), UNITS)
+        self.assertTrue(self.fleet.monitoring_up)
+        command = self.fleet.monitoring_command
+        for origin in ("http://10.0.0.1:8200", "http://10.0.0.2:8200"):
+            self.assertIn(f"--sidecar-url {origin}", command)
+        self.assertIn("NARWHAL_FLEET_NAME=fleet-a", command)
+        self.assertIn("--targets-url http://10.0.0.1:8080", command)
+        assert_stack_accepts(self, command)
+        self.assertIn("load-balancer", self.fleet.containers)
+        fleet = json.loads((self.run / "stages/fleet-limits/attempt-1/fleet.json").read_text())
+        self.assertEqual(fleet["slo"], {"ttft_s": 4.0, "tpot_s": 0.1, "router_overhead_s": 0.05})
+        self.assertEqual(fleet["engine"]["first_token_timeout_s"], 1.75)
+        self.assertTrue(
+            fleet["engine"]["first_token_calibration_path"].endswith(
+                "stages/fleet-limits/attempt-1/first-token-calibration.json"
+            )
+        )
+        self.assertEqual(fleet["engine_contract"], {"engine": "contract"})
+        uploaded = {
+            target: json.loads(data)
+            for target, data in self.fleet.uploads.items()
+            if target.endswith("runs/deployment/deployment-status.json")
+        }
+        # One upload for each of the two router hosts.
+        self.assertEqual(self.fleet.calls["upload deployment-status"], 2)
+        (status,) = {json.dumps(document, sort_keys=True) for document in uploaded.values()}
+        status = json.loads(status)
+        self.assertEqual(status["schema"], "narwhal.deployment-status")
+        self.assertEqual({stage["state"] for stage in status["stages"]}, {"passed"})
+        self.assertIsNotNone(status["last_passed_at"])
+        self.assertEqual(
+            status["fabric"][0], {"edge": EDGES[0], "measured_gbps": 90.0, "budget_gbps": 1.0}
+        )
+
+        code, result = self.deploy("run")
+        self.assertEqual((code, self.ran(result)), (0, set()))
+        self.assertEqual(self.fleet.calls["package"], 1)
+        self.assertEqual(self.fleet.calls["install[node-1]"], 1)
+
+    def test_run_tells_the_operator_about_a_stale_lock(self):
+        self.deploy("run")
+        ended = subprocess.Popen([sys.executable, "-c", "pass"])
+        ended.wait()
+        record = run_record.read(self.run)
+        owner = {**run_record.owner(), "pid": ended.pid}
+        record["lock"] = {"owner": owner, "acquired_at": time.time()}
+        run_record.write(self.run, record)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["data"]["stale_lock"]["pid"], ended.pid)
+        self.assertIn(
+            f"narwhal: deploy run: this run found a stale lock of pid {ended.pid} of",
+            self.stderr.getvalue(),
+        )
+        code, result = self.deploy("run")
+        self.assertNotIn("stale_lock", result["data"])
+        self.assertNotIn("stale lock", self.stderr.getvalue())
+
+    def test_a_stopped_engine_is_prepared_again_and_readmitted_to_the_running_router(self):
+        self.deploy("run")
+        del self.fleet.containers["engine-2"]
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(
+            self.ran(result),
+            {
+                "engine-prepare[engine-2]",
+                "engine-check[engine-2]",
+                "engine-start[engine-2]",
+                "engine-probe[engine-2]",
+                "cache-capture[engine-2]",
+                "attest-capture[engine-2]",
+                "sidecar-start[engine-2]",
+                "sidecar-verify[engine-2]",
+                *(
+                    f"{stage}[{host}]"
+                    for stage in ("finalize-fleet", "preflight", "router-start")
+                    for host in ROUTERS
+                ),
+            },
+        )
+        # Only the router that holds the lease readmits, with the control token from its role
+        # file rather than its command line.
+        self.assertEqual(self.fleet.readmitted, [["n2"]])
+        [script] = self.fleet.readmissions
+        self.assertIn(". ./runs/deployment/.env.router && ", script)
+        self.assertNotIn(CONTROL_TOKEN, script)
+        self.assertEqual(self.fleet.calls["start router"], 2)
+        # The readmission measured the overhead on the router that controls the fleet again.
+        self.assertEqual(self.fleet.calls["measure the router overhead"], 4)
+        self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
+        self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
+
+    def test_an_engine_restart_with_the_same_cache_geometry_keeps_the_groups_and_fabric(self):
+        self.deploy("run")
+        del self.fleet.containers["engine-2"]
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        ran = self.ran(result)
+        self.assertIn("cache-capture[engine-2]", ran)
+        # The fresh launch directory changed only the layout's plan digest.
+        self.assertFalse({"cache-groups", "fabric-budget[engine-1]", *EDGES} & ran, ran)
+        self.assertFalse(any(stage.startswith("fabric-edge") for stage in ran), ran)
+        # A changed geometry still reruns them.
+        del self.fleet.containers["engine-2"]
+        self.fleet.kv_layout = "NHD"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertLessEqual({"cache-groups", "fabric-budget[engine-1]"}, self.ran(result))
+
+    def test_an_engine_container_restarted_in_place_is_removed_before_the_new_start(self):
+        # Docker restarted the recorded container: same ID, new start. It still holds the
+        # engine's port and GPUs, so the new start removes it first.
+        self.deploy("run")
+        cid, _ = self.fleet.containers["engine-2"]
+        self.fleet.containers["engine-2"] = (cid, "2026-01-01T01:00:00Z")
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("engine-start[engine-2]", self.ran(result))
+        self.assertIn(cid, self.fleet.removed)
+        self.assertNotEqual(self.fleet.containers["engine-2"][0], cid)
+
+    def test_an_engine_start_on_a_used_launch_directory_prepares_a_fresh_one_first(self):
+        self.deploy("run")
+        old = self.fleet.containers["engine-1"]
+        # A changed check output reruns engine-start while engine-prepare holds.
+        entry = run_record.read(self.run)["stages"]["engine-check[engine-1]"]
+        (self.run / entry["directory"] / "checked.json").write_text('{"plan": "changed"}')
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        ran = self.ran(result)
+        self.assertLessEqual(
+            {"engine-prepare[engine-1]", "engine-check[engine-1]", "engine-start[engine-1]"},
+            ran,
+        )
+        self.assertEqual(self.fleet.calls["engine-prepare[engine-1]"], 2)
+        self.assertEqual(self.fleet.calls["engine-start[engine-1]"], 2)
+        self.assertEqual(self.fleet.calls["removed unrecorded"], 0)
+        self.assertNotEqual(self.fleet.containers["engine-1"], old)
+        record = run_record.read(self.run)["stages"]
+        self.assertEqual(record["engine-start[engine-1]"]["attempt"], 3)
+        self.assertEqual(record["engine-prepare[engine-1]"]["attempt"], 2)
+        code, result = self.deploy("run")
+        self.assertEqual((code, self.ran(result)), (0, set()))
+
+    def test_a_discovery_change_frees_the_engine_ports_before_inspecting_again(self):
+        self.deploy("run")
+        os.environ["NARWHAL_MODEL_DIR"] = "/models/other"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), every_stage() - {"access[node-1]", "access[node-2]"})
+        self.assertEqual(len(self.fleet.units), UNITS)
+        self.assertEqual(set(self.fleet.containers), {"engine-1", "engine-2", "load-balancer"})
+
+    def test_status_records_a_restarted_sidecar_once_its_verification_passes(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        code, result = self.deploy("status")
+        self.assertEqual(code, 0, result)
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["sidecar_identity[engine-2]"], "restarted and checked")
+        self.assertEqual(live["router_identity[node-1]"], "holds")
+        self.assertEqual(len(self.fleet.verified), 1)
+        entry = run_record.read(self.run)["stages"]["sidecar-start[engine-2]"]
+        self.assertEqual(entry["products"]["sidecar_identity"]["restarts"], 1)
+
+        code, result = self.deploy("run")
+        self.assertEqual(
+            self.ran(result),
+            {"sidecar-verify[engine-2]", "finalize-fleet[node-1]", "finalize-fleet[node-2]"},
+        )
+        self.assertEqual(self.fleet.calls["start sidecar-2"], 1)
+
+    def test_status_fails_while_the_last_run_stopped_at_a_failed_stage(self):
+        self.fleet.fail_stage = "monitoring"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        code, result = self.deploy("status")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        [error] = result["errors"]
+        self.assertEqual(error["stage"], "monitoring")
+        self.assertIn("stubbed failure", error["message"])
+        self.assertIn("recovery", error["context"])
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(set(live.values()), {"holds"})
+        self.fleet.fail_stage = None
+        self.assertEqual(self.deploy("run")[0], 0)
+        code, result = self.deploy("status")
+        self.assertEqual((code, result["status"]), (0, "success"), result)
+
+    def test_status_reports_a_stopped_router_as_stopped_not_as_a_failed_restart(self):
+        self.deploy("run")
+        unit = next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        del self.fleet.units[unit]
+        code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["router_identity[node-1]"], "gone")
+        self.assertIn(f"router-start: {unit} is not running", self.stderr.getvalue())
+        self.assertNotIn("the restarted", self.stderr.getvalue())
+
+    def test_a_checked_restart_moves_the_process_record_down_stops(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        self.deploy("status")
+        entry = run_record.read(self.run)["stages"]["sidecar-start[engine-2]"]
+        (process,) = entry["processes"]
+        self.assertEqual(process, {"name": "sidecar-2", **entry["products"]["sidecar_identity"]})
+
+    def test_a_restart_that_fails_its_check_reruns_its_stage(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        self.fleet.fail_verify = True
+        code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["sidecar_identity[engine-2]"], "gone")
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("sidecar-start[engine-2]", self.ran(result))
+        self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
+
+    def test_plan_reads_a_restarted_unit_without_running_its_check(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        code, result = self.deploy("plan")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.fleet.verified, [])
+        self.assertEqual(
+            result["data"]["notes"],
+            [
+                "sidecar_identity[engine-2] restarted; run checks it first and reruns "
+                "sidecar-start[engine-2] if the check fails"
+            ],
+        )
+        planned = {row["stage"] for row in result["data"]["stages"] if row["runs"]}
+        self.assertEqual(
+            planned,
+            {"sidecar-verify[engine-2]", "finalize-fleet[node-1]", "finalize-fleet[node-2]"},
+        )
+
+    def test_every_run_subcommand_reports_a_held_run_alike(self):
+        self.deploy("run")
+        self.fleet.restart_unit("sidecar-2")
+        with run_record.locked(self.run):
+            for action in ("run", "down"):
+                with self.subTest(action=action):
+                    code, result = self.deploy(action)
+                    self.assertEqual((code, result["status"]), (4, "error"))
+                    self.assertEqual(result["errors"][0]["code"], "operation_failed")
+            code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        self.assertTrue(result["data"]["locked"])
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["sidecar_identity[engine-2]"], "restarted, not checked")
+        self.assertEqual(self.fleet.verified, [])
+        self.assertEqual(len(self.fleet.units), UNITS)
+
+    def test_a_changed_slo_rewrites_the_limits_and_restarts_the_router(self):
+        self.deploy("run")
+        os.environ["NARWHAL_TTFT_S"] = "5"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), SLO_RERUN)
+        self.assertEqual(self.fleet.calls["start router"], 4)
+        self.assertEqual(len(self.fleet.units), UNITS)
+        # No start removes the lease; each reads it first. The primary's rerun finds its own
+        # router holding the lease, stops it and reads the lease again.
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        self.assertEqual(self.fleet.calls["read the pair's lease"], 5)
+
+    def test_a_changed_profiling_sweep_reaches_the_fleet_the_routers_load(self):
+        self.deploy("run")
+        os.environ["NARWHAL_PROFILE_WARMUP_REQUESTS"] = "3"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), {"profile"} | SLO_RERUN)
+        stages = run_record.read(self.run)["stages"]
+        profiled = self.run / stages["profile"]["directory"] / "host" / "profiles.json"
+        limits = stages["fleet-limits"]["directory"]
+        self.assertEqual(stages["fleet-limits"]["attempt"], 2)
+        self.assertEqual((self.run / limits / "profiles.json").read_bytes(), profiled.read_bytes())
+        # The restarted routers load the fleet file of the new fleet-limits attempt.
+        argv = self.fleet.argv["router"]
+        self.assertTrue(argv[argv.index("--fleet") + 1].endswith(f"{limits}/fleet.json"), argv)
+
+    def test_a_lease_path_the_hosts_do_not_share_stops_the_run_before_the_routers(self):
+        self.fleet.lease_coherent = False
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "lease-check")
+        self.assertIn("does not read the primary's claim", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 0)
+        self.fleet.lease_coherent = True
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("router-start[node-1]", self.ran(result))
+
+    def test_a_lost_primary_rejoins_the_standby_that_took_over(self):
+        self.deploy("run")
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        del self.fleet.units[
+            next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        ]
+        self.fleet.active_router = "node-2"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), {"router-start[node-1]"})
+        # The standby holds a live lease, which stays; the primary rejoins as its standby, and
+        # the rejoin measures the overhead on the standby that controls the fleet.
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        self.assertEqual(self.fleet.calls["start router"], 3)
+        self.assertIn("http://10.0.0.2:8000", self.fleet.measured[-1])
+        start = self.run / "stages/router-start/node-1/attempt-2/router.json"
+        lease = json.loads(start.read_text())["lease"]
+        self.assertEqual((lease["holder"], lease["live"]), ("node-2:token", True))
+
+    def test_a_cold_start_waits_out_a_lease_a_standby_could_still_take_over(self):
+        # The pair stopped 10 s ago: its lease file is left and expired, and the primary
+        # claims it only once no standby's handoff can take it over.
+        self.fleet.lease_expired_ago = 10.0
+        waits = []
+
+        def pause(seconds):
+            waits.append(seconds)
+            self.fleet.lease_expired_ago += seconds
+
+        with patch.object(deploy, "_pause", pause):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(waits, [21.0])
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+        start = self.run / "stages/router-start/node-1/attempt-1/router.json"
+        self.assertEqual(json.loads(start.read_text())["lease"]["expires_at"], 969.0)
+
+    def test_a_rerun_after_a_failed_overhead_check_stops_its_own_lease_holder_first(self):
+        # The first attempt's router claimed the lease, then failed its overhead check and kept
+        # running. Its replacement must not shadow it: the stage stops it, waits until no
+        # standby could take its lease over, and starts the primary to claim it.
+        self.fleet.overhead_problem = "overhead 0.068s exceeds 0.05s"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        self.assertEqual(self.fleet.lease_holder(), "node-1")
+        self.fleet.overhead_problem = None
+        # Stopping the router releases its lease, which leaves it expired at that moment.
+        self.fleet.lease_expired_ago = 0.0
+        waits = []
+
+        def pause(seconds):
+            waits.append(seconds)
+            self.fleet.lease_expired_ago += seconds
+
+        with patch.object(deploy, "_pause", pause):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(waits, [31.0])
+        self.assertIn("router of the earlier attempt holds the lease", self.stderr.getvalue())
+        start = self.run / "stages/router-start/node-1/attempt-2/router.json"
+        lease = json.loads(start.read_text())["lease"]
+        self.assertEqual((lease["holder"], lease["live"]), ("node-1:old", False))
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
+
+    def test_a_cold_start_after_a_long_stop_starts_the_primary_at_once(self):
+        self.fleet.lease_expired_ago = 3600.0
+        with patch.object(deploy, "_pause", lambda seconds: self.fail("waited")):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+
+    def test_both_routers_start_with_the_lease_witness(self):
+        self.deploy("run")
+        argv = self.fleet.argv["router"]
+        at = argv.index("--lease-witness")
+        self.assertEqual(argv[at + 1], "/srv/shared/.narwhal-lease-witness")
+
+    def test_a_default_nfs_mount_caches_the_lease_too_long_for_lease_check(self):
+        # Without actimeo, the kernel caches attributes for up to 60 s.
+        self.fleet.mount_options["node-2"] = ["rw", "vers=4.2", "hard", "local_lock=none"]
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "lease-check")
+        self.assertIn("node-2's lease mount /srv/shared", error["message"])
+        self.assertIn("acregmax=60", error["message"])
+        self.assertIn("remount with actimeo=1 or noac", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 0)
+
+    def test_a_lease_mount_back_with_nocto_starts_no_router(self):
+        self.deploy("run")
+        self.stop_primary_router()
+        self.fleet.mount_options["node-1"] = [
+            "rw",
+            "vers=4.2",
+            "nocto",
+            "acregmin=1",
+            "acregmax=1",
+            "acdirmin=1",
+            "acdirmax=1",
+            "local_lock=none",
+        ]
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("remount without nocto", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def test_a_lease_directory_of_another_file_system_type_starts_no_router(self):
+        # The witness is there, but on a local file system rather than the shared mount.
+        self.deploy("run")
+        self.stop_primary_router()
+        self.fleet.mounts["node-1"] = "ext4"
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("a ext4 mount, not a nfs4 one", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def stop_primary_router(self):
+        del self.fleet.units[
+            next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        ]
+        self.fleet.active_router = "node-2"
+
+    def test_a_router_host_without_its_lease_mount_starts_no_router(self):
+        self.deploy("run")
+        del self.fleet.units[
+            next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        ]
+        self.fleet.active_router = "node-2"
+        # The host rebooted without the shared mount; lease-check's result still stands.
+        self.fleet.unmounted.add("node-1")
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "router-start[node-1]")
+        self.assertIn("not the shared mount that lease-check saw", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 2)
+
+    def test_router_hosts_whose_clocks_differ_beyond_the_lease_margin_fail_lease_check(self):
+        self.fleet.clocks = {"node-1": (0.0, 0.04), "node-2": (0.8, 0.27)}
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "lease-check")
+        self.assertIn("clocks differ by 0.800s, measured to within 0.310s", error["message"])
+        self.assertEqual(self.fleet.calls["start router"], 0)
+        self.fleet.clocks = {"node-1": (0.0, 0.05), "node-2": (0.5, 0.2)}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        checked = json.loads(
+            (self.run / "stages/lease-check/attempt-2/lease-check.json").read_text()
+        )
+        self.assertAlmostEqual(checked["clock"]["skew_s"], 0.5)
+
+    def test_an_interrupt_during_router_start_records_it_cancelled(self):
+        self.fleet.interrupt_at = "ask which router controls the fleet"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 130, result)
+        entry = run_record.read(self.run)["stages"]["router-start[node-1]"]
+        self.assertEqual(entry["status"], "cancelled")
+        self.assertIn("router-start[node-1] cancelled", self.stderr.getvalue())
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("router-start[node-1]", self.ran(result))
+
+    def test_router_overhead_above_its_input_fails_router_start(self):
+        self.fleet.overhead_problem = "router overhead 0.0900s exceeds NARWHAL_ROUTER_OVERHEAD_S"
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        self.assertEqual(result["errors"][0]["stage"], "router-start[node-1]")
+        self.assertIn("router overhead 0.0900s", result["errors"][0]["message"])
+
+    def test_a_failed_stage_names_its_recovery_and_the_next_run_resumes_there(self):
+        self.fleet.fail_stage = "engine-check"
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"))
+        error = result["errors"][0]
+        self.assertEqual(error["stage"], "engine-check[engine-1]")
+        # Both router hosts have the package, so each receives the failed run's status.
+        self.assertEqual(self.fleet.calls["upload deployment-status"], 2)
+        status = json.loads((self.run / "deployment-status.json").read_text())
+        self.assertIn(
+            {"stage": "engine-check", "instance": "engine-1", "state": "failed"}, status["stages"]
+        )
+        self.assertIsNone(status["last_passed_at"])
+        self.assertEqual(
+            error["context"]["recovery"],
+            "https://athrael-soju.github.io/Narwhal/deploy/03-Validate-Engines/"
+            "#preparing-checking-and-starting-each-engine",
+        )
+        self.fleet.fail_stage = None
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0)
+        self.assertNotIn("engine-prepare[engine-1]", self.ran(result))
+        self.assertIn("engine-check[engine-1]", self.ran(result))
+        self.assertEqual(self.fleet.calls["engine-prepare[engine-1]"], 1)
+
+    def test_a_host_step_that_fails_without_a_verdict_is_an_operational_error(self):
+        self.fleet.fail_stage = "engine-inspect"
+        self.fleet.fail_status = 4
+        code, result = self.deploy("run")
+        self.assertEqual((code, result["status"]), (4, "error"))
+        self.assertEqual(result["errors"][0]["code"], "operation_failed")
+        self.assertEqual(result["data"]["failed_stage"], "engine-inspect[engine-1]")
+
+    def test_plan_names_every_missing_input_before_any_host(self):
+        del os.environ["NARWHAL_TTFT_S"]
+        os.environ["NARWHAL_PROFILE_PREFILL_LENS"] = "256,x"
+        code, result = self.deploy("plan")
+        self.assertEqual((code, result["status"]), (2, "invalid_input"))
+        messages = [error["message"] for error in result["errors"]]
+        self.assertIn("set NARWHAL_TTFT_S to a finite number of at least 0", messages)
+        self.assertIn(
+            "set NARWHAL_PROFILE_PREFILL_LENS to comma-separated positive integers", messages
+        )
+        self.assertEqual(sum(self.fleet.calls.values()), 0)
+        self.assertFalse(self.run.exists())
+
+    def test_plan_decides_each_stage_without_running_one(self):
+        code, result = self.deploy("plan")
+        self.assertEqual(code, 0, result)
+        stages = {row["stage"]: row for row in result["data"]["stages"]}
+        self.assertEqual(stages["access[node-1]"]["reasons"], ["no attempt yet"])
+        self.assertEqual(stages["discover"]["reasons"], ["no attempt yet"])
+        self.assertEqual(stages["fabric-budget"]["reasons"], ["runs after cache-groups"])
+        self.assertIn("router-start[node-1]", stages)
+        self.assertEqual(sum(self.fleet.calls.values()), 0)
+        self.assertFalse(self.run.exists())
+
+        self.deploy("run")
+        os.environ["NARWHAL_TTFT_S"] = "5"
+        code, result = self.deploy("plan")
+        stages = {row["stage"]: row for row in result["data"]["stages"]}
+        self.assertFalse(stages["calibrate"]["runs"])
+        self.assertEqual(stages["fleet-limits"]["reasons"], ["slo changed"])
+        self.assertEqual(stages["preflight[node-1]"]["reasons"], ["slo changed"])
+        self.assertEqual({name for name, row in stages.items() if row["runs"]}, SLO_RERUN)
+        self.assertEqual(
+            run_record.read(self.run)["inputs"]["slo"]["digest"],
+            run_record.keyed(
+                run_record.find_salt(self.run), deploy.inputs({**self.env})["slo"].digest
+            ),
+        )
+
+    def test_plan_names_a_host_that_cannot_run_supervised_units(self):
+        with patch.object(deploy.supervision, "check_systemd_host", lambda runner: ["no linger"]):
+            code, result = self.deploy("plan")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"))
+        self.assertIn("node-1: no linger", [error["message"] for error in result["errors"]])
+
+    def test_plan_names_a_router_host_without_docker_compose(self):
+        self.fleet.compose_problem = "no compose"
+        code, result = self.deploy("plan")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"))
+        messages = [error["message"] for error in result["errors"]]
+        # Only the primary router's host runs the monitoring stack.
+        self.assertEqual(messages, ["node-1: no compose"])
+
+    def test_down_stops_what_the_run_started(self):
+        self.deploy("run")
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0)
+        names = {(p["name"], p["stopped"]) for p in result["data"]["processes"]}
+        self.assertEqual(
+            names,
+            {
+                ("monitoring", True),
+                ("load-balancer", True),
+                ("router", True),
+                ("sidecar-1", True),
+                ("sidecar-2", True),
+                ("engine-1", True),
+                ("engine-2", True),
+            },
+        )
+        self.assertEqual(self.fleet.units, {})
+        self.assertEqual(set(self.fleet.containers), set())
+        self.assertFalse(self.fleet.monitoring_up)
+
+    def test_down_removes_the_runs_exited_engine_containers(self):
+        self.deploy("run")
+        # The recorded engine-2 container exited, and an earlier attempt left another.
+        recorded, _ = self.fleet.containers.pop("engine-2")
+        self.fleet.exited = {recorded: "engine-2", "e" * 64: "engine-2"}
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0, result)
+        engine = next(p for p in result["data"]["processes"] if p["name"] == "engine-2")
+        self.assertFalse(engine["stopped"])
+        self.assertEqual(engine["removed_exited"], ["e" * 64])
+        self.assertEqual(self.fleet.exited, {})
+        self.assertIn(recorded, self.fleet.removed)
+
+    def test_down_leaves_a_unit_another_start_owns_and_stops_the_rest(self):
+        self.deploy("run")
+        unit = next(name for name in self.fleet.units if name.endswith("-sidecar-1.service"))
+        _, invocation, restarts = self.fleet.units[unit]
+        self.fleet.units[unit] = ("another-start", invocation, restarts)
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0)
+        stopped = {p["name"]: p["stopped"] for p in result["data"]["processes"]}
+        self.assertFalse(stopped["sidecar-1"])
+        self.assertTrue(stopped["router"] and stopped["sidecar-2"] and stopped["engine-2"])
+        self.assertEqual(list(self.fleet.units), [unit])
+
+    def keyed_run(self, key: str) -> dict:
+        os.environ["NARWHAL_ENGINE_KEY"] = key
+        code, result = self.deploy("run", "--until", "package")
+        self.assertEqual(code, 0, result)
+        return result
+
+    def test_the_run_record_digests_of_the_engine_key_need_the_run_salt(self):
+        key = "stub-key-3"
+        self.keyed_run(key)
+        text = (self.run / "run.json").read_text()
+        record = run_record.read(self.run)
+        # No file an attempt wrote, such as a role environment, appears by its SHA-256.
+        written = [
+            self.run / output["path"]
+            for entry in record["stages"].values()
+            for output in entry["outputs"]
+        ]
+        self.assertTrue(written)
+        for path in written:
+            self.assertNotIn(digest(path), text)
+        env = dict(os.environ)
+        guesses = {
+            guess: deploy.inputs({**env, "NARWHAL_ENGINE_KEY": guess})["discovery"].digest
+            for guess in ("stub-key-1", "stub-key-2", key, "stub-key-4")
+        }
+        # Offline, no guess matches a digest the record holds, the right one included.
+        self.assertEqual([g for g, d in guesses.items() if d.split(":")[1] in text], [])
+        # With the run's salt, only the right guess matches the discovery input.
+        salt = run_record.find_salt(self.run)
+        recorded = record["inputs"]["discovery"]["digest"]
+        self.assertEqual(
+            [g for g, d in guesses.items() if run_record.keyed(salt, d) == recorded], [key]
+        )
+        for value in record["inputs"].values():
+            self.assertRegex(value["digest"], "^hmac-sha256:[0-9a-f]{64}$")
+        for entry in record["stages"].values():
+            for output in entry["outputs"]:
+                self.assertEqual(set(output), {"path", "hmac_sha256", "size", "mode"})
+        info = (self.run / run_record.SALT).stat()
+        self.assertEqual((info.st_mode & 0o777, info.st_size), (0o600, 32))
+
+    def test_plan_refuses_a_missing_or_short_control_token(self):
+        for token, problem in (
+            (None, "set NARWHAL_ROUTER_TOKEN to the router control token"),
+            ("", "set NARWHAL_ROUTER_TOKEN to the router control token"),
+            ("a" * 63, "must hold at least 32 random bytes"),
+            ("A" * 42, "must hold at least 32 random bytes"),
+            ("a b" * 30, "must hold at least 32 random bytes"),
+        ):
+            with self.subTest(token=token):
+                os.environ.pop(ROUTER_TOKEN_ENV, None)
+                if token is not None:
+                    os.environ[ROUTER_TOKEN_ENV] = token
+                code, result = self.deploy("plan")
+                self.assertEqual(code, 2, result)
+                messages = [error["message"] for error in result["errors"]]
+                self.assertTrue(any(problem in m for m in messages), messages)
+        self.assertFalse(self.run.exists())
+        os.environ[ROUTER_TOKEN_ENV] = "A_-" * 15
+        self.assertEqual(self.deploy("plan")[0], 0)
+
+    def test_plan_refuses_a_control_token_equal_to_the_engine_key(self):
+        os.environ["NARWHAL_ENGINE_KEY"] = os.environ[ROUTER_TOKEN_ENV]
+        code, result = self.deploy("plan")
+        self.assertEqual(code, 2, result)
+        messages = [error["message"] for error in result["errors"]]
+        self.assertTrue(any("equals the engine API key" in m for m in messages), messages)
+        self.assertFalse(self.run.exists())
+
+    def test_no_run_file_or_log_holds_the_control_token(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        token = CONTROL_TOKEN.encode()
+        plain = hashlib.sha256(token).hexdigest().encode()
+        for path in self.run.rglob("*"):
+            if path.is_file():
+                with self.subTest(path=str(path.relative_to(self.run))):
+                    self.assertNotIn(token, path.read_bytes())
+                    self.assertNotIn(plain, path.read_bytes())
+        self.assertNotIn(CONTROL_TOKEN, self.stderr.getvalue())
+        for value in run_record.read(self.run)["inputs"].values():
+            self.assertRegex(value["digest"], "^hmac-sha256:[0-9a-f]{64}$")
+
+    def test_a_changed_control_token_reruns_the_routers(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        os.environ[ROUTER_TOKEN_ENV] = "d4" * 32
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertTrue(
+            {"discover", "package", *(f"router-start[{host}]" for host in ROUTERS)}
+            <= self.ran(result)
+        )
+        self.assertEqual(self.ran(self.deploy("run")[1]), set())
+
+    def test_a_changed_engine_key_reruns_the_stages_its_input_feeds(self):
+        self.keyed_run("stub-key-1")
+        salt = (self.run / run_record.SALT).read_bytes()
+        self.assertEqual(self.ran(self.keyed_run("stub-key-1")), set())
+        self.assertTrue({"discover", "package"} <= self.ran(self.keyed_run("stub-key-2")))
+        # The salt is made once.
+        self.assertEqual((self.run / run_record.SALT).read_bytes(), salt)
+
+    def test_a_record_with_unkeyed_digests_is_keyed_in_place_without_a_rerun(self):
+        self.keyed_run("stub-key-1")
+        record = run_record.read(self.run)
+        unkeyed = deploy.inputs(dict(os.environ))
+        record["inputs"] = {
+            name: {"digest": value.digest, "source": value.source}
+            for name, value in unkeyed.items()
+        }
+        for entry in record["stages"].values():
+            digests = entry["input_digests"]
+            for name in set(digests) & set(unkeyed):
+                digests[name] = unkeyed[name].digest
+            entry["outputs"] = [
+                {
+                    "path": output["path"],
+                    "sha256": digest(self.run / output["path"]),
+                    "size": output["size"],
+                    "mode": output["mode"],
+                }
+                for output in entry["outputs"]
+            ]
+        # As a version 2 runner wrote it, before any run directory had a salt.
+        document = {"schema": "narwhal.deployment-run", "schema_version": 2, **record}
+        (self.run / "run.json").write_text(json.dumps(document))
+        (self.run / run_record.SALT).unlink()
+        self.assertEqual(self.ran(self.keyed_run("stub-key-1")), set())
+        written = json.loads((self.run / "run.json").read_text())
+        self.assertEqual(written["schema_version"], 3)
+        text = (self.run / "run.json").read_text()
+        for value in unkeyed.values():
+            self.assertNotIn(value.digest, text)
+        for entry in run_record.read(self.run)["stages"].values():
+            for output in entry["outputs"]:
+                self.assertIn("hmac_sha256", output)
+
+    def test_a_salt_other_users_can_read_is_refused(self):
+        self.keyed_run("stub-key-1")
+        (self.run / run_record.SALT).chmod(0o644)
+        os.environ["NARWHAL_ENGINE_KEY"] = "stub-key-1"
+        code, result = self.deploy("run", "--until", "package")
+        self.assertEqual(code, 2, result)
+        self.assertIn("run.salt must be a regular file", result["errors"][0]["message"])
+
+    def test_status_and_down_refuse_a_run_directory_other_users_may_enter(self):
+        self.deploy("run")
+        units = dict(self.fleet.units)
+        self.run.chmod(0o750)
+        for action in ("status", "down"):
+            code, result = self.deploy(action)
+            self.assertEqual(code, 2, result)
+            self.assertIn("lets other users in", result["errors"][0]["message"])
+        self.assertEqual(self.fleet.units, units)
+        self.run.chmod(0o700)
+        record = self.run / "run.json"
+        moved = self.run / "elsewhere.json"
+        record.rename(moved)
+        record.symlink_to(moved)
+        for action in ("status", "down"):
+            code, result = self.deploy(action)
+            self.assertEqual(code, 2, result)
+            self.assertIn("must be a regular file", result["errors"][0]["message"])
+        self.assertEqual(self.fleet.units, units)
+
+
+SLO_RERUN = {"fleet-limits"} | {
+    f"{stage}[{host}]" for stage in ("preflight", "router-start") for host in ROUTERS
+}
+
+
+PAIR_INPUTS = (
+    "NARWHAL_STANDBY_ROUTER_SSH",
+    "NARWHAL_STANDBY_ROUTER_URL",
+    "NARWHAL_LOAD_BALANCER_URL",
+    "NARWHAL_LEASE_PATH",
+    "NARWHAL_HAPROXY_IMAGE",
+)
+
+
+def one_host(env: dict[str, str]) -> dict[str, str]:
+    """`env` with both engines and the only router on node 1's host, and no standby."""
+    single = {name: value for name, value in env.items() if name not in PAIR_INPUTS}
+    return {**single, "NARWHAL_NODE_2_SSH": single["NARWHAL_NODE_1_SSH"]}
+
+
+class SingleRouterTests(unittest.TestCase):
+    """A fleet on one SSH host: its engines and one router, with no standby, lease or load
+    balancer."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.fleet = Fleet(self.root)
+        self.fleet.env = one_host(self.fleet.env)
+        self.run = self.fleet.run_directory
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.fleet.patched())
+        stack.enter_context(patch.dict(os.environ, self.fleet.env, clear=True))
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, cwd)
+
+    def deploy(self, action: str, *args: str) -> tuple[int, dict, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["deploy", action, "--run", str(self.run), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_inventory_puts_the_engines_and_the_router_on_one_host(self):
+        [host] = discovery.derive_hosts(self.fleet.env)
+        self.assertEqual(host.roles, ("engine-1", "engine-2", "router"))
+        self.assertIn("router", deploy.inputs(self.fleet.env))
+
+    def test_plan_says_once_that_the_fleet_has_no_router_failover(self):
+        code, out, _ = self.deploy("plan")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("no router failover"), 1, out)
+        self.assertNotIn("lease-check", out)
+        self.assertNotIn("load-balancer", out)
+        code, result = self.json("plan")
+        self.assertIn(deploy.SINGLE_ROUTER, result["data"]["notes"])
+
+    def test_run_starts_one_router_without_a_lease_and_monitors_it(self):
+        code, out, err = self.deploy("run")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.count("no router failover"), 1, out)
+        self.assertNotIn("lease-check", out)
+        self.assertNotIn("load-balancer", out)
+        self.assertIn("router-start[node-1]: passed", out)
+        self.assertEqual(self.fleet.calls["start router"], 1)
+        argv = self.fleet.argv["router"]
+        for flag in ("--lease-path", "--lease-witness", "--standby-of", "--first-start-primary"):
+            self.assertNotIn(flag, argv)
+        self.assertNotIn("load-balancer", self.fleet.containers)
+        command = self.fleet.monitoring_command
+        self.assertEqual(command.count("--router-url"), 1, command)
+        self.assertNotIn("--targets-url", command)
+        assert_stack_accepts(self, command)
+        self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
+        # A rerun finds the router running and repeats nothing.
+        code, out, err = self.deploy("run")
+        self.assertEqual(code, 0, err)
+        self.assertIn("0 stage instances ran", out)
+
+    def json(self, action: str) -> tuple[int, dict]:
+        code, out, _ = self.deploy(action, "--format", "json")
+        return code, json.loads(out)
+
+
+class InputTests(unittest.TestCase):
+    def setUp(self):
+        self.env = Fleet(Path(tempfile.mkdtemp())).env
+
+    def changed(self, **values: str) -> set[str]:
+        before = deploy.inputs(self.env)
+        after = deploy.inputs({**self.env, **values})
+        return {name for name in before if before[name].digest != after[name].digest}
+
+    def test_a_lease_path_a_shell_could_misread_or_in_the_root_is_refused(self):
+        for lease in ("/srv/it's/lease.json", "/srv/a b/lease.json", "/lease.json", "/srv/../x/l"):
+            with self.subTest(lease=lease), self.assertRaises(deploy.InputError) as raised:
+                deploy.pair({**self.env, "NARWHAL_LEASE_PATH": lease})
+            self.assertIn("NARWHAL_LEASE_PATH", raised.exception.problems[0])
+        self.assertEqual(deploy.pair(self.env).lease_path, "/srv/shared/narwhal-lease.json")
+
+    def test_each_input_reruns_only_its_own_fact(self):
+        self.assertEqual(self.changed(NARWHAL_TTFT_S="5"), {"slo"})
+        self.assertEqual(self.changed(NARWHAL_ROUTER_OVERHEAD_S="0.1"), {"slo"})
+        self.assertEqual(self.changed(NARWHAL_FIRST_TOKEN_MARGIN_S="1"), {"deadline_margin"})
+        self.assertEqual(self.changed(NARWHAL_PROFILE_WARMUP_REQUESTS="4"), {"profiling"})
+        self.assertEqual(self.changed(NARWHAL_CALIBRATION_SAMPLES="200"), {"calibration"})
+        self.assertEqual(self.changed(NARWHAL_FABRIC_BURST="3"), {"fabric_workload"})
+        self.assertEqual(self.changed(NARWHAL_FABRIC_TEST_PORT="5202"), {"fabric_test"})
+        self.assertEqual(self.changed(NARWHAL_RDMA_GID_INDEX="3"), {"fabric_test"})
+        self.assertEqual(self.changed(NARWHAL_ROUTER_URL="http://10.0.0.1:9000"), {"router"})
+        self.assertEqual(self.changed(NARWHAL_LEASE_PATH="/srv/other/lease.json"), {"router"})
+        self.assertEqual(self.changed(NARWHAL_GRAFANA_BIND_ADDRESS="127.0.0.1"), {"monitoring"})
+        self.assertEqual(self.changed(NARWHAL_FLEET_NAME="fleet-b"), {"monitoring"})
+        self.assertEqual(
+            self.changed(NARWHAL_ALERTMANAGER_URL="http://10.0.0.9:9093"), {"monitoring"}
+        )
+        self.assertEqual(self.changed(NARWHAL_LOAD_BALANCER_SSH="deploy@h2"), {"destinations"})
+        self.assertEqual(self.changed(NARWHAL_NODE_2_SSH="deploy@h3"), {"destinations"})
+        self.assertEqual(self.changed(NARWHAL_MODEL_DIR="/models/other"), {"discovery"})
+        self.assertEqual(self.changed(NARWHAL_STAGE_TIMEOUT_SECONDS="60"), set())
+
+    def test_secrets_enter_only_as_digests(self):
+        inputs = deploy.inputs({**self.env, "NARWHAL_ENGINE_KEY": "secret-value"})
+        self.assertNotIn("secret-value", json.dumps({k: vars(v) for k, v in inputs.items()}))
+        self.assertNotIn(CONTROL_TOKEN, json.dumps({k: vars(v) for k, v in inputs.items()}))
+        self.assertEqual(self.changed(NARWHAL_ROUTER_TOKEN="d4" * 32), {"discovery"})
+
+    def test_every_malformed_input_is_named(self):
+        env = {
+            **self.env,
+            "NARWHAL_ROUTER_URL": "router:8000",
+            "NARWHAL_FIRST_TOKEN_MARGIN_S": "0",
+            "NARWHAL_CALIBRATION_SAMPLES": "99",
+            "NARWHAL_FLEET_NAME": "Fleet A",
+            "NARWHAL_ALERTMANAGER_URL": "alertmanager:9093",
+        }
+        del env["NARWHAL_CALIBRATION_INPUT_TOKENS"]
+        with self.assertRaises(deploy.InputError) as caught:
+            deploy.inputs(env)
+        self.assertEqual(
+            set(caught.exception.problems),
+            {
+                "set NARWHAL_FIRST_TOKEN_MARGIN_S to a positive number",
+                "set NARWHAL_CALIBRATION_INPUT_TOKENS to comma-separated positive integers",
+                "set NARWHAL_ROUTER_URL to the router's http://HOST:PORT",
+                "set NARWHAL_FLEET_NAME to the fleet's name, lowercase letters, digits, '.', '_' "
+                "or '-', which labels every series",
+                "NARWHAL_ALERTMANAGER_URL 'alertmanager:9093' needs http(s)://HOST:PORT",
+                f"set NARWHAL_CALIBRATION_SAMPLES to an integer of at least "
+                f"{MIN_SAMPLES_PER_GROUP}",
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

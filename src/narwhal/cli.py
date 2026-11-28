@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import math
 import socket
 import sys
+import time
+from pathlib import Path
 
 import uvicorn
 
 from .cli_errors import failure
 from .cli_support import add_version_argument
 from .config import FleetConfig
+from .runtime.lease import DEFAULT_SAFETY_MARGIN_S, FileLease, LeaseError, RouterLease
 from .runtime.listeners import check_http_bind
+from .runtime.standby import MAX_HANDOFF_AGE_S
 from .serving.app import create_app
 
 # uvicorn logs its shutdown steps here.
@@ -34,6 +39,44 @@ LOG_LEVELS = {
     "debug": "DEBUG",
     "trace": "DEBUG",
 }
+
+
+def _first_start(args: argparse.Namespace) -> bool:
+    """Whether a `--first-start-primary` router starts as the primary and claims the lease.
+
+    It does when no lease exists or the lease is free, as a Kubernetes Lease is once its holder
+    released it, or when a lease file expired longer ago than the `--standby-max-handoff-age`,
+    since no standby then holds a handoff fresh enough to take over. A held lease, or one a
+    standby can still take over, makes it the standby of its peer, as does a lease directory
+    without its `--lease-witness` or a Lease it cannot read.
+    """
+    try:
+        lease: RouterLease
+        if args.kubernetes_lease:
+            from .runtime.kubernetes_lease import KubernetesLease
+
+            lease = KubernetesLease.in_cluster(
+                args.kubernetes_lease,
+                "first-start",
+                args.lease_ttl,
+                safety_margin_s=args.lease_safety_margin,
+            )
+        else:
+            lease = FileLease(
+                Path(args.lease_path),
+                "first-start",
+                args.lease_ttl,
+                witness=Path(args.lease_witness) if args.lease_witness else None,
+            )
+        record = lease.read()
+    except (LeaseError, ValueError):
+        # A missing directory, witness or ServiceAccount, or a lease this version cannot read.
+        return False
+    return (
+        record is None
+        or not record.holder
+        or time.time() - record.expires_at > args.standby_max_handoff_age
+    )
 
 
 def serve(argv: list[str] | None = None) -> int:
@@ -83,7 +126,13 @@ def serve(argv: list[str] | None = None) -> int:
         metavar="URL",
         help="run as a warm standby of the primary router at URL: remain "
         "non-ready while shadowing its handoff, then attempt fenced takeover "
-        "after the primary is silent and its shared lease expires",
+        "after the primary is silent and its lease expires",
+    )
+    ap.add_argument(
+        "--first-start-primary",
+        action="store_true",
+        help="start as the primary while the lease is absent or free, and as the standby of "
+        "--standby-of once another router holds it, so a supervisor's restart rejoins the pair",
     )
     ap.add_argument(
         "--standby-probe-interval",
@@ -100,13 +149,26 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--standby-max-handoff-age",
         type=float,
-        default=30.0,
+        default=MAX_HANDOFF_AGE_S,
         help="finite positive maximum state age in seconds for automatic takeover (default 30)",
     )
     ap.add_argument(
         "--lease-path",
         default="",
         help="lease JSON on storage shared by the primary and standby",
+    )
+    ap.add_argument(
+        "--lease-witness",
+        default="",
+        help="file on the shared lease storage that must exist before the router touches the "
+        "lease, such as the one narwhal deploy's lease check leaves beside it",
+    )
+    ap.add_argument(
+        "--kubernetes-lease",
+        default="",
+        metavar="NAME",
+        help="elect the primary through the coordination.k8s.io Lease NAME in the pod's "
+        "namespace, with the pod's ServiceAccount, instead of a --lease-path file",
     )
     ap.add_argument(
         "--router-id",
@@ -118,7 +180,7 @@ def serve(argv: list[str] | None = None) -> int:
         type=float,
         default=5.0,
         help="finite lease lifetime in seconds, must exceed --lease-renew-interval plus "
-        "--lease-safety-margin (default: %(default)s)",
+        "--lease-safety-margin, and whole with --kubernetes-lease (default: %(default)s)",
     )
     ap.add_argument(
         "--lease-renew-interval",
@@ -129,9 +191,17 @@ def serve(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--lease-safety-margin",
         type=float,
-        default=1.0,
-        help="finite nonnegative relative clock skew in seconds reserved before expiry "
-        "(default: %(default)s)",
+        default=DEFAULT_SAFETY_MARGIN_S,
+        help="finite nonnegative seconds the holder fences before its lease expires: the "
+        "relative clock skew of a lease file, and a positive margin for clock rate and "
+        "scheduling with --kubernetes-lease (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--deployment-status",
+        default="",
+        metavar="PATH",
+        help="narwhal.deployment-status document whose stage states, times, fabric edges and "
+        "attested engines /metrics exports, read on every scrape",
     )
     ap.add_argument(
         "--resume",
@@ -186,8 +256,14 @@ def serve(argv: list[str] | None = None) -> int:
         ap.error("--standby-takeover-after must be at least 1")
     if args.standby_max_handoff_age <= 0:
         ap.error("--standby-max-handoff-age must be positive")
-    if args.standby_of and not args.lease_path:
-        ap.error("--standby-of requires --lease-path for fenced takeover")
+    if args.lease_path and args.kubernetes_lease:
+        ap.error("give --lease-path or --kubernetes-lease, not both")
+    if args.standby_of and not (args.lease_path or args.kubernetes_lease):
+        ap.error("--standby-of requires --lease-path or --kubernetes-lease for fenced takeover")
+    if args.first_start_primary and not args.standby_of:
+        ap.error("--first-start-primary requires --standby-of")
+    if args.lease_witness and not args.lease_path:
+        ap.error("--lease-witness requires --lease-path")
     if args.lease_safety_margin < 0:
         ap.error("--lease-safety-margin must be nonnegative")
     if (
@@ -195,20 +271,34 @@ def serve(argv: list[str] | None = None) -> int:
         or args.lease_ttl <= args.lease_renew_interval + args.lease_safety_margin
     ):
         ap.error("--lease-ttl must exceed --lease-renew-interval plus --lease-safety-margin")
+    if args.kubernetes_lease:
+        from .runtime.kubernetes_lease import check_settings
+
+        try:
+            check_settings(args.kubernetes_lease, args.lease_ttl, args.lease_safety_margin)
+        except ValueError as exc:
+            ap.error(f"--kubernetes-lease: {exc}")
+    # A first start claims the lease, and keeps its peer to shadow should another router
+    # claim first.
+    claim_first = bool(args.first_start_primary and _first_start(args))
     try:
         app = create_app(
             cfg,
             max_concurrent=args.max_concurrent,
             journal_path=args.journal or None,
             standby_of=args.standby_of.rstrip("/") or None,
+            claim_first=claim_first,
             standby_probe_interval_s=args.standby_probe_interval,
             standby_takeover_after=args.standby_takeover_after,
             standby_max_handoff_age_s=args.standby_max_handoff_age,
             lease_path=args.lease_path or None,
+            lease_witness=args.lease_witness or None,
+            kubernetes_lease=args.kubernetes_lease or None,
             router_id=args.router_id or f"{socket.gethostname()}:{args.port}",
             lease_ttl_s=args.lease_ttl,
             lease_renew_interval_s=args.lease_renew_interval,
             lease_safety_margin_s=args.lease_safety_margin,
+            deployment_status=args.deployment_status or None,
         )
     except (OSError, ValueError) as exc:
         return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)
@@ -260,7 +350,8 @@ class YieldingServer(uvicorn.Server):
         for connection in list(self.server_state.connections):
             connection.shutdown()
         await asyncio.sleep(0.1)
-        yield_control()
+        if inspect.isawaitable(handed := yield_control()):
+            await handed
         try:
             await asyncio.wait_for(
                 self._wait_tasks_to_complete(), timeout=self.config.timeout_graceful_shutdown

@@ -14,15 +14,15 @@ from pathlib import Path
 
 import httpx
 
-from tools.measurement import load_trial as trial
-from tools.measurement.benchmark_evidence import metric_values
+from narwhal.deployment import load_trial as trial
+from narwhal.deployment.reconcile import metric_values
 from tools.measurement.simulated_engine import ACTIVE_METRIC
 
 from .client import client_argv, sleep_until
 from .cpus import Allocation, proc_seconds
 from .files import open_private, write_private
 from .fleet import write_fleet
-from .processes import ROOT, child_env, free_port, ready_line
+from .processes import ROOT, child_env, free_port, ready_line, router_env
 from .report import BUSY_METRIC, per
 from .run import Run, settings_of
 
@@ -313,7 +313,7 @@ class ScaleRun:
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         cwd=self.out,
-                        env=child_env(str(Path(self.args.router_src).resolve())),
+                        env=router_env(str(Path(self.args.router_src).resolve())),
                     )
                 )
         deadline = time.monotonic() + 60.0

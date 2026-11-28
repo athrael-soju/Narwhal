@@ -296,8 +296,10 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_explicit_auth_headers_take_precedence_case_insensitively(self):
         headers = {"Authorization": "Bearer forwarded", "x-request-id": "r"}
-        self.assertEqual(self.client._auth(headers), headers)
-        self.assertEqual(self.client._auth({})["authorization"], "Bearer synthetic-engine-key")
+        self.assertEqual(self.client._auth(headers, "http://e"), headers)
+        self.assertEqual(
+            self.client._auth({}, "http://e")["authorization"], "Bearer synthetic-engine-key"
+        )
 
 
 class RendezvousProbeTests(unittest.IsolatedAsyncioTestCase):

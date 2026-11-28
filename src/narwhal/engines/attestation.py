@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import dataclasses
 import json
 import math
+import os
 import re
+import signal
 import subprocess
+import sys
+import threading
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -16,6 +23,7 @@ from uuid import uuid4
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 
 from ..backends import DEFAULT_BACKEND
 from ..backends import load as load_backend
@@ -30,13 +38,21 @@ from ..contracts import (
     validate_document,
     versioned,
 )
+from ..observability import restarts
+from ..observability.metrics.exposition import CONTENT_TYPE
+from ..observability.restarts import render_restarts
 from .host_process import process_clock
+from .pod_identity import pod_clock, read_pod
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
 ATTESTATION_PATH = "/v1/attestation"
 PROCESS_PATH = "/v1/process"
 RESIDENCY_PATH = "/v1/residency"
+HCA_PATH = "/v1/hca"
+# The kernel's RDMA device tree, and the file that identifies the running host boot.
+INFINIBAND = Path("/sys/class/infiniband")
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 # Socket names inside the launch plan's cache-event directory; the launcher uses the same.
 EVENTS_SOCKET = "events.sock"
 REPLAY_SOCKET = "replay.sock"
@@ -55,6 +71,8 @@ class EngineIdentityReader(ABC):
     contract_fields: ClassVar[frozenset[str] | None] = None
     # The launch flag that carries the sequence limit; None means the backend attests none.
     sequence_flag: ClassVar[str | None] = None
+    # True when the engine serves its version only to a caller holding the engine credential.
+    identity_needs_key: ClassVar[bool] = False
 
     @abstractmethod
     async def version(
@@ -192,7 +210,7 @@ async def fetch_engine_identity(
     *,
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
     reader: EngineIdentityReader | None = None,
     attestation_url: str | None = None,
     process: Callable[[], float] | None = None,
@@ -233,6 +251,135 @@ async def fetch_spec_identity(
     )
 
 
+@dataclass(frozen=True)
+class AttestedIdentity:
+    """A live engine's identity and attestation, and why the attestation does not verify."""
+
+    identity: EngineIdentity
+    payload: Any
+    failures: tuple[str, ...]
+
+
+IdentityRead = Callable[..., Awaitable[EngineIdentity]]
+
+
+async def read_attestation(
+    spec: EngineSpec,
+    *,
+    timeout_s: float,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Any:
+    """The attestation `spec`'s sidecar serves, read with no credential."""
+    if not spec.attestation_url:
+        raise ValueError(f"{spec.iid}: attestation_url is not configured")
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        response = await client.get(spec.attestation_url)
+        response.raise_for_status()
+    return response.json()
+
+
+async def attest_identity(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    payload: Any,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    headers: Mapping[str, str] | None = None,
+    trusted_start: float | None = None,
+    identify: IdentityRead | None = None,
+) -> AttestedIdentity:
+    """Read `spec`'s live identity and verify `payload`, its attestation, against it.
+
+    The engine's version and process start are read with no credential where the engine serves
+    them without one. An engine that serves its version only with the credential gets
+    `headers`, the fleet's engine headers by default, only after `payload` verifies against
+    the contract and the process start its sidecar reads, and, with `trusted_start`, only while
+    that start is the one the caller trusted the engine for. `identify` reads the identity, as
+    `fetch_spec_identity` does by default. Unreadable evidence raises `httpx.HTTPError` or
+    `ValueError`.
+    """
+    contract = cfg.engine_contract
+    if contract is None:
+        raise ValueError("attestation requires an engine contract")
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    read = fetch_spec_identity if identify is None else identify
+    reader = load_backend(cfg.backend).identity
+    keyed = dict(cfg.engine_headers() if headers is None else headers)
+    if not (reader.identity_needs_key and keyed):
+        identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers={})
+        return AttestedIdentity(
+            identity, payload, tuple(verify_attestation(payload, contract, identity))
+        )
+    if reader.reports_process_start or not spec.attestation_url:
+        raise ValueError("an engine that guards its version must have a sidecar process start")
+    start = await read_process_start(spec.attestation_url, timeout_s=timeout, transport=transport)
+    engine = payload.get("engine") if isinstance(payload, dict) else None
+    attested = engine.get("version") if isinstance(engine, dict) else None
+    claimed = EngineIdentity(attested if isinstance(attested, str) else "", start)
+    failures = verify_attestation(payload, contract, claimed)
+    if trusted_start is not None and start != trusted_start:
+        failures.append(
+            f"engine process started at {start}, not at the {trusted_start} it was trusted for"
+        )
+    if failures:
+        return AttestedIdentity(claimed, payload, tuple(failures))
+    identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers=keyed)
+    return AttestedIdentity(
+        identity, payload, tuple(verify_attestation(payload, contract, identity))
+    )
+
+
+async def attest_spec(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    headers: Mapping[str, str] | None = None,
+    trusted_start: float | None = None,
+    identify: IdentityRead | None = None,
+) -> AttestedIdentity:
+    """Read `spec`'s attestation with no credential, then its identity as `attest_identity`."""
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    payload = await read_attestation(spec, timeout_s=timeout, transport=transport)
+    return await attest_identity(
+        cfg,
+        spec,
+        payload,
+        timeout_s=timeout,
+        transport=transport,
+        headers=headers,
+        trusted_start=trusted_start,
+        identify=identify,
+    )
+
+
+async def read_process_start_of(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    identify: IdentityRead | None = None,
+) -> float:
+    """The engine's live process start, read with no credential, from the engine or its sidecar.
+
+    `identify` reads an engine that publishes its process start, as `fetch_spec_identity` does
+    by default.
+    """
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    if not load_backend(cfg.backend).identity.reports_process_start:
+        if not spec.attestation_url:
+            raise ValueError(f"{spec.iid}: attestation_url is not configured")
+        return await read_process_start(
+            spec.attestation_url, timeout_s=timeout, transport=transport
+        )
+    read = fetch_spec_identity if identify is None else identify
+    identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers={})
+    return identity.process_start_time_seconds
+
+
 async def read_process_start(
     attestation_url: str,
     *,
@@ -247,6 +394,52 @@ async def read_process_start(
     if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError(f"{url} returned no process start time")
     return float(value)
+
+
+async def read_hca_counters(
+    attestation_url: str,
+    *,
+    timeout_s: float = 5.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, Any] | None:
+    """The engine's HCA port counters from its sidecar, or None when it sends KV through none.
+
+    A reading whose counter the sidecar could not read has a null `port_xmit_data` and its
+    `counter_error`.
+    """
+    url = httpx.URL(attestation_url).copy_with(path=HCA_PATH, query=None)
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        response = await client.get(url)
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        detail: Any = ""
+        with contextlib.suppress(ValueError):
+            detail = response.json()
+        detail = detail.get("detail", "") if isinstance(detail, dict) else ""
+        raise ValueError(
+            f"{url} returned HTTP {response.status_code}" + (f": {detail}" if detail else "")
+        )
+    payload = response.json()
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("device"), str)
+        or type(payload.get("port")) is not int
+        or not isinstance(payload.get("boot_id"), str)
+        or not payload["boot_id"]
+        or ("host" in payload and (not isinstance(payload["host"], str) or not payload["host"]))
+        or not (
+            (type(payload.get("port_xmit_data")) is int and payload["port_xmit_data"] >= 0)
+            or (
+                "port_xmit_data" in payload
+                and payload["port_xmit_data"] is None
+                and isinstance(payload.get("counter_error"), str)
+                and payload["counter_error"]
+            )
+        )
+    ):
+        raise ValueError(f"{url} returned no HCA counters")
+    return payload
 
 
 def attested_launch(payload: Any) -> dict[str, Any]:
@@ -408,6 +601,53 @@ def verify_attestation(
     return failures
 
 
+@dataclass(frozen=True)
+class HcaPort:
+    """The RDMA device port that an engine sends its KV through, and the host it is on.
+
+    `host` names the engine's host where the deployment knows it, such as a Kubernetes engine
+    pod's node; an engine without one is told apart by its kernel's boot ID.
+    """
+
+    device: str
+    port: int
+    host: str | None = None
+
+    @classmethod
+    def parse(cls, value: str) -> HcaPort:
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+):([1-9][0-9]{0,2})", value)
+        if match is None:
+            raise ValueError(f"an HCA port is DEVICE:PORT, such as mlx5_0:1, not {value!r}")
+        return cls(match[1], int(match[2]))
+
+    def counters(self) -> dict[str, Any]:
+        """The port's transmit counter, in the kernel's 4-octet words, the host's boot ID, and
+        the host's name when it has one.
+
+        A counter that cannot be read leaves `port_xmit_data` null and names the reason in
+        `counter_error`; the port and the host still tell which engines share the host. An RDMA
+        device that a network namespace other than the host's sees has no port counters.
+        """
+        boot_id = BOOT_ID.read_text().strip()
+        if not boot_id:
+            raise ValueError(f"{BOOT_ID} is empty")
+        counter = INFINIBAND / self.device / "ports" / str(self.port) / "counters/port_xmit_data"
+        reading: dict[str, Any] = {"device": self.device, "port": self.port, "boot_id": boot_id}
+        if self.host is not None:
+            reading["host"] = self.host
+        try:
+            words = counter.read_text().strip()
+        except OSError as exc:
+            return {**reading, "port_xmit_data": None, "counter_error": f"{counter}: {exc}"}
+        if not words.isdigit():
+            return {
+                **reading,
+                "port_xmit_data": None,
+                "counter_error": f"{counter} holds no counter value",
+            }
+        return {**reading, "port_xmit_data": int(words)}
+
+
 def _document_from_response(payload: dict[str, Any]) -> AttestationDocument:
     contract = _read_contract(payload.get("contract"))
     return AttestationDocument(contract, _read_sources(payload.get("sources"), contract))
@@ -427,7 +667,13 @@ def build_app(
     residency: ResidencyIndex | None = None,
     reader: EngineIdentityReader | None = None,
     process: Callable[[], float] | None = None,
+    hca: HcaPort | None = None,
+    supervised: Callable[[], dict[str, int]] | None = None,
+    kubelet: Callable[[], dict[str, int]] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> FastAPI:
+    """Return the sidecar app. `headers`, the engine's authorization header, goes with every
+    request the sidecar sends the engine, and never to a sidecar."""
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
     epoch = uuid4().hex
@@ -438,6 +684,7 @@ def build_app(
                 engine_base,
                 timeout_s=timeout_s,
                 transport=transport,
+                headers=headers,
                 reader=reader,
                 process=process,
             )
@@ -468,10 +715,27 @@ def build_app(
                     status_code=503, detail=f"engine process unreadable: {exc}"
                 ) from exc
 
+    @app.get("/metrics", summary="The restart counts of this sidecar and its engine pod")
+    async def metrics() -> Response:
+        counts = await asyncio.to_thread(supervised) if supervised is not None else {}
+        pod = await asyncio.to_thread(kubelet) if kubelet is not None else None
+        text = "".join(line + "\n" for line in render_restarts(counts, pod))
+        return Response(content=text, media_type=CONTENT_TYPE)
+
     @app.get(ATTESTATION_PATH)
     async def attestation() -> dict[str, Any]:
         identity = await current_identity()
         return make_attestation(document, identity)
+
+    @app.get(HCA_PATH)
+    async def hca_counters() -> dict[str, Any]:
+        await current_identity()
+        if hca is None:
+            raise HTTPException(status_code=404, detail="the engine sends KV through no HCA port")
+        try:
+            return await asyncio.to_thread(hca.counters)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=f"HCA port unreadable: {exc}") from exc
 
     def require_residency() -> ResidencyIndex:
         if residency is None:
@@ -506,7 +770,42 @@ def build_app(
     return app
 
 
-def main(argv: list[str] | None = None) -> int:
+def _kubelet(pod: str | None) -> Callable[[], dict[str, int]] | None:
+    """The kubelet restart count of each container of `pod`, read from the pod status."""
+    if pod is None:
+        return None
+    namespace, name = pod.split("/")
+    return restarts.Cached(lambda: restarts.pod_restarts(read_pod(namespace, name)))
+
+
+# How often a pod sidecar checks that the engine process it serves still runs.
+POD_WATCH_S = 1.0
+
+
+def watch_process(process: Callable[[], float]) -> None:
+    """Stop this sidecar once the engine process that `process` clocks has ended.
+
+    In a pod, the kubelet then restarts the sidecar, which serves the replacement engine
+    container's own attestation.
+    """
+
+    def watch() -> None:
+        while True:
+            time.sleep(POD_WATCH_S)
+            try:
+                process()
+            except ValueError as error:
+                print(f"narwhal-attest: {error}; stopping", file=sys.stderr, flush=True)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    threading.Thread(target=watch, name="engine-process-watch", daemon=True).start()
+
+
+def main(argv: list[str] | None = None, *, engine_headers: Mapping[str, str] | None = None) -> int:
+    """Run the sidecar. `engine_headers`, the engine's authorization header, goes with every
+    request to the engine; the contract tool passes its launch's. Without it, the header holds
+    the key in the variable `--engine-key-env` names."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
@@ -526,11 +825,28 @@ def main(argv: list[str] | None = None) -> int:
         help="engine identity HTTP timeout in seconds (default: %(default)s)",
     )
     parser.add_argument(
+        "--engine-key-env",
+        metavar="NAME",
+        help="environment variable holding the engine API key, sent as a bearer token on "
+        "every request to the engine",
+    )
+    parser.add_argument(
         "--kv-events",
         type=Path,
         help="directory holding the engine's cache-event sockets; enables residency routes",
     )
     parser.add_argument("--model", help="served model name; required with --kv-events")
+    parser.add_argument(
+        "--hca",
+        metavar="DEVICE:PORT",
+        help="HCA port the engine sends KV through, even to engines on its own host; "
+        "enables the HCA counter route",
+    )
+    parser.add_argument(
+        "--hca-host",
+        help="the engine's host by name, such as its Kubernetes node, which the HCA counter "
+        "route reports so engines whose hosts share a kernel are told apart",
+    )
     process_owner = parser.add_mutually_exclusive_group()
     process_owner.add_argument(
         "--engine-container", help="engine container whose start time identifies the process"
@@ -538,28 +854,65 @@ def main(argv: list[str] | None = None) -> int:
     process_owner.add_argument(
         "--engine-pid", type=int, help="engine process ID whose start time identifies the process"
     )
+    process_owner.add_argument(
+        "--engine-pod-container",
+        help="engine container of this pod, by runtime container ID, whose first process in the "
+        "shared process namespace identifies the engine; the sidecar exits once it ends",
+    )
+    parser.add_argument(
+        "--pod",
+        metavar="NAMESPACE/NAME",
+        help="this engine pod, whose containers' kubelet restart counts /metrics exports",
+    )
     args = parser.parse_args(argv)
+    if args.pod is not None and args.pod.count("/") != 1:
+        parser.error("--pod must be NAMESPACE/NAME")
     if not 0 <= args.port <= 65535:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
         parser.error("--kv-events requires --model")
+    headers = dict(engine_headers or {})
+    if engine_headers is None and args.engine_key_env is not None:
+        key = os.environ.get(args.engine_key_env)
+        if not key:
+            parser.error(f"--engine-key-env {args.engine_key_env} is not set in the environment")
+        headers = {"authorization": f"Bearer {key}"}
+    hca = None
+    if args.hca is not None:
+        try:
+            hca = HcaPort.parse(args.hca)
+        except ValueError as exc:
+            parser.error(f"--hca: {exc}")
+    if args.hca_host is not None:
+        if hca is None or not args.hca_host.strip():
+            parser.error("--hca-host names the host of --hca's port")
+        hca = dataclasses.replace(hca, host=args.hca_host)
     from ..cli_errors import failure
 
     backend = load_backend(args.backend)
     process = None
     if args.engine_container is not None or args.engine_pid is not None:
         process = process_clock(container=args.engine_container, pid=args.engine_pid)
-    elif not backend.identity.reports_process_start:
-        parser.error(f"--backend {args.backend} requires --engine-container or --engine-pid")
+    elif args.engine_pod_container is None and not backend.identity.reports_process_start:
+        parser.error(
+            f"--backend {args.backend} requires --engine-container, --engine-pid or "
+            "--engine-pod-container"
+        )
 
     try:
         document = AttestationDocument.load(args.document)
     except (OSError, ValueError) as exc:
         return failure("narwhal-attest", f"load document {args.document}", exc, 2)
     try:
+        if args.engine_pod_container is not None:
+            process = pod_clock(args.engine_pod_container)
         identity = asyncio.run(
             fetch_engine_identity(
-                args.engine_base, timeout_s=args.timeout_s, reader=backend.identity, process=process
+                args.engine_base,
+                timeout_s=args.timeout_s,
+                headers=headers,
+                reader=backend.identity,
+                process=process,
             )
         )
         if identity.version != document.contract.engine_version:
@@ -583,6 +936,8 @@ def main(argv: list[str] | None = None) -> int:
             decoder=backend.kv_events,
         )
         feed.start()
+    if args.engine_pod_container is not None and process is not None:
+        watch_process(process)
     try:
         uvicorn.run(
             build_app(
@@ -593,6 +948,10 @@ def main(argv: list[str] | None = None) -> int:
                 residency=residency,
                 reader=backend.identity,
                 process=process,
+                hca=hca,
+                supervised=restarts.supervisor("sidecar"),
+                kubelet=_kubelet(args.pod),
+                headers=headers,
             ),
             host=args.host,
             port=args.port,

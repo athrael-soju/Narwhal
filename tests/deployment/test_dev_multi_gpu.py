@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -19,12 +20,14 @@ from narwhal.config import FleetConfig
 from narwhal.config.loading import read_engine_spec
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.plan import option
-from narwhal.dev import lifecycle, template
+from narwhal.dev import launch, lifecycle, template
 from narwhal.dev.cli import main
 from narwhal.runtime.lifecycle import leave
 from narwhal.runtime.lifecycle.join import join_refusal
 from narwhal.runtime.lifecycle.leave import begin_leave, leave_refusal
 from narwhal.serving.app import create_app
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV, token_problem
+from tests import CONTROL_HEADERS, CONTROL_TOKEN
 from tests.runtime import test_join
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -255,8 +258,6 @@ class MultiGpuInitTests(Instance):
 class MultiGpuLifecycleTests(Instance):
     def test_up_starts_each_engine_on_its_own_gpu(self):
         self.initialize(gpu_uuids=GPUS[:3], engine_count=3)
-        run = self.root / "run-test"
-        run.mkdir()
         started = {}
 
         class Started(Exception):
@@ -269,16 +270,12 @@ class MultiGpuLifecycleTests(Instance):
 
         with (
             patch.object(lifecycle, "_run", side_effect=command),
+            patch.object(lifecycle, "_check_free_ports"),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(Started),
         ):
-            lifecycle._launch(
-                self.root,
-                run,
-                lifecycle.instance(self.root),
-                self.spec,
-                {"run": str(run), "processes": []},
-            )
+            lifecycle.up(self.root)
         self.assertEqual(started["log"], "native-start")
         self.assertEqual(started["args"][0], "start-native")
         self.assertNotIn("--backend", started["args"])
@@ -300,13 +297,13 @@ class MultiGpuLifecycleTests(Instance):
         run.mkdir()
         (run / "profiles-1p2d.json").write_text('{"profiles": []}')
         with patch.object(lifecycle, "_run") as command, contextlib.redirect_stderr(io.StringIO()):
-            lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), self.spec)
+            launch._profiles(run, lifecycle.read(self.root / "fleet.json"), self.spec)
         self.assertEqual([call.args[3] for call in command.call_args_list], ["profile-1p2d"])
         args = command.call_args.args[2]
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
         # Each engine serves discarded requests before its sweep.
-        self.assertEqual(args[args.index("--warmup-requests") + 1], str(lifecycle.WARMUP_REQUESTS))
+        self.assertEqual(args[args.index("--warmup-requests") + 1], str(launch.WARMUP_REQUESTS))
 
     def test_engines_on_one_gpu_profile_without_the_warm_up(self):
         sglang = template._read_template("small-cuda-sglang-v1.json")
@@ -321,7 +318,7 @@ class MultiGpuLifecycleTests(Instance):
                     patch.object(lifecycle, "_run") as command,
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
-                    lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
+                    launch._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
                 for call in command.call_args_list:
                     self.assertNotIn("--warmup-requests", call.args[2])
 
@@ -416,7 +413,9 @@ class DevFleetRejoinTests(test_join.JoinHarness):
         departed = next(spec for spec in self.cfg.engines if spec.iid == "n3")
         self.assertEqual(read_engine_spec(json.loads(saved)), departed)
         client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(client.aclose)
         capture = AsyncMock(return_value=({"n3": 100.0}, {}))
@@ -453,3 +452,24 @@ class DevFleetRejoinTests(test_join.JoinHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouterTokenTests(unittest.TestCase):
+    """The instance's router takes the exported control token, or else one of its own."""
+
+    def test_an_instance_draws_its_token_once_and_keeps_it_private(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.dict(os.environ, {ROUTER_TOKEN_ENV: ""}):
+                token = launch.router_token(root)
+                self.assertIsNone(token_problem(token))
+                path = root / launch.ROUTER_TOKEN_FILE
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(launch.router_token(root), token)
+            self.assertEqual(launch.router_token(root), CONTROL_TOKEN)
+            path.write_text("short\n")
+            with (
+                patch.dict(os.environ, {ROUTER_TOKEN_ENV: ""}),
+                self.assertRaisesRegex(ValueError, "32 random bytes"),
+            ):
+                launch.router_token(root)

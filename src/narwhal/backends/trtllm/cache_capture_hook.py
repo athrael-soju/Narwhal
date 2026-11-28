@@ -109,12 +109,14 @@ def record(creator: Any, resources: dict) -> None:
     output = Path(os.environ["NARWHAL_CACHE_OUTPUT"])
     path = output.with_name(f"{output.stem}.rank{rank}{output.suffix}")
     text = json.dumps(value, indent=2) + "\n"
+    # A Kubernetes pod's attestation sidecar, another user, reads the record.
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
         if path.read_text() != text:
             raise ValueError("cache layout differs from this launch's earlier start") from None
         return
+    os.fchmod(fd, 0o644)
     with os.fdopen(fd, "w") as handle:
         handle.write(text)
 

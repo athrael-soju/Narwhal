@@ -8,7 +8,7 @@ from narwhal.backends.sglang.runtime import SETTINGS_TAG
 from narwhal.deployment.attestation_contract.evidence import config_model_dimensions
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
-from tests.backends.contract import ContractFixtures
+from tests.backends.contract import CONTAINER_STARTED_S, ContractFixtures, EngineAnswers
 
 
 def page_stored(
@@ -41,8 +41,8 @@ def check_output(plan: dict) -> str:
     return "loading\n" + SETTINGS_TAG + json.dumps(record) + "\n"
 
 
-def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
-    config_model_dimensions(run, plan)
+def attestation_evidence(run: Path, attempt: Path, plan: dict, container_id: str) -> None:
+    config_model_dimensions(run, plan, attempt)
     server = {
         "version": "0.5.21",
         "dtype": "bfloat16",
@@ -57,12 +57,17 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
     checked = json.loads((run / "checked.json").read_text())
     record = {
         "server": server,
-        "process_start_time_seconds": 100.0,
+        "process_start_time_seconds": CONTAINER_STARTED_S,
         "plan_sha256": digest(run / "launch.json"),
         "image_id": checked["image_id"],
         "container_id": container_id,
     }
-    (run / "server-info.json").write_text(json.dumps(record, indent=2) + "\n")
+    (attempt / "server-info.json").write_text(json.dumps(record, indent=2) + "\n")
+
+
+def engine_answers(reference: Path) -> EngineAnswers:
+    server = json.loads((reference / "server-info.json").read_text())["server"]
+    return EngineAnswers(routes={"/server_info": server})
 
 
 _TRANSFER = "sglang:per_stage_req_latency_seconds"
@@ -122,5 +127,6 @@ FIXTURES = ContractFixtures(
     check_output=check_output,
     attestation_evidence=attestation_evidence,
     startup_log="max_running_requests=256, context_len=4096\n",
+    engine_answers=engine_answers,
     handoff_random_fields=("bootstrap_room",),
 )

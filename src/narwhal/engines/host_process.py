@@ -29,9 +29,16 @@ def container_start(container: str) -> float:
         check=True,
     )
     running, _, started = result.stdout.strip().partition(" ")
-    match = _STARTED_AT.fullmatch(started)
-    if running != "true" or match is None:
+    if running != "true" or _STARTED_AT.fullmatch(started) is None:
         raise ValueError(f"container {container} is not running")
+    return started_at_seconds(started)
+
+
+def started_at_seconds(started: str) -> float:
+    """Seconds since the epoch of a container's `State.StartedAt`."""
+    match = _STARTED_AT.fullmatch(started)
+    if match is None:
+        raise ValueError(f"container start {started!r} is not a UTC RFC 3339 time")
     seconds = datetime.fromisoformat(match.group(1) + "+00:00").timestamp()
     # Microseconds keep the value exact across reads of one container start.
     return seconds + int((match.group(2) or "0")[:6].ljust(6, "0")) / 1e6

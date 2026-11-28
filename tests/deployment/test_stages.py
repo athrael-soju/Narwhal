@@ -294,6 +294,33 @@ else:
 """
 
 
+class CreationClock:
+    """The stage clock, held at zero until the fake daemon holds the stalled container.
+
+    The stage budget then times out a client that stalled after creating its container,
+    however long the fake `docker` takes to start on a loaded machine.
+    """
+
+    def __init__(self, state: Path):
+        self.state = state
+        self.started: float | None = None
+
+    def monotonic(self) -> float:
+        now = time.monotonic()
+        if self.started is None:
+            try:
+                created = "a" * 64 in json.loads(self.state.read_text())
+            except (OSError, ValueError):
+                created = False
+            if not created:
+                return 0.0
+            self.started = now
+        return now - self.started
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 class DockerStageTests(unittest.TestCase):
     stage_budget = "0.3"
     setUp = StageTests.setUp
@@ -313,12 +340,17 @@ class DockerStageTests(unittest.TestCase):
             {
                 "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                 "FAKE_DOCKER_STATE": str(state),
-                "NARWHAL_DOCKER_RECONCILE_SECONDS": "1.5",
+                # Long enough for every fake `docker` call on a loaded machine; a reconciliation
+                # that completes ends as soon as it does.
+                "NARWHAL_DOCKER_RECONCILE_SECONDS": "60",
                 **extra,
             },
         )
         environment.start()
         self.addCleanup(environment.stop)
+        clock = patch.object(stages, "time", CreationClock(state))
+        clock.start()
+        self.addCleanup(clock.stop)
         return state
 
     def test_stalled_create_reconciles_label_and_preserves_unrelated_container(self):
@@ -381,3 +413,87 @@ class DockerStageTests(unittest.TestCase):
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["status"], "inspection_required")
         self.assertIn("exhausted", report["error"])
+
+
+class OrphanedWorkerTests(unittest.TestCase):
+    """A controller that dies before it records its stage worker leaves nothing running."""
+
+    CONTROLLER = """
+import os, signal, subprocess, sys
+from pathlib import Path
+from narwhal.deployment import stages
+folder = Path(sys.argv[1])
+real = subprocess.Popen
+
+def recorded(*args, **kwargs):
+    process = real(*args, **kwargs)
+    (folder / "worker").write_text(str(process.pid))
+    return process
+
+subprocess.Popen = recorded
+# The controller dies at its first evidence write, before anything records the worker.
+stages.write_evidence = lambda *args, **kwargs: os.kill(os.getpid(), signal.SIGKILL)
+helper = f"open({str(folder / 'helper')!r}, 'w').write(str(__import__('os').getpid()))"
+helper += "; __import__('time').sleep(30)"
+stages.run([sys.executable, "-c", helper], stage="orphan", log=folder / "orphan.log")
+"""
+
+    def test_a_worker_whose_controller_dies_before_recording_it_exits_unstarted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            controller = subprocess.run(
+                [sys.executable, "-c", self.CONTROLLER, str(folder)], timeout=30
+            )
+            self.assertEqual(controller.returncode, -signal.SIGKILL)
+            worker = int((folder / "worker").read_text())
+
+            def stop():
+                # The worker leads its own session; stop what is left of it by its ID.
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(worker, signal.SIGKILL)
+
+            self.addCleanup(stop)
+
+            def running():
+                state = stages._processes().get(worker)
+                return state is not None and state[0] not in {"Z", "X"}
+
+            deadline = time.monotonic() + 5
+            while running() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(running(), "the worker outlived its controller")
+            self.assertFalse((folder / "helper").exists(), "the helper started unrecorded")
+
+
+class StageCancelTests(unittest.TestCase):
+    def test_cancel_stops_the_child_and_its_descendants_and_records_them(self):
+        with tempfile.TemporaryDirectory() as root:
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import subprocess, sys, time; "
+                    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                    "time.sleep(60)",
+                ],
+                start_new_session=True,
+            )
+            time.sleep(0.3)
+            evidence = Path(root) / "sidecar-spawn.stage.json"
+            with patch.dict(os.environ, {"NARWHAL_STAGE_CLEANUP_GRACE_SECONDS": "0.5"}):
+                cleanup = stages.cancel(child, stage="sidecar", evidence=evidence)
+            record = json.loads(evidence.read_text())
+            self.assertEqual(record["status"], "cancelled")
+            self.assertEqual(record["pid"], child.pid)
+            self.assertEqual(len(record["processes"]), 2)
+            self.assertEqual(cleanup["surviving_processes"], {})
+            self.assertFalse(any(alive(int(pid)) for pid in record["processes"]))
+            self.assertEqual(stages.active(record), {})
+
+
+def alive(pid):
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return state not in {"Z", "X"}

@@ -6,7 +6,7 @@ description: Inspect Narwhal alerts, troubleshoot the monitoring stack, add a GP
 
 ## Alert evaluation
 
-Prometheus evaluates the rules in `tools/observability/prometheus-alerts.yml` and publishes their state in the `ALERTS` series. Each rule carries `severity="page"` or `severity="warn"`. Route those labels through your own Alertmanager.
+Prometheus evaluates the rules in `src/narwhal/observability/stack/prometheus-alerts.yml` and publishes their state in the `ALERTS` series. Each rule carries `severity="page"` or `severity="warn"`, apart from `NarwhalWatchdog`, which carries `severity="watchdog"` and always fires for a dead man's switch, as [Monitor](../operate/02-Monitor.md) describes. Every alert carries the `fleet` label of its series. Prometheus sends firing alerts to the Alertmanager that `--alertmanager-url` names, where you route them by those labels. Without one, the Prometheus alerts page at `/alerts` is the only place alerts show, and nobody is paged.
 
 List the loaded rules on the router host:
 
@@ -14,11 +14,11 @@ List the loaded rules on the router host:
 curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 ```
 
-Rules select the router by `job="narwhal-router"` and each engine by `job="engines"` and `iid=<engine identity>`.
+Rules select the router by `job="narwhal-router"`, each engine by `job="engines"` and `iid=<engine identity>`, and each attestation sidecar by `job="sidecars"`.
 
 ## GPU metrics
 
-The monitoring stack scrapes the router, the engines, the fleet control service and the Narwhal tools. To chart GPU sensor metrics, run a GPU exporter that Prometheus can reach, add a scrape job for it to `tools/observability/prometheus.yml`, rerun `make observe`, and build the GPU dashboard in Grafana.
+The monitoring stack scrapes the router, the engines, the fleet control service and the Narwhal tools. To chart GPU sensor metrics, run a GPU exporter that Prometheus can reach, add a scrape job for it to `src/narwhal/observability/stack/prometheus.yml`, rerun `make observe`, and build the GPU dashboard in Grafana.
 
 ## Troubleshooting
 
@@ -39,22 +39,22 @@ After a fix, rerun `make observe`. It returns once the [readiness contract](01-S
 
 ### Inspecting Compose services
 
-Every Compose command for `tools/observability/compose.yml` requires `NARWHAL_RENDERER_TOKEN`, which `make observe` stores in `runs/observability/renderer-token`.
+Every Compose command for the stack requires `NARWHAL_RENDERER_TOKEN`, which `make observe` stores in `runs/observability/renderer-token`. The stack's project directory is `runs/observability` under the directory `make observe` ran from.
 
-Load the token in the deployed checkout on the router host, then query the services:
+From that directory, with `.venv` active, load the token, then query the services:
 
 ```bash
 export NARWHAL_RENDERER_TOKEN="$(cat runs/observability/renderer-token)"
-docker compose -f tools/observability/compose.yml ps
-docker compose -f tools/observability/compose.yml logs prometheus grafana
+compose="$(python -c 'from narwhal.observability.stack.start import stack; print(stack.COMPOSE_FILE)')"
+docker compose --project-directory runs/observability -f "$compose" ps
+docker compose --project-directory runs/observability -f "$compose" logs prometheus grafana
 ```
 
 ### Mount permission failures
 
-1. Confirm `tools/observability/start/` and `tools/observability/compose.yml` share one checkout.
-2. Rerun `make observe` from that deployed checkout.
-3. Read the [staged mount permissions](01-Start-and-Verify.md#staged-monitoring-files) and container logs.
-4. Save the failure output in the private deployment record.
+1. Rerun `make observe` from the directory that holds `runs/observability`.
+2. Read the [staged mount permissions](01-Start-and-Verify.md#staged-monitoring-files) and container logs.
+3. Save the failure output in the private deployment record.
 
 ## Retaining monitoring captures
 

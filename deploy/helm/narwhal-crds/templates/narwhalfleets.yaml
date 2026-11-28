@@ -1,0 +1,1319 @@
+{{- /* Generated from src/narwhal/deployment/fleet_resource.py by tools/maintenance/crd_schema.py. Edit the schema, then run the tool. */}}
+apiVersion: "apiextensions.k8s.io/v1"
+kind: "CustomResourceDefinition"
+metadata:
+  name: "narwhalfleets.narwhal.example.com"
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/part-of: narwhal
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+  annotations:
+    "helm.sh/resource-policy": "keep"
+    "narwhal.example.com/schema-sha256": "8be8c79758f38fbc6dfeea33459c5b361be1c43cb25af111c32935075cdbbf27"
+spec:
+  group: "narwhal.example.com"
+  names:
+    kind: "NarwhalFleet"
+    listKind: "NarwhalFleetList"
+    plural: "narwhalfleets"
+    singular: "narwhalfleet"
+    categories:
+      - "narwhal"
+  scope: "Namespaced"
+  versions:
+    - name: "v1alpha1"
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: "object"
+          description: "A Narwhal fleet: the engines, routers and gate Jobs of one namespace, and the inputs of its stage graph"
+          properties:
+            apiVersion:
+              type: "string"
+              description: "The resource's API version"
+              maxLength: 64
+            kind:
+              type: "string"
+              description: "The resource's kind"
+              maxLength: 64
+            metadata:
+              type: "object"
+            spec:
+              type: "object"
+              description: "The deployment inputs of the fleet"
+              properties:
+                images:
+                  type: "object"
+                  description: "The third-party images the fleet runs besides the engine's, each by registry digest. The routers, gate Jobs and attestation sidecars run the controller's own image, which the narwhal chart's images.narwhal pins"
+                  properties:
+                    haproxy:
+                      type: "string"
+                      description: "The HAProxy image"
+                      maxLength: 512
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+                    fabric:
+                      type: "string"
+                      description: "The image the fabric Jobs run ib_write_bw from"
+                      maxLength: 512
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+                  required:
+                    - "haproxy"
+                    - "fabric"
+                engines:
+                  type: "object"
+                  description: "The engine pods"
+                  properties:
+                    image:
+                      type: "string"
+                      description: "The engine image by registry digest"
+                      maxLength: 512
+                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
+                    model:
+                      type: "object"
+                      description: "The checkpoint the engines serve"
+                      properties:
+                        name:
+                          type: "string"
+                          description: "The served model name"
+                          maxLength: 256
+                          minLength: 1
+                          pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                        treeSha256:
+                          type: "string"
+                          description: "The checkpoint's model_tree_sha256"
+                          maxLength: 64
+                          pattern: "^[0-9a-f]{64}$"
+                        file:
+                          type: "string"
+                          description: "For an engine that serves one model file, its path in the model volume"
+                          maxLength: 1024
+                          pattern: "^[^/\\x00-\\x1f\\x7f-\\x9f]+(/[^/\\x00-\\x1f\\x7f-\\x9f]+)*$"
+                          x-kubernetes-validations:
+                            - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
+                              message: "must not hold a . or .. segment"
+                        fileSha256:
+                          type: "string"
+                          description: "The model file's SHA-256"
+                          maxLength: 64
+                          pattern: "^[0-9a-f]{64}$"
+                      required:
+                        - "name"
+                        - "treeSha256"
+                      x-kubernetes-validations:
+                        - rule: "has(self.file) == has(self.fileSha256)"
+                          message: "set file and fileSha256 together"
+                    modelVolume:
+                      type: "object"
+                      description: "The volume that serves the staged checkpoint to every engine pod, read-only. Set exactly one source."
+                      properties:
+                        persistentVolumeClaim:
+                          type: "object"
+                          description: "A PersistentVolumeClaim in the fleet's namespace"
+                          properties:
+                            claimName:
+                              type: "string"
+                              description: "The claim's name"
+                              maxLength: 253
+                              pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                            readOnly:
+                              type: "boolean"
+                              description: "Always true: engines read the model and never write it"
+                              default: true
+                              x-kubernetes-validations:
+                                - rule: "self"
+                                  message: "the model volume is mounted read-only"
+                          required:
+                            - "claimName"
+                        hostPath:
+                          type: "object"
+                          description: "A directory on every engine node. The controller refuses it unless the cluster admin lists hostPath in the narwhal chart's modelVolumeSources and a prefix that holds it in modelHostPathPrefixes, which is empty by default."
+                          properties:
+                            path:
+                              type: "string"
+                              description: "The directory's normalised absolute path on the node"
+                              maxLength: 4096
+                              pattern: "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+                              x-kubernetes-validations:
+                                - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
+                                  message: "must not hold a . or .. segment"
+                                - rule: "!self.matches(r'^/(proc|sys|dev|run|var/run|etc|boot|root|home|host|var/log|var/snap|opt/cni|var/lib/(kubelet|etcd|containerd|docker|containers|cri-o|crio|rancher|k0s|cni))(/|$)|^/(var|var/lib|opt)$')"
+                                  message: "must not be or lie in a node's system, kubelet or container runtime directory"
+                            type:
+                              type: "string"
+                              description: "Directory: the kubelet refuses a path that is not an existing directory"
+                              maxLength: 16
+                              enum:
+                                - "Directory"
+                          required:
+                            - "path"
+                            - "type"
+                        nfs:
+                          type: "object"
+                          description: "An NFS export. The controller refuses it unless the cluster admin lists nfs in the narwhal chart's modelVolumeSources and its server in modelNfsServers."
+                          properties:
+                            server:
+                              type: "string"
+                              description: "The NFS server's host name or address"
+                              maxLength: 253
+                              pattern: "^[A-Za-z0-9.:\\[\\]-]+$"
+                            path:
+                              type: "string"
+                              description: "The exported directory"
+                              maxLength: 4096
+                              pattern: "^(/[^/\\x00-\\x1f\\x7f-\\x9f]+)+$"
+                              x-kubernetes-validations:
+                                - rule: "!self.matches(r'(^|/)\\.\\.?(/|$)')"
+                                  message: "must not hold a . or .. segment"
+                            readOnly:
+                              type: "boolean"
+                              description: "Always true: engines read the model and never write it"
+                              default: true
+                              x-kubernetes-validations:
+                                - rule: "self"
+                                  message: "the model volume is mounted read-only"
+                          required:
+                            - "server"
+                            - "path"
+                        csi:
+                          type: "object"
+                          description: "A CSI ephemeral volume. The controller refuses it unless the cluster admin lists csi in the narwhal chart's modelVolumeSources and its driver in modelCsiDrivers."
+                          properties:
+                            driver:
+                              type: "string"
+                              description: "The CSI driver's name"
+                              maxLength: 63
+                              pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                            readOnly:
+                              type: "boolean"
+                              description: "Always true: engines read the model and never write it"
+                              default: true
+                              x-kubernetes-validations:
+                                - rule: "self"
+                                  message: "the model volume is mounted read-only"
+                            volumeAttributes:
+                              type: "object"
+                              description: "The driver's volume attributes"
+                              maxProperties: 32
+                              additionalProperties:
+                                type: "string"
+                                maxLength: 1024
+                                pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                              x-kubernetes-validations:
+                                - rule: "self.all(k, k.size() <= 253)"
+                                  message: "an attribute name holds at most 253 characters"
+                          required:
+                            - "driver"
+                      x-kubernetes-validations:
+                        - rule: "[has(self.persistentVolumeClaim), has(self.hostPath), has(self.nfs), has(self.csi)].filter(set, set).size() == 1"
+                          message: "set exactly one of persistentVolumeClaim, hostPath, nfs, csi"
+                    resources:
+                      type: "object"
+                      description: "The device plugins' extended resources, and the engine pods' RuntimeClass"
+                      properties:
+                        gpu:
+                          type: "string"
+                          description: "The GPU device plugin's extended resource name, <domain>/<name>"
+                          maxLength: 316
+                          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                          x-kubernetes-validations:
+                            - rule: "!self.matches(r'^([^/]*\\.)?(kubernetes|k8s)\\.io/')"
+                              message: "the kubernetes.io and k8s.io domains are reserved"
+                        rdma:
+                          type: "string"
+                          description: "The RDMA device plugin's extended resource name. On each engine node it holds only the HCA the engine's NARWHAL_TRANSFER_NET_DEVICES names, shared by the engine pods and the fabric Jobs"
+                          maxLength: 316
+                          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
+                          x-kubernetes-validations:
+                            - rule: "!self.matches(r'^([^/]*\\.)?(kubernetes|k8s)\\.io/')"
+                              message: "the kubernetes.io and k8s.io domains are reserved"
+                        runtimeClassName:
+                          type: "string"
+                          description: "The RuntimeClass of nodes whose default container runtime exposes no GPUs"
+                          maxLength: 253
+                          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                      required:
+                        - "gpu"
+                        - "rdma"
+                      x-kubernetes-validations:
+                        - rule: "self.gpu != self.rdma"
+                          message: "gpu and rdma must name two resources"
+                    ports:
+                      type: "object"
+                      description: "The ports each engine pod serves on, unless its entry of nodes sets its own"
+                      properties:
+                        engine:
+                          type: "integer"
+                          description: "The engine's HTTP port"
+                          minimum: 1
+                          maximum: 65535
+                        attestation:
+                          type: "integer"
+                          description: "The attestation sidecar's HTTP port"
+                          minimum: 1
+                          maximum: 65535
+                        sideChannel:
+                          type: "integer"
+                          description: "The port the engine's KV connector listens on for its peers' handshakes"
+                          minimum: 1
+                          maximum: 65535
+                        ucxTcpPortRange:
+                          type: "string"
+                          description: "LOW-HIGH, the ports UCX TCP listeners take"
+                          maxLength: 11
+                          pattern: "^[0-9]{1,5}-[0-9]{1,5}$"
+                      required:
+                        - "engine"
+                        - "attestation"
+                        - "sideChannel"
+                        - "ucxTcpPortRange"
+                      x-kubernetes-validations:
+                        - rule: "self.engine != self.attestation && self.engine != self.sideChannel && self.attestation != self.sideChannel"
+                          message: "the engine, attestation and side channel ports must differ"
+                        - rule: "[self.engine, self.attestation, self.sideChannel].all(p, p < int(self.ucxTcpPortRange.split('-')[0]) || p > int(self.ucxTcpPortRange.split('-')[1]))"
+                          message: "the engine, attestation and side channel ports must lie outside the UCX TCP port range"
+                    nodes:
+                      type: "array"
+                      description: "The engines, one entry each"
+                      items:
+                        type: "object"
+                        description: "One engine: the node its pod runs on, in role order, so the first entry is engine-1. Two engines may share a node, each with its own ports."
+                        properties:
+                          node:
+                            type: "string"
+                            description: "The Kubernetes node's name"
+                            maxLength: 253
+                            pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                          fabricInterface:
+                            type: "string"
+                            description: "The network interface that carries the engine's KV transfers"
+                            maxLength: 15
+                            pattern: "^[^\\s/:\\x00-\\x1f\\x7f-\\x9f]+$"
+                          rdma:
+                            type: "object"
+                            description: "The RDMA port settings of a ucx_rdma engine"
+                            properties:
+                              gidIndex:
+                                type: "integer"
+                                description: "The GID index of the HCA port"
+                                minimum: 0
+                                maximum: 255
+                              roceMode:
+                                type: "string"
+                                description: "v2 or v1 for RoCE, or infiniband for a native InfiniBand port"
+                                maxLength: 16
+                                enum:
+                                  - "v2"
+                                  - "v1"
+                                  - "infiniband"
+                          ports:
+                            type: "object"
+                            description: "This engine's ports in place of engines.ports. Engine pods run on the node's host network, so engines that share a node need ports no other engine there uses, which the controller checks."
+                            properties:
+                              engine:
+                                type: "integer"
+                                description: "The engine's HTTP port"
+                                minimum: 1
+                                maximum: 65535
+                              attestation:
+                                type: "integer"
+                                description: "The attestation sidecar's HTTP port"
+                                minimum: 1
+                                maximum: 65535
+                              sideChannel:
+                                type: "integer"
+                                description: "The port the engine's KV connector listens on for its peers' handshakes"
+                                minimum: 1
+                                maximum: 65535
+                              ucxTcpPortRange:
+                                type: "string"
+                                description: "LOW-HIGH, the ports UCX TCP listeners take"
+                                maxLength: 11
+                                pattern: "^[0-9]{1,5}-[0-9]{1,5}$"
+                            x-kubernetes-validations:
+                              - rule: "!has(self.ucxTcpPortRange) || [has(self.engine) ? self.engine : -1, has(self.attestation) ? self.attestation : -1, has(self.sideChannel) ? self.sideChannel : -1].all(p, p < int(self.ucxTcpPortRange.split('-')[0]) || p > int(self.ucxTcpPortRange.split('-')[1]))"
+                                message: "the engine, attestation and side channel ports must lie outside the UCX TCP port range"
+                        required:
+                          - "node"
+                          - "fabricInterface"
+                      minItems: 2
+                      maxItems: 64
+                      x-kubernetes-list-type: "atomic"
+                    apiKeySecret:
+                      type: "object"
+                      description: "The Secret that holds the engines' API key. Name a new Secret to rotate the key."
+                      properties:
+                        name:
+                          type: "string"
+                          description: "The Secret's name"
+                          maxLength: 253
+                          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                        key:
+                          type: "string"
+                          description: "The key in the Secret"
+                          maxLength: 253
+                          pattern: "^[-._A-Za-z0-9]+$"
+                      required:
+                        - "name"
+                        - "key"
+                    launch:
+                      type: "array"
+                      description: "More launch inputs of the engine backend, as the variables discovery reads, such as NARWHAL_ENGINE_BACKEND or NARWHAL_TRANSFER_NET_DEVICES. A name another field of the fleet sets, or that names a credential, is refused."
+                      items:
+                        type: "object"
+                        description: "One launch input"
+                        properties:
+                          name:
+                            type: "string"
+                            description: "The variable's name"
+                            maxLength: 128
+                            pattern: "^NARWHAL_[A-Z0-9_]+$"
+                            x-kubernetes-validations:
+                              - rule: "!self.matches(r'^NARWHAL_(NODE_[0-9]+_)?(KUBERNETES_.*|KUBECTL|HELM|ENGINE_(IMAGE|MODEL_NAME|PORT|LAUNCH_CONFIG)|ATTEST_PORT|KV_SIDE_CHANNEL_PORT|UCX_TCP_PORT_RANGE|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME|.*(SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY).*|(.*_)?(TOKENS?|KEYS?|CREDS)(_.*)?)$')"
+                                message: "another field of the fleet sets this variable, or it names a credential, which belongs in engines.apiKeySecret or controlTokenSecret"
+                          value:
+                            type: "string"
+                            description: "The variable's value"
+                            maxLength: 4096
+                            pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                        required:
+                          - "name"
+                          - "value"
+                      maxItems: 64
+                      x-kubernetes-list-type: "map"
+                      x-kubernetes-list-map-keys:
+                        - "name"
+                  required:
+                    - "image"
+                    - "model"
+                    - "modelVolume"
+                    - "resources"
+                    - "ports"
+                    - "nodes"
+                slo:
+                  type: "object"
+                  description: "The fleet's service-level objective, in seconds"
+                  properties:
+                    ttftS:
+                      type: "string"
+                      description: "The time-to-first-token target"
+                      maxLength: 16
+                      pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                      x-kubernetes-validations:
+                        - rule: "double(self) > 0.0"
+                          message: "must be greater than 0"
+                    tpotS:
+                      type: "string"
+                      description: "The time-per-output-token target"
+                      maxLength: 16
+                      pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                      x-kubernetes-validations:
+                        - rule: "double(self) > 0.0"
+                          message: "must be greater than 0"
+                    routerOverheadS:
+                      type: "string"
+                      description: "The router's own share of each request"
+                      maxLength: 16
+                      pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                  required:
+                    - "ttftS"
+                    - "tpotS"
+                    - "routerOverheadS"
+                firstTokenMarginS:
+                  type: "string"
+                  description: "Seconds the first-token deadline adds to the calibrated candidate"
+                  maxLength: 16
+                  pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                  x-kubernetes-validations:
+                    - rule: "double(self) > 0.0"
+                      message: "must be greater than 0"
+                profiling:
+                  type: "object"
+                  description: "The profiling sweep"
+                  properties:
+                    prefillLens:
+                      type: "array"
+                      description: "The prompt lengths of the prefill sweep"
+                      items:
+                        type: "integer"
+                        description: "A token count"
+                        minimum: 1
+                        maximum: 10000000
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: "atomic"
+                    decodeInputLens:
+                      type: "array"
+                      description: "The input lengths of the decode sweep"
+                      items:
+                        type: "integer"
+                        description: "A token count"
+                        minimum: 1
+                        maximum: 10000000
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: "atomic"
+                    decodeConcurrency:
+                      type: "array"
+                      description: "The concurrency levels of the decode sweep"
+                      items:
+                        type: "integer"
+                        description: "A token count"
+                        minimum: 1
+                        maximum: 10000000
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: "atomic"
+                    warmupRequests:
+                      type: "integer"
+                      description: "Requests sent before measuring"
+                      minimum: 0
+                      maximum: 100000
+                  required:
+                    - "prefillLens"
+                    - "decodeInputLens"
+                    - "warmupRequests"
+                calibration:
+                  type: "object"
+                  description: "The first-token calibration"
+                  properties:
+                    inputTokens:
+                      type: "array"
+                      description: "The input lengths calibration measures"
+                      items:
+                        type: "integer"
+                        description: "A token count"
+                        minimum: 1
+                        maximum: 10000000
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: "atomic"
+                    samples:
+                      type: "integer"
+                      description: "Samples per group, at least the 100 that preflight accepts"
+                      minimum: 100
+                      maximum: 100000
+                    observationTimeoutS:
+                      type: "string"
+                      description: "Seconds calibration waits for one observation"
+                      maxLength: 16
+                      pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                      x-kubernetes-validations:
+                        - rule: "double(self) > 0.0"
+                          message: "must be greater than 0"
+                  required:
+                    - "inputTokens"
+                    - "samples"
+                    - "observationTimeoutS"
+                fabric:
+                  type: "object"
+                  description: "Fabric qualification"
+                  properties:
+                    workload:
+                      type: "object"
+                      description: "The workload the fabric budget sizes each edge for"
+                      properties:
+                        promptTokens:
+                          type: "integer"
+                          description: "Prompt tokens per KV handoff"
+                          minimum: 1
+                          maximum: 10000000
+                        handoffsPerS:
+                          type: "string"
+                          description: "Peak remote KV handoffs per second on each directed edge, for each source cache group"
+                          maxLength: 16
+                          pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                          x-kubernetes-validations:
+                            - rule: "double(self) > 0.0"
+                              message: "must be greater than 0"
+                        burst:
+                          type: "integer"
+                          description: "Handoffs in a burst"
+                          minimum: 1
+                          maximum: 1000000
+                        transferBudgetS:
+                          type: "string"
+                          description: "Seconds in which one burst must transfer"
+                          maxLength: 16
+                          pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                          x-kubernetes-validations:
+                            - rule: "double(self) > 0.0"
+                              message: "must be greater than 0"
+                        headroom:
+                          type: "string"
+                          description: "Multiplier on the required rate"
+                          maxLength: 16
+                          pattern: "^(0|[1-9][0-9]{0,6})(\\.[0-9]{1,6})?$"
+                          x-kubernetes-validations:
+                            - rule: "double(self) >= 1.0"
+                              message: "must be at least 1"
+                      required:
+                        - "promptTokens"
+                        - "handoffsPerS"
+                        - "burst"
+                        - "transferBudgetS"
+                        - "headroom"
+                    testPort:
+                      type: "integer"
+                      description: "The TCP port the fabric test listens on"
+                      minimum: 1
+                      maximum: 65535
+                  required:
+                    - "workload"
+                    - "testPort"
+                routers:
+                  type: "object"
+                  description: "The router pair"
+                  properties:
+                    storageClassName:
+                      type: "string"
+                      description: "The storage class of each router's volume"
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                    size:
+                      type: "string"
+                      description: "The size of each router's volume"
+                      maxLength: 32
+                      pattern: "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?)?$"
+                    args:
+                      type: "array"
+                      description: "More narwhal-serve options, such as --lease-ttl 6"
+                      items:
+                        type: "string"
+                        description: "One option or value"
+                        maxLength: 256
+                        pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+                      maxItems: 32
+                      x-kubernetes-list-type: "atomic"
+                  required:
+                    - "storageClassName"
+                    - "size"
+                controlTokenSecret:
+                  type: "object"
+                  description: "The Secret that holds the routers' control token, which the routes that change membership, trust or lifecycle require: at least 32 random bytes, as 64 hex digits or 43 base64url characters. Name a new Secret to rotate the token."
+                  properties:
+                    name:
+                      type: "string"
+                      description: "The Secret's name"
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                    key:
+                      type: "string"
+                      description: "The key in the Secret"
+                      maxLength: 253
+                      pattern: "^[-._A-Za-z0-9]+$"
+                  required:
+                    - "name"
+                    - "key"
+                haproxy:
+                  type: "object"
+                  description: "The HAProxy load balancer in front of the routers"
+                  properties:
+                    replicas:
+                      type: "integer"
+                      description: "HAProxy pods"
+                      minimum: 1
+                      maximum: 16
+                      default: 1
+                    clusterDomain:
+                      type: "string"
+                      description: "The cluster's DNS domain"
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                      default: "cluster.local"
+                timeouts:
+                  type: "object"
+                  description: "Seconds a stage may run"
+                  properties:
+                    defaultSeconds:
+                      type: "integer"
+                      description: "Every stage's limit"
+                      minimum: 1
+                      maximum: 604800
+                    stages:
+                      type: "object"
+                      description: "One stage's limit, by stage name"
+                      properties:
+                        access:
+                          type: "integer"
+                          description: "The access stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        discover:
+                          type: "integer"
+                          description: "The discover stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        engine-prepare:
+                          type: "integer"
+                          description: "The engine-prepare stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        install:
+                          type: "integer"
+                          description: "The install stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        engine-start:
+                          type: "integer"
+                          description: "The engine-start stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        engine-check:
+                          type: "integer"
+                          description: "The engine-check stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        cache-capture:
+                          type: "integer"
+                          description: "The cache-capture stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        transfer-measure:
+                          type: "integer"
+                          description: "The transfer-measure stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        cache-groups:
+                          type: "integer"
+                          description: "The cache-groups stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        fabric-budget:
+                          type: "integer"
+                          description: "The fabric-budget stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        fabric-edge:
+                          type: "integer"
+                          description: "The fabric-edge stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        attest-capture:
+                          type: "integer"
+                          description: "The attest-capture stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        sidecar-start:
+                          type: "integer"
+                          description: "The sidecar-start stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        sidecar-verify:
+                          type: "integer"
+                          description: "The sidecar-verify stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        finalize-fleet:
+                          type: "integer"
+                          description: "The finalize-fleet stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        profile:
+                          type: "integer"
+                          description: "The profile stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        calibrate:
+                          type: "integer"
+                          description: "The calibrate stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        fleet-limits:
+                          type: "integer"
+                          description: "The fleet-limits stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        preflight:
+                          type: "integer"
+                          description: "The preflight stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                        router-start:
+                          type: "integer"
+                          description: "The router-start stage's limit"
+                          minimum: 1
+                          maximum: 604800
+                until:
+                  type: "string"
+                  description: "The last stage to run; every stage by default"
+                  maxLength: 63
+                  enum:
+                    - "access"
+                    - "discover"
+                    - "engine-prepare"
+                    - "install"
+                    - "engine-start"
+                    - "engine-check"
+                    - "cache-capture"
+                    - "transfer-measure"
+                    - "cache-groups"
+                    - "fabric-budget"
+                    - "fabric-edge"
+                    - "attest-capture"
+                    - "sidecar-start"
+                    - "sidecar-verify"
+                    - "finalize-fleet"
+                    - "profile"
+                    - "calibrate"
+                    - "fleet-limits"
+                    - "preflight"
+                    - "router-start"
+                stopped:
+                  type: "boolean"
+                  description: "Stop the routers, HAProxy, engines and Jobs, keeping the volumes"
+                  default: false
+                retainRuns:
+                  type: "integer"
+                  description: "Run directories kept, the current one included"
+                  minimum: 1
+                  maximum: 16
+                  default: 3
+              required:
+                - "images"
+                - "engines"
+                - "slo"
+                - "firstTokenMarginS"
+                - "profiling"
+                - "calibration"
+                - "fabric"
+                - "routers"
+                - "controlTokenSecret"
+              x-kubernetes-validations:
+                - rule: "!has(self.engines.apiKeySecret) || self.engines.apiKeySecret.name != self.controlTokenSecret.name || self.engines.apiKeySecret.key != self.controlTokenSecret.key"
+                  message: "controlTokenSecret names the Secret and key of engines.apiKeySecret; keep the control token in its own Secret"
+            status:
+              type: "object"
+              description: "What the controller observed. Per-instance detail stays in the run record."
+              properties:
+                observedGeneration:
+                  type: "integer"
+                  format: "int64"
+                  minimum: 0
+                  description: "The generation the latest pass started from"
+                conditions:
+                  type: "array"
+                  description: "Ready, Reconciling, Stalled, Stopped, and one per stage"
+                  items:
+                    type: "object"
+                    description: "One condition of the fleet"
+                    properties:
+                      type:
+                        type: "string"
+                        description: "The condition's type"
+                        maxLength: 316
+                        pattern: "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$"
+                      status:
+                        type: "string"
+                        description: "True, False or Unknown"
+                        maxLength: 7
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      observedGeneration:
+                        type: "integer"
+                        format: "int64"
+                        minimum: 0
+                        description: "The generation the condition was set from"
+                      lastTransitionTime:
+                        type: "string"
+                        description: "When the status last changed"
+                        maxLength: 64
+                        format: "date-time"
+                      reason:
+                        type: "string"
+                        description: "A CamelCase reason"
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$"
+                      message:
+                        type: "string"
+                        description: "What the reason means for this fleet"
+                        maxLength: 32768
+                    required:
+                      - "type"
+                      - "status"
+                      - "lastTransitionTime"
+                      - "reason"
+                      - "message"
+                  maxItems: 24
+                  x-kubernetes-list-type: "map"
+                  x-kubernetes-list-map-keys:
+                    - "type"
+                serving:
+                  type: "boolean"
+                  description: "The routers serve through HAProxy"
+                stage:
+                  type: "string"
+                  description: "The stage the latest pass runs or stopped at"
+                  maxLength: 63
+                engines:
+                  type: "string"
+                  description: "Engines checked, of those the fleet names"
+                  maxLength: 16
+                  pattern: "^[0-9]+/[0-9]+$"
+                stages:
+                  type: "object"
+                  description: "Each stage's instances"
+                  properties:
+                    access:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    discover:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    engine-prepare:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    install:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    engine-start:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    engine-check:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    cache-capture:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    transfer-measure:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    cache-groups:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    fabric-budget:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    fabric-edge:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    attest-capture:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    sidecar-start:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    sidecar-verify:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    finalize-fleet:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    profile:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    calibrate:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    fleet-limits:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    preflight:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                    router-start:
+                      type: "object"
+                      description: "One stage's instances"
+                      properties:
+                        passed:
+                          type: "integer"
+                          description: "Instances that passed"
+                          minimum: 0
+                          maximum: 1000000
+                        total:
+                          type: "integer"
+                          description: "Instances the stage runs"
+                          minimum: 0
+                          maximum: 1000000
+                        lastPassedTime:
+                          type: "string"
+                          description: "When an instance last passed"
+                          maxLength: 64
+                          format: "date-time"
+                previousRuns:
+                  type: "array"
+                  description: "The fleet UIDs of the run directories an earlier fleet of this name left"
+                  items:
+                    type: "string"
+                    description: "A fleet UID"
+                    maxLength: 36
+                    pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  maxItems: 16
+                  x-kubernetes-list-type: "atomic"
+                exports:
+                  type: "array"
+                  description: "The export Jobs the controller made for the latest narwhal.example.com/export-request values"
+                  items:
+                    type: "object"
+                    description: "One export request's answer: its Job and, once the Job's pod succeeds, the pod and the SHA-256 and size of the log the controller read from it; or why the export failed"
+                    properties:
+                      nonce:
+                        type: "string"
+                        description: "The request's nonce"
+                        maxLength: 32
+                        pattern: "^[0-9a-f]{32}$"
+                      job:
+                        type: "string"
+                        description: "The export Job's name"
+                        maxLength: 63
+                      uid:
+                        type: "string"
+                        description: "The export Job's UID"
+                        maxLength: 36
+                        pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                      pod:
+                        type: "string"
+                        description: "The export Job's pod the controller read"
+                        maxLength: 253
+                      sha256:
+                        type: "string"
+                        description: "The SHA-256 of the pod's log"
+                        maxLength: 64
+                        pattern: "^[0-9a-f]{64}$"
+                      size:
+                        type: "integer"
+                        description: "The size of the pod's log in bytes"
+                        minimum: 0
+                        maximum: 2147483647
+                      error:
+                        type: "string"
+                        description: "Why the export failed"
+                        maxLength: 1024
+                    required:
+                      - "nonce"
+                  maxItems: 4
+                  x-kubernetes-list-type: "map"
+                  x-kubernetes-list-map-keys:
+                    - "nonce"
+          required:
+            - "spec"
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == 'fleet'"
+              message: "a namespace holds one NarwhalFleet, and it is named fleet"
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: "Serving"
+          type: "boolean"
+          jsonPath: ".status.serving"
+        - name: "Ready"
+          type: "string"
+          jsonPath: ".status.conditions[?(@.type==\"Ready\")].status"
+        - name: "Stage"
+          type: "string"
+          jsonPath: ".status.stage"
+        - name: "Engines"
+          type: "string"
+          jsonPath: ".status.engines"
+        - name: "Age"
+          type: "date"
+          jsonPath: ".metadata.creationTimestamp"

@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import stages
 from .backend import plan_launcher
 from .docker import docker
 from .plan import (
+    HOOK_MOUNT,
+    MODEL_MOUNT,
     append_private,
     check_model_files,
     container_options,
@@ -21,8 +23,9 @@ from .plan import (
     requires_remote_code,
 )
 from .runtime import digest, write_once
+from .verdict import verdict
 
-CONTAINER_LAUNCHER = "/narwhal-hooks/launch_engine.py"
+CONTAINER_LAUNCHER = f"{HOOK_MOUNT}/launch_engine.py"
 
 
 @dataclass(frozen=True)
@@ -47,43 +50,37 @@ class CheckContext:
         return ValueError(f"{message}; inspect {self.run / self.log}")
 
 
-@dataclass(frozen=True)
-class ProbeResult:
-    version: object
-    prefix_caching: object
-    kv_events: object
-    # Engine-specific evidence, recorded after the shared fields.
-    fields: dict = field(default_factory=dict)
-    # Lines printed between the summary and the cache line.
-    notes: tuple[str, ...] = ()
+def check_context(
+    run: Path, plan: dict, log: str, environment: dict[str, str], *, model_metadata: bool = True
+) -> CheckContext:
+    """Return the runtime check's inputs; with `model_metadata`, check the model's custom code.
 
-
-def check(run: Path, plan: dict) -> None:
-    engine = plan_launcher(plan)
-    native = plan.get("backend") == "native"
-    log = start_check(run, plan)
-    mapping = engine.launch_settings
-    default_tokenizer = plan["model_dir"] if native else "/model"
+    The check reads a separate tokenizer's metadata in the serving namespace.
+    """
+    mapping = plan_launcher(plan).launch_settings
+    default_tokenizer = plan["model_dir"] if plan.get("backend") == "native" else MODEL_MOUNT
     flag = mapping.settings["tokenizer"].flag
     tokenizer = (flag and option(plan["args"], flag)) or default_tokenizer
     trust_remote_code = mapping.remote_code_flag in plan["args"]
-    # The probe checks a separate tokenizer's metadata in the serving namespace.
     if (
-        requires_remote_code(
+        model_metadata
+        and requires_remote_code(
             Path(plan["model_dir"]), include_tokenizer=tokenizer == default_tokenizer
         )
         and not trust_remote_code
     ):
         raise ValueError(f"Model metadata requires {mapping.remote_code_flag} in the launch record")
-    context = CheckContext(
-        run,
-        plan,
-        log,
-        read_env(run / env_file_name(plan)),
-        tokenizer,
-        trust_remote_code,
-    )
-    inspection = None
+    return CheckContext(run, plan, log, environment, tokenizer, trust_remote_code)
+
+
+def check(run: Path, plan: dict) -> None:
+    """Run the runtime probe on this host, in the plan's image or its native runtime."""
+    engine = plan_launcher(plan)
+    native = plan.get("backend") == "native"
+    if plan.get("backend") == "kubernetes":
+        raise ValueError("a Kubernetes plan's check reads the records of its engine pod")
+    log = start_check(run, plan)
+    context = check_context(run, plan, log, read_env(run / env_file_name(plan)))
     if native:
         model_path = Path(plan["model_path"])
         if not model_path.exists():
@@ -93,6 +90,11 @@ def check(run: Path, plan: dict) -> None:
         check_model_files(plan)
         arguments = engine.runtime_probe(context)
         output = run_native_check(run, plan, log, arguments, context.environment)
+        identity = {
+            "backend": "native",
+            "python_executable": plan["python_executable"],
+            "expected_packages": plan["expected_packages"],
+        }
     else:
         if model_file_changed(plan):
             raise ValueError("model file changed after launch preparation")
@@ -112,29 +114,34 @@ def check(run: Path, plan: dict) -> None:
             run,
             log,
         )
-    result = engine.probe_result(context, output)
-    if not isinstance(result.version, str) or not result.version.strip():
-        raise context.failure(f"runtime check returned an invalid {engine.version_label} version")
-    if type(result.prefix_caching) is not bool:
-        raise context.failure("runtime check requires one resolved cache setting")
-    planned = plan.get("kv_events")
-    expected = (
-        None if planned is None else {key: planned[key] for key in ("endpoint", "replay_endpoint")}
-    )
-    if result.kv_events != expected:
-        raise context.failure("runtime cache-event endpoints differ from the launch plan")
-    evidence = {
-        "engine_version": result.version,
-        "prefix_caching": result.prefix_caching,
-        "kv_events": result.kv_events,
-        **result.fields,
-    }
-    write_checked(run, plan, evidence, inspection)
+        identity = {"image_id": inspection["Id"]}
+    finish_check(context, judge(context, output), identity)
+
+
+def judge(context: CheckContext, output: str) -> dict:
+    """Return the verdict on the probe output, the evidence and notes of a passing probe."""
+    try:
+        return verdict(
+            plan_launcher(context.plan).probe_reader, context.plan, context.environment, output
+        )
+    except ValueError as error:
+        raise context.failure(str(error)) from None
+
+
+def finish_check(context: CheckContext, judged: dict, identity: dict) -> None:
+    """Write checked.json from a passing verdict and the identity of what ran the probe.
+
+    The identity fields follow the probe's evidence.
+    """
+    run, plan = context.run, context.plan
+    engine = plan_launcher(plan)
+    write_checked(run, judged["evidence"], identity)
     print(engine.check_summary)
-    for note in result.notes:
+    for note in judged["notes"]:
         print(note)
     cache = engine.prefix_cache_name
-    if not result.prefix_caching:
+    planned = plan.get("kv_events")
+    if not judged["evidence"]["prefix_caching"]:
         print(f"{cache} is off; the engine publishes no cache events.")
     elif planned is None:
         print(f"{cache} is on; cache-event publication is disabled.")
@@ -156,6 +163,8 @@ def require_checked(run: Path, plan: dict) -> None:
         or checked.get("expected_packages") != plan["expected_packages"]
     ):
         raise ValueError("native runtime check differs from the launch plan")
+    if (plan.get("backend") == "kubernetes") != (checked.get("backend") == "kubernetes"):
+        raise ValueError("runtime check backend differs from the launch plan")
 
 
 def start_check(run: Path, plan: dict) -> str:
@@ -204,18 +213,9 @@ def run_native_check(
     return result.stdout
 
 
-def write_checked(run: Path, plan: dict, fields: dict, inspection: dict | None) -> None:
-    # write_once compares bytes, so the key order stays fixed: plan hash, backend fields, mode.
-    evidence = {"plan_sha256": digest(run / "launch.json"), **fields}
-    if plan.get("backend") == "native":
-        evidence.update(
-            backend="native",
-            python_executable=plan["python_executable"],
-            expected_packages=plan["expected_packages"],
-        )
-    else:
-        assert inspection is not None
-        evidence["image_id"] = inspection["Id"]
+def write_checked(run: Path, fields: dict, identity: dict) -> None:
+    # write_once compares bytes, so the key order stays fixed: plan hash, probe fields, identity.
+    evidence = {"plan_sha256": digest(run / "launch.json"), **fields, **identity}
     write_once(
         run / "checked.json",
         json.dumps(evidence),

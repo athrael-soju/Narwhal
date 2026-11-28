@@ -40,6 +40,8 @@ dependencies = [
   "fastapi>=0.136.3",
   "httptools>=0.8.0",
   "httpx>=0.28.1",
+  # 1.0 moves to the httpx2 fork.
+  "lightkube>=0.22,<1",
   "msgpack>=1.2.2",
   "pydantic>=2.13.5",
   "pyzmq>=27.2.0",
@@ -55,6 +57,8 @@ dev = [
   "mypy==2.3.1",
   "pre-commit>=4",
   "build>=1.2",
+  # The packaging tests build the wheel and sdist without an isolated environment.
+  "setuptools>=77",
   "twine>=5",
 ]
 docs = [
@@ -83,6 +87,11 @@ Issues = "https://github.com/athrael-soju/Narwhal/issues"
 Changelog = "https://github.com/athrael-soju/Narwhal/blob/main/CHANGELOG.md"
 "Release notes" = "https://github.com/athrael-soju/Narwhal/releases"
 
+[tool.setuptools]
+# The wheel ships the modules and the package data listed below, and nothing else that
+# MANIFEST.in matches, so an untracked file in a package directory stays out of it.
+include-package-data = false
+
 [tool.setuptools.dynamic]
 readme = { file = ["README.md", "CHANGELOG.md"], content-type = "text/markdown" }
 
@@ -96,6 +105,16 @@ narwhal = ["py.typed", "fleet.example.json"]
   "direct-qwen35-08b-v1.json",
   "direct-ernie45-03b-v1.json",
 ]
+"narwhal.observability.stack" = [
+  "compose.yml",
+  "prometheus.yml",
+  "prometheus-alerts.yml",
+  "grafana-narwhal.json",
+  "grafana/provisioning/dashboards/narwhal.yml",
+  "grafana/provisioning/datasources/prometheus.yml",
+]
+"narwhal.fleet_control" = ["console.html"]
+"narwhal.deployment" = ["haproxy.cfg"]
 "narwhal.backends.vllm" = ["icon.png"]
 "narwhal.backends.sglang" = ["icon.png"]
 "narwhal.backends.llamacpp" = ["icon.png"]
@@ -118,6 +137,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S"]
 "src/narwhal/backends/sglang/*.py" = ["S"]
 "src/narwhal/backends/llamacpp/*.py" = ["S"]
 "src/narwhal/backends/trtllm/*.py" = ["S"]
+# The monitoring stack and fleet control service keep the baseline they had under tools/.
+"src/narwhal/fleet_control/*.py" = ["S"]
+"src/narwhal/observability/stack/**/*.py" = ["S"]
 
 [tool.mypy]
 python_version = "3.11"

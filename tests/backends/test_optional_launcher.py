@@ -20,6 +20,8 @@ LAUNCH_TESTS = {
         "test_launch_command_and_environment",
         "test_runtime_check_result",
         "test_attestation_document",
+        "test_kubernetes_engine_pod_and_check",
+        "test_attestation_capture",
     },
 }
 

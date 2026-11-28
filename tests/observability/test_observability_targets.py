@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.observability.stack import make_targets
 from narwhal.observability.targets import scrape_targets
-from tools.observability import make_targets
 
 
 def fleet(*engines: EngineSpec, backend: str = "vllm") -> FleetConfig:
@@ -73,7 +73,9 @@ class TargetGenerationTests(unittest.TestCase):
         for routers in (["http://router-a:8000", "http://router-b:8000"], ["http://router-a:8000"]):
             with (
                 self.subTest(routers=routers),
-                self.assertRaisesRegex(ValueError, "NARWHAL_TARGETS_URL names router router-a"),
+                self.assertRaisesRegex(
+                    ValueError, "--targets-url or NARWHAL_TARGETS_URL names router router-a"
+                ),
             ):
                 make_targets.load_contract(routers, "http://router-a:8000/")
 

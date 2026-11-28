@@ -1,0 +1,3777 @@
+{
+ "about": "helm template of deploy/helm/narwhal at 1e74b88f: the engine, gate and HAProxy templates the controller's builders replace, with task 24's route allow-list in haproxy.cfg and the RuntimeDefault seccomp profile the admission policy requires of gate and HAProxy pods",
+ "inputs": {
+  "credentials": {
+   "engineApiKey": {
+    "env": "NARWHAL_ENGINE_API_KEY",
+    "key": "api-key",
+    "secretName": "engine-credential"
+   }
+  },
+  "engines": {
+   "access": {
+    "role": {
+     "apiVersion": "rbac.authorization.k8s.io/v1",
+     "kind": "Role",
+     "metadata": {
+      "name": "narwhal-attestation-pod-reader"
+     },
+     "rules": [
+      {
+       "apiGroups": [
+        ""
+       ],
+       "resources": [
+        "pods"
+       ],
+       "verbs": [
+        "get"
+       ]
+      }
+     ]
+    },
+    "roleBinding": {
+     "apiVersion": "rbac.authorization.k8s.io/v1",
+     "kind": "RoleBinding",
+     "metadata": {
+      "name": "narwhal-attestation-pod-reader"
+     },
+     "roleRef": {
+      "apiGroup": "rbac.authorization.k8s.io",
+      "kind": "Role",
+      "name": "narwhal-attestation-pod-reader"
+     },
+     "subjects": [
+      {
+       "kind": "ServiceAccount",
+       "name": "narwhal-attestation"
+      }
+     ]
+    },
+    "serviceAccount": {
+     "apiVersion": "v1",
+     "automountServiceAccountToken": false,
+     "kind": "ServiceAccount",
+     "metadata": {
+      "name": "narwhal-attestation"
+     }
+    }
+   },
+   "configMaps": [
+    {
+     "apiVersion": "v1",
+     "data": {
+      "launch.json": "<launch.json>",
+      "launch_engine.py": "<launch_engine.py>",
+      "sitecustomize.py": "<sitecustomize.py>"
+     },
+     "immutable": true,
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "narwhal-engine-1-404ee717ee6f-hooks"
+     }
+    },
+    {
+     "apiVersion": "v1",
+     "data": {
+      "launch.json": "<launch.json>",
+      "launch_engine.py": "<launch_engine.py>",
+      "sitecustomize.py": "<sitecustomize.py>"
+     },
+     "immutable": true,
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "narwhal-engine-2-6606f75ecc84-hooks"
+     }
+    },
+    {
+     "apiVersion": "v1",
+     "data": {
+      "checkpoint.py": "<checkpoint.py>",
+      "inspections.py": "<inspections.py>",
+      "pod.py": "<pod.py>",
+      "probe_reader.py": "<probe_reader.py>",
+      "verdict.py": "<verdict.py>"
+     },
+     "immutable": true,
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "narwhal-pod-018c868728e1"
+     }
+    },
+    {
+     "apiVersion": "v1",
+     "data": {
+      "checkpoint.json": "<checkpoint.json>",
+      "engine.json": "<engine.json>",
+      "runtime-check.json": "<runtime-check.json>"
+     },
+     "immutable": true,
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "narwhal-spec-engine-1-e036b109e4b6"
+     }
+    },
+    {
+     "apiVersion": "v1",
+     "data": {
+      "checkpoint.json": "<checkpoint.json>",
+      "engine.json": "<engine.json>",
+      "runtime-check.json": "<runtime-check.json>"
+     },
+     "immutable": true,
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "narwhal-spec-engine-2-26e285ffae50"
+     }
+    }
+   ],
+   "count": 2,
+   "gpuResource": "gpu.example.com/gpu",
+   "gpus": 2,
+   "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "modelVolume": {
+    "persistentVolumeClaim": {
+     "claimName": "models",
+     "readOnly": true
+    }
+   },
+   "namespace": "example",
+   "podTemplate": {
+    "automountServiceAccountToken": false,
+    "containers": [
+     {
+      "command": [
+       "python3",
+       "-I",
+       "-B",
+       "-c",
+       "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+       "/narwhal-spec",
+       "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+       "engine"
+      ],
+      "env": [
+       {
+        "name": "NARWHAL_POD_IP",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "status.podIP"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_POD_UID",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.uid"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_NODE_NAME",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "spec.nodeName"
+         }
+        }
+       },
+       {
+        "name": "VLLM_API_KEY",
+        "valueFrom": {
+         "secretKeyRef": {
+          "key": "api-key",
+          "name": "engine-credential"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_ROLE",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.name"
+         }
+        }
+       }
+      ],
+      "image": null,
+      "name": "engine",
+      "resources": null,
+      "securityContext": {
+       "capabilities": {
+        "add": [
+         "IPC_LOCK"
+        ]
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/narwhal-hooks",
+        "name": "narwhal-hooks",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/narwhal-pod",
+        "name": "narwhal-pod",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/model",
+        "name": "model",
+        "readOnly": true
+       },
+       {
+        "mountPath": "/root/.cache",
+        "name": "cache"
+       },
+       {
+        "mountPath": "/dev/shm",
+        "name": "shm"
+       },
+       {
+        "mountPath": "/narwhal-kv-events",
+        "name": "kv-events"
+       },
+       {
+        "mountPath": "/narwhal-engine",
+        "name": "narwhal-engine"
+       },
+       {
+        "mountPath": "/narwhal-state",
+        "name": "narwhal-state",
+        "readOnly": true,
+        "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+       },
+       {
+        "mountPath": "/narwhal-spec",
+        "name": "narwhal-spec",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       }
+      ]
+     },
+     {
+      "command": [
+       "python3",
+       "-I",
+       "-m",
+       "narwhal.deployment.attestation_contract.cli",
+       "serve",
+       "--run",
+       "/narwhal-launch",
+       "--pod-evidence",
+       "/narwhal-state"
+      ],
+      "env": [
+       {
+        "name": "NARWHAL_POD_IP",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "status.podIP"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_POD_UID",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.uid"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_NODE_NAME",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "spec.nodeName"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_POD_NAME",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.name"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_ROLE",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.name"
+         }
+        }
+       }
+      ],
+      "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "attestation",
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "runAsGroup": 0,
+       "runAsUser": 0
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/narwhal-hooks",
+        "name": "narwhal-hooks",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/model",
+        "name": "model",
+        "readOnly": true
+       },
+       {
+        "mountPath": "/narwhal-kv-events",
+        "name": "kv-events"
+       },
+       {
+        "mountPath": "/narwhal-engine",
+        "name": "narwhal-engine"
+       },
+       {
+        "mountPath": "/narwhal-state",
+        "name": "narwhal-state",
+        "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+       },
+       {
+        "mountPath": "/narwhal-launch",
+        "name": "narwhal-state",
+        "readOnly": true,
+        "subPathExpr": "engines/$(NARWHAL_ROLE)/launches/$(NARWHAL_POD_UID)"
+       },
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "narwhal-api",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirstWithHostNet",
+    "enableServiceLinks": false,
+    "hostNetwork": true,
+    "initContainers": [
+     {
+      "command": [
+       "python3",
+       "-I",
+       "-B",
+       "-c",
+       "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+       "/narwhal-spec",
+       "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+       "checkpoint"
+      ],
+      "env": [
+       {
+        "name": "NARWHAL_POD_IP",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "status.podIP"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_POD_UID",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.uid"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_NODE_NAME",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "spec.nodeName"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_ROLE",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.name"
+         }
+        }
+       }
+      ],
+      "image": null,
+      "name": "checkpoint",
+      "volumeMounts": [
+       {
+        "mountPath": "/narwhal-hooks",
+        "name": "narwhal-hooks",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/narwhal-pod",
+        "name": "narwhal-pod",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/model",
+        "name": "model",
+        "readOnly": true
+       },
+       {
+        "mountPath": "/narwhal-state",
+        "name": "narwhal-state",
+        "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+       },
+       {
+        "mountPath": "/narwhal-spec",
+        "name": "narwhal-spec",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       }
+      ]
+     },
+     {
+      "command": [
+       "python3",
+       "-I",
+       "-B",
+       "-c",
+       "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+       "/narwhal-spec",
+       "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+       "runtime-check"
+      ],
+      "env": [
+       {
+        "name": "NARWHAL_POD_IP",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "status.podIP"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_POD_UID",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.uid"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_NODE_NAME",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "spec.nodeName"
+         }
+        }
+       },
+       {
+        "name": "VLLM_API_KEY",
+        "valueFrom": {
+         "secretKeyRef": {
+          "key": "api-key",
+          "name": "engine-credential"
+         }
+        }
+       },
+       {
+        "name": "NARWHAL_ROLE",
+        "valueFrom": {
+         "fieldRef": {
+          "fieldPath": "metadata.name"
+         }
+        }
+       }
+      ],
+      "image": null,
+      "name": "runtime-check",
+      "resources": null,
+      "securityContext": {
+       "capabilities": {
+        "add": [
+         "IPC_LOCK"
+        ]
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/narwhal-hooks",
+        "name": "narwhal-hooks",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/narwhal-pod",
+        "name": "narwhal-pod",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       },
+       {
+        "mountPath": "/model",
+        "name": "model",
+        "readOnly": true
+       },
+       {
+        "mountPath": "/root/.cache",
+        "name": "cache"
+       },
+       {
+        "mountPath": "/dev/shm",
+        "name": "shm"
+       },
+       {
+        "mountPath": "/narwhal-kv-events",
+        "name": "kv-events"
+       },
+       {
+        "mountPath": "/narwhal-state",
+        "name": "narwhal-state",
+        "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+       },
+       {
+        "mountPath": "/narwhal-spec",
+        "name": "narwhal-spec",
+        "readOnly": true,
+        "subPathExpr": "$(NARWHAL_ROLE)"
+       }
+      ]
+     }
+    ],
+    "serviceAccountName": "narwhal-attestation",
+    "shareProcessNamespace": true,
+    "volumes": [
+     {
+      "name": "narwhal-hooks",
+      "projected": {
+       "defaultMode": 292,
+       "sources": [
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "launch.json",
+            "path": "engine-1/launch.json"
+           },
+           {
+            "key": "launch_engine.py",
+            "path": "engine-1/launch_engine.py"
+           },
+           {
+            "key": "sitecustomize.py",
+            "path": "engine-1/sitecustomize.py"
+           }
+          ],
+          "name": "narwhal-engine-1-404ee717ee6f-hooks"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "launch.json",
+            "path": "engine-2/launch.json"
+           },
+           {
+            "key": "launch_engine.py",
+            "path": "engine-2/launch_engine.py"
+           },
+           {
+            "key": "sitecustomize.py",
+            "path": "engine-2/sitecustomize.py"
+           }
+          ],
+          "name": "narwhal-engine-2-6606f75ecc84-hooks"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "name": "narwhal-pod",
+      "projected": {
+       "defaultMode": 292,
+       "sources": [
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "checkpoint.py",
+            "path": "engine-1/checkpoint.py"
+           },
+           {
+            "key": "inspections.py",
+            "path": "engine-1/inspections.py"
+           },
+           {
+            "key": "pod.py",
+            "path": "engine-1/pod.py"
+           },
+           {
+            "key": "probe_reader.py",
+            "path": "engine-1/probe_reader.py"
+           },
+           {
+            "key": "verdict.py",
+            "path": "engine-1/verdict.py"
+           }
+          ],
+          "name": "narwhal-pod-018c868728e1"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "checkpoint.py",
+            "path": "engine-2/checkpoint.py"
+           },
+           {
+            "key": "inspections.py",
+            "path": "engine-2/inspections.py"
+           },
+           {
+            "key": "pod.py",
+            "path": "engine-2/pod.py"
+           },
+           {
+            "key": "probe_reader.py",
+            "path": "engine-2/probe_reader.py"
+           },
+           {
+            "key": "verdict.py",
+            "path": "engine-2/verdict.py"
+           }
+          ],
+          "name": "narwhal-pod-018c868728e1"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "name": "model"
+     },
+     {
+      "name": "narwhal-state",
+      "persistentVolumeClaim": {
+       "claimName": "narwhal-state"
+      }
+     },
+     {
+      "emptyDir": {},
+      "name": "cache"
+     },
+     {
+      "emptyDir": {
+       "medium": "Memory"
+      },
+      "name": "shm"
+     },
+     {
+      "emptyDir": {},
+      "name": "kv-events"
+     },
+     {
+      "emptyDir": {},
+      "name": "narwhal-engine"
+     },
+     {
+      "name": "narwhal-api",
+      "projected": {
+       "defaultMode": 292,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3600,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     },
+     {
+      "name": "narwhal-spec",
+      "projected": {
+       "defaultMode": 292,
+       "sources": [
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "checkpoint.json",
+            "path": "engine-1/checkpoint.json"
+           },
+           {
+            "key": "engine.json",
+            "path": "engine-1/engine.json"
+           },
+           {
+            "key": "runtime-check.json",
+            "path": "engine-1/runtime-check.json"
+           }
+          ],
+          "name": "narwhal-spec-engine-1-e036b109e4b6"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "checkpoint.json",
+            "path": "engine-2/checkpoint.json"
+           },
+           {
+            "key": "engine.json",
+            "path": "engine-2/engine.json"
+           },
+           {
+            "key": "runtime-check.json",
+            "path": "engine-2/runtime-check.json"
+           }
+          ],
+          "name": "narwhal-spec-engine-2-26e285ffae50"
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "rdmaResource": "rdma.example.com/hca",
+   "schema": "narwhal.engine-set",
+   "schemaVersion": 1,
+   "serviceName": "engines",
+   "sidecarImage": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "stateClaim": "narwhal-state"
+  },
+  "gates": [
+   {
+    "command": [
+     "python3",
+     "-I",
+     "-m",
+     "narwhal.deployment.discovery"
+    ],
+    "deadlineSeconds": 1800,
+    "keep": "deploy/run-1/jobs/discover-node-a",
+    "kind": "discovery",
+    "name": "discover-node-a",
+    "node": "node-a"
+   },
+   {
+    "command": [
+     "python3",
+     "/narwhal-input/gate.py",
+     "run"
+    ],
+    "deadlineSeconds": 1800,
+    "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "inputs": "discover-node-b",
+    "keep": "deploy/run-1/jobs/discover-node-b",
+    "kind": "discovery",
+    "modelVolume": {
+     "hostPath": {
+      "path": "/models",
+      "type": "Directory"
+     }
+    },
+    "name": "discover-node-b",
+    "node": "node-b",
+    "resources": {
+     "gpu.example.com/gpu": "8"
+    },
+    "runtimeClassName": "nvidia"
+   },
+   {
+    "command": [
+     "ib_write_bw"
+    ],
+    "deadlineSeconds": 180,
+    "keep": "deploy/run-1/jobs/fabric-server",
+    "kind": "fabric-server",
+    "name": "fabric-node-a-node-b-server",
+    "node": "node-b"
+   },
+   {
+    "command": [
+     "ib_write_bw",
+     "node-b"
+    ],
+    "deadlineSeconds": 180,
+    "env": {
+     "A": "x y",
+     "B": "2"
+    },
+    "keep": "deploy/run-1/jobs/fabric-client",
+    "kind": "fabric-client",
+    "name": "fabric-node-a-node-b-client",
+    "node": "node-a"
+   },
+   {
+    "command": [
+     "ip",
+     "route"
+    ],
+    "deadlineSeconds": 120,
+    "keep": "deploy/run-1/jobs/probe-node-a",
+    "kind": "fabric-probe",
+    "name": "probe-node-a",
+    "node": "node-a"
+   },
+   {
+    "command": [
+     "narwhal-engine",
+     "prepare"
+    ],
+    "deadlineSeconds": 1800,
+    "env": {
+     "NARWHAL_X": "1"
+    },
+    "inputs": "prepare-engine-1",
+    "keep": "deploy/run-1/jobs/prepare-engine-1",
+    "kind": "prepare",
+    "modelVolume": {
+     "persistentVolumeClaim": {
+      "claimName": "models",
+      "readOnly": true
+     }
+    },
+    "name": "prepare-engine-1",
+    "node": "node-a"
+   },
+   {
+    "command": [
+     "sh",
+     "-c",
+     "true"
+    ],
+    "deadlineSeconds": 900,
+    "hostNetwork": true,
+    "inputs": "measure-node-a",
+    "keep": "deploy/run-1/jobs/measure-node-a",
+    "kind": "transfer-measure",
+    "name": "measure-node-a",
+    "node": "node-a"
+   },
+   {
+    "command": [
+     "python",
+     "-m",
+     "narwhal.deployment.attestation_contract.cli"
+    ],
+    "deadlineSeconds": 300,
+    "keep": "deploy/run-1/jobs/verify-engine-1",
+    "kind": "sidecar-verify",
+    "name": "verify-engine-1",
+    "serviceAccount": true
+   },
+   {
+    "command": [
+     "true"
+    ],
+    "deadlineSeconds": 600,
+    "keep": "deploy/run-1/jobs/state-1",
+    "kind": "state",
+    "name": "state-1"
+   },
+   {
+    "command": [
+     "narwhal-check",
+     "--fleet",
+     "/narwhal-state/fleet.json"
+    ],
+    "deadlineSeconds": 1800,
+    "keep": "deploy/run-1/jobs/preflight",
+    "kind": "preflight",
+    "name": "preflight"
+   }
+  ],
+  "haproxy": {
+   "clusterDomain": "cluster.example",
+   "replicas": 2
+  },
+  "images": {
+   "fabric": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "haproxy": "registry.example/haproxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "narwhal": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+ },
+ "placed": {
+  "apiVersion": "apps/v1",
+  "kind": "StatefulSet",
+  "metadata": {
+   "labels": {
+    "app.kubernetes.io/component": "engine",
+    "app.kubernetes.io/instance": "fleet",
+    "app.kubernetes.io/managed-by": "Helm",
+    "app.kubernetes.io/name": "narwhal",
+    "app.kubernetes.io/version": "0.13.0"
+   },
+   "name": "engine"
+  },
+  "spec": {
+   "ordinals": {
+    "start": 1
+   },
+   "podManagementPolicy": "Parallel",
+   "replicas": 2,
+   "selector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "engine",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/name": "narwhal"
+    }
+   },
+   "serviceName": "engines",
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "engine",
+      "app.kubernetes.io/instance": "fleet",
+      "app.kubernetes.io/name": "narwhal"
+     }
+    },
+    "spec": {
+     "automountServiceAccountToken": false,
+     "containers": [
+      {
+       "command": [
+        "python3",
+        "-I",
+        "-B",
+        "-c",
+        "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+        "/narwhal-spec",
+        "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+        "engine"
+       ],
+       "env": [
+        {
+         "name": "NARWHAL_POD_IP",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "status.podIP"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_POD_UID",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.uid"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_NODE_NAME",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "spec.nodeName"
+          }
+         }
+        },
+        {
+         "name": "VLLM_API_KEY",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "api-key",
+           "name": "engine-credential"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_ROLE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.name"
+          }
+         }
+        }
+       ],
+       "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "name": "engine",
+       "resources": {
+        "limits": {
+         "gpu.example.com/gpu": "2",
+         "rdma.example.com/hca": "1"
+        }
+       },
+       "securityContext": {
+        "capabilities": {
+         "add": [
+          "IPC_LOCK"
+         ]
+        }
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/narwhal-hooks",
+         "name": "narwhal-hooks",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/narwhal-pod",
+         "name": "narwhal-pod",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/model",
+         "name": "model",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/root/.cache",
+         "name": "cache"
+        },
+        {
+         "mountPath": "/dev/shm",
+         "name": "shm"
+        },
+        {
+         "mountPath": "/narwhal-kv-events",
+         "name": "kv-events"
+        },
+        {
+         "mountPath": "/narwhal-engine",
+         "name": "narwhal-engine"
+        },
+        {
+         "mountPath": "/narwhal-state",
+         "name": "narwhal-state",
+         "readOnly": true,
+         "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+        },
+        {
+         "mountPath": "/narwhal-spec",
+         "name": "narwhal-spec",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        }
+       ]
+      },
+      {
+       "command": [
+        "python3",
+        "-I",
+        "-m",
+        "narwhal.deployment.attestation_contract.cli",
+        "serve",
+        "--run",
+        "/narwhal-launch",
+        "--pod-evidence",
+        "/narwhal-state"
+       ],
+       "env": [
+        {
+         "name": "NARWHAL_POD_IP",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "status.podIP"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_POD_UID",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.uid"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_NODE_NAME",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "spec.nodeName"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_POD_NAME",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.name"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_ROLE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.name"
+          }
+         }
+        }
+       ],
+       "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "name": "attestation",
+       "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+         "drop": [
+          "ALL"
+         ]
+        },
+        "runAsGroup": 0,
+        "runAsUser": 0
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/narwhal-hooks",
+         "name": "narwhal-hooks",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/model",
+         "name": "model",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/narwhal-kv-events",
+         "name": "kv-events"
+        },
+        {
+         "mountPath": "/narwhal-engine",
+         "name": "narwhal-engine"
+        },
+        {
+         "mountPath": "/narwhal-state",
+         "name": "narwhal-state",
+         "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+        },
+        {
+         "mountPath": "/narwhal-launch",
+         "name": "narwhal-state",
+         "readOnly": true,
+         "subPathExpr": "engines/$(NARWHAL_ROLE)/launches/$(NARWHAL_POD_UID)"
+        },
+        {
+         "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+         "name": "narwhal-api",
+         "readOnly": true
+        }
+       ]
+      }
+     ],
+     "dnsPolicy": "ClusterFirstWithHostNet",
+     "enableServiceLinks": false,
+     "hostNetwork": true,
+     "initContainers": [
+      {
+       "command": [
+        "python3",
+        "-I",
+        "-B",
+        "-c",
+        "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+        "/narwhal-spec",
+        "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+        "checkpoint"
+       ],
+       "env": [
+        {
+         "name": "NARWHAL_POD_IP",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "status.podIP"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_POD_UID",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.uid"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_NODE_NAME",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "spec.nodeName"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_ROLE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.name"
+          }
+         }
+        }
+       ],
+       "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "name": "checkpoint",
+       "volumeMounts": [
+        {
+         "mountPath": "/narwhal-hooks",
+         "name": "narwhal-hooks",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/narwhal-pod",
+         "name": "narwhal-pod",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/model",
+         "name": "model",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/narwhal-state",
+         "name": "narwhal-state",
+         "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+        },
+        {
+         "mountPath": "/narwhal-spec",
+         "name": "narwhal-spec",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        }
+       ]
+      },
+      {
+       "command": [
+        "python3",
+        "-I",
+        "-B",
+        "-c",
+        "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+        "/narwhal-spec",
+        "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+        "runtime-check"
+       ],
+       "env": [
+        {
+         "name": "NARWHAL_POD_IP",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "status.podIP"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_POD_UID",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.uid"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_NODE_NAME",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "spec.nodeName"
+          }
+         }
+        },
+        {
+         "name": "VLLM_API_KEY",
+         "valueFrom": {
+          "secretKeyRef": {
+           "key": "api-key",
+           "name": "engine-credential"
+          }
+         }
+        },
+        {
+         "name": "NARWHAL_ROLE",
+         "valueFrom": {
+          "fieldRef": {
+           "fieldPath": "metadata.name"
+          }
+         }
+        }
+       ],
+       "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "name": "runtime-check",
+       "resources": {
+        "limits": {
+         "gpu.example.com/gpu": "2",
+         "rdma.example.com/hca": "1"
+        }
+       },
+       "securityContext": {
+        "capabilities": {
+         "add": [
+          "IPC_LOCK"
+         ]
+        }
+       },
+       "volumeMounts": [
+        {
+         "mountPath": "/narwhal-hooks",
+         "name": "narwhal-hooks",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/narwhal-pod",
+         "name": "narwhal-pod",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        },
+        {
+         "mountPath": "/model",
+         "name": "model",
+         "readOnly": true
+        },
+        {
+         "mountPath": "/root/.cache",
+         "name": "cache"
+        },
+        {
+         "mountPath": "/dev/shm",
+         "name": "shm"
+        },
+        {
+         "mountPath": "/narwhal-kv-events",
+         "name": "kv-events"
+        },
+        {
+         "mountPath": "/narwhal-state",
+         "name": "narwhal-state",
+         "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+        },
+        {
+         "mountPath": "/narwhal-spec",
+         "name": "narwhal-spec",
+         "readOnly": true,
+         "subPathExpr": "$(NARWHAL_ROLE)"
+        }
+       ]
+      }
+     ],
+     "schedulingGates": [
+      {
+       "name": "narwhal.io/placement"
+      }
+     ],
+     "serviceAccountName": "narwhal-attestation",
+     "shareProcessNamespace": true,
+     "volumes": [
+      {
+       "name": "narwhal-hooks",
+       "projected": {
+        "defaultMode": 292,
+        "sources": [
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "launch.json",
+             "path": "engine-1/launch.json"
+            },
+            {
+             "key": "launch_engine.py",
+             "path": "engine-1/launch_engine.py"
+            },
+            {
+             "key": "sitecustomize.py",
+             "path": "engine-1/sitecustomize.py"
+            }
+           ],
+           "name": "narwhal-engine-1-404ee717ee6f-hooks"
+          }
+         },
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "launch.json",
+             "path": "engine-2/launch.json"
+            },
+            {
+             "key": "launch_engine.py",
+             "path": "engine-2/launch_engine.py"
+            },
+            {
+             "key": "sitecustomize.py",
+             "path": "engine-2/sitecustomize.py"
+            }
+           ],
+           "name": "narwhal-engine-2-6606f75ecc84-hooks"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "narwhal-pod",
+       "projected": {
+        "defaultMode": 292,
+        "sources": [
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "checkpoint.py",
+             "path": "engine-1/checkpoint.py"
+            },
+            {
+             "key": "inspections.py",
+             "path": "engine-1/inspections.py"
+            },
+            {
+             "key": "pod.py",
+             "path": "engine-1/pod.py"
+            },
+            {
+             "key": "probe_reader.py",
+             "path": "engine-1/probe_reader.py"
+            },
+            {
+             "key": "verdict.py",
+             "path": "engine-1/verdict.py"
+            }
+           ],
+           "name": "narwhal-pod-018c868728e1"
+          }
+         },
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "checkpoint.py",
+             "path": "engine-2/checkpoint.py"
+            },
+            {
+             "key": "inspections.py",
+             "path": "engine-2/inspections.py"
+            },
+            {
+             "key": "pod.py",
+             "path": "engine-2/pod.py"
+            },
+            {
+             "key": "probe_reader.py",
+             "path": "engine-2/probe_reader.py"
+            },
+            {
+             "key": "verdict.py",
+             "path": "engine-2/verdict.py"
+            }
+           ],
+           "name": "narwhal-pod-018c868728e1"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "model",
+       "persistentVolumeClaim": {
+        "claimName": "models",
+        "readOnly": true
+       }
+      },
+      {
+       "name": "narwhal-state",
+       "persistentVolumeClaim": {
+        "claimName": "narwhal-state"
+       }
+      },
+      {
+       "emptyDir": {},
+       "name": "cache"
+      },
+      {
+       "emptyDir": {
+        "medium": "Memory"
+       },
+       "name": "shm"
+      },
+      {
+       "emptyDir": {},
+       "name": "kv-events"
+      },
+      {
+       "emptyDir": {},
+       "name": "narwhal-engine"
+      },
+      {
+       "name": "narwhal-api",
+       "projected": {
+        "defaultMode": 292,
+        "sources": [
+         {
+          "serviceAccountToken": {
+           "expirationSeconds": 3600,
+           "path": "token"
+          }
+         },
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "ca.crt",
+             "path": "ca.crt"
+            }
+           ],
+           "name": "kube-root-ca.crt"
+          }
+         },
+         {
+          "downwardAPI": {
+           "items": [
+            {
+             "fieldRef": {
+              "fieldPath": "metadata.namespace"
+             },
+             "path": "namespace"
+            }
+           ]
+          }
+         }
+        ]
+       }
+      },
+      {
+       "name": "narwhal-spec",
+       "projected": {
+        "defaultMode": 292,
+        "sources": [
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "checkpoint.json",
+             "path": "engine-1/checkpoint.json"
+            },
+            {
+             "key": "engine.json",
+             "path": "engine-1/engine.json"
+            },
+            {
+             "key": "runtime-check.json",
+             "path": "engine-1/runtime-check.json"
+            }
+           ],
+           "name": "narwhal-spec-engine-1-e036b109e4b6"
+          }
+         },
+         {
+          "configMap": {
+           "items": [
+            {
+             "key": "checkpoint.json",
+             "path": "engine-2/checkpoint.json"
+            },
+            {
+             "key": "engine.json",
+             "path": "engine-2/engine.json"
+            },
+            {
+             "key": "runtime-check.json",
+             "path": "engine-2/runtime-check.json"
+            }
+           ],
+           "name": "narwhal-spec-engine-2-26e285ffae50"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "updateStrategy": {
+    "type": "OnDelete"
+   }
+  }
+ },
+ "placement": {
+  "engine-1": "node-a",
+  "engine-2": "node-b"
+ },
+ "rendered": [
+  {
+   "apiVersion": "v1",
+   "data": {
+    "launch.json": "<launch.json>",
+    "launch_engine.py": "<launch_engine.py>",
+    "sitecustomize.py": "<sitecustomize.py>"
+   },
+   "immutable": true,
+   "kind": "ConfigMap",
+   "metadata": {
+    "name": "narwhal-engine-1-404ee717ee6f-hooks"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "data": {
+    "launch.json": "<launch.json>",
+    "launch_engine.py": "<launch_engine.py>",
+    "sitecustomize.py": "<sitecustomize.py>"
+   },
+   "immutable": true,
+   "kind": "ConfigMap",
+   "metadata": {
+    "name": "narwhal-engine-2-6606f75ecc84-hooks"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "data": {
+    "checkpoint.py": "<checkpoint.py>",
+    "inspections.py": "<inspections.py>",
+    "pod.py": "<pod.py>",
+    "probe_reader.py": "<probe_reader.py>",
+    "verdict.py": "<verdict.py>"
+   },
+   "immutable": true,
+   "kind": "ConfigMap",
+   "metadata": {
+    "name": "narwhal-pod-018c868728e1"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "data": {
+    "checkpoint.json": "<checkpoint.json>",
+    "engine.json": "<engine.json>",
+    "runtime-check.json": "<runtime-check.json>"
+   },
+   "immutable": true,
+   "kind": "ConfigMap",
+   "metadata": {
+    "name": "narwhal-spec-engine-1-e036b109e4b6"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "data": {
+    "checkpoint.json": "<checkpoint.json>",
+    "engine.json": "<engine.json>",
+    "runtime-check.json": "<runtime-check.json>"
+   },
+   "immutable": true,
+   "kind": "ConfigMap",
+   "metadata": {
+    "name": "narwhal-spec-engine-2-26e285ffae50"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "data": {
+    "haproxy.cfg": "global\n    log stdout format raw local0\n    tune.bufsize 131072\n\ndefaults\n    mode http\n    timeout connect 1s\n    timeout check   1s\n    timeout client  10m\n    timeout server  10m\n    option http-buffer-request\n    retries 10\n    option redispatch 1\n    retry-on conn-failure 503\n\nfrontend narwhal\n    bind :8000\n    acl narwhal_get method GET\n    acl narwhal_get_routes path /v1/models /health /ready /narwhal/targets\n    acl narwhal_post method POST\n    acl narwhal_post_routes path /v1/completions /v1/chat/completions\n    http-request deny deny_status 404 unless narwhal_get narwhal_get_routes || narwhal_post narwhal_post_routes\n    http-request disable-l7-retry if { nbsrv(narwhal_routers) lt 2 }\n    default_backend narwhal_routers\n\nbackend narwhal_routers\n    option httpchk\n    # A router is in rotation while it controls the fleet and has finished taking over.\n    http-check connect\n    http-check send meth GET uri /narwhal/targets\n    http-check expect status 200\n    http-check connect\n    http-check send meth GET uri /ready\n    http-check expect ! string \"engine identity validation pending\"\n    default-server check inter 200ms fall 1 rise 1\n    server router-a router-0.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    server router-b router-1.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    # Nothing listens on this address. While no router passes /ready, HAProxy sends each\n    # request here and retries the refused connection one second later.\n    server hold 127.0.0.1:1 backup no-check\n\nresolvers kubernetes\n    parse-resolv-conf\n    resolve_retries 3\n    timeout resolve 1s\n    timeout retry 1s\n    hold valid 1s\n    hold obsolete 1s\n    hold nx 1s\n    hold refused 1s\n    hold timeout 1s\n    hold other 1s\n"
+   },
+   "kind": "ConfigMap",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "haproxy",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "haproxy"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Service",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "engine",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "engines"
+   },
+   "spec": {
+    "clusterIP": "None",
+    "publishNotReadyAddresses": true,
+    "selector": {
+     "app.kubernetes.io/component": "engine",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/name": "narwhal"
+    }
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Service",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "haproxy",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "haproxy"
+   },
+   "spec": {
+    "ports": [
+     {
+      "name": "http",
+      "port": 8000,
+      "targetPort": "http"
+     }
+    ],
+    "selector": {
+     "app.kubernetes.io/component": "haproxy",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/name": "narwhal"
+    }
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "haproxy",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "haproxy"
+   },
+   "spec": {
+    "replicas": 2,
+    "selector": {
+     "matchLabels": {
+      "app.kubernetes.io/component": "haproxy",
+      "app.kubernetes.io/instance": "fleet",
+      "app.kubernetes.io/name": "narwhal"
+     }
+    },
+    "template": {
+     "metadata": {
+      "annotations": {
+       "narwhal.io/config-sha256": "264a825f90e29013af52dd75a34c5c9b275218ab0b2620584febcb60f29ef924"
+      },
+      "labels": {
+       "app.kubernetes.io/component": "haproxy",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "image": "registry.example/haproxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "haproxy",
+        "ports": [
+         {
+          "containerPort": 8000,
+          "name": "http"
+         }
+        ],
+        "volumeMounts": [
+         {
+          "mountPath": "/usr/local/etc/haproxy",
+          "name": "config",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "volumes": [
+       {
+        "configMap": {
+         "name": "haproxy"
+        },
+        "name": "config"
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "StatefulSet",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "engine",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "engine"
+   },
+   "spec": {
+    "ordinals": {
+     "start": 1
+    },
+    "podManagementPolicy": "Parallel",
+    "replicas": 2,
+    "selector": {
+     "matchLabels": {
+      "app.kubernetes.io/component": "engine",
+      "app.kubernetes.io/instance": "fleet",
+      "app.kubernetes.io/name": "narwhal"
+     }
+    },
+    "serviceName": "engines",
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "engine",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-B",
+         "-c",
+         "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+         "/narwhal-spec",
+         "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+         "engine"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_POD_IP",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "status.podIP"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_UID",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.uid"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_NODE_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "spec.nodeName"
+           }
+          }
+         },
+         {
+          "name": "VLLM_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROLE",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "name": "engine",
+        "resources": {
+         "limits": {
+          "gpu.example.com/gpu": "2",
+          "rdma.example.com/hca": "1"
+         }
+        },
+        "securityContext": {
+         "capabilities": {
+          "add": [
+           "IPC_LOCK"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-hooks",
+          "name": "narwhal-hooks",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/narwhal-pod",
+          "name": "narwhal-pod",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/root/.cache",
+          "name": "cache"
+         },
+         {
+          "mountPath": "/dev/shm",
+          "name": "shm"
+         },
+         {
+          "mountPath": "/narwhal-kv-events",
+          "name": "kv-events"
+         },
+         {
+          "mountPath": "/narwhal-engine",
+          "name": "narwhal-engine"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state",
+          "readOnly": true,
+          "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+         },
+         {
+          "mountPath": "/narwhal-spec",
+          "name": "narwhal-spec",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         }
+        ]
+       },
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-m",
+         "narwhal.deployment.attestation_contract.cli",
+         "serve",
+         "--run",
+         "/narwhal-launch",
+         "--pod-evidence",
+         "/narwhal-state"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_POD_IP",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "status.podIP"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_UID",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.uid"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_NODE_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "spec.nodeName"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROLE",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "attestation",
+        "securityContext": {
+         "allowPrivilegeEscalation": false,
+         "capabilities": {
+          "drop": [
+           "ALL"
+          ]
+         },
+         "runAsGroup": 0,
+         "runAsUser": 0
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-hooks",
+          "name": "narwhal-hooks",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/narwhal-kv-events",
+          "name": "kv-events"
+         },
+         {
+          "mountPath": "/narwhal-engine",
+          "name": "narwhal-engine"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state",
+          "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+         },
+         {
+          "mountPath": "/narwhal-launch",
+          "name": "narwhal-state",
+          "readOnly": true,
+          "subPathExpr": "engines/$(NARWHAL_ROLE)/launches/$(NARWHAL_POD_UID)"
+         },
+         {
+          "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+          "name": "narwhal-api",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "initContainers": [
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-B",
+         "-c",
+         "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+         "/narwhal-spec",
+         "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+         "checkpoint"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_POD_IP",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "status.podIP"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_UID",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.uid"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_NODE_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "spec.nodeName"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROLE",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "name": "checkpoint",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-hooks",
+          "name": "narwhal-hooks",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/narwhal-pod",
+          "name": "narwhal-pod",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state",
+          "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+         },
+         {
+          "mountPath": "/narwhal-spec",
+          "name": "narwhal-spec",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         }
+        ]
+       },
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-B",
+         "-c",
+         "import hashlib, json, os, re, sys\nEXPANSION = re.compile(r\"\\$$\\$$|\\$$\\(([A-Za-z_][A-Za-z0-9_]*)\\)\")\ndef expand(value, defined):\n    return EXPANSION.sub(lambda m: \"$$\" if m[0] == \"$$$$\" else defined.get(m[1], m[0]), value)\ndef launch(spec_dir, pins, container, environ, execute):\n    role = environ.pop(\"NARWHAL_ROLE\", \"\")\n    path = os.path.join(spec_dir, container + \".json\")\n    with open(path, \"rb\") as stream:\n        data = stream.read()\n    if hashlib.sha256(data).hexdigest() != pins.get(role, {}).get(container):\n        sys.exit(f\"narwhal: {path} differs from the SHA-256 pinned for {role}\")\n    spec = json.loads(data)\n    defined = {name: environ[name] for name in spec[\"defined\"] if name in environ}\n    for item in spec[\"env\"]:\n        defined[item[\"name\"]] = environ[item[\"name\"]] = expand(item[\"value\"], defined)\n    argv = [expand(part, defined) for part in spec[\"command\"]]\n    execute(argv[0], argv, environ)\nlaunch(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], dict(os.environ), os.execvpe)\n",
+         "/narwhal-spec",
+         "{\"engine-1\":{\"checkpoint\":\"64684f06a6a7a2ea5ba89ff0f95ac3e490cac660e288a551d009e1444e3e6ffa\",\"engine\":\"4fef8f74aa55ebdc4737f7d38dd665a0750701023ad99f57b771ebb75f00fd4c\",\"runtime-check\":\"9ea6e86483137e9b596e793fbf262e3f8849e2298c445f69068746cf439912eb\"},\"engine-2\":{\"checkpoint\":\"6263ae80075f039dc9fa7eedb0e161a061f0a73acd89d150722bbba5a30ecc7e\",\"engine\":\"138bc6aa3216146ab57b51cac40163e5adc3ff01f6b5d660755f66a48b224675\",\"runtime-check\":\"1dadf6ccbc3412a7f978d276d2c81479e3412c2e78045e58c09e234add797769\"}}",
+         "runtime-check"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_POD_IP",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "status.podIP"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_UID",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.uid"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_NODE_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "spec.nodeName"
+           }
+          }
+         },
+         {
+          "name": "VLLM_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROLE",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "name": "runtime-check",
+        "resources": {
+         "limits": {
+          "gpu.example.com/gpu": "2",
+          "rdma.example.com/hca": "1"
+         }
+        },
+        "securityContext": {
+         "capabilities": {
+          "add": [
+           "IPC_LOCK"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-hooks",
+          "name": "narwhal-hooks",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/narwhal-pod",
+          "name": "narwhal-pod",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/root/.cache",
+          "name": "cache"
+         },
+         {
+          "mountPath": "/dev/shm",
+          "name": "shm"
+         },
+         {
+          "mountPath": "/narwhal-kv-events",
+          "name": "kv-events"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state",
+          "subPathExpr": "engines/$(NARWHAL_ROLE)/$(NARWHAL_POD_UID)"
+         },
+         {
+          "mountPath": "/narwhal-spec",
+          "name": "narwhal-spec",
+          "readOnly": true,
+          "subPathExpr": "$(NARWHAL_ROLE)"
+         }
+        ]
+       }
+      ],
+      "serviceAccountName": "narwhal-attestation",
+      "shareProcessNamespace": true,
+      "volumes": [
+       {
+        "name": "narwhal-hooks",
+        "projected": {
+         "defaultMode": 292,
+         "sources": [
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "launch.json",
+              "path": "engine-1/launch.json"
+             },
+             {
+              "key": "launch_engine.py",
+              "path": "engine-1/launch_engine.py"
+             },
+             {
+              "key": "sitecustomize.py",
+              "path": "engine-1/sitecustomize.py"
+             }
+            ],
+            "name": "narwhal-engine-1-404ee717ee6f-hooks"
+           }
+          },
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "launch.json",
+              "path": "engine-2/launch.json"
+             },
+             {
+              "key": "launch_engine.py",
+              "path": "engine-2/launch_engine.py"
+             },
+             {
+              "key": "sitecustomize.py",
+              "path": "engine-2/sitecustomize.py"
+             }
+            ],
+            "name": "narwhal-engine-2-6606f75ecc84-hooks"
+           }
+          }
+         ]
+        }
+       },
+       {
+        "name": "narwhal-pod",
+        "projected": {
+         "defaultMode": 292,
+         "sources": [
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "checkpoint.py",
+              "path": "engine-1/checkpoint.py"
+             },
+             {
+              "key": "inspections.py",
+              "path": "engine-1/inspections.py"
+             },
+             {
+              "key": "pod.py",
+              "path": "engine-1/pod.py"
+             },
+             {
+              "key": "probe_reader.py",
+              "path": "engine-1/probe_reader.py"
+             },
+             {
+              "key": "verdict.py",
+              "path": "engine-1/verdict.py"
+             }
+            ],
+            "name": "narwhal-pod-018c868728e1"
+           }
+          },
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "checkpoint.py",
+              "path": "engine-2/checkpoint.py"
+             },
+             {
+              "key": "inspections.py",
+              "path": "engine-2/inspections.py"
+             },
+             {
+              "key": "pod.py",
+              "path": "engine-2/pod.py"
+             },
+             {
+              "key": "probe_reader.py",
+              "path": "engine-2/probe_reader.py"
+             },
+             {
+              "key": "verdict.py",
+              "path": "engine-2/verdict.py"
+             }
+            ],
+            "name": "narwhal-pod-018c868728e1"
+           }
+          }
+         ]
+        }
+       },
+       {
+        "name": "model",
+        "persistentVolumeClaim": {
+         "claimName": "models",
+         "readOnly": true
+        }
+       },
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "emptyDir": {},
+        "name": "cache"
+       },
+       {
+        "emptyDir": {
+         "medium": "Memory"
+        },
+        "name": "shm"
+       },
+       {
+        "emptyDir": {},
+        "name": "kv-events"
+       },
+       {
+        "emptyDir": {},
+        "name": "narwhal-engine"
+       },
+       {
+        "name": "narwhal-api",
+        "projected": {
+         "defaultMode": 292,
+         "sources": [
+          {
+           "serviceAccountToken": {
+            "expirationSeconds": 3600,
+            "path": "token"
+           }
+          },
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "ca.crt",
+              "path": "ca.crt"
+             }
+            ],
+            "name": "kube-root-ca.crt"
+           }
+          },
+          {
+           "downwardAPI": {
+            "items": [
+             {
+              "fieldRef": {
+               "fieldPath": "metadata.namespace"
+              },
+              "path": "namespace"
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "name": "narwhal-spec",
+        "projected": {
+         "defaultMode": 292,
+         "sources": [
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "checkpoint.json",
+              "path": "engine-1/checkpoint.json"
+             },
+             {
+              "key": "engine.json",
+              "path": "engine-1/engine.json"
+             },
+             {
+              "key": "runtime-check.json",
+              "path": "engine-1/runtime-check.json"
+             }
+            ],
+            "name": "narwhal-spec-engine-1-e036b109e4b6"
+           }
+          },
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "checkpoint.json",
+              "path": "engine-2/checkpoint.json"
+             },
+             {
+              "key": "engine.json",
+              "path": "engine-2/engine.json"
+             },
+             {
+              "key": "runtime-check.json",
+              "path": "engine-2/runtime-check.json"
+             }
+            ],
+            "name": "narwhal-spec-engine-2-26e285ffae50"
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "updateStrategy": {
+     "type": "OnDelete"
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "discovery"
+    },
+    "name": "discover-node-a"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "discovery"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-m",
+         "narwhal.deployment.discovery"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/discover-node-a"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "name": "model",
+        "persistentVolumeClaim": {
+         "claimName": "models",
+         "readOnly": true
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "discovery"
+    },
+    "name": "discover-node-b"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "discovery"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "/narwhal-input/gate.py",
+         "run"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "name": "gate",
+        "resources": {
+         "limits": {
+          "gpu.example.com/gpu": "8"
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/discover-node-b"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         },
+         {
+          "mountPath": "/narwhal-input",
+          "name": "narwhal-input",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "nodeName": "node-b",
+      "restartPolicy": "Never",
+      "runtimeClassName": "nvidia",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "configMap": {
+         "name": "discover-node-b"
+        },
+        "name": "narwhal-input"
+       },
+       {
+        "hostPath": {
+         "path": "/models",
+         "type": "Directory"
+        },
+        "name": "model"
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "fabric-server"
+    },
+    "name": "fabric-node-a-node-b-server"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 180,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "fabric-server"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "ib_write_bw"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "gate",
+        "resources": {
+         "limits": {
+          "rdma.example.com/hca": "1"
+         }
+        },
+        "securityContext": {
+         "allowPrivilegeEscalation": false,
+         "capabilities": {
+          "add": [
+           "IPC_LOCK"
+          ],
+          "drop": [
+           "ALL"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/fabric-server"
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "nodeName": "node-b",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "fabric-client"
+    },
+    "name": "fabric-node-a-node-b-client"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 180,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "fabric-client"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "ib_write_bw",
+         "node-b"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         },
+         {
+          "name": "A",
+          "value": "x y"
+         },
+         {
+          "name": "B",
+          "value": "2"
+         }
+        ],
+        "image": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "gate",
+        "resources": {
+         "limits": {
+          "rdma.example.com/hca": "1"
+         }
+        },
+        "securityContext": {
+         "allowPrivilegeEscalation": false,
+         "capabilities": {
+          "add": [
+           "IPC_LOCK"
+          ],
+          "drop": [
+           "ALL"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/fabric-client"
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "fabric-probe"
+    },
+    "name": "probe-node-a"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 120,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "fabric-probe"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "ip",
+         "route"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "gate",
+        "securityContext": {
+         "allowPrivilegeEscalation": false,
+         "capabilities": {
+          "drop": [
+           "ALL"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/probe-node-a"
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "prepare"
+    },
+    "name": "prepare-engine-1"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "prepare"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "narwhal-engine",
+         "prepare"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         },
+         {
+          "name": "NARWHAL_X",
+          "value": "1"
+         },
+         {
+          "name": "NARWHAL_ENGINE_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/prepare-engine-1"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         },
+         {
+          "mountPath": "/narwhal-input",
+          "name": "narwhal-input",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "configMap": {
+         "name": "prepare-engine-1"
+        },
+        "name": "narwhal-input"
+       },
+       {
+        "name": "model",
+        "persistentVolumeClaim": {
+         "claimName": "models",
+         "readOnly": true
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "transfer-measure"
+    },
+    "name": "measure-node-a"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 900,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "transfer-measure"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "sh",
+         "-c",
+         "true"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         },
+         {
+          "name": "NARWHAL_ENGINE_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/measure-node-a"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         },
+         {
+          "mountPath": "/narwhal-input",
+          "name": "narwhal-input",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "configMap": {
+         "name": "measure-node-a"
+        },
+        "name": "narwhal-input"
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "sidecar-verify"
+    },
+    "name": "verify-engine-1"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 300,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "sidecar-verify"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": true,
+      "containers": [
+       {
+        "command": [
+         "python",
+         "-m",
+         "narwhal.deployment.attestation_contract.cli"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/verify-engine-1"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "restartPolicy": "Never",
+      "serviceAccountName": "narwhal-attestation",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "state"
+    },
+    "name": "state-1"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 600,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "state"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "true"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/state-1"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "preflight"
+    },
+    "name": "preflight"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "preflight"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "narwhal-check",
+         "--fleet",
+         "/narwhal-state/fleet.json"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         },
+         {
+          "name": "NARWHAL_ENGINE_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/preflight"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  }
+ ],
+ "withoutEngines": [
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "discovery"
+    },
+    "name": "discover-node-a"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "discovery"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-m",
+         "narwhal.deployment.discovery"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/discover-node-a"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "discovery"
+    },
+    "name": "discover-node-b"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "discovery"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "/narwhal-input/gate.py",
+         "run"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "name": "gate",
+        "resources": {
+         "limits": {
+          "gpu.example.com/gpu": "8"
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/discover-node-b"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         },
+         {
+          "mountPath": "/narwhal-input",
+          "name": "narwhal-input",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/model",
+          "name": "model",
+          "readOnly": true
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "nodeName": "node-b",
+      "restartPolicy": "Never",
+      "runtimeClassName": "nvidia",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       },
+       {
+        "configMap": {
+         "name": "discover-node-b"
+        },
+        "name": "narwhal-input"
+       },
+       {
+        "hostPath": {
+         "path": "/models",
+         "type": "Directory"
+        },
+        "name": "model"
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "fabric-probe"
+    },
+    "name": "probe-node-a"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 120,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "fabric-probe"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "ip",
+         "route"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         }
+        ],
+        "image": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "name": "gate",
+        "securityContext": {
+         "allowPrivilegeEscalation": false,
+         "capabilities": {
+          "drop": [
+           "ALL"
+          ]
+         }
+        },
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/probe-node-a"
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirstWithHostNet",
+      "enableServiceLinks": false,
+      "hostNetwork": true,
+      "nodeName": "node-a",
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "gate",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0",
+     "narwhal.io/gate": "preflight"
+    },
+    "name": "preflight"
+   },
+   "spec": {
+    "activeDeadlineSeconds": 1800,
+    "backoffLimit": 0,
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "gate",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal",
+       "narwhal.io/gate": "preflight"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "narwhal-check",
+         "--fleet",
+         "/narwhal-state/fleet.json"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_GATE_KEEP",
+          "value": "/narwhal-keep"
+         },
+         {
+          "name": "NARWHAL_ENGINE_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "gate",
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-keep",
+          "name": "narwhal-state",
+          "subPath": "deploy/run-1/jobs/preflight"
+         },
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state"
+         }
+        ]
+       }
+      ],
+      "enableServiceLinks": false,
+      "restartPolicy": "Never",
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state"
+        }
+       }
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

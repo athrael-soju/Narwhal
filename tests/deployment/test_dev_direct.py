@@ -1,5 +1,7 @@
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import random
@@ -17,8 +19,8 @@ import httpx
 
 from narwhal.backends import load
 from narwhal.backends.llamacpp.dev import PROBE_OUTPUT_TOKENS, LlamacppDirect
-from narwhal.deployment import native_engine
-from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures
+from narwhal.deployment import native_engine, run_record
+from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures, measure
 from narwhal.dev import direct, lifecycle, template
 from narwhal.dev.template import _check_free_ports, _read_template
 from narwhal.profiling.store import ProfileStore
@@ -239,7 +241,7 @@ class DirectLifecycleTests(DirectInstance):
         self.addCleanup(self.stop)
         self.assertEqual(launched["status"], "launched")
         run = Path(launched["run"])
-        store = ProfileStore(run / "profiles.json")
+        store = ProfileStore(Path(json.loads((run / "fleet.json").read_text())["profiles"]["path"]))
         profiles = [store.get(iid) for iid in ("n1", "n2")]
         self.assertTrue(all(profile.nominal for profile in profiles))
         self.assertEqual(
@@ -289,7 +291,7 @@ class DirectLifecycleTests(DirectInstance):
         fleet = {"model": "m", "engines": [{"iid": f"n{i}", "url": f"http://e{i}"} for i in (1, 2)]}
         client = httpx.Client(transport=httpx.MockTransport(handle))
         with patch.object(direct.httpx, "Client", return_value=client) as built:
-            figures = direct._measure(Loaded(), fleet, self.spec["runtime"])
+            figures = measure(Loaded(), fleet, self.spec["runtime"])
         self.assertEqual(built.call_args.kwargs["limits"].max_connections, 4)
         self.assertEqual(served, {"e1": 2, "e2": 2})
         self.assertAlmostEqual(figures["n1"].prefill_token_s, 0.002)
@@ -315,7 +317,7 @@ class DirectLifecycleTests(DirectInstance):
             patch.object(direct.httpx, "Client", return_value=client),
             self.assertRaises(httpx.HTTPStatusError),
         ):
-            direct._measure(Simulated(), fleet, self.spec["runtime"])
+            measure(Simulated(), fleet, self.spec["runtime"])
         self.assertLess(time.monotonic() - started, 2)
 
         class Idle(Simulated):
@@ -323,7 +325,7 @@ class DirectLifecycleTests(DirectInstance):
                 return 0
 
         with self.assertRaisesRegex(ValueError, "at least one request"):
-            direct._measure(Idle(), fleet, self.spec["runtime"])
+            measure(Idle(), fleet, self.spec["runtime"])
 
     def test_an_engine_that_exits_fails_up_and_stops_the_engine_that_started(self):
         self.init()
@@ -334,13 +336,71 @@ class DirectLifecycleTests(DirectInstance):
         ):
             lifecycle.up(self.root)
         state = json.loads((self.root / "lifecycle.json").read_text())
-        self.assertEqual(state["phase"], "stopped")
+        # The failed stage stopped the engine it started, so the run holds nothing to resume.
+        self.assertEqual(state["phase"], "failed")
         self.assertIn("became healthy", state["failure"]["message"])
-        self.assertEqual(state["stopped"], ["engine-1"])
-        survivor = state["processes"][0]["identity"]
-        self.assertFalse(native_engine._owns_process(survivor))
+        self.assertEqual(state["processes"], [])
         _check_free_ports({first}, "127.0.0.1")
         self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
+
+    def test_up_tells_the_operator_about_a_stale_lock(self):
+        self.init()
+        with (
+            patch("narwhal.dev.launch.measure", side_effect=ValueError("measurement failed")),
+            self.assertRaisesRegex(ValueError, "measurement failed"),
+        ):
+            lifecycle.up(self.root)
+        self.addCleanup(self.stop)
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        directory = Path(state["run"]) / "launch"
+        ended = subprocess.Popen([sys.executable, "-c", "pass"])
+        ended.wait()
+        record = run_record.read(directory)
+        owner = {**run_record.owner(), "pid": ended.pid}
+        record["lock"] = {"owner": owner, "acquired_at": time.time()}
+        run_record.write(directory, record)
+        with contextlib.redirect_stderr(io.StringIO()) as progress:
+            lifecycle.up(self.root)
+        self.assertIn(
+            f"narwhal: dev up: this run found a stale lock of pid {ended.pid} of",
+            progress.getvalue(),
+        )
+
+    def test_a_failed_up_resumes_at_the_stage_that_failed(self):
+        self.init()
+        with (
+            patch("narwhal.dev.launch.measure", side_effect=ValueError("measurement failed")),
+            self.assertRaisesRegex(ValueError, "measurement failed"),
+        ):
+            lifecycle.up(self.root)
+        self.addCleanup(self.stop)
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        self.assertEqual(state["phase"], "failed")
+        engines = {record["name"]: record["identity"] for record in state["processes"]}
+        self.assertEqual(sorted(engines), ["engine-1", "engine-2"])
+        self.assertTrue(all(map(native_engine.owns_process, engines.values())))
+        self.assertEqual(lifecycle.status(self.root)["status"], "degraded")
+        with self.assertRaisesRegex(ValueError, "requires a launched instance"):
+            lifecycle.verify(self.root)
+        # The engines keep logging and saving KV slots while the run waits; neither restarts them.
+        attempt = Path(state["run"]) / "launch/stages/engine-start/attempt-1"
+        for name in engines:
+            with (attempt / f"{name}.log").open("a") as log:
+                log.write("served a request\n")
+        (attempt / "slot-files" / "slot-0.bin").write_bytes(b"kv")
+        with contextlib.redirect_stderr(io.StringIO()) as progress:
+            launched = lifecycle.up(self.root)
+        self.assertEqual(Path(launched["run"]), Path(state["run"]))
+        resumed_at = [line for line in progress.getvalue().splitlines() if "resuming" in line]
+        self.assertEqual(resumed_at, [f"resuming {state['run']} at profile"])
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        self.assertEqual(state["phase"], "launched")
+        resumed = {record["name"]: record["identity"] for record in state["processes"]}
+        self.assertEqual({name: resumed[name] for name in engines}, engines)
+        self.assertEqual(lifecycle.status(self.root)["status"], "launched")
+        # A stopped run starts afresh.
+        lifecycle.down(self.root)
+        self.assertNotEqual(lifecycle.up(self.root)["run"], launched["run"])
 
     def test_a_failed_verification_and_a_dead_engine_degrade_the_instance(self):
         self.init()
@@ -357,7 +417,7 @@ class DirectLifecycleTests(DirectInstance):
         self.assertIn("verification failed", " ".join(status["problems"]))
         self.assertEqual(lifecycle.verify(self.root)["status"], "ready")
         state = json.loads((self.root / "lifecycle.json").read_text())
-        native_engine._terminate(state["processes"][0]["identity"])
+        native_engine.terminate(state["processes"][0]["identity"])
         status = lifecycle.status(self.root)
         self.assertEqual(status["status"], "degraded")
         self.assertIn("engine-1 process identity expired", status["problems"])

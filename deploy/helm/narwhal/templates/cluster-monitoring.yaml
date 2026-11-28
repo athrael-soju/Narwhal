@@ -1,0 +1,152 @@
+{{- /*
+What the cluster's own Prometheus Operator and Grafana read in place of the bundled stack.
+
+The monitors select what the fleet controller builds by the labels and ports
+kubernetes_objects gives it: the router Service `routers` (app.kubernetes.io/name: narwhal,
+app.kubernetes.io/component: router, port `http`), the engine pods
+(app.kubernetes.io/component: engine) and their container `attestation`, and the Service
+`haproxy` on port 8000. Each target gets the job name, address and relabelings of its job in
+prometheus.yml, so the series carry the labels the alert rules and dashboard read, as under the
+bundled Prometheus.
+*/ -}}
+{{- with .Values.monitoring }}
+{{- if .enabled }}
+{{- $root := $ }}
+{{- $operator := (.serviceMonitors).enabled }}
+{{- if and $operator (not (.dashboardConfigMap).enabled) }}
+{{- fail "monitoring.serviceMonitors leaves Prometheus to the cluster, and the chart's Grafana reads only the chart's Prometheus; set monitoring.dashboardConfigMap.enabled as well" }}
+{{- end }}
+{{- if $operator }}
+{{- $namespace := $.Release.Namespace }}
+{{- $suffix := printf "%s.svc.%s" $namespace $.Values.haproxy.clusterDomain }}
+{{- $fleet := .fleet | default $.Release.Name }}
+{{- $config := fromYaml ($.Files.Get "files/observability/prometheus.yml") }}
+{{- if hasKey $config "Error" }}
+{{- fail (printf "src/narwhal/observability/stack/prometheus.yml is not YAML: %s" $config.Error) }}
+{{- end }}
+{{- $jobs := dict }}
+{{- range $config.scrape_configs }}
+{{- $_ := set $jobs .job_name . }}
+{{- end }}
+{{- range list "narwhal-router" "engines" "sidecars" }}
+{{- if not (hasKey $jobs .) }}
+{{- fail (printf "src/narwhal/observability/stack/prometheus.yml has no job %s, which the alert rules read" .) }}
+{{- end }}
+{{- end }}
+{{- $interval := $config.global.scrape_interval }}
+{{- $labels := merge (fromYaml (include "narwhal.labels" (dict "root" $root "component" "monitoring"))) (.serviceMonitors.labels | default (dict)) }}
+{{- $alerts := fromYaml ($.Files.Get "files/observability/prometheus-alerts.yml") }}
+{{- if hasKey $alerts "Error" }}
+{{- fail (printf "src/narwhal/observability/stack/prometheus-alerts.yml is not YAML: %s" $alerts.Error) }}
+{{- end }}
+{{- /* Both routers, at the pod DNS names the bundled Prometheus scrapes them by. The standby
+answers /metrics too, and the headless Service lists it while it is not ready. */}}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $.Release.Name }}-routers
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: narwhal
+      app.kubernetes.io/component: router
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ $interval }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: __address__
+          replacement: {{ printf "${1}.routers.%s:8000" $suffix | quote }}
+        - targetLabel: job
+          replacement: narwhal-router
+        # Only the labels the bundled Prometheus gives a target, so the rules' sums over the
+        # routers of a fleet stay sums.
+        - action: labeldrop
+          regex: container|endpoint|pod|service
+        {{- include "narwhal.relabelings" (dict "configs" (index $jobs "narwhal-router").relabel_configs "fleet" $fleet) | fromJsonArray | toYaml | nindent 8 }}
+{{- /* Each engine pod's attestation sidecar. The pod template lists no container ports, so the
+pod gives one target per container; the address is the one the fleet's engine URLs name. */}}
+{{- with ($.Values.fleet).engines }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $.Release.Name }}-sidecars
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: narwhal
+      app.kubernetes.io/component: engine
+  podMetricsEndpoints:
+    - path: /metrics
+      interval: {{ $interval }}
+      relabelings:
+        - action: keep
+          sourceLabels: [__meta_kubernetes_pod_container_name]
+          regex: attestation
+        {{- /* Each engine's sidecar listens on its own port, as engines on one node must. */}}
+        {{- $ports := .ports }}
+        {{- range $n, $node := .nodes }}
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          regex: {{ printf "engine-%d" (add1 $n) }}
+          targetLabel: __address__
+          replacement: {{ printf "engine-%d.engines.%s.svc:%d" (add1 $n) $namespace (int ((($node.ports).attestation) | default $ports.attestation)) | quote }}
+        {{- end }}
+        - targetLabel: job
+          replacement: sidecars
+        - action: labeldrop
+          regex: container|endpoint|pod|service
+        {{- include "narwhal.relabelings" (dict "configs" (index $jobs "sidecars").relabel_configs "fleet" $fleet) | fromJsonArray | toYaml | nindent 8 }}
+{{- end }}
+{{- /* The engines, from /narwhal/targets through HAProxy, which reaches the active router, so
+a router pair lists each engine once. */}}
+{{- $engines := index $jobs "engines" }}
+{{- $discovery := first $engines.http_sd_configs }}
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: {{ $.Release.Name }}-engines
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  scrapeInterval: {{ $interval }}
+  httpSDConfigs:
+    - url: {{ replace "<<targets>>" (printf "haproxy.%s:8000" $suffix) $discovery.url | quote }}
+      refreshInterval: {{ $discovery.refresh_interval }}
+  relabelings:
+    - targetLabel: job
+      replacement: engines
+    {{- include "narwhal.relabelings" (dict "configs" $engines.relabel_configs "fleet" $fleet) | fromJsonArray | toYaml | nindent 4 }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $.Release.Name }}-alerts
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  {{- toYaml $alerts | nindent 2 }}
+{{- end }}
+{{- with .dashboardConfigMap }}
+{{- if .enabled }}
+{{- $dashboard := include "narwhal.dashboard" $root }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $root.Release.Name }}-dashboard
+  labels:
+    {{- toYaml (merge (fromYaml (include "narwhal.labels" (dict "root" $root "component" "grafana"))) (dict .label .labelValue)) | nindent 4 }}
+data:
+  narwhal.json: {{ $dashboard | toJson }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

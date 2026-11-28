@@ -8,9 +8,9 @@ The fleet control service runs on the router host. Write its configuration and b
 
 ## Prerequisites
 
-- A deployed fleet with its router serving on the router host, as in [Starting and locally verifying the router](../../deploy/07-Serve-and-Measure.md#starting-and-locally-verifying-the-router).
-- The router shell: the router host's Narwhal checkout with `.venv` active, opened with `deploy_hosts.py shell`.
-- The monitoring stack, started with `make observe` on the router host.
+- A deployed fleet with its router serving on the router host, as in [Starting and locally verifying the router](../../deploy/07-Serve-and-Measure.md#starting-the-router-pair).
+- The router shell: opened with `narwhal deploy shell --run <package> --role router`.
+- The monitoring stack, started as in [Starting Prometheus and Grafana](../../observability/01-Start-and-Verify.md#starting-prometheus-and-grafana).
 - The baseline fleet configuration file that the router is running.
 - A [hook](09-Configuration-Reference.md#hooks) command for each action you plan to run.
 - For load jobs, AIPerf on the router host, at the version in [Ordered benchmark points](../../measure/05-Benchmark-Runner.md).
@@ -23,7 +23,7 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature.
+Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature. Give the deployment's files by absolute path. The service refuses a relative `fleet`, and the router environment's `NARWHAL_FLEET` is relative, so set `fleet` to the absolute path of the deployment's `runs/deployment/fleet.json`.
 
 The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 
@@ -35,14 +35,16 @@ In the router shell, generate a token:
 export NARWHAL_CONTROL_TOKEN="$(openssl rand -hex 32)"
 ```
 
-Keep the token in your secret store. The console and every API request need it.
+Keep the token in your secret store. The console and every API request need it. It is an operator credential: with it a caller can join an engine, so never give it to monitoring or any other service. Prometheus scrapes `GET /metrics` with a read-only token derived from it, as [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) describes.
+
+The service sends the router's own [control token](../../HTTP-API.md#control-token) with each drain, readmission, join and removal, from `NARWHAL_ROUTER_TOKEN`. The router shell already exports it from the router's role file. The two tokens must differ, because the service's token reaches browsers and Prometheus; the service refuses to start when they match or when `NARWHAL_ROUTER_TOKEN` is unset or shorter than 32 random bytes.
 
 ## Start the service
 
-In the router shell, from the checkout root, run:
+In the router shell, run:
 
 ```bash
-.venv/bin/python -m tools.fleet_control.cli --config config/fleet-control.local.json
+.venv/bin/python -m narwhal.fleet_control.cli --config config/fleet-control.local.json
 ```
 
 The service runs in the foreground. To change the log level, add `--log-level` with `critical`, `error`, `warning`, `info` (default) or `debug`.

@@ -16,13 +16,13 @@ from narwhal.deployment.launch_engine import cli as engine_cli
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.native_engine import (
     _environment,
-    _group_members,
     _ports_free,
-    _terminate,
+    group_members,
     process_identity,
     start_each,
     start_shared,
     stop,
+    terminate,
     validate_native_runs,
 )
 from tests.runtime.test_listeners import listener
@@ -45,10 +45,10 @@ class NativeEngineOwnershipTests(unittest.TestCase):
     def test_shutdown_escalates_workers_after_the_leader_exits(self):
         with process_group_with_worker() as (leader, worker):
             identity = process_identity(leader.pid)
-            self.assertIn(worker, _group_members(identity))
-            _terminate(identity, grace_seconds=0.05)
+            self.assertIn(worker, group_members(identity))
+            terminate(identity, grace_seconds=0.05)
             leader.wait(timeout=5)
-            self.assertEqual(_group_members(identity), {})
+            self.assertEqual(group_members(identity), {})
 
     def test_exited_leader_reports_survivors_without_signalling_them(self):
         with process_group_with_worker() as (leader, worker):
@@ -56,16 +56,16 @@ class NativeEngineOwnershipTests(unittest.TestCase):
             leader.terminate()
             leader.wait(timeout=5)
             with self.assertRaisesRegex(ValueError, f"surviving group PIDs \\[{worker}\\]"):
-                _terminate(identity, grace_seconds=0.05)
-            self.assertIn(worker, _group_members(identity))
+                terminate(identity, grace_seconds=0.05)
+            self.assertIn(worker, group_members(identity))
 
     def test_stale_group_identity_preserves_the_leader_and_worker(self):
         with process_group_with_worker() as (leader, worker):
             identity = process_identity(leader.pid)
             identity["start_ticks"] += 1
-            self.assertEqual(_group_members(identity), {})
+            self.assertEqual(group_members(identity), {})
             with self.assertRaisesRegex(ValueError, "refusing to signal"):
-                _terminate(identity, grace_seconds=0.05)
+                terminate(identity, grace_seconds=0.05)
             self.assertIsNone(leader.poll())
             os.kill(worker, 0)
 
@@ -323,8 +323,8 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         version="0.29.0", process_start_time_seconds=1234.5
                     ),
                 ),
-                patch("narwhal.deployment.native_engine._group_members", return_value={102: 20}),
-                patch("narwhal.deployment.native_engine._terminate") as terminate,
+                patch("narwhal.deployment.native_engine.group_members", return_value={102: 20}),
+                patch("narwhal.deployment.native_engine.terminate") as terminate,
                 patch("narwhal.deployment.native_engine.stop") as stop_first,
                 self.assertRaisesRegex(
                     ValueError, "engine-2: native launch failed with 6100 MiB used before start"

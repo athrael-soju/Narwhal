@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import math
+import os
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -17,14 +19,16 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
 from ..config import FleetConfig
+from ..observability import restarts
 from ..observability.journal import RunJournal
+from ..observability.metrics.deployment import read_status, render_deployment
 from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
 from ..profiling.membership import engine_set_problem, generation_problems
 from ..runtime import state as handoff_state
-from ..runtime.lease import FileLease, LeaseError
+from ..runtime.lease import FileLease, LeaseError, RouterLease
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
 from ..runtime.lifecycle.readmission import validate_readmission
 from ..runtime.lifecycle.records import LifecycleError, ValidationOutcome
@@ -42,6 +46,7 @@ from ..runtime.standby import (
 )
 from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
+from .control_token import authorized, read_token, token_problem
 from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
@@ -63,6 +68,18 @@ log = logging.getLogger("narwhal.app")
 
 
 _FORWARD_HEADERS = ("x-request-id",)
+UNAUTHENTICATED: dict[int | str, dict[str, Any]] = {
+    401: {"description": "The request carries no control token, or another one"}
+}
+
+
+class Unauthenticated(Exception):
+    """A control route's request carries no valid control token."""
+
+
+async def _unauthenticated(request: HTTPRequest, exc: Exception) -> Response:
+    # The answer says nothing of the route or the token.
+    return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
 def create_app(
@@ -75,16 +92,52 @@ def create_app(
     standby_max_handoff_age_s: float | None = None,
     standby_transport: httpx.AsyncBaseTransport | None = None,
     lease_path: Path | str | None = None,
+    lease_witness: Path | str | None = None,
+    kubernetes_lease: str | None = None,
     router_id: str = "router",
     lease_ttl_s: float = 5.0,
     lease_renew_interval_s: float = 1.0,
     lease_safety_margin_s: float = 1.0,
-    lease: FileLease | None = None,
+    lease: RouterLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
+    deployment_status: Path | str | None = None,
+    claim_first: bool = False,
+    control_token: str | None = None,
 ) -> FastAPI:
+    """Build the router application.
+
+    With `standby_of`, the router shadows that peer and takes over its lease. `claim_first`
+    makes it try to claim the lease at start instead: it is the primary when the claim
+    succeeds, and shadows the peer as any standby does when another router claimed first.
+    The lease is a file at `lease_path` on shared storage, or the Kubernetes Lease named
+    `kubernetes_lease` in the pod's namespace.
+
+    `control_token`, by default `NARWHAL_ROUTER_TOKEN`, is the bearer token every route that
+    changes membership, trust or lifecycle requires. The router refuses to start without one.
+    """
+    if control_token is None:
+        control_token = read_token()
+    elif problem := token_problem(control_token, "control_token"):
+        raise ValueError(problem)
     cfg = cfg or FleetConfig.from_env()
-    if standby_of and lease is None and lease_path is None:
-        raise ValueError("automatic standby takeover requires a shared lease_path")
+    # The engines hold their key, so a token equal to it would let an engine change the fleet.
+    if cfg.engine_api_key_env and hmac.compare_digest(
+        control_token.encode(), (os.environ.get(cfg.engine_api_key_env) or "").encode()
+    ):
+        raise ValueError(
+            f"the control token equals the engine API key in {cfg.engine_api_key_env}; "
+            "generate a separate token"
+        )
+    if claim_first and not standby_of:
+        raise ValueError("claim_first needs standby_of, the peer to shadow after a lost claim")
+    if sum(option is not None for option in (lease, lease_path, kubernetes_lease)) > 1:
+        raise ValueError("give one of lease, lease_path and kubernetes_lease")
+    if lease_witness and lease_path is None:
+        raise ValueError("lease_witness needs lease_path")
+    if standby_of and lease is None and lease_path is None and kubernetes_lease is None:
+        raise ValueError(
+            "automatic standby takeover requires a shared lease_path or a kubernetes_lease"
+        )
     for name, value in (
         ("lease_ttl_s", lease_ttl_s),
         ("lease_renew_interval_s", lease_renew_interval_s),
@@ -106,14 +159,29 @@ def create_app(
         raise ValueError("standby_probe_interval_s must be positive")
     if standby_takeover_after is not None and standby_takeover_after < 1:
         raise ValueError("standby_takeover_after must be at least 1")
-    if lease is None and lease_path is not None:
-        holder = f"{router_id}:{uuid.uuid4().hex}"
-        lease = FileLease(
+    holder = f"{router_id}:{uuid.uuid4().hex}"
+    if kubernetes_lease is not None:
+        from ..runtime.kubernetes_lease import KubernetesLease
+
+        lease = KubernetesLease.in_cluster(
+            kubernetes_lease, holder, lease_ttl_s, safety_margin_s=lease_safety_margin_s
+        )
+    elif lease is None and lease_path is not None:
+        file_lease = FileLease(
             Path(lease_path),
             holder,
             lease_ttl_s,
             safety_margin_s=lease_safety_margin_s,
+            witness=Path(lease_witness) if lease_witness else None,
         )
+        lease = file_lease
+        try:
+            orphans = file_lease.remove_orphans()
+        except (OSError, LeaseError) as exc:
+            log.warning("could not remove orphaned lease temporary files: %s", exc)
+            orphans = []
+        for orphan in orphans:
+            log.info("removed the orphaned lease temporary file %s", orphan)
     journal = RunJournal(
         path=Path(journal_path) if journal_path else cfg.profiles_path.parent / "journal.jsonl"
     )
@@ -173,25 +241,40 @@ def create_app(
             raise RuntimeError("; ".join(generation_failures))
         watch = None
         lease_watch = None
+        claimed = False
         if lease is not None:
-            if standby_of:
+            if standby_of and not claim_first:
                 router.standby = True
             else:
                 try:
                     claimed = lease.claim()
                 except LeaseError as exc:
-                    claimed = False
-                    router.failover_blocked = f"lease unavailable: {exc}"
+                    if not standby_of:
+                        router.failover_blocked = f"lease unavailable: {exc}"
+                    log.warning("could not claim the lease at start: %s", exc)
                 if claimed:
                     router.lease_epoch = lease.epoch
                     router.lease_holder = lease.holder
                 else:
                     router.standby = True
-                    router.failover_blocked = (
-                        router.failover_blocked or "lease held by another router"
-                    )
+                    if not standby_of:
+                        router.failover_blocked = (
+                            router.failover_blocked or "lease held by another router"
+                        )
+                    else:
+                        log.warning(
+                            "another router claimed the lease first; shadowing %s", standby_of
+                        )
             lease_watch = asyncio.create_task(lease_renew_loop(router, lease_renew_interval_s))
-        if standby_of:
+            if claimed and (delay := lease.serving_delay()):
+                # The lease may have had a holder this router never saw; its renewals go on.
+                log.warning(
+                    "claimed epoch %d; waiting %.1fs for any unseen holder's lease to lapse",
+                    lease.epoch,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        if standby_of and not claimed:
             # A polled handoff is fresher than the local resume file.
             if lease is None:
                 raise ValueError("automatic standby takeover requires a shared lease")
@@ -205,6 +288,7 @@ def create_app(
                     takeover_after=standby_takeover_after or TAKEOVER_AFTER,
                     max_handoff_age_s=standby_max_handoff_age_s or MAX_HANDOFF_AGE_S,
                     transport=standby_transport,
+                    token=control_token,
                 )
             )
         journal.open()
@@ -257,10 +341,10 @@ def create_app(
                 with contextlib.suppress(OSError):
                     handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
             if lease is not None:
-                lease.release()
+                await asyncio.to_thread(lease.release)
             journal.close()
 
-    def yield_control() -> None:
+    async def yield_control() -> None:
         """Release a held lease as shutdown starts, before in-flight requests drain.
 
         The standby takes over while this process finishes its open streams. Without a lease,
@@ -272,7 +356,8 @@ def create_app(
         router.failover_blocked = "shutting down"
         with contextlib.suppress(OSError):
             handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
-        lease.release()
+        # Off the event loop: the drain's open streams keep running while the store answers.
+        await asyncio.to_thread(lease.release)
         log.info("released the lease at epoch %d for shutdown", router.lease_epoch)
 
     def begin_shutdown() -> None:
@@ -283,8 +368,19 @@ def create_app(
     app.state.router = router
     app.state.yield_control = yield_control
     app.state.begin_shutdown = begin_shutdown
-    app.add_middleware(ServingIngress, router=router)
+    app.add_middleware(ServingIngress, router=router, control_token=control_token)
     app.add_exception_handler(FleetNotControlled, not_controlling_response)
+    app.add_exception_handler(Unauthenticated, _unauthenticated)
+
+    async def require_token(request: HTTPRequest) -> None:
+        if not authorized(request.headers.get("authorization"), control_token):
+            raise Unauthenticated
+
+    # Routes that change membership, trust or lifecycle need the control token.
+    authenticated: dict[str, Any] = {
+        "dependencies": [Depends(require_token)],
+        "responses": UNAUTHENTICATED,
+    }
     # Routes that describe the fleet answer only from the router that holds the lease.
     controlled: dict[str, Any] = {
         "dependencies": [Depends(require_control)],
@@ -352,11 +448,22 @@ def create_app(
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
     @app.get("/narwhal/handoff", summary="The live control-plane handoff document", **controlled)
-    async def handoff() -> dict[str, Any]:
-        return handoff_state.snapshot(router)
+    async def handoff() -> JSONResponse:
+        # A standby accepts only a signed document; the token itself never leaves the router.
+        response = JSONResponse(content=handoff_state.snapshot(router))
+        body = bytes(response.body)
+        signature = handoff_state.sign(json.loads(body), body, control_token)
+        response.headers[handoff_state.SIGNATURE_HEADER] = signature
+        return response
+
+    status_path = Path(deployment_status) if deployment_status is not None else None
+    restart_count = restarts.supervisor("router")
 
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
     async def metrics() -> Response:
+        extra = render_deployment(read_status(status_path)) if status_path is not None else []
+        if restart_count is not None:
+            extra += restarts.render_restarts(await asyncio.to_thread(restart_count))
         return Response(
             content=render(
                 router.state(),
@@ -366,7 +473,8 @@ def create_app(
                 router.queue_wait,
                 router.monitor.requests_sent,
                 adopted=router.adopted,
-            ),
+            )
+            + "".join(line + "\n" for line in extra),
             media_type=CONTENT_TYPE,
         )
 
@@ -387,13 +495,15 @@ def create_app(
     async def state() -> dict[str, Any]:
         return router.state()
 
-    add_engine_routes(app, router, controlled)
+    add_engine_routes(app, router, controlled, authenticated)
 
     @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **diagnosable)
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
 
-    @app.post("/narwhal/lifecycle/drain", summary="Remove engines from new placement")
+    @app.post(
+        "/narwhal/lifecycle/drain", summary="Remove engines from new placement", **authenticated
+    )
     async def drain(action: DrainIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
@@ -429,7 +539,11 @@ def create_app(
                 )
             return JSONResponse(content=router.lifecycle.document())
 
-    @app.post("/narwhal/lifecycle/readmit", summary="Validate and return engines to placement")
+    @app.post(
+        "/narwhal/lifecycle/readmit",
+        summary="Validate and return engines to placement",
+        **authenticated,
+    )
     async def readmit(action: ReadmitIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")

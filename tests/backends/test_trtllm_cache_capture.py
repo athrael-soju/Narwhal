@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 from narwhal.backends import load
 from narwhal.backends.trtllm import captures
+from narwhal.deployment.fabric_budget import runtime_payload
 from narwhal.deployment.launch_engine.runtime import digest
 from tests.backends.contract import fixtures, prepared
-from tools.deployment.fabric_budget import runtime_payload
 
 HOOK = load("trtllm").launcher().cache_hook
 # The engine's attention bytes per token and recurrent state per sequence, as measured on a
@@ -157,6 +157,8 @@ class HookTests(unittest.TestCase):
             self.assertFalse(self.rank_record().exists())
             creator.build_managers({}, False)
         record = json.loads(self.rank_record().read_text())
+        # A Kubernetes pod's attestation sidecar, another user, reads the record.
+        self.assertEqual(self.rank_record().stat().st_mode & 0o777, 0o644)
         self.assertEqual(creator.builds, 2)
         plan_sha256 = hashlib.sha256(self.plan_path.read_bytes()).hexdigest()
         self.assertEqual(record["plan_sha256"], plan_sha256)
@@ -266,9 +268,7 @@ class CaptureTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        self.run, _, _ = prepared(
-            Path(folder.name), load("trtllm").launcher(), fixtures("trtllm"), native=False
-        )
+        self.run, _, _ = prepared(Path(folder.name), load("trtllm").launcher(), fixtures("trtllm"))
         self.plan = json.loads((self.run / "launch.json").read_text())
         (self.run / "checked.json").write_text(
             json.dumps({"plan_sha256": digest(self.run / "launch.json")})

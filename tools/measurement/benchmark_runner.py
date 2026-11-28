@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from narwhal.deployment.load_trial import poll_drain
 from tools.measurement.attainment import (
     DEFAULT_RECORDS,
     DEFAULT_SHARE,
@@ -28,7 +29,6 @@ from tools.measurement.attainment import (
     trace_rate,
 )
 from tools.measurement.benchmark_evidence import EvidenceCollector
-from tools.measurement.load_trial import poll_drain
 
 
 def now() -> str:

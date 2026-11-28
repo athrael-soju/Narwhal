@@ -1,0 +1,161 @@
+# Alert rules for the Prometheus instance that scrapes `/metrics`.
+# Load with `rule_files: [prometheus-alerts.yml]` in prometheus.yml.
+# Each router of a pair counts the requests it answered, so the rate rules sum over routers.
+# The rules on router gauges read the router with the highest lease epoch: the lease holder,
+# or the last router to hold the lease. Prometheus answers a target's last sample for 5 minutes,
+# including one from a target a previous configuration named, so the router rules count only
+# samples scraped in the last 30 seconds.
+# Every rule matches and aggregates within one `fleet`, so one Prometheus can hold several.
+groups:
+  - name: narwhal
+    rules:
+      - alert: NarwhalWatchdog
+        # Always firing for each fleet Prometheus scrapes. Route it to a dead man's switch,
+        # which pages when it stops arriving: Prometheus runs on the primary router's host,
+        # and no other rule fires while that host is down.
+        expr: count by (fleet) (up{job="narwhal-router"}) >= 0
+        labels:
+          severity: watchdog
+        annotations:
+          summary: "Prometheus evaluates the Narwhal alerts for this fleet"
+          description: "This alert always fires. When the receiver stops getting it, Prometheus or its host is down, and the other Narwhal alerts cannot fire."
+
+      - alert: NarwhalEngineDown
+        expr: up{job="engines"} == 0
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "Engine {{ $labels.iid }} stopped answering its scrape"
+          description: "Check the engine process and its metrics endpoint. Targets remain monitored while the router lists them in /narwhal/targets."
+
+      # The sidecar targets come from the fleet, so they stay listed while a host is down or
+      # after it reboots, when the router lists no engine and Prometheus scrapes none.
+      - alert: NarwhalHostDown
+        expr: up{job="sidecars"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "The engine host of sidecar {{ $labels.instance }} stopped reporting"
+          description: "The attestation sidecar does not answer its scrape: the host, its engine or the sidecar is down. After a reboot, run narwhal deploy run to start them again."
+
+      - alert: NarwhalEngineEjected
+        expr: narwhal_ejected_instances > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "The breaker is holding {{ $value }} engine(s) out of scheduling"
+          description: "narwhal_ejected{iid=...} identifies the engines. Inspect /narwhal/lifecycle and breaker evidence. Contracted fleets require inference and identity validation; whole_wave fleets require an operator-managed restart wave."
+
+      - alert: NarwhalRouterDown
+        expr: (up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Router {{ $labels.instance }} stopped answering its scrape, and no router is active"
+          description: "No router controls the fleet. Check the router process, its metrics endpoint and the lease. For a router pair, read the standby's /ready reason to see why it did not take over."
+
+      - alert: NarwhalStandbyRouterDown
+        expr: (up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) and on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        for: 2m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Router {{ $labels.instance }} stopped answering its scrape while another router is active"
+          description: "The active router serves, and the pair has no standby to take over. Restart the stopped router with --standby-of set to the active router."
+
+      - alert: NarwhalNoRouterReady
+        # For a fleet's only router and for a pair; NarwhalRouterDown pages for a stopped router
+        # with none active.
+        expr: (max by (fleet) (narwhal_router_ready{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30)) or count by (fleet) (up{job="narwhal-router"}) * 0) < 1 and on (fleet) count by (fleet) (timestamp(up{job="narwhal-router"}) > time() - 30) >= 1 unless on (fleet) ((up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1))
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "No router of the fleet admits traffic"
+          description: "Every router of the fleet that answers its scrape answers /ready with HTTP 503: the fleet's only router, both routers of a pair, or the router a stopped one left active. Read the reason in each router's /ready."
+
+      - alert: NarwhalMultipleRoutersReady
+        expr: count by (fleet) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30 and narwhal_router_ready{job="narwhal-router"} == 1) > 1
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $value }} routers admit traffic at once"
+          description: "Only the lease holder may admit traffic. Compare narwhal_router_lease_epoch and the lease holder in each router's /ready, and check that both routers share one lease path."
+
+      - alert: NarwhalErrorBurst
+        expr: sum without (instance, reason) (rate(narwhal_failed_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Requests failing at {{ $value | printf \"%.2f\" }}/s over 5m"
+          description: "Inspect terminal errors and attempt_failures in the request journal, then check the named engines and breaker evidence."
+
+      # Each share rule divides by offered requests, which include early refusals and
+      # rejections. 0.01 is the 1% at which the dashboard's Dropped headline turns yellow.
+      - alert: NarwhalRejectedRising
+        expr: sum without (instance, reason) (rate(narwhal_rejected_total[5m])) / sum without (instance) (rate(narwhal_offered_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "The router rejected {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "Rejected requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_rejected_total by reason: inflight_limit means requests filled the router in-flight limit and serving.queue_capacity, saturated means event-loop lag or request sizing delay reached the saturation threshold, and not_ready means the router was not ready to serve."
+
+      - alert: NarwhalExpiredRising
+        expr: sum without (instance, reason) (rate(narwhal_expired_total[5m])) / sum without (instance) (rate(narwhal_offered_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Deadlines expired {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "Expired requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_expired_total by reason: queue_timeout means a queue wait reached serving.queue_timeout_s, deadline means serving.request_timeout_s expired, and handoff means a prefilled request reached its KV handoff bound before decode dispatch. Compare queue depth and wait by stage on the dashboard."
+
+      - alert: NarwhalRetryDeniedRising
+        expr: sum without (instance) (rate(narwhal_retry_denied_total[5m])) / sum without (instance) (rate(narwhal_offered_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "The retry quota denied retries for {{ $value | humanizePercentage }} of offered requests over 5m"
+          description: "A denied retry ends a request the retry policy would otherwise retry, so denials above 1% of offered requests can turn the dashboard's Dropped headline yellow on their own. Check narwhal_retry_credits and narwhal_attempt_failures_total by reason for the failures that consume the quota."
+
+      - alert: NarwhalUnservedRising
+        expr: sum without (instance) (rate(narwhal_unserved_total[10m])) > 0.2
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Request placement exceeds the configured SLO"
+          description: "Compare offered demand, pool load, measured profile coverage and controller decisions in /narwhal/state."
+
+      - alert: NarwhalPoolStarved
+        expr: narwhal_pool_instances < 1 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
+        for: 2m
+        labels:
+          severity: warn
+        annotations:
+          summary: "A pool contains fewer than one engine"
+
+      - alert: NarwhalPrefillBelowFloor
+        expr: narwhal_prefill_below_floor > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
+        for: 1m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Live prefill capacity is below min_prefill"
+          description: "Inspect engine exclusions and controller decisions in /narwhal/state. Predictive admission permits aggregate fallback on an idle decode engine when live prefill capacity reaches zero."
+
+      - alert: NarwhalDecodeBelowFloor
+        expr: narwhal_decode_below_floor > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
+        for: 1m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Live decode capacity is below min_decode"
+          description: "Health exclusions and dwell state can reduce decode capacity below its floor. Check decode_floor.below_floor, decode_floor.restoration_moves, NarwhalEngineEjected, and controller decisions in /narwhal/state."

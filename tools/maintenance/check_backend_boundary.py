@@ -8,8 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/narwhal"
+# `mooncake_trace` is AIPerf's trace dataset format, which fleet control load jobs replay.
 ENGINE_TERMS = re.compile(
-    r"vllm|nixl|sglang|mooncake|kv_transfer_params|bootstrap_room|llama|id_slot", re.I
+    r"vllm|nixl|sglang|mooncake(?!_trace)|kv_transfer_params|bootstrap_room|llama|id_slot", re.I
 )
 TEXT_TOKENS = {tokenize.NAME, tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", tokenize.STRING)}
 BACKEND_IMPORT = re.compile(r"^\s*(?:from|import)\s+(?:narwhal|\.+)\.?backends\.\w", re.M)

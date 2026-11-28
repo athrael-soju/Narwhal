@@ -6,95 +6,40 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 ## Fabric workload qualification
 
-`deploy_hosts.py prepare` copies a snapshot of the fabric helper, `tools/deployment/fabric_budget.py`, for every engine host. The prepared manifest and `NARWHAL_FABRIC_BUDGET_SHA256` hold the snapshot's SHA-256.
+[`narwhal deploy fabric`](../cli/Deploy.md#fabric-qualification) sizes the budgets and measures the edges from the workstation. It reads the [fabric inputs](04-Deployment-Inputs.md#fabric-qualification-inputs), the installed package and the hosts, and writes every record on this page into its output directory at mode 0600.
 
-`deploy_hosts.py install` verifies the installed snapshot at `runs/deployment-tools/fabric_budget.py`, and `NARWHAL_FABRIC_BUDGET_TOOL` holds its path.
+### Budget
 
-If the helper changes, start a new preparation directory.
+Each cache group has one `budget.json`, `fabric-budget/<representative>/budget.json`. It holds:
 
-### Calculating the workload budget
+- the SHA-256 of the representative's model configuration and launch record, which sit beside it as `model-config.json` and `engine-launch.json`
+- the TP size, the prompt length and the payload per handoff
+- the declared workload: `peak_handoffs_per_s`, `burst_handoffs`, `transfer_budget_s` and `headroom`
+- `required_gbps`, the total rate over all TP ranks that one directed host edge must carry for the group
+- `cache_group`, the group's roles, representative first
 
-Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
+On vLLM and TensorRT-LLM, the payload is the padded-page bound of the captured `cache-layout.json`, copied beside the budget. The budget records its SHA-256, the image identity and the launch-plan hash. The layout must name this model configuration and launch record. On vLLM, every TP rank must resolve one KV cache layout, which the budget records as `kv_cache_layout`.
 
-`calculate` accepts these options:
-
-| Option                            | Default          | Description                                                                                               |
-| --------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `--model-config PATH`             | required         | Model configuration file, whose hash must match a runtime layout.                                         |
-| `--launch-config PATH`            | required         | Engine launch record that supplies the tensor parallel (TP) size, whose hash must match a runtime layout. |
-| `--runtime-layout PATH`           | one cache source | Captured `cache-layout.json`.                                                                             |
-| `--transfer-metrics BEFORE AFTER` | one cache source | SGLang prefill `/metrics` saved by `measure-transfer` before and after its handoffs.                      |
-| `--prompt-tokens N`               | required         | Prompt length, in tokens.                                                                                 |
-| `--handoffs-per-s RATE`           | required         | Peak remote KV handoff rate, in handoffs per second.                                                      |
-| `--burst N`                       | required         | Number of KV handoffs in a burst.                                                                         |
-| `--transfer-budget-s SECONDS`     | required         | Time budget for transferring one burst.                                                                   |
-| `--headroom FACTOR`               | required         | Multiplier of at least 1 applied to the required rate.                                                    |
-| `--out PATH`                      | required         | Fresh private output path for the budget.                                                                 |
-
-Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--uniform-cache`, or `--bytes-per-token`.
-
-`measure-transfer` puts the decode engine in the decode role, switching it out and back first when it already serves decode. It then sends handoffs and returns the decode engine to the role it found. `measure-transfer` accepts these options:
-
-| Option                  | Default                  | Description                                                                                                     |
-| ----------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `--prefill URL`         | required                 | Base URL of an idle engine serving the prefill role.                                                            |
-| `--decode URL`          | required                 | Base URL of another idle engine of the same cache group.                                                        |
-| `--bootstrap-host HOST` | required                 | Address of the prefill engine's bootstrap server.                                                               |
-| `--bootstrap-port PORT` | required                 | The prefill engine's `NARWHAL_KV_SIDE_CHANNEL_PORT`.                                                            |
-| `--model NAME`          | required                 | Served model name.                                                                                              |
-| `--launch-config PATH`  | required                 | Launch record whose `runtime.decode_cuda_graph_memory_gb` sizes the decode switch when the engine reports none. |
-| `--prompt-tokens N`     | required                 | Prompt length of each handoff, the same as the budget's `--prompt-tokens`.                                      |
-| `--handoffs N`          | 8                        | Number of handoffs.                                                                                             |
-| `--api-key-env NAME`    | `NARWHAL_ENGINE_API_KEY` | Environment variable whose value, when set, goes to both engines as a bearer token.                             |
-| `--out-dir PATH`        | required                 | New directory for `before.prom` and `after.prom`.                                                               |
-
-### Retained budget evidence
-
-Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engine host.
-
-The budget file holds:
-
-- the model and launch hashes, and the runtime-layout or transfer-metrics hashes
-- the TP size, and from a runtime layout the image identity and launch-plan hash
-- the prompt length
-- the payload per handoff, a padded-page bound or a measured mean
-- the sizing assumptions
-- the required decimal Gbit/s
-
-The budget is the total rate over all TP ranks that one directed host edge must carry at the recorded workload.
-
-Each matching source role's private comparison budget holds the representative's budget rate and hash.
-
-The captured layout holds per-layer page bytes for each TP rank, the token block size, and extra blocks for state and boundary allowance. It also holds the image identity, package versions, application revision and launch-plan hash.
-
-### Uniform-cache options
-
-Deployments use `--runtime-layout` on vLLM and TensorRT-LLM, and `--transfer-metrics` on SGLang, for every model.
-
-Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
+On SGLang, the payload is the mean measured handoff of the representative's `transfer.json`, schema `narwhal.kv-transfer-measurement` version 1, from [`narwhal deploy transfer-measure`](../deploy/04-Qualify-Fabric.md#measuring-kv-handoffs). The packaged measurement tool, `transfer_measure.py`, runs on each engine's host. It puts the engine's decode peer in the decode role, switching it out and back first when it already serves decode, sends eight handoffs of `NARWHAL_FABRIC_PROMPT_TOKENS` tokens, and returns the peer to the role it found. `transfer.json` holds the metric series, the SHA-256 of the engine's packaged launch record, the prompt length, the payload per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`, which sit beside it. The budget records the SHA-256 of all three, and `fabric-budget/<representative>/` keeps copies of them.
 
 ### Link evidence
 
-For `ucx_tcp`, the measured rate is the aggregate received bitrate that the iperf3 receiver reports, and `record-edge` takes the iperf3 JSON as `--sample`. For `ucx_rdma`, the measured rate is the average Gbit/s from the retained perftest report, and `record-edge` takes that rate as `--gbps` with the report as `--sample`.
+Each directed sample has a directory, `fabric-edge/<source-host>-to-<destination-host>/<sample>/`, named after the first source and destination role it serves, such as `engine-1-to-engine-2`.
 
-`fabric_budget.py link` prints a SHA-256 link fingerprint per directed pair over these inputs:
+| File | Contents |
+| --- | --- |
+| `source.json`, `destination.json` | Each host's tool version, its route to the other host, and on RDMA the GID table entry |
+| `link.json` | The link record |
+| `sample.json` or `sample.txt` | The `iperf3` JSON of a `ucx_tcp` sample, or the `ib_write_bw` report of a `ucx_rdma` sample |
+| `<role>.evidence.json` | The sample against the budget of each source role, schema `narwhal.fabric-edge-evidence` version 2 |
+| `retained/` | For a reused sample, the retained sample and the evidence it was recorded with |
+| `<role>.comparison.json` | For a reused sample, the retained rate against each source role's current budget, schema `narwhal.fabric-edge-comparison` version 2 |
 
-- roles
-- addresses
-- interfaces
-- routes
-- transport
-- utility version
-- test parameters
+The link record holds both hosts, addresses and interfaces, both routes, the transport, both hosts' tool versions and the test parameters: the port, the stream count or the HCA ports, GID indexes, GIDs and RoCE mode, the message size and the durations. A route keeps only `dst`, `from`, `gateway`, `via`, `dev`, `prefsrc` and `table`, so a route cache timer does not change it. The link fingerprint is the SHA-256 of the record's canonical JSON.
 
-These `fabric_budget.py` commands compare a link sample with a budget:
+Evidence and comparisons hold the source role, the link fingerprint, the SHA-256 of the sample and the budget, `measured_gbps`, `required_gbps` and `passed`. A comparison also holds the SHA-256 of the evidence it reuses. For `ucx_tcp`, the measured rate is the receiver's aggregate `end.sum_received.bits_per_second`. For `ucx_rdma`, it is the report's `BW average[Gb/sec]` column.
 
-| Command       | Result                                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `compare`     | Compares one sample, from `--iperf` or `--gbps`, with a budget.                                                     |
-| `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                   |
-| `reuse-edge`  | Writes a new private comparison of the retained sample against a corrected budget, for a matching link fingerprint. |
-
+`fabric.json` lists the input digests, the budget of each group, and every sample with its roles, link fingerprint, measured rate, whether it was reused, and each source role's required rate and verdict.
 
 ## CLI precedence
 

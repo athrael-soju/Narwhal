@@ -57,6 +57,9 @@ def load(path: str | Path) -> FleetConfig:
         slo = SLO(
             ttft_s=_read_float(problems, "slo.ttft_s", slo_raw.get("ttft_s")),
             tpot_s=_read_float(problems, "slo.tpot_s", slo_raw.get("tpot_s")),
+            router_overhead_s=_read_float(
+                problems, "slo.router_overhead_s", slo_raw.get("router_overhead_s", 0.0)
+            ),
         )
     controller_raw = _read_section(problems, raw, "controller")
     serving_raw = _read_section(problems, raw, "serving")
@@ -503,7 +506,7 @@ _KNOWN_KEYS = {
     "hardware",
 }
 
-_SLO_KEYS = {"ttft_s", "tpot_s"}
+_SLO_KEYS = {"ttft_s", "tpot_s", "router_overhead_s"}
 _ENGINE_SPEC_KEYS = {"iid", "url", "role", "pin", "attestation_url", "shared_device"}
 _SHARED_DEVICE_KEYS = {"group", "gpu_uuid", "device_allowance", "gpu_memory_utilization"}
 

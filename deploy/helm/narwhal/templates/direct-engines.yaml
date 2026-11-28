@@ -1,0 +1,104 @@
+{{- /*
+Engines that start directly from their image, as `narwhal dev` starts them on a host. Each pod
+runs the command the backend's direct start rendered, with the model volume and the directory
+every engine shares for its KV handoff files. The engines take no attestation, so their fleet
+has no engine_contract, as for the engines of `narwhal dev`.
+*/ -}}
+{{- with .Values.directEngines }}
+{{- if . }}
+{{- include "narwhal.directChecks" $ }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .serviceName }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
+spec:
+  clusterIP: None
+  # The routers reach an engine by its pod name before the engine is ready.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .port }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: narwhal-engine-shared
+  labels:
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .shared.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .shared.size }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  # The pods are engine-1 onwards, the names of the engine roles.
+  name: engine
+  labels:
+    {{- include "narwhal.labels" (dict "root" $ "component" "direct-engine") | nindent 4 }}
+spec:
+  serviceName: {{ .serviceName }}
+  replicas: {{ .count }}
+  ordinals:
+    start: 1
+  podManagementPolicy: Parallel
+  # Only a drain and readmission replaces an engine.
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" $ "component" "direct-engine") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: engine
+          image: {{ .image }}
+          command:
+            {{- toYaml .command | nindent 12 }}
+          env:
+            - name: NARWHAL_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- with .env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          volumeMounts:
+            - name: model
+              mountPath: {{ .modelMount | quote }}
+              readOnly: true
+            - name: shared
+              mountPath: {{ .sharedMount | quote }}
+      volumes:
+        - name: model
+          {{- toYaml .modelVolume | nindent 10 }}
+        - name: shared
+          persistentVolumeClaim:
+            claimName: narwhal-engine-shared
+{{- end }}
+{{- end }}

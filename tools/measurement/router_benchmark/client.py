@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import uvloop
 
-from tools.measurement import load_trial as trial
+from narwhal.deployment import load_trial as trial
 
 from .files import open_private
 from .fleet import MODEL

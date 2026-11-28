@@ -1,0 +1,245 @@
+{{- /*
+The fleet controller: one pod that runs the stage graph for the namespace's NarwhalFleet. Its
+Role holds only the verbs the controller uses, and its ClusterRole only reads nodes and its own
+CRD. It has no verb on Secrets, RBAC or pods/exec. The pod mounts no ServiceAccount token
+itself; the controller container alone mounts a projected one.
+*/ -}}
+{{- $name := include "narwhal.controller" . }}
+{{- $lease := include "narwhal.fleet.controllerLease" . }}
+{{- $settings := dict
+  "release" .Release.Name
+  "stateClaim" (include "narwhal.stateClaim" .)
+  "engineServiceAccount" (include "narwhal.engineAccount" .)
+  "sidecarUser" .Values.sidecarUser
+  "modelVolumeSources" .Values.modelVolumeSources
+  "modelHostPathPrefixes" .Values.modelHostPathPrefixes
+  "modelNfsServers" .Values.modelNfsServers
+  "modelCsiDrivers" .Values.modelCsiDrivers
+  "runtimeClassNames" .Values.runtimeClassNames
+  "admissionPolicy" (printf "%s-narwhal" .Release.Namespace)
+  "keyCheckPeriodSeconds" .Values.controller.keyCheckPeriodSeconds
+  "image" .Values.images.narwhal
+  "runAsUser" .Values.controller.runAsUser
+  "runAsGroup" .Values.controller.runAsGroup
+  "fleet" (.Values.monitoring.fleet | default .Release.Name)
+}}
+{{- $config := toPrettyJson $settings }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+data:
+  # The chart's settings: its state claim, the engines' ServiceAccount, the cluster admin's
+  # model volume and RuntimeClass allow-lists, the admission policy that bounds the fleet, how
+  # often the controller checks the engine API key, the controller's image, user and
+  # group, which its export Jobs run as, and the fleet label of its monitoring.
+  controller.json: {{ $config | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  # The controller writes only a fleet's status.
+  - apiGroups: [{{ include "narwhal.group" . | quote }}]
+    resources: [{{ include "narwhal.fleet.plural" . | quote }}]
+    verbs: [get, list, watch]
+  - apiGroups: [{{ include "narwhal.group" . | quote }}]
+    resources: [{{ printf "%s/status" (include "narwhal.fleet.plural" .) | quote }}]
+    verbs: [patch]
+  # Gate and export Jobs. Every delete propagates in the background, so a Job takes its pods.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  # Engine pods: pinning one to its node, and replacing one.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # The engines, routers and HAProxy, and the gate inputs.
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [apps]
+    resources: [statefulsets, deployments]
+    verbs: [get, list, watch, create, patch, delete]
+  # Leader election. Create cannot name its object; every other verb names the one Lease.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ $lease | quote }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "narwhal.clusterName" . }}-nodes
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+rules:
+  # Discovery reads the nodes the fleet names.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+  # The controller stalls when the installed CRD's schema differs from its own.
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    resourceNames: [{{ include "narwhal.fleet.crdName" . | quote }}]
+    verbs: [get]
+  # The controller creates nothing while the namespace's admission policy is missing.
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    resourceNames: [{{ printf "%s-narwhal" .Release.Namespace | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "narwhal.clusterName" . }}-nodes
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "narwhal.clusterName" . }}-nodes
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
+spec:
+  replicas: 1
+  # The old pod stops before the new one starts; the Lease fences a pod on a lost node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "narwhal.selector" (dict "root" . "component" "controller") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "narwhal.selector" (dict "root" . "component" "controller") | nindent 8 }}
+      annotations:
+        {{ include "narwhal.group" . }}/config-sha256: {{ $config | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.controller.runAsUser }}
+        runAsGroup: {{ .Values.controller.runAsGroup }}
+        # The run directories on the state volume belong to the controller's group.
+        fsGroup: {{ .Values.controller.runAsGroup }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: controller
+          image: {{ .Values.images.narwhal }}
+          command:
+            - python3
+            - -I
+            - -m
+            - narwhal.deployment.kubernetes_controller
+            - --settings
+            - /etc/narwhal/controller.json
+          env:
+            # The Lease holder's identity.
+            - name: NARWHAL_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.controller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: api
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: settings
+              mountPath: /etc/narwhal
+              readOnly: true
+            - name: narwhal-state
+              mountPath: /narwhal-state
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The controller's token, which the kubelet renews before it expires, with the
+        # cluster's CA and the namespace.
+        - name: api
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        - name: settings
+          configMap:
+            name: {{ $name }}
+        - name: narwhal-state
+          persistentVolumeClaim:
+            claimName: {{ include "narwhal.stateClaim" . }}
+        - name: tmp
+          emptyDir: {}

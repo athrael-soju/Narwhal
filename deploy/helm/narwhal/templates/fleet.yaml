@@ -1,0 +1,17 @@
+{{- /*
+The NarwhalFleet the values set, so one helm install deploys the fleet. The controller copies
+none of its labels or annotations to the objects it derives.
+*/ -}}
+{{- with .Values.fleet }}
+apiVersion: {{ include "narwhal.fleet.apiVersion" $ }}
+kind: {{ include "narwhal.fleet.kind" $ }}
+metadata:
+  name: {{ include "narwhal.fleet.name" $ }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" $ "component" "fleet") | nindent 4 }}
+  annotations:
+    # Argo CD syncs the fleet before the CRD exists when one Application holds both charts.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml . | nindent 2 }}
+{{- end }}

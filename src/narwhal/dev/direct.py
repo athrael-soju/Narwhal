@@ -11,29 +11,22 @@ import sys
 import tempfile
 import time
 import uuid
-from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.loading import load as load_fleet
-from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures
+from narwhal.deployment.direct_start import DirectStart
 from narwhal.deployment.launch_engine.runtime import write_private
-from narwhal.deployment.launch_engine.start import READY_SECONDS
-from narwhal.profiling.model import nominal_profile
-from narwhal.profiling.store import ProfileStore
 
 from . import lifecycle
 from .template import _check_free_ports, _sha256
 
 HOST = "127.0.0.1"
 PROBE_TIMEOUT_S = 120.0
-READY_TIMEOUT_S = 60.0
 MAX_THREADS = 8
 VERIFY_BODY = {"prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}
 
@@ -282,167 +275,6 @@ def materialize(
             shutil.rmtree(output, ignore_errors=True)
         raise
     return output
-
-
-def up(root: Path, config: dict) -> dict:
-    with lifecycle.locked(root):
-        # setup may have changed the instance since the caller read it.
-        config = lifecycle.instance(root)
-        if (root / "lifecycle.json").exists():
-            previous = lifecycle._read_state(root)
-            if previous.get("phase") != "stopped":
-                raise ValueError("the fleet is already up; run narwhal dev down to stop it")
-        spec = lifecycle.read(root / "template.json")
-        start = _direct_start(spec)
-        binary = _binary(Path(config["engine_binary"]))
-        if start.check(binary, _runtime(spec)) != config["engine_version"]:
-            raise ValueError("engine binary changed after dev init")
-        _model(spec, Path(config["model_path"]))
-        _check_free_ports(_ports(spec, config["engine_count"])[1], HOST)
-        # The last run's logs stay for a look after a restart; earlier runs leave.
-        kept = Path(previous["run"]).name if (root / "lifecycle.json").exists() else None
-        for earlier in root.glob("run-*"):
-            if earlier.name == kept:
-                continue
-            if earlier.is_symlink():
-                earlier.unlink()
-            elif earlier.is_dir():
-                shutil.rmtree(earlier)
-        run = root / f"run-{uuid.uuid4().hex[:12]}"
-        run.mkdir(mode=0o700)
-        state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
-        lifecycle.write(root / "lifecycle.json", state)
-        try:
-            _launch(root, run, config, spec, state, start, binary)
-        except BaseException as error:
-            state["failure"] = {"message": str(error), "stage": "startup", "context": {}}
-            try:
-                lifecycle._stop(root, state)
-            except (OSError, ValueError) as cleanup_error:
-                state["failure"]["cleanup_error"] = str(cleanup_error)
-                lifecycle.write(root / "lifecycle.json", state)
-            raise
-        state["phase"] = "launched"
-        lifecycle.write(root / "lifecycle.json", state)
-        return {"status": "launched", "run": str(run), "router": config["router_url"]}
-
-
-def _launch(
-    root: Path,
-    run: Path,
-    config: dict,
-    spec: dict,
-    state: dict,
-    start: DirectStart,
-    binary: Path,
-) -> None:
-    fleet = lifecycle.read(root / "fleet.json")
-    fleet["profiles"]["path"] = str(run / "profiles.json")
-    fleet["recovery"] = {"state_path": str(run / "router-state.json")}
-    lifecycle.write(run / "fleet.json", fleet)
-    shared = run / "slot-files"
-    shared.mkdir(mode=0o700)
-    threads = _threads(config["engine_count"])
-    environment = {**os.environ, **start.environment(binary)}
-    records = []
-    for index, engine in enumerate(fleet["engines"]):
-        port = urlsplit(engine["url"]).port
-        if port is None:
-            raise ValueError(f"engine url names no port: {engine['url']}")
-        command = start.command(
-            binary,
-            DirectEngine(
-                model=Path(config["model_path"]),
-                served_name=fleet["model"],
-                host=HOST,
-                port=port,
-                runtime=spec["runtime"],
-                shared_dir=shared,
-                accelerated=config["accelerated"],
-                threads=threads,
-            ),
-        )
-        records.append(
-            lifecycle._spawn_command(root, state, command, f"engine-{index + 1}", environment)
-        )
-    for engine, record in zip(fleet["engines"], records, strict=True):
-        lifecycle._wait(engine["url"] + "/health", record["identity"], READY_SECONDS)
-    store = ProfileStore(run / "profiles.json")
-    for iid, figures in _measure(start, fleet, spec["runtime"]).items():
-        store.put(
-            nominal_profile(
-                iid,
-                prefill_token_s=figures.prefill_token_s,
-                token_interval_s=figures.token_interval_s,
-                kv_capacity_tokens=figures.kv_capacity_tokens,
-                max_requests=figures.max_requests,
-            )
-        )
-    router = urlsplit(config["router_url"])
-    record = lifecycle._spawn(
-        root,
-        state,
-        "narwhal.cli",
-        [
-            "--fleet",
-            str(run / "fleet.json"),
-            "--host",
-            str(router.hostname),
-            "--port",
-            str(router.port),
-            "--journal",
-            str(run / "journal.jsonl"),
-        ],
-        "router",
-        dict(os.environ),
-    )
-    lifecycle._wait(config["router_url"] + "/health", record["identity"])
-    lifecycle._wait(config["router_url"] + "/ready", record["identity"], int(READY_TIMEOUT_S))
-
-
-def _measure(start: DirectStart, fleet: dict, runtime: dict) -> dict[str, NominalFigures]:
-    """Each engine's figures with every engine serving its full number of requests.
-
-    The engines share one device, so an engine measured alone reports a speed it loses as
-    soon as its neighbours serve.
-    """
-    endpoint, body = start.probe(fleet["model"])
-    each = start.probe_requests(runtime)
-    if each < 1:
-        raise ValueError("an engine is measured with at least one request")
-    engines = [engine for engine in fleet["engines"] for _ in range(each)]
-
-    def one(engine: dict) -> NominalFigures:
-        reply = client.post(engine["url"] + endpoint, json=body)
-        reply.raise_for_status()
-        return start.figures(reply.json(), runtime)
-
-    client = httpx.Client(
-        timeout=PROBE_TIMEOUT_S,
-        trust_env=False,
-        limits=httpx.Limits(max_connections=len(engines)),
-    )
-    pool = ThreadPoolExecutor(max_workers=len(engines))
-    try:
-        pending = [pool.submit(one, engine) for engine in engines]
-        wait(pending, return_when=FIRST_EXCEPTION)
-        # A failed request raises here while the others may still be in flight.
-        measured = [future.result() for future in pending if future.done()]
-        if len(measured) != len(pending):
-            raise ValueError("an engine measurement ended early")
-    finally:
-        # Closing the client ends requests still in flight, so a hung engine holds nothing.
-        pool.shutdown(wait=False, cancel_futures=True)
-        client.close()
-    figures = {}
-    for index, engine in enumerate(fleet["engines"]):
-        own = measured[index * each : (index + 1) * each]
-        figures[engine["iid"]] = replace(
-            own[0],
-            prefill_token_s=sum(f.prefill_token_s for f in own) / each,
-            token_interval_s=sum(f.token_interval_s for f in own) / each,
-        )
-    return figures
 
 
 def verify(root: Path, config: dict) -> dict:

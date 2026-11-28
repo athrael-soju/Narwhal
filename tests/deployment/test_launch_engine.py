@@ -11,14 +11,16 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import Mock, patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
+from narwhal.backends.vllm.probe_reader import releases_peers
 from narwhal.deployment import native_engine
+from narwhal.deployment.attestation_contract.document import planned_launch
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine import start as launch_start
@@ -27,9 +29,9 @@ from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspe
 from narwhal.deployment.launch_engine.plan import (
     build,
     check_model_files,
+    ipc_cache_off,
     load,
     prepare,
-    releases_peers,
     validate_runtime,
 )
 from narwhal.deployment.launch_engine.runtime import digest, regular_file_digest
@@ -38,6 +40,7 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
+from narwhal.engines.attestation import launch_digest
 from tests.deployment.fixtures import (
     cuda_engine,
     engine_config_modules,
@@ -128,6 +131,69 @@ class EngineLauncherTests(unittest.TestCase):
             plan = load(root / "launch")
             self.assertEqual(plan["model_tree_sha256"], tree)
             self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_two_prepares_of_one_record_attest_one_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/model.safetensors").write_bytes(b"weights")
+            prepare(root / "first", env)
+            time.sleep(0.05)
+            prepare(root / "second", env)
+            first, second = load(root / "first"), load(root / "second")
+            # Each prepare names its own container and paths.
+            self.assertNotEqual(first, second)
+            contract = {"engine_version": "1.0.0"}
+            image = "sha256:" + "a" * 64
+            self.assertEqual(
+                launch_digest(contract, planned_launch(first, image)),
+                launch_digest(contract, planned_launch(second, image)),
+            )
+
+    def test_a_launch_plan_keys_its_digest_of_the_credential_environment(self):
+        for backend in ("container", "native"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                if backend == "native":
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend=backend)
+                plan = load(run)
+                environment = run / launch_plan.env_file_name(plan)
+                text = environment.read_text()
+                self.assertIn("=engine-only-secret\n", text)
+                salt = run / launch_plan.ENV_SALT
+                self.assertEqual(salt.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(len(salt.read_bytes()), 32)
+                self.assertRegex(plan["env_sha256"], "^hmac-sha256:[0-9a-f]{64}$")
+                # Rebuilding the environment from a guessed key matches no digest in either
+                # copy of the plan, the right guess included.
+                for copy in (run / "launch.json", run / "hook/launch.json"):
+                    for guess in ("engine-secret", "engine-only-secret", "changeme"):
+                        guessed = text.replace("engine-only-secret", guess).encode()
+                        self.assertNotIn(hashlib.sha256(guessed).hexdigest(), copy.read_text())
+                environment.write_text(text.replace("engine-only-secret", "rotated"))
+                with self.assertRaisesRegex(ValueError, "engine environment changed"):
+                    load(run)
+
+    def test_a_plan_from_an_earlier_version_keeps_its_unkeyed_environment_digest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = json.loads((run / "launch.json").read_text())
+            plan["env_sha256"] = digest(run / "container.env")
+            (run / "launch.json").write_text(json.dumps(plan))
+            (run / launch_plan.ENV_SALT).unlink()
+            self.assertEqual(load(run)["env_sha256"], plan["env_sha256"])
+            (run / "container.env").write_text("CHANGED=1\n")
+            with self.assertRaisesRegex(ValueError, "engine environment changed"):
+                load(run)
 
     def test_check_refuses_a_status_change_that_keeps_the_content(self):
         for change in ("chmod", "hard link"):
@@ -608,7 +674,7 @@ class EngineLauncherTests(unittest.TestCase):
 
         for change, message in (
             (unpinned, "set NARWHAL_MODEL_SHA256"),
-            (mismatched, "model file differs from its supplied hash"),
+            (mismatched, "differs from NARWHAL_MODEL_SHA256"),
             (outside, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
             (linked, "not a symbolic link"),
             (missing, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
@@ -646,6 +712,65 @@ class EngineLauncherTests(unittest.TestCase):
             env.update(NARWHAL_MODEL_REVISION="a" * 40, NARWHAL_MODEL_SHA256="9" * 64)
             with self.assertRaisesRegex(ValueError, "NARWHAL_MODEL_SHA256 pins a model file"):
                 prepare(root / "launch", env, backend="native")
+
+    def test_start_waits_for_health_only_when_given_ready_seconds(self):
+        plan = {"role": "engine-1"}
+        for ready, waits in ((None, []), (30, [30])):
+            run = Path(tempfile.mkdtemp())
+            waited = Mock()
+            with (
+                self.subTest(ready=ready),
+                patch.object(launch_start, "_create_container", return_value="cid"),
+                patch.object(launch_start, "docker", return_value="2026-01-01T00:00:00Z"),
+                patch.object(launch_start, "record_container_start"),
+                patch.object(launch_start, "wait_ready", waited),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                launch_start.start(run, plan, ready)
+            self.assertEqual([call.args[3] for call in waited.call_args_list], waits)
+
+    def wait_ready(self, states, metrics_start):
+        """`wait_ready` against a container whose inspections return `states` in turn, and an
+        endpoint whose /metrics names `metrics_start` as its process start."""
+        plan = {"role": "engine-1", "endpoint": "http://127.0.0.1:8001"}
+        inspected = iter(states)
+        clock = iter(range(1000))
+
+        def docker(command, run, log, **kwargs):
+            if command[0] == "logs":
+                return "OSError: [Errno 98] Address already in use"
+            return json.dumps(next(inspected))
+
+        def urlopen(request, timeout):
+            url = request if isinstance(request, str) else request.full_url
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            body = f"process_start_time_seconds {metrics_start}\n".encode()
+            response.__enter__.return_value.read.return_value = body
+            self.assertTrue(url.endswith(("/health", "/metrics")), url)
+            return response
+
+        with (
+            patch.object(launch_start, "docker", side_effect=docker),
+            patch.object(launch_start, "urlopen", side_effect=urlopen),
+            patch.object(launch_start, "launch_headers", return_value=None, create=True),
+            patch.object(
+                launch_start, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=Mock())
+            ),
+        ):
+            launch_start.wait_ready(Path("/unused"), plan, "cid", 5)
+
+    def test_start_accepts_health_only_from_the_containers_own_process(self):
+        running = {"Running": True, "StartedAt": "2026-01-01T00:10:00Z"}
+        # 2026-01-01T00:10:00Z, the container's start.
+        self.wait_ready([running] * 2, 1767226200.4)
+        # An engine left from an earlier start answers on the port with its own process start.
+        with self.assertRaisesRegex(ValueError, "another process holds the engine port"):
+            self.wait_ready([running] * 20, 1767225000.0)
+        # The container exits after the old process answered: its exit is the failure.
+        exited = {"Running": False, "ExitCode": 1}
+        with self.assertRaisesRegex(ValueError, "container exited 1: OSError: .Errno 98"):
+            self.wait_ready([running, exited], 1767226200.4)
 
     def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -765,10 +890,11 @@ class EngineLauncherTests(unittest.TestCase):
                     if "--pid" in plan["common"]
                     else None
                 )
-                self.assertEqual(pid, "host" if shared else None)
+                # Only CUDA IPC needs the engines of one host in one PID namespace.
+                ipc = shared and gpu_tls == "cuda"
+                self.assertEqual(pid, "host" if ipc else None)
                 # CUDA IPC peers with the IPC cache off evict a stopped engine after the TTL.
                 extra = plan["connector"]["kv_connector_extra_config"]
-                ipc = shared and gpu_tls == "cuda"
                 self.assertIs(plan["cuda_ipc_peers"], ipc)
                 self.assertEqual(
                     extra.get("engine_ttl"), ENGINE_TTL_S if ipc and cache == "n" else None
@@ -1045,13 +1171,14 @@ class EngineLauncherTests(unittest.TestCase):
                 self.assertIs(checked["peer_release"], released)
                 self.assertEqual("whole-wave restart" not in printed.getvalue(), released)
                 self.assertEqual("per transfer" in printed.getvalue(), ipc and released)
-        self.assertFalse(releases_peers("1.21.9", "n"))
-        self.assertTrue(releases_peers("1.22.0", "n"))
-        self.assertTrue(releases_peers("2.0", "n"))
-        self.assertFalse(releases_peers("1.22.0", None))
-        self.assertFalse(releases_peers("unknown", "n"))
+        self.assertFalse(releases_peers("1.21.9", True))
+        self.assertTrue(releases_peers("1.22.0", True))
+        self.assertTrue(releases_peers("2.0", True))
+        self.assertFalse(releases_peers("1.22.0", False))
+        self.assertFalse(releases_peers("unknown", True))
+        self.assertFalse(ipc_cache_off(None))
         for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
-            self.assertIs(releases_peers("1.22.0", value), disabled)
+            self.assertIs(ipc_cache_off(value), disabled)
 
     def test_the_shared_budget_and_transports_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1174,7 +1301,7 @@ class EngineLauncherTests(unittest.TestCase):
 
                 with patched_docker(side_effect=execute) as docker:
                     if passed:
-                        handshake_policy(run, plan)
+                        handshake_policy(run, plan, run)
                         capture = run / "handshake-policy.json"
                         record = json.loads(capture.read_text())
                         self.assertIs(record["enforce_handshake_compat"], True)
@@ -1185,10 +1312,10 @@ class EngineLauncherTests(unittest.TestCase):
                         )
                         self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
                         with self.assertRaisesRegex(ValueError, "capture exists"):
-                            handshake_policy(run, plan)
+                            handshake_policy(run, plan, run)
                     else:
                         with self.assertRaisesRegex(ValueError, "boolean true"):
-                            handshake_policy(run, plan)
+                            handshake_policy(run, plan, run)
                         self.assertFalse((run / "handshake-policy.json").exists())
                     self.assertEqual(docker.call_count, 1)
 
@@ -1489,7 +1616,9 @@ class SharedEngineStartTests(unittest.TestCase):
                 if command[0] == "start":
                     return "started"
                 if command[2] == "{{json .State}}":
-                    return json.dumps({"Running": True, "Pid": 1234})
+                    return json.dumps(
+                        {"Running": True, "Pid": 1234, "StartedAt": "2026-01-01T00:00:00Z"}
+                    )
                 if command[2] == "{{json .Config.Cmd}}":
                     return json.dumps(dict(selected)[run]["args"])
                 return "sha256:test"
@@ -1524,6 +1653,13 @@ class SharedEngineStartTests(unittest.TestCase):
                 self.assertEqual(record["image_id"], "sha256:test")
                 self.assertEqual(record["engine_args"], plan["args"])
                 self.assertEqual(record["budget_mib"], 6000)
+                self.assertEqual(
+                    json.loads((run / "container-start.json").read_text()),
+                    {
+                        "container_id": (run / "container.id").read_text().strip(),
+                        "started_at": "2026-01-01T00:00:00Z",
+                    },
+                )
 
     def test_pressure_failure_preserves_original_cause_if_sensor_fails(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1546,7 +1682,9 @@ class SharedEngineStartTests(unittest.TestCase):
                 if command[0] in {"start", "rm"}:
                     return "done"
                 if command[2] == "{{json .State}}":
-                    return json.dumps({"Running": True, "Pid": 1234})
+                    return json.dumps(
+                        {"Running": True, "Pid": 1234, "StartedAt": "2026-01-01T00:00:00Z"}
+                    )
                 if command[2] == "{{json .Config.Cmd}}":
                     return json.dumps(dict(selected)[run]["args"])
                 return "sha256:test"

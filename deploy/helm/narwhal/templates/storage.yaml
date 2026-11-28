@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "narwhal.stateClaim" . }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "state") | nindent 4 }}
+  annotations:
+    # The run directories and evidence outlive the release; a new install finds them.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .Values.state.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.state.size }}

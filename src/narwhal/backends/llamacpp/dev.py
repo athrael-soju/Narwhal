@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,13 @@ def _positive(timings: Any, name: str) -> float:
 
 
 class LlamacppDirect(DirectStart):
-    def environment(self, binary: Path) -> dict[str, str]:
+    def environment(
+        self, binary: Path, inherited: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
         # A prebuilt release keeps its shared libraries beside the server binary.
-        inherited = os.environ.get("LD_LIBRARY_PATH")
+        search = (os.environ if inherited is None else inherited).get("LD_LIBRARY_PATH")
         beside = str(binary.resolve().parent)
-        return {"LD_LIBRARY_PATH": os.pathsep.join(filter(None, [beside, inherited]))}
+        return {"LD_LIBRARY_PATH": os.pathsep.join(filter(None, [beside, search]))}
 
     def check(self, binary: Path, runtime: dict[str, Any]) -> str:
         try:
