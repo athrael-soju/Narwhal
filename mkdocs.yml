@@ -86,6 +86,7 @@ nav:
       - Profiling and preflight: deploy/06-Profile-and-Preflight.md
       - Serving and measuring: deploy/07-Serve-and-Measure.md
       - Deploying on Kubernetes: deploy/Kubernetes.md
+      - NarwhalFleet reference: deploy/NarwhalFleet.md
   - Deployment operations:
       - Measuring a fleet:
           - Overview: Measure.md

@@ -23,7 +23,7 @@ from .graph import INPUT, LIVE, PRODUCT, Fact, Relation, Rerun, Scope, Stage, St
 PAGE = "deploy/Kubernetes.md"
 
 SCOPES = (
-    Scope(WORKSTATION, "run", "Once per run, from the management workstation", single=True),
+    Scope(WORKSTATION, "run", "Once per run, for the whole fleet", single=True),
     Scope(ENGINE, "engine", "Once for each engine pod"),
     Scope(GROUP, "cache group", "Once for each cache-equivalence group"),
     Scope(EDGE, "edge", "Once for each directed edge between the engines' nodes"),
@@ -60,7 +60,7 @@ STAGES = (
     _own("access", WORKSTATION, "Checking cluster access"),
     _own("discover", WORKSTATION, "Discovering the engine nodes", ("access",)),
     _own("engine-prepare", ENGINE, "Preparing the engine pods", ("discover",), ("launch",)),
-    _own("install", WORKSTATION, "Installing the chart", ("engine-prepare",)),
+    _own("install", WORKSTATION, "Applying the engines", ("engine-prepare",)),
     _own("engine-start", ENGINE, "Starting the engine pods", ("install",), ("engine_identity",)),
     _own("engine-check", ENGINE, "Checking the engine pods", ("engine-start",)),
     replace(
@@ -128,9 +128,8 @@ FACTS = (
         "cluster",
         INPUT,
         WORKSTATION,
-        "Namespace, fleet, Kubernetes context or kubectl path",
-        "`NARWHAL_KUBERNETES_NAMESPACE`, the fleet's uid in `NARWHAL_KUBERNETES_FLEET_UID`, "
-        "`NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL`",
+        "Namespace or fleet, such as a fleet deleted and made again",
+        "The fleet's namespace and uid",
         (Rerun("access", onward=True),),
     ),
     Fact(
@@ -138,7 +137,8 @@ FACTS = (
         INPUT,
         WORKSTATION,
         "Engine node, model volume, image, checkpoint, launch policy or transport",
-        "The discovery fields of `.env`, the Kubernetes inputs of the engine pods and the images",
+        "The fleet's `images`, and its `engines` fields other than `apiKeySecret` and each node's "
+        "`rdma`",
         (Rerun("discover", onward=True),),
     ),
     Fact(
@@ -157,8 +157,8 @@ FACTS = (
         INPUT,
         WORKSTATION,
         "Engine API key Secret, or the key in it",
-        "The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key "
-        "under the fleet's salt from a key-check Job, never the key itself",
+        "`engines.apiKeySecret`, and an HMAC of the key under the fleet's salt from a key-check "
+        "Job, never the key itself",
         _reruns("engine-prepare", "router-start"),
     ),
     # The Secret holding the routers' control token, which the routers and the router-check
@@ -169,8 +169,8 @@ FACTS = (
         INPUT,
         WORKSTATION,
         "Router control token Secret, or the token in it",
-        "The Secret name and key in `NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET`, and an HMAC of "
-        "the token under the fleet's salt from a key-check Job, never the token itself",
+        "`controlTokenSecret`, and an HMAC of the token under the fleet's salt from a key-check "
+        "Job, never the token itself",
         _reruns("router-start"),
     ),
     *(
@@ -189,7 +189,7 @@ FACTS = (
         INPUT,
         WORKSTATION,
         "Router settings",
-        "The routers' storage, arguments and HAProxy settings, and the router URL",
+        "The fleet's `routers` and `haproxy`",
         _reruns("router-start"),
     ),
     # A prepared launch is a product: its pod's records, not a host directory, show it ran.

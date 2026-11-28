@@ -10,7 +10,7 @@ This page takes a fleet from hosts with nothing of Narwhal's on them to a servin
 | --- | --- | --- |
 | One SSH host | Two or more engines on one host, each with its own GPUs | One router on the same host, with no failover |
 | Several SSH hosts | Engines on two or more hosts | A primary and a standby router on two hosts, behind HAProxy, with a shared lease. Or one router, with no failover |
-| One Kubernetes node | Two or more engine pods on one node | A router pair, both on that node |
+| One Kubernetes node | Two or more engine pods on one node, which the controller cannot run yet, as [One node and several nodes](#one-node-and-several-nodes) explains | A router pair, both on that node |
 | Several Kubernetes nodes | Engine pods on two or more nodes | A router pair on two different nodes |
 
 The SSH layouts share every step below; the inputs file is where they differ. The Kubernetes layouts are at the [end of the page](#deploying-on-kubernetes).
@@ -232,35 +232,147 @@ After a host reboot, a new release, or to find a process's logs, see [After a ho
 
 ## Deploying on Kubernetes
 
-On Kubernetes, a `NarwhalFleet` custom resource holds the deployment inputs, and a controller in the cluster runs the same stages for it as gate Jobs, with the same rerun rules and evidence. The CRD chart ships now. The controller, and with it the steps after the cluster's preparation, are being finished. [Needs verification: task 26]
+On Kubernetes, a `NarwhalFleet` resource holds what `.env` holds on SSH hosts, and the fleet controller that the narwhal chart runs in the cluster takes it through the same stages, as gate Jobs, to a router pair behind HAProxy. You install two charts and create the Secrets the fleet names; the controller does the rest. [Deploying on Kubernetes](Kubernetes.md) covers each stage, the status, recovery and access.
 
 ### Preparing the cluster
 
 The cluster admin provides:
 
-- Kubernetes 1.30 or later, which the CRD chart requires, and `helm` and `kubectl` on the workstation.
-- A GPU device plugin and an RDMA device plugin on every engine node, which hand each engine pod its GPUs and one HCA under the resource names the inputs give.
-- A ReadWriteMany storage class for the state volume, and a volume that serves the staged checkpoint.
-- The engine image, and a Narwhal image built from the repository's `Dockerfile`, in a registry the nodes pull from, each pinned by digest. Narwhal publishes no image.
-- The model volume allow-lists in the Narwhal chart's values. `modelVolumeSources` allows only `persistentVolumeClaim` by default; a `hostPath`, `nfs` or `csi` volume also needs `modelHostPathPrefixes`, `modelNfsServers` or `modelCsiDrivers`, as the [CRD chart](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal-crds/README.md) describes.
+- Kubernetes 1.30 or later, and `helm` and `kubectl` on the workstation.
+- A GPU device plugin and an RDMA device plugin on every engine node, which hand each engine pod its GPUs and one HCA under the resource names the fleet gives.
+- A ReadWriteMany storage class for the state volume, a storage class for the routers' volumes, and a PersistentVolumeClaim in the namespace that serves the staged checkpoint.
+- A network plugin that enforces NetworkPolicy.
+- The engine image, a Narwhal image built from the repository's `Dockerfile`, an HAProxy image, an image with `ib_write_bw` for the fabric Jobs, and Prometheus and Grafana images, in a registry the nodes pull from, each pinned by digest. Narwhal publishes no image.
 
-Install the CRD chart first, then the Narwhal chart:
+The model volume can also be a `hostPath`, `nfs` or `csi` volume once the admin allows it in the narwhal chart's values, as the [CRD chart](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal-crds/README.md) describes.
 
-```bash
-helm install narwhal-crds deploy/helm/narwhal-crds
-helm install narwhal deploy/helm/narwhal --namespace <namespace> --values config/helm/<fleet>.yaml
+### Writing the values file
+
+The narwhal chart's values hold the controller's image, the state volume, the monitoring and, under `fleet`, the fleet itself. Keep the file in the ignored `config/helm/` directory, such as `config/helm/fleet.yaml`. For two engines on two nodes:
+
+```yaml
+images:
+  narwhal: <registry>/narwhal@sha256:<digest>
+
+state:
+  storageClassName: <ReadWriteMany storage class>
+  size: 200Gi
+
+monitoring:
+  enabled: true
+  prometheus:
+    image: <registry>/prometheus@sha256:<digest>
+  grafana:
+    image: <registry>/grafana@sha256:<digest>
+    admin:
+      secretName: grafana-admin
+      userKey: user
+      passwordKey: password
+
+fleet:
+  images:
+    narwhal: <registry>/narwhal@sha256:<digest>
+    haproxy: <registry>/haproxy@sha256:<digest>
+    fabric: <registry>/perftest@sha256:<digest>
+  engines:
+    image: <registry>/engine@sha256:<digest>
+    model:
+      name: <served model name>
+      treeSha256: <model_tree_sha256>
+    modelVolume:
+      persistentVolumeClaim:
+        claimName: models
+    resources:
+      gpu: <GPU resource name>
+      rdma: <RDMA resource name>
+    ports:
+      engine: 8001
+      attestation: 9001
+    nodes:
+      - node: <node-a>
+        fabricInterface: <interface>
+      - node: <node-b>
+        fabricInterface: <interface>
+    apiKeySecret:
+      name: engine-key-v1
+      key: key
+    launch:
+      - name: NARWHAL_TRANSFER_TRANSPORT
+        value: ucx_rdma
+      - name: NARWHAL_TRANSFER_NET_DEVICES
+        value: mlx5_0:1
+  slo:
+    ttftS: "<seconds>"
+    tpotS: "<seconds>"
+    routerOverheadS: "0.05"
+  firstTokenMarginS: "0.1"
+  profiling:
+    prefillLens: [256, 700, 1300, 2300, 4096, 4300, 8300, 12300]
+    decodeInputLens: [512, 4096, 8192]
+    warmupRequests: 2
+  calibration:
+    inputTokens: [256, 8192, 16382]
+    samples: 100
+    observationTimeoutS: "20"
+  fabric:
+    workload:
+      promptTokens: 1024
+      handoffsPerS: "1"
+      burst: 1
+      transferBudgetS: "1"
+      headroom: "1.25"
+    testPort: 5201
+  routers:
+    storageClassName: <storage class>
+    size: 1Gi
+  controlTokenSecret:
+    name: router-token-v1
+    key: token
 ```
 
-The second install reaches a serving fleet only with the controller. [Needs verification: task 26] Keep the values file in the ignored `config/helm/` directory.
+Use the same Narwhal image in `images.narwhal`, which the controller runs, and in `fleet.images.narwhal`, which the routers, gate Jobs and sidecars run. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
+
+### Installing and following the fleet
+
+Create the namespace and the Secrets the values name, render the dashboard, then install both charts:
+
+```bash
+kubectl create namespace narwhal
+kubectl label namespace narwhal pod-security.kubernetes.io/enforce=privileged
+kubectl create secret generic router-token-v1 --namespace narwhal \
+  --from-literal=token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+kubectl create secret generic engine-key-v1 --namespace narwhal \
+  --from-literal=key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+kubectl create secret generic grafana-admin --namespace narwhal --from-literal=user=admin \
+  --from-literal=password="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
+helm install narwhal-crds deploy/helm/narwhal-crds
+helm install narwhal deploy/helm/narwhal --namespace narwhal --values config/helm/fleet.yaml \
+  --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
+```
+
+The namespace label is needed only where the cluster enforces the Pod Security `baseline` level by default. After the second install, the controller runs every stage with no other command. [Needs verification: task 22, two `helm install`s reaching a serving fleet on the live cluster] Follow it:
+
+```bash
+kubectl get narwhalfleet --namespace narwhal --watch
+```
+
+`STAGE` names the stage that runs, and `READY` turns `True` and `SERVING` `true` once `router-start` passes. The first pass takes as long as hashing the checkpoint, starting the engines, measuring the fabric, profiling and calibrating, which can be hours. `kubectl describe narwhalfleet fleet --namespace narwhal` shows whether the fleet is `Stalled`, with the stage and its failure, and [Recovery](Kubernetes.md#recovery) says what clears a stall.
+
+Reach Grafana, Prometheus and the fleet from the workstation, each in its own terminal:
+
+```bash
+kubectl port-forward --namespace narwhal svc/grafana 13000:3000
+kubectl port-forward --namespace narwhal svc/prometheus 19090:9090
+kubectl port-forward --namespace narwhal svc/haproxy 18000:8000
+```
+
+Open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, sign in with the login in `grafana-admin`, and send completions to `http://127.0.0.1:18000/v1/completions`.
+
+To stop the fleet and keep its volumes, set `fleet.stopped: true` in the values and run `helm upgrade` with the flags of the install. Set it back to `false` to start the fleet again. `helm uninstall narwhal --namespace narwhal` deletes the fleet, and the garbage collector deletes the engines, the routers, HAProxy and the Jobs. The state claim, the router claims, the Leases, the admission policy and the CRD stay, as [Recovery](Kubernetes.md#recovery) lists.
 
 ### One node and several nodes
 
-On one node, both engine pods and both router pods run there. On several nodes, each engine pod runs on the node the inputs name, and the routers never share a node. The values file is the only difference. [Needs verification: task 26]
+On several nodes, each entry of `fleet.engines.nodes` names the node its engine runs on, and a topology spread constraint keeps the two router pods on different nodes whenever more than one node can take them, so losing one node leaves a router. The values file above is that layout.
 
-1. Write the values file with the fleet's inputs. [Needs verification: task 26]
-2. Install or upgrade the Narwhal chart with it, as above. [Needs verification: task 26]
-3. Follow each stage with `kubectl get narwhalfleet --namespace <namespace>`. [Needs verification: task 26]
-4. Reach Grafana and Prometheus with `kubectl port-forward`. [Needs verification: task 26]
-5. Stop the fleet by deleting its `NarwhalFleet`, or with `helm uninstall`. [Needs verification: task 26]
-
-[Deploying on Kubernetes](Kubernetes.md) covers what each stage does on a cluster today, through `narwhal deploy --target kubernetes`.
+On one node, the routers both run on that node, and both entries of `fleet.engines.nodes` name it. A fleet needs at least two engines, though, and the controller cannot yet run two on one node. Every engine of a fleet listens on the same `engines.ports`, and engine pods run on the node's host network, so the second engine cannot bind its ports. Each engine's discovery Job also asks for every GPU of its node, and the two Jobs start together, so the kubelet refuses the second. Give each engine a node of its own. [Needs verification: task 22, on a live one-node cluster]

@@ -99,7 +99,7 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
-Run `make chart-check` after a change to `deploy/helm/narwhal`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `src/narwhal/observability/stack` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the fleet controller, to the chart's controller, RBAC, admission policy or direct engines, to the router or HAProxy objects, or to the router lease. It needs Docker and about 6 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
+Run `make chart-check` after a change to either chart under `deploy/helm`, to `deployment/fleet_resource.py`, to `deploy/ha/haproxy.cfg`, to the monitoring files in `src/narwhal/observability/stack` or to the Kubernetes launch backend. Run `make chart-e2e` by hand after a change to the fleet controller, to the chart's controller, RBAC, admission policy or direct engines, to the router or HAProxy objects, or to the router lease. It needs Docker and about 6 GB of memory, so CI does not run it. The chart tests in `tests/deployment/test_helm_chart.py` also run in `make test` when helm is installed, and skip without it.
 
 `tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `src/narwhal/observability/stack/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
@@ -285,9 +285,17 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/kubernetes.py`                                     | Kubernetes engine pod manifests and the check of the pod's records         |
 | `deployment/launch_engine/pod.py`                                            | Engine pod steps, run with the engine image's Python                       |
-| `deployment/launch_engine/engine_set.py`                                     | The Helm chart's engine values, from every engine's Kubernetes launch plan |
+| `deployment/launch_engine/engine_set.py`                                     | The engine StatefulSet's values, from every engine's Kubernetes launch plan |
 | `deployment/direct_engine_set.py`                                            | The Helm chart's direct engine values, from a backend's direct start         |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
+| `deployment/fleet_resource.py`                                               | The `NarwhalFleet` API group, CRD schema and printer columns, and the variables a fleet's spec gives |
+| `deployment/kubernetes_graph.py`                                             | The Kubernetes stage graph                                               |
+| `deployment/kubernetes_target.py`                                            | The Kubernetes stages' actions, live checks, Job adoption and stop       |
+| `deployment/kubernetes_objects.py`                                           | The engine, gate Job, router and HAProxy objects the controller derives, and their pruning |
+| `deployment/kubernetes_gate.py`                                              | What a gate Job runs around its command, and the files its log returns   |
+| `deployment/kubernetes_controller.py`                                        | The fleet controller: its loop, Lease, status and stop                   |
+| `runtime/kubernetes_api.py`                                                  | The in-cluster Kubernetes API client, informer and workqueue             |
+| `runtime/kubernetes_lease.py`                                                | The router and controller election on a `coordination.k8s.io` Lease      |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
 | `deployment/attestation_contract/capture.py`                                 | One engine's attestation captures, in attempts, and the published one    |
@@ -457,4 +465,4 @@ The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each 
 
 ## Documentation publishing
 
-Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`, and those in `docs/cli/Dev.md` from `src/narwhal/deployment/dev_graph.py`: after changing a graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The unit suite fails while a page and its graph differ. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
+Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The stage tables in `docs/Deploy.md` come from `src/narwhal/deployment/deploy_graph.py`, those in `docs/deploy/Kubernetes.md` from `kubernetes_graph.py`, and those in `docs/cli/Dev.md` from `dev_graph.py`: after changing a graph, run `.venv/bin/python tools/maintenance/stage_graph_doc.py`. The field tables in `docs/deploy/NarwhalFleet.md` come from `SCHEMA` in `src/narwhal/deployment/fleet_resource.py`: after changing it, run `.venv/bin/python tools/maintenance/crd_schema.py` for the charts and `.venv/bin/python tools/maintenance/fleet_reference_doc.py` for the page. The unit suite fails while a page or chart differs from its source. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
