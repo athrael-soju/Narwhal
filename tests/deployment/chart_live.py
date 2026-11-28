@@ -76,7 +76,6 @@ CONTROLLER_RULES: frozenset[tuple[str, str, str, str]] = frozenset(
             ("coordination.k8s.io", "leases", verb, fleet_resource.CONTROLLER_LEASE)
             for verb in ("get", "update")
         ),
-        *(("events.k8s.io", "events", verb, "") for verb in ("create", "patch")),
     }
 )
 
@@ -108,6 +107,7 @@ FORBIDDEN: tuple[tuple[str, str, str, str], ...] = (
     ("", "serviceaccounts/token", "create", ""),
     ("", "serviceaccounts", "create", ""),
     ("", "persistentvolumeclaims", "delete", ""),
+    ("events.k8s.io", "events", "create", ""),
     ("rbac.authorization.k8s.io", "roles", "create", ""),
     ("rbac.authorization.k8s.io", "rolebindings", "create", ""),
     ("rbac.authorization.k8s.io", "roles", "bind", ""),

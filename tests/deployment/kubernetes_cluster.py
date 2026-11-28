@@ -176,7 +176,6 @@ PERSISTENT_VOLUME_CLAIM = Kind(
 )
 NODE = Kind("", "v1", "Node", "nodes", namespaced=False, status=True)
 NAMESPACE_KIND = Kind("", "v1", "Namespace", "namespaces", namespaced=False, status=True)
-EVENT = Kind("events.k8s.io", "v1", "Event", "events")
 STATEFUL_SET = Kind("apps", "v1", "StatefulSet", "statefulsets", status=True, generation=True)
 DEPLOYMENT = Kind("apps", "v1", "Deployment", "deployments", status=True, generation=True)
 # The API default for a Job delete orphans its pods.
@@ -200,7 +199,6 @@ KINDS = (
     PERSISTENT_VOLUME_CLAIM,
     NODE,
     NAMESPACE_KIND,
-    EVENT,
     STATEFUL_SET,
     DEPLOYMENT,
     JOB,

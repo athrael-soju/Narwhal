@@ -26,7 +26,6 @@ Its Role in the namespace grants:
 | `pods`; `pods/log` | get, list, watch, patch, delete; get |
 | `configmaps`, `services`, `statefulsets`, `deployments` | get, list, watch, create, patch, delete |
 | `leases` | create; get and update on `controller.narwhal.example.com` only |
-| `events.k8s.io` events | create, patch |
 
 The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` and `controlTokenSecret` references into the pods that need the key or the routers' control token, and never reads either Secret.
 

@@ -468,7 +468,6 @@ JOB = Kind("batch", "v1", "Job", "jobs")
 STATEFUL_SET = Kind("apps", "v1", "StatefulSet", "statefulsets")
 DEPLOYMENT = Kind("apps", "v1", "Deployment", "deployments")
 LEASE = Kind("coordination.k8s.io", "v1", "Lease", "leases")
-EVENT = Kind("events.k8s.io", "v1", "Event", "events")
 CUSTOM_RESOURCE_DEFINITION = Kind(
     "apiextensions.k8s.io", "v1", "CustomResourceDefinition", "customresourcedefinitions", False
 )

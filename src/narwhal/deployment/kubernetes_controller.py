@@ -144,7 +144,7 @@ from .run_record import (
     TIMEOUT,
     RunLocked,
 )
-from .runner import HelpersSurvived, StageFailed, Stop, check_directory
+from .runner import StageFailed, Stop, check_directory
 
 log = logging.getLogger("narwhal.kubernetes_controller")
 
@@ -200,7 +200,6 @@ INPUT_REFUSED = "InputRefused"
 ROUTER_STORAGE = "RouterStorageImmutable"
 STAGE_FAILED = "StageFailed"
 NAME_REFUSED = "NameRefused"
-HELPERS_SURVIVED = "HelpersSurvived"
 # Ready's reason while a failed `discover` holds the engines it stopped.
 ENGINES_STOPPED = "EnginesStopped"
 
@@ -1328,9 +1327,6 @@ class Controller:
             return _Outcome(retrying=str(exc))
         except RunLocked as exc:
             return _Outcome(retrying=str(exc))
-        except HelpersSurvived as exc:
-            log.warning("stalled: %s", exc)
-            return _Outcome(stalled=(HELPERS_SURVIVED, str(exc)))
         except InputError as exc:
             log.warning("stalled: the fleet's inputs are refused: %s", "; ".join(exc.problems))
             return _Outcome(stalled=(INPUT_REFUSED, "; ".join(exc.problems)))
