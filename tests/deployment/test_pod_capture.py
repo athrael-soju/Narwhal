@@ -16,6 +16,7 @@ from narwhal.deployment.attestation_contract.capture import CaptureFailed, publi
 from narwhal.deployment.attestation_contract.document import attested
 from narwhal.deployment.launch_engine import kubernetes, pod
 from narwhal.deployment.launch_engine.check import read_checked
+from narwhal.deployment.launch_engine.plan import API_KEY_ENV
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.pod_identity import PodIdentity
 from tests.backends.contract import CONTAINER_STARTED_S, LiveContainer, fixtures, prepared
@@ -27,6 +28,7 @@ from tests.deployment.pod_fixtures import (
     NODE,
     POD_IP,
     POD_UID,
+    SECRET_VALUE,
     EnginePod,
 )
 
@@ -119,7 +121,12 @@ class PodCaptureTests(unittest.TestCase):
         stack.enter_context(
             patch.dict(
                 os.environ,
-                {"NARWHAL_POD_NAME": "engine-1", pod.POD_UID_ENV: POD_UID},
+                # The sidecar holds the engine API key from its Secret, as its pod spec gives it.
+                {
+                    "NARWHAL_POD_NAME": "engine-1",
+                    pod.POD_UID_ENV: POD_UID,
+                    API_KEY_ENV: SECRET_VALUE,
+                },
             )
         )
         stack.enter_context(self.live.serving())

@@ -1,0 +1,335 @@
+{{- /*
+The namespace's admission policy, so write access to the fleet, or to pods in the namespace,
+cannot run a privileged pod beyond the engine and fabric pods the controller derives. It checks
+every pod, and the pod template of every Job, StatefulSet, Deployment and ReplicaSet, created
+or changed in the release's namespace. It holds the rules of the Pod Security baseline level,
+which the namespace cannot enforce itself because the engine pods need the host network and
+IPC_LOCK:
+
+- Only the controller's engine StatefulSet and its fabric and transfer-measure gate Jobs, and
+  the pods the StatefulSet and Job controllers make for them, use the host network or add
+  IPC_LOCK. The policy trusts a label only on an object whose requester it trusts: the
+  controller's ServiceAccount for a workload, and the Kubernetes controller that owns a pod.
+  The init container named checkpoint in those engine pods may add CHOWN and FOWNER, to hand
+  the pod's evidence directory to the attestation sidecar's user. No container adds another
+  capability.
+- Only the controller's workloads carry the engine, router, gate and HAProxy labels; the
+  routers' NetworkPolicy admits the last three.
+- No pod is privileged, shares the host's process or IPC namespace, binds a host port, or sets
+  an unsafe SELinux type, an unconfined AppArmor profile, an unmasked /proc, an unsafe sysctl, a
+  Windows host process or a RuntimeClass outside runtimeClassNames. Every pod but an engine pod
+  runs the RuntimeDefault or a Localhost seccomp profile; an engine pod may run unconfined, as
+  the ROCm launch does.
+- Every image is named by registry digest.
+- The model volume follows the cluster admin's allow-lists, as the controller's
+  check_model_volume does, and is mounted read-only. Every other volume is a ConfigMap, Secret,
+  emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a
+  host path.
+
+A pod's spec cannot change after it is created, apart from its images and ephemeral
+containers, so an update to a pod is checked for those. `helm uninstall` keeps the policy, so
+it outlives the controller and the workloads the fleet leaves behind.
+*/ -}}
+{{- $name := printf "%s-narwhal" .Release.Namespace }}
+{{- $model := include "narwhal.fleet.modelVolume" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "narwhal.controller" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "admission") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [statefulsets, deployments, replicasets]
+  variables:
+    - name: pod
+      expression: "object.kind == 'Pod' ? object : object.spec.template"
+    - name: spec
+      expression: variables.pod.spec
+    - name: podUpdate
+      expression: "object.kind == 'Pod' && request.operation == 'UPDATE'"
+    - name: labels
+      expression: |-
+        has(variables.pod.metadata) && has(variables.pod.metadata.labels)
+          ? variables.pod.metadata.labels : {}
+    - name: component
+      expression: |-
+        'app.kubernetes.io/name' in variables.labels
+          && variables.labels['app.kubernetes.io/name'] == 'narwhal'
+          && 'app.kubernetes.io/component' in variables.labels
+          ? variables.labels['app.kubernetes.io/component'] : ''
+    - name: oldLabels
+      expression: |-
+        request.operation != 'UPDATE' ? {}
+          : object.kind == 'Pod'
+            ? (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})
+            : (has(oldObject.spec.template.metadata)
+                && has(oldObject.spec.template.metadata.labels)
+                ? oldObject.spec.template.metadata.labels : {})
+    - name: oldComponent
+      expression: |-
+        'app.kubernetes.io/name' in variables.oldLabels
+          && variables.oldLabels['app.kubernetes.io/name'] == 'narwhal'
+          && 'app.kubernetes.io/component' in variables.oldLabels
+          ? variables.oldLabels['app.kubernetes.io/component'] : ''
+    # The kind of the object's controlling owner.
+    - name: owner
+      expression: |-
+        has(object.metadata.ownerReferences)
+          && object.metadata.ownerReferences.exists(r, has(r.controller) && r.controller)
+          ? object.metadata.ownerReferences.filter(r, has(r.controller) && r.controller)[0].kind
+          : ''
+    - name: requester
+      expression: request.userInfo.username
+    # The Kubernetes controller that makes an object of each owner kind, by its ServiceAccount
+    # or, where the controller manager runs without one per controller, as itself.
+    - name: makers
+      expression: |-
+        {'StatefulSet': 'statefulset-controller', 'Job': 'job-controller',
+         'ReplicaSet': 'replicaset-controller', 'Deployment': 'deployment-controller'}
+    - name: madeByOwner
+      expression: |-
+        variables.owner in variables.makers
+          && (variables.requester == 'system:serviceaccount:kube-system:' + variables.makers[variables.owner]
+              || variables.requester == 'system:kube-controller-manager')
+    # The kind of workload a trusted requester makes the object for, or '' when the policy
+    # trusts no label on it: a workload the fleet controller applies, or whose pod template an
+    # update leaves as it was; a ReplicaSet the Deployment controller makes; and a pod the
+    # controller of its owner makes.
+    - name: trusted
+      expression: |-
+        object.kind == 'Pod'
+          ? (variables.madeByOwner ? variables.owner : '')
+          : variables.requester == '{{ $controller }}'
+              || (request.operation == 'UPDATE' && object.spec.template == oldObject.spec.template)
+              || (object.kind == 'ReplicaSet' && variables.madeByOwner && variables.owner == 'Deployment')
+            ? object.kind : ''
+    # The workload kinds each controller-owned component comes from.
+    - name: kinds
+      expression: |-
+        {'engine': ['StatefulSet'], 'router': ['StatefulSet'], 'gate': ['Job'],
+         'haproxy': ['Deployment', 'ReplicaSet']}
+    - name: controlled
+      expression: |-
+        variables.component in variables.kinds
+          && variables.trusted in variables.kinds[variables.component]
+    - name: engine
+      expression: variables.component == 'engine' && variables.controlled
+    - name: hostNetworkGate
+      expression: |-
+        variables.component == 'gate' && variables.controlled
+          && '{{ include "narwhal.fleet.gateLabel" . }}' in variables.labels
+          && variables.labels['{{ include "narwhal.fleet.gateLabel" . }}'] in {{ include "narwhal.fleet.hostNetworkGates" . }}
+    - name: hostNetworkAllowed
+      expression: variables.engine || variables.hostNetworkGate
+    # The engine pod's checkpoint step, which hands the pod's evidence directory to the
+    # attestation sidecar's user. Container names are unique across a pod's init, regular and
+    # ephemeral containers, so the container of that name is the init container.
+    - name: checkpoint
+      expression: |-
+        variables.engine && has(variables.spec.initContainers)
+          && variables.spec.initContainers.exists(c, c.name == 'checkpoint')
+    # The containers a request can change: every container of a new object, and the
+    # ephemeral containers of an existing pod.
+    - name: allContainers
+      expression: |-
+        variables.spec.containers
+          + (has(variables.spec.initContainers) ? variables.spec.initContainers : [])
+          + (has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])
+    - name: containers
+      expression: |-
+        variables.podUpdate
+          ? (has(variables.spec.ephemeralContainers) ? variables.spec.ephemeralContainers : [])
+          : variables.allContainers
+    - name: podContext
+      expression: |-
+        !variables.podUpdate && has(variables.spec.securityContext)
+          ? [variables.spec.securityContext] : []
+    - name: contexts
+      expression: |-
+        variables.podContext + variables.containers.filter(c, has(c.securityContext))
+          .map(c, c.securityContext)
+    - name: podSeccomp
+      expression: |-
+        has(variables.spec.securityContext) && has(variables.spec.securityContext.seccompProfile)
+          ? variables.spec.securityContext.seccompProfile.type : ''
+    - name: volumes
+      expression: |-
+        !variables.podUpdate && has(variables.spec.volumes) ? variables.spec.volumes : []
+    # The cluster admin's allow-lists, from the chart's values.
+    - name: sources
+      expression: {{ .Values.modelVolumeSources | toJson | toJson }}
+    - name: hostPathPrefixes
+      expression: {{ .Values.modelHostPathPrefixes | toJson | toJson }}
+    - name: nfsServers
+      expression: {{ .Values.modelNfsServers | toJson | toJson }}
+    - name: csiDrivers
+      expression: {{ .Values.modelCsiDrivers | toJson | toJson }}
+    - name: runtimeClasses
+      expression: {{ .Values.runtimeClassNames | toJson | toJson }}
+  validations:
+    - expression: |-
+        variables.podUpdate || !has(variables.spec.hostNetwork) || !variables.spec.hostNetwork
+          || variables.hostNetworkAllowed
+      message: only the controller's engine pods and fabric and transfer-measure gate Jobs use the host network
+      reason: Forbidden
+    - expression: |-
+        !(variables.component in variables.kinds) || variables.controlled
+          || (variables.podUpdate && variables.oldComponent == variables.component)
+      messageExpression: |-
+        'only the fleet controller\'s workloads carry app.kubernetes.io/component='
+          + variables.component
+      reason: Forbidden
+    - expression: |-
+        variables.podUpdate || (!(has(variables.spec.hostPID) && variables.spec.hostPID)
+          && !(has(variables.spec.hostIPC) && variables.spec.hostIPC))
+      message: no pod shares the host's process or IPC namespace
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.securityContext)
+          || !has(c.securityContext.privileged) || !c.securityContext.privileged)
+      message: no container is privileged
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.securityContext)
+          || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add)
+          || c.securityContext.capabilities.add.all(a,
+               (a == 'IPC_LOCK' && variables.hostNetworkAllowed)
+               || (a in ['CHOWN', 'FOWNER'] && c.name == 'checkpoint' && variables.checkpoint)))
+      message: only the controller's engine pods and fabric and transfer-measure gate Jobs add a capability, and only IPC_LOCK, apart from CHOWN and FOWNER for an engine pod's checkpoint step
+      reason: Forbidden
+    - expression: |-
+        variables.engine || variables.containers.all(c,
+          has(c.securityContext) && has(c.securityContext.seccompProfile)
+            ? c.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost']
+            : variables.podSeccomp in ['RuntimeDefault', 'Localhost'])
+      message: every container but an engine's runs the RuntimeDefault or a Localhost seccomp profile
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.ports) || c.ports.all(p,
+          !has(p.hostPort) || p.hostPort == 0
+          || (has(variables.spec.hostNetwork) && variables.spec.hostNetwork
+              && p.hostPort == p.containerPort)))
+      message: no pod binds a host port; on the host network, a port is only the container's own
+      reason: Forbidden
+    - expression: |-
+        variables.contexts.all(s, !has(s.seLinuxOptions) || (
+          (!has(s.seLinuxOptions.type) || s.seLinuxOptions.type in
+            ['', 'container_t', 'container_init_t', 'container_kvm_t', 'container_engine_t'])
+          && !has(s.seLinuxOptions.user) && !has(s.seLinuxOptions.role)))
+      message: no pod sets an SELinux user, a role or a type outside the container types
+      reason: Forbidden
+    - expression: |-
+        variables.contexts.all(s, !has(s.appArmorProfile) || s.appArmorProfile.type != 'Unconfined')
+          && !(has(variables.pod.metadata) && has(variables.pod.metadata.annotations)
+            && variables.pod.metadata.annotations.exists(k,
+                 k.startsWith('container.apparmor.security.beta.kubernetes.io/')
+                 && variables.pod.metadata.annotations[k] == 'unconfined'))
+      message: no pod runs without an AppArmor profile
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount)
+          || c.securityContext.procMount == 'Default')
+      message: no container unmasks /proc
+      reason: Forbidden
+    - expression: |-
+        variables.contexts.all(s, !has(s.windowsOptions) || !has(s.windowsOptions.hostProcess)
+          || !s.windowsOptions.hostProcess)
+      message: no pod runs a Windows host process
+      reason: Forbidden
+    - expression: |-
+        variables.podUpdate || !has(variables.spec.securityContext)
+          || !has(variables.spec.securityContext.sysctls)
+          || variables.spec.securityContext.sysctls.all(s, s.name in [
+               'kernel.shm_rmid_forced', 'net.ipv4.ip_local_port_range',
+               'net.ipv4.ip_unprivileged_port_start', 'net.ipv4.tcp_syncookies',
+               'net.ipv4.ping_group_range', 'net.ipv4.ip_local_reserved_ports',
+               'net.ipv4.tcp_keepalive_time', 'net.ipv4.tcp_fin_timeout',
+               'net.ipv4.tcp_keepalive_intvl', 'net.ipv4.tcp_keepalive_probes'])
+      message: a pod sets only the sysctls the Pod Security baseline level allows
+      reason: Forbidden
+    - expression: |-
+        variables.podUpdate || !has(variables.spec.runtimeClassName)
+          || variables.spec.runtimeClassName in variables.runtimeClasses
+      message: a pod's RuntimeClass is one the cluster admin lists in runtimeClassNames
+      reason: Forbidden
+    - expression: |-
+        variables.allContainers.all(c, has(c.image)
+          && c.image.matches(r'{{ include "narwhal.fleet.digest" . }}'))
+      message: every image is named by registry digest, <repository>@sha256:<hex>
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name == '{{ $model }}'
+          || has(v.configMap) || has(v.secret) || has(v.emptyDir) || has(v.projected)
+          || has(v.downwardAPI) || has(v.persistentVolumeClaim))
+      messageExpression: |-
+        'volume ' + variables.volumes.filter(v, !(v.name == '{{ $model }}'
+          || has(v.configMap) || has(v.secret) || has(v.emptyDir) || has(v.projected)
+          || has(v.downwardAPI) || has(v.persistentVolumeClaim)))[0].name
+          + ' is of a type only the model volume may use, or of none the namespace allows'
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}'
+          || (has(v.persistentVolumeClaim) && 'persistentVolumeClaim' in variables.sources)
+          || (has(v.hostPath) && 'hostPath' in variables.sources)
+          || (has(v.nfs) && 'nfs' in variables.sources)
+          || (has(v.csi) && 'csi' in variables.sources))
+      message: the model volume uses a source the cluster admin does not list in modelVolumeSources
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.hostPath) || (
+          has(v.hostPath.type) && v.hostPath.type == 'Directory'
+          && v.hostPath.path.matches(r'{{ include "narwhal.fleet.normalisedPath" . }}')
+          && !v.hostPath.path.matches(r'{{ include "narwhal.fleet.dotSegment" . }}')
+          && !v.hostPath.path.matches(r'{{ include "narwhal.fleet.hostPathRefused" . }}')
+          && variables.hostPathPrefixes.exists(p,
+               v.hostPath.path == p || v.hostPath.path.startsWith(p + '/'))))
+      message: a hostPath model volume is a normalised directory at or below one of modelHostPathPrefixes, outside every system, kubelet and container runtime directory
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.nfs)
+          || v.nfs.server in variables.nfsServers)
+      message: an nfs model volume names a server in modelNfsServers
+      reason: Forbidden
+    - expression: |-
+        variables.volumes.all(v, v.name != '{{ $model }}' || !has(v.csi)
+          || v.csi.driver in variables.csiDrivers)
+      message: a csi model volume uses a driver in modelCsiDrivers
+      reason: Forbidden
+    - expression: |-
+        variables.containers.all(c, !has(c.volumeMounts)
+          || c.volumeMounts.all(m, m.name != '{{ $model }}' || (has(m.readOnly) && m.readOnly)))
+      message: every container mounts the model volume read-only
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "narwhal.labels" (dict "root" . "component" "admission") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}

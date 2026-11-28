@@ -3,18 +3,23 @@ labels from the allow-list only, deterministic Job names and pruning.
 
 `golden/kubernetes_objects.json` holds `helm template` output of the chart's engine, gate and
 HAProxy templates before the builders replaced them, with the values it was rendered from.
+`golden/kubernetes_routers.json` holds the same of the chart's router templates.
 """
 
 import base64
 import copy
 import hashlib
 import json
+import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from narwhal.deployment import fleet_resource
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.kubernetes_objects import (
     ApiKey,
@@ -22,15 +27,21 @@ from narwhal.deployment.kubernetes_objects import (
     Fleet,
     GateJob,
     Owner,
+    Routers,
 )
+from narwhal.deployment.kubernetes_target import ROUTER_HOME, ROUTERS
 from narwhal.deployment.launch_engine import engine_set
 from tests.deployment import chart_fixtures
+from tests.deployment.pod_fixtures import POD_IP, SECRET_VALUE, expand
 from tests.deployment.test_helm_chart import Comparison
 
 ROOT = Path(__file__).resolve().parents[2]
 GROUP = objects.GROUP
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "kubernetes_objects.json").read_text())
 INPUTS = GOLDEN["inputs"]
+ROUTER_GOLDEN = json.loads(
+    (Path(__file__).parent / "golden" / "kubernetes_routers.json").read_text()
+)
 OWNER = Owner("fleet", "0b6f4c1e-5d1a-4c55-9f7e-3a1f0f5e9a11", chart_fixtures.NAMESPACE)
 OTHER = Owner("fleet", "6a3c2b9d-1e8f-4f70-8b2a-5c4d3e2f1a00", chart_fixtures.NAMESPACE)
 CHART_PLACEMENT = "narwhal.io/placement"
@@ -94,7 +105,43 @@ def everything(target: Fleet | None = None) -> list[dict]:
         for item in INPUTS["gates"]
         if item.get("inputs")
     ]
-    return documents + objects.haproxy(target)
+    return documents + objects.haproxy(target) + objects.routers(target, router_settings())
+
+
+def router_settings(**overrides: Any) -> Routers:
+    """The router settings the router golden's values describe."""
+    values = ROUTER_GOLDEN["inputs"]["routers"]
+    settings: dict[str, Any] = {
+        "fleet_file": values["fleet"],
+        "storage_class": values["storageClassName"],
+        "size": values["size"],
+        "args": tuple(values["args"]),
+    }
+    settings.update(overrides)
+    return Routers(**settings)
+
+
+def router_fleet(**overrides: Any) -> Fleet:
+    """The fleet the router golden's values describe."""
+    inputs = ROUTER_GOLDEN["inputs"]
+    key = inputs["credentials"]["engineApiKey"]
+    settings: dict[str, Any] = {
+        "narwhal_image": inputs["images"]["narwhal"],
+        "state_claim": inputs["stateClaim"],
+        "api_key": ApiKey(key["env"], key["secretName"], key["key"]),
+        "cluster_domain": inputs["haproxy"]["clusterDomain"],
+    }
+    settings.update(overrides)
+    return fleet(**settings)
+
+
+def router_set(target: Fleet | None = None, settings: Routers | None = None) -> dict:
+    [found] = [
+        d
+        for d in objects.routers(target or router_fleet(), settings or router_settings())
+        if d["kind"] == "StatefulSet"
+    ]
+    return found
 
 
 def metadata_blocks(document: Any) -> list[dict]:
@@ -138,6 +185,15 @@ def template(document: dict) -> dict:
     return document["spec"]["template"]["spec"]
 
 
+# The gate Jobs whose engine API key the builders give differently from the chart.
+MOVED_KEY = ("prepare-engine-1", "verify-engine-1")
+KEY_VARIABLE = "NARWHAL_ENGINE_API_KEY"
+
+
+def env_names(document: dict) -> list[str]:
+    return [e["name"] for e in template(document)["containers"][0].get("env") or []]
+
+
 class GoldenTests(unittest.TestCase):
     """The builders render the pod specs the chart's templates rendered."""
 
@@ -151,7 +207,19 @@ class GoldenTests(unittest.TestCase):
         self.assertEqual(sorted(built), sorted(rendered))
         for key, document in rendered.items():
             with self.subTest(kind=key[0], name=key[1]):
-                self.assertEqual(spec_only(built[key]), spec_only(document))
+                ours, chart = spec_only(built[key]), spec_only(document)
+                if key[1] in MOVED_KEY:
+                    # The chart gave the key to prepare, whose launch checks read it; the
+                    # builders give it to sidecar-verify, which calls the engine, instead.
+                    has, lacks = (ours, chart) if key[1] == "verify-engine-1" else (chart, ours)
+                    self.assertIn(KEY_VARIABLE, env_names(has))
+                    self.assertNotIn(KEY_VARIABLE, env_names(lacks))
+                    for side in (ours, chart):
+                        container = template(side)["containers"][0]
+                        container["env"] = [
+                            e for e in container["env"] if e["name"] != KEY_VARIABLE
+                        ]
+                self.assertEqual(ours, chart)
 
     def test_a_placed_engine_set_matches_the_chart(self):
         [statefulset] = [
@@ -220,6 +288,62 @@ class GoldenTests(unittest.TestCase):
             annotations, {f"{GROUP}/config-sha256": hashlib.sha256(text.encode()).hexdigest()}
         )
 
+    def test_haproxy_forwards_only_the_serving_routes(self):
+        text = objects.haproxy(fleet())[0]["data"]["haproxy.cfg"]
+        frontend = text.split("frontend narwhal\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(frontend[0], "    bind :8000")
+        # The deny rule comes before anything sends a request on.
+        deny = next(n for n, line in enumerate(frontend) if "http-request deny" in line)
+        backend = next(n for n, line in enumerate(frontend) if "default_backend" in line)
+        self.assertLess(deny, backend)
+        acls: dict[str, list[str]] = {}
+        for line in frontend:
+            words = line.split()
+            if words[:1] == ["acl"]:
+                acls[words[1]] = words[2:]
+        condition = frontend[deny].split(" unless ", 1)[1]
+        self.assertEqual(
+            frontend[deny].split(" unless ")[0].split(),
+            ["http-request", "deny", "deny_status", "404"],
+        )
+
+        def forwarded(method: str, path: str) -> bool:
+            def holds(name: str) -> bool:
+                kind, *values = acls[name]
+                return (method if kind == "method" else path) in values
+
+            return any(
+                all(holds(name) for name in alternative.split())
+                for alternative in condition.split(" || ")
+            )
+
+        routes = {
+            ("GET", "/narwhal/state"),
+            ("GET", "/narwhal/handoff"),
+            ("GET", "/narwhal/lifecycle"),
+            ("POST", "/narwhal/lifecycle/drain"),
+            ("POST", "/narwhal/lifecycle/readmit"),
+            ("GET", "/narwhal/engines"),
+            ("POST", "/narwhal/engines"),
+            ("DELETE", "/narwhal/engines/n1"),
+            ("GET", "/metrics"),
+            ("GET", "/openapi.json"),
+            ("GET", "/docs"),
+            ("GET", "/v1/completions"),
+            ("POST", "/v1/models"),
+            ("POST", "/narwhal/targets"),
+            ("GET", "//health"),
+            *objects.SERVING_ROUTES,
+        }
+        self.assertEqual(
+            {route for route in routes if forwarded(*route)}, set(objects.SERVING_ROUTES)
+        )
+        self.assertIn(("GET", "/narwhal/targets"), objects.SERVING_ROUTES)
+        self.assertEqual(
+            {path for _, path in objects.SERVING_ROUTES if path.startswith("/narwhal/")},
+            {"/narwhal/targets"},
+        )
+
 
 class EngineTests(unittest.TestCase):
     @classmethod
@@ -240,6 +364,20 @@ class EngineTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.folder.cleanup()
+
+    def test_the_launchs_engine_pods_pass_the_charts_admission_policy(self):
+        engines = by_name(self.documents)[("StatefulSet", "engine")]
+        self.assertEqual(policy_refusals(engines), [])
+        spec = template(engines)
+        [checkpoint] = [c for c in spec["initContainers"] if c["name"] == "checkpoint"]
+        self.assertEqual(checkpoint["securityContext"]["capabilities"]["add"], ["CHOWN", "FOWNER"])
+        # CHOWN and FOWNER are the checkpoint step's alone.
+        broken = copy.deepcopy(engines)
+        for container in template(broken)["containers"]:
+            container.setdefault("securityContext", {}).setdefault("capabilities", {})["add"] = [
+                "CHOWN"
+            ]
+        self.assertEqual(policy_refusals(broken), ["capabilities"])
 
     def test_the_engine_statefulset_runs_each_plans_pod(self):
         found = by_name(self.documents)
@@ -379,6 +517,32 @@ class GateTests(unittest.TestCase):
         self.assertEqual(own["model"]["hostPath"], {"path": "/models", "type": "Directory"})
         self.assertEqual(jobs["discover-node-b"]["runtimeClassName"], "nvidia")
 
+    def test_only_fabric_and_transfer_jobs_run_on_the_host_network(self):
+        # The chart's admission policy allows the host network on these gate kinds alone.
+        for kind in objects.GATE_KINDS:
+            with self.subTest(kind):
+                settings = {"kind": kind, "node": "node-a", "host_network": True}
+                if kind in objects.HOST_NETWORK_KINDS:
+                    job = objects.job(fleet(), gate(entry("preflight"), **settings))
+                    self.assertTrue(template(job)["hostNetwork"])
+                else:
+                    with self.assertRaisesRegex(ValueError, "run on the host network"):
+                        gate(entry("preflight"), **settings)
+        on_host = {
+            item["kind"]
+            for item in INPUTS["gates"]
+            if template(objects.job(fleet(), gate(item))).get("hostNetwork")
+        }
+        self.assertLessEqual(on_host, set(objects.HOST_NETWORK_KINDS))
+
+    def test_gate_and_haproxy_pods_run_the_runtime_default_seccomp_profile(self):
+        # The chart's admission policy refuses a pod outside the engines without one.
+        pods = [*self.jobs().values(), template(objects.haproxy(fleet())[1])]
+        for spec in pods:
+            self.assertEqual(
+                spec["securityContext"], {"seccompProfile": {"type": "RuntimeDefault"}}
+            )
+
     def test_only_a_sidecar_verify_job_gets_a_token(self):
         for name, spec in self.jobs().items():
             with self.subTest(name):
@@ -399,7 +563,7 @@ class GateTests(unittest.TestCase):
         def env(job: str) -> dict:
             return {e["name"]: e for e in jobs[job]["containers"][0]["env"]}
 
-        for job in ("preflight", "prepare-engine-1", "measure-node-a"):
+        for job in ("preflight", "verify-engine-1", "measure-node-a"):
             self.assertEqual(
                 env(job)["NARWHAL_ENGINE_API_KEY"]["valueFrom"]["secretKeyRef"],
                 {"name": "engine-credential", "key": "api-key"},
@@ -408,7 +572,7 @@ class GateTests(unittest.TestCase):
             "discover-node-a",
             "fabric-node-a-node-b-server",
             "probe-node-a",
-            "verify-engine-1",
+            "prepare-engine-1",
             "state-1",
         ):
             self.assertNotIn("NARWHAL_ENGINE_API_KEY", env(job))
@@ -660,6 +824,702 @@ def named(
         owner=owner,
         **meta,
     )
+
+
+def without_release(document: dict) -> dict:
+    """An object without what differs by design, as `spec_only`, and without the release in
+    the routers' spread constraint.
+
+    The chart at ad38650c ran the routers with no security context and no volume check; the
+    builder adds both on purpose. This drops the security contexts, the scratch volume and the
+    start script, which `test_each_router_runs_unprivileged_on_a_read_only_root` and
+    `test_the_router_pair_matches_the_chart` check instead.
+    """
+    document = spec_only(document)
+    pod = document["spec"].get("template", {}).get("spec", {})
+    for constraint in pod.get("topologySpreadConstraints", []):
+        constraint["labelSelector"]["matchLabels"].pop("app.kubernetes.io/instance", None)
+    if pod:
+        pod.pop("securityContext", None)
+        pod["volumes"] = [v for v in pod["volumes"] if v["name"] != objects.TMP_VOLUME]
+        for container in pod["containers"]:
+            container.pop("securityContext", None)
+            container["command"][3] = "<router start>"
+            container["volumeMounts"] = [
+                m for m in container["volumeMounts"] if m["name"] != objects.TMP_VOLUME
+            ]
+    return document
+
+
+# The chart's admission policy, mirrored in Python for workloads a requester creates: the CEL
+# cannot run here. Each entry is one of the policy's validations, in its order.
+POLICY = ROOT / "deploy" / "helm" / "narwhal" / "templates" / "admission-policy.yaml"
+CONTROLLER_USER = f"system:serviceaccount:{chart_fixtures.NAMESPACE}:fleet-controller"
+POLICY_KINDS = {
+    "engine": ["StatefulSet"],
+    "router": ["StatefulSet"],
+    "gate": ["Job"],
+    "haproxy": ["Deployment", "ReplicaSet"],
+}
+SYSCTLS = {
+    "kernel.shm_rmid_forced",
+    "net.ipv4.ip_local_port_range",
+    "net.ipv4.ip_unprivileged_port_start",
+    "net.ipv4.tcp_syncookies",
+    "net.ipv4.ping_group_range",
+    "net.ipv4.ip_local_reserved_ports",
+    "net.ipv4.tcp_keepalive_time",
+    "net.ipv4.tcp_fin_timeout",
+    "net.ipv4.tcp_keepalive_intvl",
+    "net.ipv4.tcp_keepalive_probes",
+}
+SELINUX_TYPES = {"", "container_t", "container_init_t", "container_kvm_t", "container_engine_t"}
+VOLUME_TYPES = (
+    "configMap",
+    "secret",
+    "emptyDir",
+    "projected",
+    "downwardAPI",
+    "persistentVolumeClaim",
+)
+
+
+def policy_refusals(
+    document: dict,
+    requester: str = CONTROLLER_USER,
+    *,
+    volumes: fleet_resource.VolumePolicy | None = None,
+    runtime_classes: tuple[str, ...] = (),
+) -> list[str]:
+    """The validations of the admission policy that refuse a workload `requester` creates,
+    under the model volume allow-lists `volumes` and the RuntimeClasses `runtime_classes`."""
+    allowed = volumes or fleet_resource.VolumePolicy()
+    pod = document["spec"]["template"]
+    spec = pod["spec"]
+    labels = (pod.get("metadata") or {}).get("labels") or {}
+    component = (
+        labels.get("app.kubernetes.io/component", "")
+        if labels.get("app.kubernetes.io/name") == "narwhal"
+        else ""
+    )
+    trusted = document["kind"] if requester == CONTROLLER_USER else ""
+    controlled = component in POLICY_KINDS and trusted in POLICY_KINDS[component]
+    engine = component == "engine" and controlled
+    host_network_gate = (
+        component == "gate"
+        and controlled
+        and labels.get(fleet_resource.GATE_LABEL) in objects.HOST_NETWORK_KINDS
+    )
+    host_network_allowed = engine or host_network_gate
+    containers = [
+        *spec["containers"],
+        *spec.get("initContainers", []),
+        *spec.get("ephemeralContainers", []),
+    ]
+    checkpoint = engine and any(c["name"] == "checkpoint" for c in spec.get("initContainers", []))
+    pod_context = spec.get("securityContext") or {}
+    contexts = [pod_context] if "securityContext" in spec else []
+    contexts += [c["securityContext"] for c in containers if "securityContext" in c]
+    pod_seccomp = (pod_context.get("seccompProfile") or {}).get("type", "")
+    volumes = spec.get("volumes", [])
+    model = objects.MODEL_VOLUME
+
+    def context(c: dict) -> dict:
+        return c.get("securityContext") or {}
+
+    def seccomp(c: dict) -> str:
+        found = context(c).get("seccompProfile")
+        return found["type"] if found else pod_seccomp
+
+    def adds(c: dict) -> list[str]:
+        return (context(c).get("capabilities") or {}).get("add") or []
+
+    annotations = (pod.get("metadata") or {}).get("annotations") or {}
+    rules = {
+        "host network": not spec.get("hostNetwork") or host_network_allowed,
+        "reserved label": component not in POLICY_KINDS or controlled,
+        "host namespaces": not spec.get("hostPID") and not spec.get("hostIPC"),
+        "privileged": not any(context(c).get("privileged") for c in containers),
+        "capabilities": all(
+            (a == "IPC_LOCK" and host_network_allowed)
+            or (a in ("CHOWN", "FOWNER") and c["name"] == "checkpoint" and checkpoint)
+            for c in containers
+            for a in adds(c)
+        ),
+        "seccomp": engine or all(seccomp(c) in ("RuntimeDefault", "Localhost") for c in containers),
+        "host ports": all(
+            not port.get("hostPort")
+            or (spec.get("hostNetwork") and port["hostPort"] == port["containerPort"])
+            for c in containers
+            for port in c.get("ports", [])
+        ),
+        "SELinux": all(
+            "seLinuxOptions" not in s
+            or (
+                s["seLinuxOptions"].get("type", "") in SELINUX_TYPES
+                and "user" not in s["seLinuxOptions"]
+                and "role" not in s["seLinuxOptions"]
+            )
+            for s in contexts
+        ),
+        "AppArmor": all(
+            (s.get("appArmorProfile") or {}).get("type") != "Unconfined" for s in contexts
+        )
+        and not any(
+            key.startswith("container.apparmor.security.beta.kubernetes.io/")
+            and value == "unconfined"
+            for key, value in annotations.items()
+        ),
+        "procMount": all(context(c).get("procMount", "Default") == "Default" for c in containers),
+        "Windows host process": not any(
+            (s.get("windowsOptions") or {}).get("hostProcess") for s in contexts
+        ),
+        "sysctls": all(item["name"] in SYSCTLS for item in pod_context.get("sysctls", [])),
+        "RuntimeClass": "runtimeClassName" not in spec
+        or spec["runtimeClassName"] in runtime_classes,
+        "image digest": all(
+            "image" in c and re.search(fleet_resource._DIGEST, c["image"]) for c in containers
+        ),
+        "volume types": all(
+            v["name"] == model or any(kind in v for kind in VOLUME_TYPES) for v in volumes
+        ),
+        "model volume source": all(
+            v["name"] != model or any(kind in v for kind in allowed.sources) for v in volumes
+        ),
+        # The hostPath, nfs and csi allow-lists apply only to a model volume of those sources,
+        # as the controller's own check applies them.
+        "model hostPath": all(
+            v["name"] != model
+            or "hostPath" not in v
+            or (v["hostPath"].get("type") == "Directory" and model_volume_allowed(v, allowed))
+            for v in volumes
+        ),
+        "model nfs": all(
+            v["name"] != model or "nfs" not in v or model_volume_allowed(v, allowed)
+            for v in volumes
+        ),
+        "model csi": all(
+            v["name"] != model or "csi" not in v or model_volume_allowed(v, allowed)
+            for v in volumes
+        ),
+        "model read-only": all(
+            m["name"] != model or m.get("readOnly")
+            for c in containers
+            for m in c.get("volumeMounts", [])
+        ),
+    }
+    return [name for name, holds in rules.items() if not holds]
+
+
+def model_volume_allowed(volume: dict, policy: fleet_resource.VolumePolicy) -> bool:
+    """Whether the controller's check admits a pod's model volume under `policy`, its source
+    aside."""
+    [(kind, settings)] = [(k, v) for k, v in volume.items() if k != "name"]
+    source = fleet_resource.VolumePolicy(
+        (*policy.sources, kind), policy.host_path_prefixes, policy.nfs_servers, policy.csi_drivers
+    )
+    try:
+        fleet_resource.check_model_volume(
+            {"spec": {"engines": {"modelVolume": {kind: settings}}}}, source
+        )
+    except ValueError:
+        return False
+    return True
+
+
+# The golden fleet's model volume and RuntimeClass, as its cluster admin would allow them.
+GOLDEN_VOLUMES = fleet_resource.VolumePolicy(
+    ("persistentVolumeClaim", "hostPath"), host_path_prefixes=("/models",)
+)
+GOLDEN_RUNTIME_CLASSES = ("nvidia",)
+
+
+def workloads(documents: list[dict]) -> list[dict]:
+    """The documents the admission policy checks."""
+    return [d for d in documents if d["kind"] in ("Job", "StatefulSet", "Deployment")]
+
+
+class PolicyTests(unittest.TestCase):
+    """The chart's admission policy admits every workload the controller builds, and refuses
+    each one from another requester."""
+
+    def test_every_workload_the_controller_builds_passes_the_policy(self):
+        documents = workloads(everything())
+        self.assertEqual(
+            {d["kind"] for d in documents}, {"Job", "StatefulSet", "Deployment"}, documents
+        )
+        for document in documents:
+            with self.subTest(document["metadata"]["name"]):
+                self.assertEqual(
+                    policy_refusals(
+                        document,
+                        volumes=GOLDEN_VOLUMES,
+                        runtime_classes=GOLDEN_RUNTIME_CLASSES,
+                    ),
+                    [],
+                )
+                self.assertIn(
+                    "reserved label",
+                    policy_refusals(
+                        document,
+                        f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x",
+                        volumes=GOLDEN_VOLUMES,
+                        runtime_classes=GOLDEN_RUNTIME_CLASSES,
+                    ),
+                )
+
+    def test_the_model_volume_allow_lists_refuse_what_the_controller_refuses(self):
+        [document] = [
+            d for d in workloads(everything()) if d["metadata"]["name"] == "discover-node-b"
+        ]
+        refused = {
+            "model volume source": fleet_resource.VolumePolicy(),
+            "model hostPath": fleet_resource.VolumePolicy(
+                ("persistentVolumeClaim", "hostPath"), host_path_prefixes=("/srv",)
+            ),
+        }
+        for rule, volumes in refused.items():
+            with self.subTest(rule):
+                self.assertIn(
+                    rule,
+                    policy_refusals(
+                        document, volumes=volumes, runtime_classes=GOLDEN_RUNTIME_CLASSES
+                    ),
+                )
+        self.assertEqual(policy_refusals(document, volumes=GOLDEN_VOLUMES), ["RuntimeClass"])
+
+
+class RouterTests(unittest.TestCase):
+    """The router pair the chart ran on the Lease: its Service and StatefulSet."""
+
+    def test_the_router_pair_matches_the_chart(self):
+        built = by_name(objects.routers(router_fleet(), router_settings()))
+        rendered = by_name(ROUTER_GOLDEN["rendered"])
+        self.assertEqual(sorted(built), [("Service", "routers"), ("StatefulSet", "router")])
+        self.assertEqual(sorted(built), sorted(rendered))
+        for key, document in rendered.items():
+            with self.subTest(kind=key[0], name=key[1]):
+                self.assertEqual(without_release(built[key]), without_release(document))
+        # The script is the chart's files/router-start.py with the router volume check added.
+        [container] = template(rendered[("StatefulSet", "router")])["containers"]
+        chart = container["command"][3]
+        self.assertIn("import sys\n\nname = ", chart)
+        self.assertEqual(
+            objects.ROUTER_START,
+            chart.replace("import sys\n\n", "import sys\n\n" + objects.ROUTER_VOLUME_CHECK, 1),
+        )
+        [built_container] = template(router_set())["containers"]
+        self.assertEqual(built_container["command"][3], objects.ROUTER_START)
+
+    def test_the_routers_names_agree_with_haproxy_the_target_and_the_chart(self):
+        statefulset = router_set()
+        names = tuple(f"{statefulset['metadata']['name']}-{n}" for n in range(2))
+        self.assertEqual(statefulset["spec"]["replicas"], 2)
+        self.assertNotIn("ordinals", statefulset["spec"])
+        self.assertEqual(names, objects.ROUTER_PODS)
+        self.assertEqual(names, ROUTERS)
+        self.assertEqual(objects.ROUTER_HOME, ROUTER_HOME)
+        self.assertEqual(statefulset["spec"]["serviceName"], objects.ROUTER_SERVICE)
+        config = objects.haproxy_config(chart_fixtures.NAMESPACE, "cluster.example")
+        for pod in names:
+            self.assertIn(
+                f"{pod}.routers.{chart_fixtures.NAMESPACE}.svc.cluster.example:8000", config
+            )
+        # The chart's Role grants the routers' ServiceAccount the Lease of the same name.
+        helpers = (ROOT / "deploy/helm/narwhal/templates/_helpers.tpl").read_text()
+        [name] = re.findall(r'define "narwhal.routerName" -}}\n(\S+)\n', helpers)
+        self.assertEqual(name, objects.ROUTER_ACCOUNT)
+        self.assertEqual(objects.ROUTER_LEASE, objects.ROUTER_ACCOUNT)
+
+    def test_router_0_claims_the_lease_first_until_it_holds_a_handoff(self):
+        [container] = template(router_set())["containers"]
+        self.assertEqual(container["workingDir"], "/narwhal-router")
+        variables = {
+            "NARWHAL_POD_IP": POD_IP,
+            "NARWHAL_ROUTERS_DOMAIN": container["env"][2]["value"],
+        }
+        argv = [expand(part, variables) for part in container["command"]]
+        self.assertEqual(
+            argv[argv.index("--fleet") + 1],
+            "/narwhal-state/deploy/run-1/stages/fleet-limits/fleet.json",
+        )
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        folder = Path(scratch.name)
+        handoff = folder / "router-state.json"
+        fleet_file = folder / "fleet.json"
+        fleet_file.write_text(json.dumps({"recovery": {"state_path": str(handoff)}}))
+        argv[argv.index("--fleet") + 1] = str(fleet_file)
+        domain = f"routers.{chart_fixtures.NAMESPACE}.svc.cluster.example:8000"
+        first, second = f"http://router-1.{domain}", f"http://router-0.{domain}"
+        # Each case: the router, whether its handoff exists, and the standby options it takes.
+        cases = (
+            ("router-0", False, ["--standby-of", first, "--first-start-primary"]),
+            ("router-1", False, ["--standby-of", second]),
+            ("router-0", True, ["--standby-of", first]),
+            ("router-1", True, ["--standby-of", second]),
+        )
+        for name, saved, standby in cases:
+            with self.subTest(name=name, saved=saved):
+                handoff.unlink(missing_ok=True)
+                if saved:
+                    handoff.write_text("{}")
+                executed: list[list[str]] = []
+                environment = {**variables, "NARWHAL_POD_NAME": name}
+                with (
+                    patch.dict(os.environ, environment),
+                    patch("os.getcwd", return_value=str(folder)),
+                    patch.object(sys, "argv", ["-c", *argv[4:]]),
+                    patch.object(sys, "executable", "python3"),
+                    patch("os.execv", lambda path, args, found=executed: found.append(args)),
+                ):
+                    exec(argv[3], {"__name__": "__main__"})
+                [args] = executed
+                self.assertEqual(args[:5], ["python3", "-I", "-m", "narwhal.cli", "--fleet"])
+                tail = ["--router-id", name, *standby]
+                self.assertEqual(args[-len(tail) :], tail)
+                self.assertEqual(args[args.index("--kubernetes-lease") + 1], "narwhal-router")
+                self.assertNotIn("--lease-path", args)
+                self.assertEqual(args[args.index("--host") + 1], POD_IP)
+                self.assertEqual(args[args.index("--lease-ttl") + 1], "6")
+
+    def test_only_the_router_container_holds_the_lease_token(self):
+        spec = template(router_set())
+        self.assertEqual(spec["serviceAccountName"], "narwhal-router")
+        self.assertFalse(spec["automountServiceAccountToken"])
+        [api] = [volume for volume in spec["volumes"] if volume["name"] == "narwhal-api"]
+        sources = api["projected"]["sources"]
+        self.assertEqual(
+            sources[0], {"serviceAccountToken": {"path": "token", "expirationSeconds": 3600}}
+        )
+        self.assertEqual(sources[1]["configMap"]["name"], "kube-root-ca.crt")
+        self.assertEqual(
+            sources[2]["downwardAPI"]["items"][0]["fieldRef"]["fieldPath"], "metadata.namespace"
+        )
+        self.assertNotIn("initContainers", spec)
+        [container] = spec["containers"]
+        [mount] = [m for m in container["volumeMounts"] if m["name"] == "narwhal-api"]
+        self.assertEqual(mount["mountPath"], "/var/run/secrets/kubernetes.io/serviceaccount")
+        self.assertTrue(mount["readOnly"])
+        claims = [v for v in spec["volumes"] if "persistentVolumeClaim" in v]
+        self.assertEqual(
+            [v["persistentVolumeClaim"] for v in claims],
+            [{"claimName": "narwhal-state", "readOnly": True}],
+        )
+        state = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
+        self.assertEqual(
+            state, [{"name": "narwhal-state", "mountPath": "/narwhal-state", "readOnly": True}]
+        )
+        # No other derived object runs as the routers' ServiceAccount.
+        for document in everything():
+            if document["kind"] in ("StatefulSet", "Deployment", "Job"):
+                with self.subTest(kind=document["kind"], name=document["metadata"]["name"]):
+                    account = template(document).get("serviceAccountName")
+                    self.assertEqual(
+                        account == "narwhal-router", document["metadata"]["name"] == "router"
+                    )
+
+    def test_each_router_runs_unprivileged_on_a_read_only_root(self):
+        spec = template(router_set())
+        self.assertEqual(
+            spec["securityContext"],
+            {
+                "runAsNonRoot": True,
+                "runAsUser": 10001,
+                "runAsGroup": 10001,
+                "fsGroup": 10001,
+                "fsGroupChangePolicy": "OnRootMismatch",
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+        )
+        for container in [*spec.get("initContainers", []), *spec["containers"]]:
+            with self.subTest(container["name"]):
+                self.assertEqual(
+                    container["securityContext"],
+                    {
+                        "allowPrivilegeEscalation": False,
+                        "readOnlyRootFilesystem": True,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                )
+        custom = template(router_set(router_fleet(run_as_user=2000, run_as_group=3000)))
+        self.assertEqual(
+            {k: custom["securityContext"][k] for k in ("runAsUser", "runAsGroup", "fsGroup")},
+            {"runAsUser": 2000, "runAsGroup": 3000, "fsGroup": 3000},
+        )
+        for value in (0, -1, 2**31, True, "10001"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "non-root"):
+                router_fleet(run_as_user=value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "non-root"):
+                router_fleet(run_as_group=value)
+
+    def test_the_router_writes_only_its_own_volume_and_scratch(self):
+        spec = template(router_set())
+        [container] = spec["containers"]
+        volumes = {volume["name"]: volume for volume in spec["volumes"]}
+        writable = {}
+        for mount in container["volumeMounts"]:
+            if not mount.get("readOnly"):
+                writable[mount["mountPath"]] = mount["name"]
+        self.assertEqual(writable, {"/narwhal-router": "router-state", "/tmp": "tmp"})
+        self.assertEqual(volumes["tmp"], {"name": "tmp", "emptyDir": {"sizeLimit": "64Mi"}})
+        [claim] = router_set()["spec"]["volumeClaimTemplates"]
+        self.assertEqual(claim["metadata"]["name"], "router-state")
+        # What the router writes: its journal, its handoff state with the temporary file
+        # written beside it, and any relative path from its working directory.
+        argv = container["command"]
+        work = Path(container["workingDir"])
+        # fleet-limits sets the handoff state path under the target's ROUTER_HOME.
+        handoff = Path(ROUTER_HOME) / "router-state.json"
+        written = [
+            Path(argv[argv.index("--journal") + 1]),
+            handoff,
+            handoff.with_name(f".{handoff.name}.1.0.tmp"),
+            work / "runs" / "state.json",
+        ]
+        for path in written:
+            with self.subTest(path=str(path)):
+                self.assertTrue(any(path.is_relative_to(mount) for mount in writable), path)
+
+    def test_the_router_pair_passes_the_charts_admission_policy(self):
+        validations = POLICY.read_text().split("  validations:\n", 1)[1].split("\n---", 1)[0]
+        # The mirror holds every validation of the policy.
+        self.assertEqual(validations.count("\n    - expression:") + 1, 20)
+        statefulset = router_set()
+        self.assertEqual(policy_refusals(statefulset), [])
+        # The router labels are reserved: only the controller may apply them.
+        self.assertEqual(
+            policy_refusals(statefulset, f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x"),
+            ["reserved label"],
+        )
+        # Each rule the routers keep to refuses them once broken.
+        broken = {
+            "seccomp": lambda pod, c: pod["securityContext"].update(
+                seccompProfile={"type": "Unconfined"}
+            ),
+            "image digest": lambda pod, c: c.update(image="registry.example/narwhal:latest"),
+            "capabilities": lambda pod, c: c["securityContext"]["capabilities"].update(
+                add=["NET_ADMIN"]
+            ),
+            "host network": lambda pod, c: pod.update(hostNetwork=True),
+            "privileged": lambda pod, c: c["securityContext"].update(privileged=True),
+            "volume types": lambda pod, c: pod["volumes"].append(
+                {"name": "host", "hostPath": {"path": "/"}}
+            ),
+        }
+        for rule, breaks in broken.items():
+            with self.subTest(rule):
+                document = copy.deepcopy(statefulset)
+                pod = template(document)
+                breaks(pod, pod["containers"][0])
+                self.assertIn(rule, policy_refusals(document))
+        # The router pod runs the RuntimeDefault profile and adds no capability.
+        pod = template(statefulset)
+        self.assertEqual(pod["securityContext"]["seccompProfile"], {"type": "RuntimeDefault"})
+        self.assertNotIn("add", pod["containers"][0]["securityContext"]["capabilities"])
+        self.assertTrue(re.search(fleet_resource._DIGEST, pod["containers"][0]["image"]))
+
+    def test_the_engines_may_not_run_as_the_routers_service_account(self):
+        with self.assertRaisesRegex(ValueError, "may not be narwhal-router"):
+            fleet(engine_account="narwhal-router")
+
+    def test_the_routers_never_share_a_node_while_another_can_take_one(self):
+        statefulset = router_set()
+        [constraint] = template(statefulset)["topologySpreadConstraints"]
+        self.assertEqual(
+            constraint,
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                # A tainted node the routers cannot run on is not a node to spread over.
+                "nodeTaintsPolicy": "Honor",
+                "labelSelector": {"matchLabels": statefulset["spec"]["selector"]["matchLabels"]},
+            },
+        )
+        self.assertEqual(
+            statefulset["spec"]["selector"]["matchLabels"],
+            {"app.kubernetes.io/name": "narwhal", "app.kubernetes.io/component": "router"},
+        )
+
+    def test_only_the_router_container_gets_the_engine_key(self):
+        [container] = template(router_set())["containers"]
+        self.assertEqual(
+            container["env"][-1],
+            {
+                "name": "NARWHAL_ENGINE_API_KEY",
+                "valueFrom": {"secretKeyRef": {"name": "engine-credential", "key": "api-key"}},
+            },
+        )
+        [bare] = template(router_set(router_fleet(api_key=None)))["containers"]
+        self.assertNotIn("secretKeyRef", json.dumps(bare))
+        self.assertNotIn(
+            SECRET_VALUE, json.dumps(objects.routers(router_fleet(), router_settings()))
+        )
+
+    def test_a_fleets_router_option_reaches_narwhal_serve_as_written(self):
+        written = ("--log-level", "$(NARWHAL_ENGINE_API_KEY)", "$$x")
+        [container] = template(router_set(settings=router_settings(args=written)))["containers"]
+        variables = {"NARWHAL_ENGINE_API_KEY": SECRET_VALUE, "NARWHAL_POD_IP": POD_IP}
+        argv = [expand(part, variables) for part in container["command"]]
+        self.assertEqual(tuple(argv[-3:]), written)
+        self.assertNotIn(SECRET_VALUE, argv)
+
+    def test_router_settings_come_from_the_fleet_spec(self):
+        spec = {"storageClassName": "local-path", "size": "2Gi", "args": ["--lease-ttl", "6"]}
+        self.assertEqual(
+            Routers.of(spec, "deploy/run-1/fleet.json"),
+            Routers("deploy/run-1/fleet.json", "local-path", "2Gi", ("--lease-ttl", "6")),
+        )
+        self.assertEqual(Routers.of({"storageClassName": "a", "size": "1Gi"}, "f.json").args, ())
+
+    def test_router_settings_that_cannot_run_the_pair_are_refused(self):
+        for fleet_file in (
+            "../fleet.json",
+            "/fleet.json",
+            "a/../../fleet.json",
+            "fleet.json\nx",
+            ".hidden/fleet.json",
+            "fleet.yaml",
+            "a//fleet.json",
+        ):
+            with (
+                self.subTest(fleet_file=fleet_file),
+                self.assertRaisesRegex(ValueError, "fleet file"),
+            ):
+                router_settings(fleet_file=fleet_file)
+        with self.assertRaisesRegex(ValueError, "storage class"):
+            router_settings(storage_class="Local_Path")
+        with self.assertRaisesRegex(ValueError, "quantity"):
+            router_settings(size="2 GiB")
+        with self.assertRaisesRegex(ValueError, "at most 32"):
+            router_settings(args=("--log-level", "info") * 17)
+        with self.assertRaisesRegex(ValueError, "at most 32"):
+            router_settings(args=["--log-level", "info"])
+        for argument in ("x\ny", "\x1b[2J", "a" * 257):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, "printable"):
+                router_settings(args=(argument,))
+        # An option of the pair's own, whole, with its value, or as a prefix argparse expands.
+        for argument, reserved in (
+            ("--kubernetes-lease", "--kubernetes-lease"),
+            ("--kubernetes-lease=other", "--kubernetes-lease"),
+            ("--kube", "--kubernetes-lease"),
+            ("--lease-path", "--lease-path"),
+            ("--lease-witness=/w", "--lease-witness"),
+            ("--standby-of", "--standby-of"),
+            ("--first-start-primary", "--first-start-primary"),
+            ("--router-id", "--router-id"),
+            ("--fleet=/etc/fleet.json", "--fleet"),
+            ("--journal", "--journal"),
+            ("--host", "--host"),
+            ("--port", "--port"),
+        ):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, reserved):
+                router_settings(args=(argument, "x"))
+        # Whatever ends option parsing, exits, or stops the router at start.
+        for arguments in (
+            ("--",),
+            ("--lease-ttl", "6", "--", "-x"),
+            ("--help",),
+            ("--he",),
+            ("-h",),
+            ("--version",),
+            ("--vers",),
+            ("--log",),
+            ("--lease-tl", "6"),
+            ("-x",),
+            ("--log-level", "-v"),
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                self.assertRaisesRegex(ValueError, "no option the pair takes|the pair's own"),
+            ):
+                router_settings(args=arguments)
+        router_settings(
+            args=(
+                "--lease-ttl",
+                "6",
+                "--lease-safety-margin=1",
+                "--standby-max-handoff-age",
+                "30",
+                "--resume",
+                "--shutdown-drain",
+                "-0.5",
+            )
+        )
+
+    def test_the_options_the_pair_takes_or_sets_are_every_narwhal_serve_option(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from narwhal.cli import serve
+
+        output = StringIO()
+        # Wide enough that no option name wraps.
+        with (
+            patch.dict(os.environ, {"COLUMNS": "10000"}),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit),
+        ):
+            serve(["--help"])
+        offered = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]*[a-z])", output.getvalue()))
+        self.assertEqual(
+            offered,
+            {*objects.ROUTER_OPTIONS, *objects.ROUTER_SERVE_OPTIONS, "--help", "--version"},
+        )
+        self.assertFalse(set(objects.ROUTER_OPTIONS) & set(objects.ROUTER_SERVE_OPTIONS))
+
+    def test_a_router_whose_volume_it_cannot_write_stops_with_the_fix(self):
+        [container] = template(router_set())["containers"]
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        missing = Path(scratch.name) / "router-state"
+        with (
+            patch("os.getcwd", return_value=str(missing)),
+            patch.dict(os.environ, {"NARWHAL_POD_NAME": "router-0"}),
+            patch("os.execv") as execv,
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            exec(container["command"][3], {"__name__": "__main__"})
+        execv.assert_not_called()
+        message = str(stopped.exception.code)
+        self.assertIn(f"the router volume {missing} is not writable by UID {os.getuid()}", message)
+        self.assertIn("Delete this router's router-state PVC", message)
+        if os.getuid() != 0:
+            locked = Path(scratch.name) / "locked"
+            locked.mkdir(mode=0o555)
+            self.addCleanup(locked.chmod, 0o755)
+            with (
+                patch("os.getcwd", return_value=str(locked)),
+                patch("os.execv") as execv,
+                self.assertRaises(SystemExit),
+            ):
+                exec(container["command"][3], {"__name__": "__main__"})
+            execv.assert_not_called()
+            self.assertEqual(list(locked.iterdir()), [])
+
+    def test_the_image_user_is_the_uid_the_routers_run_as(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn("groupadd --system --gid 10001 narwhal", dockerfile)
+        self.assertIn("useradd --system --uid 10001 --gid 10001 --create-home narwhal", dockerfile)
+        # A numeric user lets the kubelet check runAsNonRoot without the pod's runAsUser.
+        self.assertIn("\nUSER 10001:10001\n", dockerfile)
+        defaults = fleet()
+        self.assertEqual((defaults.run_as_user, defaults.run_as_group), (10001, 10001))
+
+    def test_stopping_deletes_the_routers_and_keeps_their_volumes(self):
+        live = [
+            named(d["kind"], d["metadata"]["name"])
+            for d in objects.routers(router_fleet(), router_settings())
+        ]
+        live.append(named("PersistentVolumeClaim", "router-state-router-0", owner=None))
+        deletions = objects.prune(OWNER, [], live)
+        self.assertEqual(
+            [(d.kind, d.name) for d in deletions],
+            [("StatefulSet", "router"), ("Service", "routers")],
+        )
+        for deletion in deletions:
+            self.assertEqual(deletion.options()["propagationPolicy"], "Background")
 
 
 class PruneTests(unittest.TestCase):

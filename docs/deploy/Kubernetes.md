@@ -19,7 +19,7 @@ A run record belongs to one target. Resuming a run directory with the other targ
 
 The run reads the [Kubernetes launch inputs](../configuration/04-Deployment-Inputs.md#kubernetes-launch-inputs), the engine and fabric inputs, the [deployment run inputs](../configuration/04-Deployment-Inputs.md#deployment-run-inputs) and the cluster inputs that [Kubernetes target inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) lists: the namespace, the chart values file, each engine's node, and optionally the release, the kubeconfig context, the chart directory and the `kubectl` and `helm` executables.
 
-The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/model`. `NARWHAL_ROUTER_URL` defaults to the HAProxy Service, `http://haproxy:8000`.
+The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/model`. `NARWHAL_ROUTER_URL` defaults to the first router pod, `http://router-0.routers:8000`, because HAProxy forwards only the serving routes.
 
 ## How the stages run
 
@@ -60,9 +60,10 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 
 | Change | Recorded as | Reruns |
 | --- | --- | --- |
-| Kubernetes context, namespace, release or tool paths | `NARWHAL_KUBERNETES_CONTEXT`, `NARWHAL_KUBERNETES_NAMESPACE`, `NARWHAL_KUBERNETES_RELEASE`, `NARWHAL_KUBECTL` and `NARWHAL_HELM` | `access` and every stage after it |
+| Namespace, fleet, Kubernetes context or kubectl path | `NARWHAL_KUBERNETES_NAMESPACE`, the fleet's uid in `NARWHAL_KUBERNETES_FLEET_UID`, `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` | `access` and every stage after it |
 | Engine node, model volume, image, checkpoint, launch policy or transport | The discovery fields of `.env`, the Kubernetes inputs of the engine pods and the images | `discover` and every stage after it |
-| Narwhal release or chart | The SHA-256 of the installed package's Python files and of the chart's files | `discover` and every stage after it |
+| Narwhal release | The SHA-256 of the installed package's Python files, which build every object | `discover` and every stage after it |
+| Engine API key Secret, or the key in it | The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key under the fleet's salt from a key-check Job, never the key itself | `engine-prepare`, `router-start` |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start` |
 | Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start` |
@@ -81,6 +82,8 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 | Router pod replaced or restarted | Each router pod's UID and its router container's ID and start, checked live on every run | `router-start` |
 
 <!-- End of the generated stage tables. -->
+
+Keep the engine API key in an immutable Secret whose name carries a version, such as `engine-key-v2`, and rotate it by creating the next Secret and pointing `apiKeySecret` at it. Each `run` also starts a key-check Job that holds the key and reports only its HMAC under a salt kept in the run directory, so a key edited in place still restarts the engines and the routers.
 
 ## Checking cluster access
 
@@ -126,7 +129,9 @@ The sidecar captures the attestation once the launch directory exists. `cache-ca
 
 The routers elect the primary through the Lease `narwhal-router` in the namespace, as [Electing the primary on Kubernetes](../operate/01-Start-Routers.md#electing-the-primary-on-kubernetes) describes, so no volume holds a lease. They run as the ServiceAccount `narwhal-router`. Its Role grants `get` and `update` on that one Lease, and `create` on Leases in the namespace, because RBAC cannot limit a create to one name. It grants nothing else, so a router can create another Lease but cannot read, renew, take over or delete one. A compromised router could still create a Lease under a name nothing has created yet and hold up that name's election, so run each fleet in a namespace of its own. Only the router container mounts the account's token, a projected token that expires after an hour.
 
-On a fresh install, `router-0` finds no handoff and starts with `--first-start-primary`: it creates the Lease and serves one lease duration later. Every other router start is a standby of the other router.
+On a fresh install, `router-0` finds no handoff and starts with `--first-start-primary`: it creates the Lease and serves one lease duration later. Every other router start is a standby of the other router. When both routers come back together with handoffs older than 30 seconds, as after `spec.stopped`, a recreated fleet or both pods restarting, one of them claims the Lease as a [cold start](../cli/Serve.md#standby-takeover-and-lease-fencing), within about 36 seconds of their start with the default timings.
+
+The routers run as UID and GID 10001, the image's `narwhal` user, on a read-only root filesystem with no capabilities. They write only their own volume and a `/tmp` scratch directory. `fsGroup` makes the router volume writable on most storage, but not on `local-path` or other hostPath volumes. A router volume that an earlier development image wrote, when the `narwhal` user had another UID, is then not writable, and the router stops at start with an error that names the volume. Stop the routers and delete their claims, `router-state-router-0` and `router-state-router-1`; the pair then starts cold.
 
 A topology spread constraint on `kubernetes.io/hostname`, with `maxSkew: 1` and `whenUnsatisfiable: DoNotSchedule`, keeps the two router pods on different nodes whenever more than one node can take them, so losing one node leaves a router. On a single node both still run. Nodes with a taint the routers do not tolerate, such as a control-plane node, do not count.
 

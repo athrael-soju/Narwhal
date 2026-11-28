@@ -74,9 +74,15 @@ def helpers(engine: EngineLauncher) -> list[Helper]:
 
 
 def select_values(
-    role: str, node: int | None, fleet: dict, env: Mapping[str, str]
+    role: str, node: int | None, fleet: dict, env: Mapping[str, str], *, by_reference: bool = False
 ) -> dict[str, str]:
-    """Select role inputs, resolving node overrides before shared engine defaults."""
+    """Select role inputs, resolving node overrides before shared engine defaults.
+
+    The engine API key is the value of the variable the fleet's `engine_api_key_env` names. With
+    `by_reference`, as on Kubernetes, the key stays in a Secret that each pod or Job calling an
+    engine reads itself: the role file holds neither the key nor `NARWHAL_ENGINE_API_KEY`, and
+    an environment that holds the key is refused.
+    """
     values: dict[str, str] = {}
 
     def include(name: str, source: str | None = None, *, required: bool = True) -> None:
@@ -90,7 +96,13 @@ def select_values(
             raise ValueError(f"{source} is unset or empty")
 
     key_name = fleet.get("engine", {}).get("engine_api_key_env")
-    if key_name:
+    if by_reference:
+        if held := sorted(n for n in (key_name, "NARWHAL_ENGINE_API_KEY") if n and env.get(n)):
+            raise ValueError(
+                f"{', '.join(held)} holds the engine API key; the engines read it from their "
+                "Secret, so unset it"
+            )
+    elif key_name:
         include(key_name)
         if role == "engine":
             values["NARWHAL_ENGINE_API_KEY"] = values[key_name]

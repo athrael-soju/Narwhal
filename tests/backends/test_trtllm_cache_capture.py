@@ -157,6 +157,8 @@ class HookTests(unittest.TestCase):
             self.assertFalse(self.rank_record().exists())
             creator.build_managers({}, False)
         record = json.loads(self.rank_record().read_text())
+        # A Kubernetes pod's attestation sidecar, another user, reads the record.
+        self.assertEqual(self.rank_record().stat().st_mode & 0o777, 0o644)
         self.assertEqual(creator.builds, 2)
         plan_sha256 = hashlib.sha256(self.plan_path.read_bytes()).hexdigest()
         self.assertEqual(record["plan_sha256"], plan_sha256)

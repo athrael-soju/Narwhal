@@ -1,0 +1,264 @@
+{
+ "about": "helm template of deploy/helm/narwhal at ad38650c: the router templates the controller's routers() replaces",
+ "inputs": {
+  "credentials": {
+   "engineApiKey": {
+    "env": "NARWHAL_ENGINE_API_KEY",
+    "key": "api-key",
+    "secretName": "engine-credential"
+   }
+  },
+  "haproxy": {
+   "clusterDomain": "cluster.example",
+   "replicas": 2
+  },
+  "images": {
+   "fabric": "registry.example/perftest@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "haproxy": "registry.example/haproxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "narwhal": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "routers": {
+   "args": [
+    "--lease-ttl",
+    "6",
+    "--log-level",
+    "debug"
+   ],
+   "enabled": true,
+   "fleet": "deploy/run-1/stages/fleet-limits/fleet.json",
+   "size": "2Gi",
+   "storageClassName": "local-path"
+  },
+  "stateClaim": "narwhal-state"
+ },
+ "rendered": [
+  {
+   "apiVersion": "v1",
+   "kind": "Service",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "router",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "routers"
+   },
+   "spec": {
+    "clusterIP": "None",
+    "ports": [
+     {
+      "name": "http",
+      "port": 8000
+     }
+    ],
+    "publishNotReadyAddresses": true,
+    "selector": {
+     "app.kubernetes.io/component": "router",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/name": "narwhal"
+    }
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "StatefulSet",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/component": "router",
+     "app.kubernetes.io/instance": "fleet",
+     "app.kubernetes.io/managed-by": "Helm",
+     "app.kubernetes.io/name": "narwhal",
+     "app.kubernetes.io/version": "0.13.0"
+    },
+    "name": "router"
+   },
+   "spec": {
+    "podManagementPolicy": "Parallel",
+    "replicas": 2,
+    "selector": {
+     "matchLabels": {
+      "app.kubernetes.io/component": "router",
+      "app.kubernetes.io/instance": "fleet",
+      "app.kubernetes.io/name": "narwhal"
+     }
+    },
+    "serviceName": "routers",
+    "template": {
+     "metadata": {
+      "labels": {
+       "app.kubernetes.io/component": "router",
+       "app.kubernetes.io/instance": "fleet",
+       "app.kubernetes.io/name": "narwhal"
+      }
+     },
+     "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+       {
+        "command": [
+         "python3",
+         "-I",
+         "-c",
+         "# Start one router of the pair, router-0 or router-1, with the narwhal-serve arguments after\n# its own. The routers elect the primary through the Kubernetes Lease. On the first install,\n# router-0 finds no handoff at its state path and starts with --first-start-primary: it claims\n# the Lease while the Lease is absent or free, and otherwise shadows the other router. Every\n# other start is a standby of the other router, as a supervisor restarts a router of the pair.\nimport json\nimport os\nimport sys\n\nname = os.environ[\"NARWHAL_POD_NAME\"]\nbase, _, index = name.rpartition(\"-\")\npeer = f\"http://{base}-{1 - int(index)}.{os.environ['NARWHAL_ROUTERS_DOMAIN']}:8000\"\narguments = sys.argv[1:]\nwith open(arguments[arguments.index(\"--fleet\") + 1]) as stream:\n    recovery = json.load(stream).get(\"recovery\") or {}\nsaved = os.path.exists(recovery.get(\"state_path\", \"runs/state.json\"))\nstandby = [\"--standby-of\", peer]\nif index == \"0\" and not saved:\n    standby.append(\"--first-start-primary\")\nargv = [sys.executable, \"-I\", \"-m\", \"narwhal.cli\", *arguments, \"--router-id\", name, *standby]\nos.execv(sys.executable, argv)  # noqa: S606 - the router replaces this process\n",
+         "--fleet",
+         "/narwhal-state/deploy/run-1/stages/fleet-limits/fleet.json",
+         "--host",
+         "$(NARWHAL_POD_IP)",
+         "--port",
+         "8000",
+         "--journal",
+         "/narwhal-router/journal.jsonl",
+         "--kubernetes-lease",
+         "narwhal-router",
+         "--lease-ttl",
+         "6",
+         "--log-level",
+         "debug"
+        ],
+        "env": [
+         {
+          "name": "NARWHAL_POD_IP",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "status.podIP"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_POD_NAME",
+          "valueFrom": {
+           "fieldRef": {
+            "fieldPath": "metadata.name"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROUTERS_DOMAIN",
+          "value": "routers.example.svc.cluster.example"
+         },
+         {
+          "name": "NARWHAL_ENGINE_API_KEY",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "api-key",
+            "name": "engine-credential"
+           }
+          }
+         }
+        ],
+        "image": "registry.example/narwhal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "router",
+        "ports": [
+         {
+          "containerPort": 8000,
+          "name": "http"
+         }
+        ],
+        "volumeMounts": [
+         {
+          "mountPath": "/narwhal-state",
+          "name": "narwhal-state",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+          "name": "narwhal-api",
+          "readOnly": true
+         },
+         {
+          "mountPath": "/narwhal-router",
+          "name": "router-state"
+         }
+        ],
+        "workingDir": "/narwhal-router"
+       }
+      ],
+      "enableServiceLinks": false,
+      "serviceAccountName": "narwhal-router",
+      "topologySpreadConstraints": [
+       {
+        "labelSelector": {
+         "matchLabels": {
+          "app.kubernetes.io/component": "router",
+          "app.kubernetes.io/instance": "fleet",
+          "app.kubernetes.io/name": "narwhal"
+         }
+        },
+        "maxSkew": 1,
+        "nodeTaintsPolicy": "Honor",
+        "topologyKey": "kubernetes.io/hostname",
+        "whenUnsatisfiable": "DoNotSchedule"
+       }
+      ],
+      "volumes": [
+       {
+        "name": "narwhal-state",
+        "persistentVolumeClaim": {
+         "claimName": "narwhal-state",
+         "readOnly": true
+        }
+       },
+       {
+        "name": "narwhal-api",
+        "projected": {
+         "defaultMode": 292,
+         "sources": [
+          {
+           "serviceAccountToken": {
+            "expirationSeconds": 3600,
+            "path": "token"
+           }
+          },
+          {
+           "configMap": {
+            "items": [
+             {
+              "key": "ca.crt",
+              "path": "ca.crt"
+             }
+            ],
+            "name": "kube-root-ca.crt"
+           }
+          },
+          {
+           "downwardAPI": {
+            "items": [
+             {
+              "fieldRef": {
+               "fieldPath": "metadata.namespace"
+              },
+              "path": "namespace"
+             }
+            ]
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "volumeClaimTemplates": [
+     {
+      "metadata": {
+       "name": "router-state"
+      },
+      "spec": {
+       "accessModes": [
+        "ReadWriteOnce"
+       ],
+       "resources": {
+        "requests": {
+         "storage": "2Gi"
+        }
+       },
+       "storageClassName": "local-path"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -7,6 +7,7 @@ property that matters at every step: no two routers are valid at once.
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import random
 import time
@@ -21,7 +22,7 @@ from narwhal.runtime import kubernetes_api as k
 from narwhal.runtime import state
 from narwhal.runtime.kubernetes_lease import KubernetesLease, check_settings
 from narwhal.runtime.lease import FileLease, LeaseError
-from narwhal.runtime.standby import standby_loop
+from narwhal.runtime.standby import lease_renew_loop, standby_loop
 from narwhal.serving.app import create_app
 from tests.deployment.kubernetes_cluster import LEASE, Clock, ObjectStore
 from tests.runtime.test_standby_shutdown import FleetCase
@@ -803,6 +804,217 @@ class StandbyTakeoverTests(FleetCase):
             loop.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
+
+
+class ColdStartTests(FleetCase):
+    """A pair that stopped together, as after `spec.stopped`, a recreated fleet or both pods
+    restarting, comes back as two standbys whose handoffs are stale. One of them claims the
+    Lease as a cold start, and the other shadows it."""
+
+    # Long beside the renewal interval, so a slow renewal under load never fences the holder.
+    TTL = 10
+    MAX_AGE = 30.0
+
+    async def restart_both(self, previous: str) -> None:
+        """Run the pair, stop both routers as `previous` says, keep them down 40 s, then start
+        both as standbys of each other, as router-start.py does once each holds a handoff."""
+        quiet(self)
+        clock = Time()
+        store = ObjectStore()
+        store.create({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": NS}})
+
+        def wall() -> float:
+            return 1.9e9 + clock.now
+
+        def lease(holder: str, offset: float) -> KubernetesLease:
+            client = k.ApiClient(
+                k.Connection(SERVER, NS),
+                field_manager="narwhal-router",
+                transport=store.transport(),
+            )
+            return KubernetesLease(
+                client,
+                NAME,
+                holder,
+                self.TTL,
+                safety_margin_s=1.0,
+                wall_clock=wall,
+                monotonic_clock=lambda: offset + clock.now,
+            )
+
+        # The standby loop reads this wall clock; asyncio keeps its own.
+        self.enterContext(
+            patch(
+                "narwhal.runtime.standby.time",
+                type("FakeTime", (), {"time": staticmethod(wall), "monotonic": time.monotonic}),
+            )
+        )
+        configs = [
+            dataclasses.replace(self.cfg, state_path=self.root / f"router-{n}" / "handoff.json")
+            for n in (0, 1)
+        ]
+        # The pair that ran: router-0 held the Lease and both kept its handoff.
+        old = create_app(configs[0]).state.router
+        self.addAsyncCleanup(old.engines.aclose)
+        epoch = 0
+        if previous != "absent":
+            held = lease("router-0:old", 50.0)
+            self.assertTrue(held.claim())
+            old.lease_epoch, old.lease_holder = held.epoch, held.holder
+            epoch = held.epoch
+            if previous == "released":
+                held.release()
+        document = state.snapshot(old)
+        document["at"] = wall()
+        for config in configs:
+            state.write(config.state_path, document)
+        clock.advance(40.0)
+
+        routers = []
+        for n, config in enumerate(configs):
+            router = create_app(config).state.router
+            self.addAsyncCleanup(router.engines.aclose)
+            router.standby = True
+            router.lease = lease(f"router-{n}:new", 10.0 * (n + 1))
+            routers.append(router)
+
+        def peer_of(n: int):
+            other = routers[1 - n]
+
+            def transport(request: httpx.Request) -> httpx.Response:
+                if other.standby:
+                    raise httpx.ConnectError("connection refused", request=request)
+                if request.url.path == "/ready":
+                    return httpx.Response(200, json={"ready": True, "control_ready": True})
+                return httpx.Response(200, json=state.snapshot(other))
+
+            return httpx.MockTransport(transport)
+
+        def fenced() -> None:
+            valid = [r.lease.holder for r in routers if r.lease.valid()]
+            self.assertLessEqual(len(valid), 1, f"{valid} are valid at once at {clock.now}")
+
+        loops = [
+            asyncio.create_task(
+                standby_loop(
+                    router,
+                    f"http://router-{1 - n}",
+                    router.lease,
+                    probe_interval_s=0.01,
+                    takeover_after=2,
+                    max_handoff_age_s=self.MAX_AGE,
+                    transport=peer_of(n),
+                )
+            )
+            for n, router in enumerate(routers)
+        ]
+        # As in the app, each router renews the Lease whenever it holds it.
+        renewing = [asyncio.create_task(lease_renew_loop(router, 0.02)) for router in routers]
+        try:
+            # 100 ms of the pair's time for each 5 ms of the test's, the fence checked at each.
+            async with asyncio.timeout(30):
+                # A standby's loop ends once it serves, or once a takeover check fails.
+                while not any(loop.done() for loop in loops):
+                    clock.advance(0.1)
+                    fenced()
+                    await asyncio.sleep(0.005)
+            [winner] = [router for router in routers if not router.standby]
+            [done] = [loop for loop in loops if loop.done()]
+            self.assertIsNone(done.exception())
+            [loser] = [router for router in routers if router.standby]
+            self.assertEqual(winner.failover_blocked, "")
+            self.assertEqual(winner.lease_epoch, epoch + 1)
+            # The other keeps shadowing the new primary however long the pair runs.
+            for _ in range(400):
+                clock.advance(0.1)
+                fenced()
+                await asyncio.sleep(0.005)
+            self.assertTrue(winner.lease.valid())
+            self.assertFalse(winner.standby)
+            self.assertTrue(loser.standby)
+            self.assertTrue(loser.primary_seen)
+        finally:
+            for task in [*loops, *renewing]:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def test_a_pair_that_crashed_together_restarts_with_one_primary(self):
+        await self.restart_both("crashed")
+
+    async def test_a_pair_that_stopped_cleanly_restarts_with_one_primary(self):
+        await self.restart_both("released")
+
+    async def test_a_pair_whose_lease_is_gone_restarts_with_one_primary(self):
+        await self.restart_both("absent")
+
+
+class AbsentLeaseFile(FileLease):
+    """A lease file both routers miss, as a cached negative lookup on NFS shows it: every read
+    finds no file, and every claim writes epoch 1."""
+
+    def read(self):
+        return None
+
+    def claim(self) -> bool:
+        self.epoch, self._owned, self._valid_until = 1, True, float("inf")
+        return True
+
+    def renew(self) -> bool:
+        return self._owned
+
+    def release(self) -> None:
+        self._owned = False
+
+
+class FileLeaseColdStartTests(FleetCase):
+    async def test_two_standbys_that_both_miss_the_lease_file_never_both_serve(self):
+        quiet(self)
+        routers = []
+        for n in (0, 1):
+            config = dataclasses.replace(
+                self.cfg, state_path=self.root / f"router-{n}" / "handoff.json"
+            )
+            old = create_app(config).state.router
+            self.addAsyncCleanup(old.engines.aclose)
+            document = state.snapshot(old)
+            # Older than the standby's maximum handoff age.
+            document["at"] -= 3600
+            state.write(config.state_path, document)
+            router = create_app(config).state.router
+            self.addAsyncCleanup(router.engines.aclose)
+            router.standby = True
+            router.lease = AbsentLeaseFile(self.root / "lease.json", f"router-{n}", 5)
+            routers.append(router)
+        refused = httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("refused", request=request))
+        )
+        loops = [
+            asyncio.create_task(
+                standby_loop(
+                    router,
+                    f"http://router-{1 - n}",
+                    router.lease,
+                    probe_interval_s=0.01,
+                    takeover_after=2,
+                    transport=refused,
+                )
+            )
+            for n, router in enumerate(routers)
+        ]
+        try:
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                serving = [router for router in routers if not router.standby]
+                self.assertLessEqual(len(serving), 1)
+            self.assertEqual(
+                [router.failover_blocked for router in routers], ["no fresh handoff"] * 2
+            )
+        finally:
+            for task in loops:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
 class RouterAppTests(FleetCase):

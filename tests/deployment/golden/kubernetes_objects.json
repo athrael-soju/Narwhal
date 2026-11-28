@@ -1,5 +1,5 @@
 {
- "about": "helm template of deploy/helm/narwhal at 1e74b88f: the engine, gate and HAProxy templates the controller's builders replace",
+ "about": "helm template of deploy/helm/narwhal at 1e74b88f: the engine, gate and HAProxy templates the controller's builders replace, with task 24's route allow-list in haproxy.cfg and the RuntimeDefault seccomp profile the admission policy requires of gate and HAProxy pods",
  "inputs": {
   "credentials": {
    "engineApiKey": {
@@ -1697,7 +1697,7 @@
   {
    "apiVersion": "v1",
    "data": {
-    "haproxy.cfg": "global\n    log stdout format raw local0\n    tune.bufsize 131072\n\ndefaults\n    mode http\n    timeout connect 1s\n    timeout check   1s\n    timeout client  10m\n    timeout server  10m\n    option http-buffer-request\n    retries 10\n    option redispatch 1\n    retry-on conn-failure 503\n\nfrontend narwhal\n    bind :8000\n    http-request disable-l7-retry if { nbsrv(narwhal_routers) lt 2 }\n    default_backend narwhal_routers\n\nbackend narwhal_routers\n    option httpchk\n    # A router is in rotation while it controls the fleet and has finished taking over.\n    http-check connect\n    http-check send meth GET uri /narwhal/targets\n    http-check expect status 200\n    http-check connect\n    http-check send meth GET uri /ready\n    http-check expect ! string \"engine identity validation pending\"\n    default-server check inter 200ms fall 1 rise 1\n    server router-a router-0.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    server router-b router-1.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    # Nothing listens on this address. While no router passes /ready, HAProxy sends each\n    # request here and retries the refused connection one second later.\n    server hold 127.0.0.1:1 backup no-check\n\nresolvers kubernetes\n    parse-resolv-conf\n    resolve_retries 3\n    timeout resolve 1s\n    timeout retry 1s\n    hold valid 1s\n    hold obsolete 1s\n    hold nx 1s\n    hold refused 1s\n    hold timeout 1s\n    hold other 1s\n"
+    "haproxy.cfg": "global\n    log stdout format raw local0\n    tune.bufsize 131072\n\ndefaults\n    mode http\n    timeout connect 1s\n    timeout check   1s\n    timeout client  10m\n    timeout server  10m\n    option http-buffer-request\n    retries 10\n    option redispatch 1\n    retry-on conn-failure 503\n\nfrontend narwhal\n    bind :8000\n    acl narwhal_get method GET\n    acl narwhal_get_routes path /v1/models /health /ready /narwhal/targets\n    acl narwhal_post method POST\n    acl narwhal_post_routes path /v1/completions /v1/chat/completions\n    http-request deny deny_status 404 unless narwhal_get narwhal_get_routes || narwhal_post narwhal_post_routes\n    http-request disable-l7-retry if { nbsrv(narwhal_routers) lt 2 }\n    default_backend narwhal_routers\n\nbackend narwhal_routers\n    option httpchk\n    # A router is in rotation while it controls the fleet and has finished taking over.\n    http-check connect\n    http-check send meth GET uri /narwhal/targets\n    http-check expect status 200\n    http-check connect\n    http-check send meth GET uri /ready\n    http-check expect ! string \"engine identity validation pending\"\n    default-server check inter 200ms fall 1 rise 1\n    server router-a router-0.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    server router-b router-1.routers.example.svc.cluster.example:8000 resolvers kubernetes init-addr none\n    # Nothing listens on this address. While no router passes /ready, HAProxy sends each\n    # request here and retries the refused connection one second later.\n    server hold 127.0.0.1:1 backup no-check\n\nresolvers kubernetes\n    parse-resolv-conf\n    resolve_retries 3\n    timeout resolve 1s\n    timeout retry 1s\n    hold valid 1s\n    hold obsolete 1s\n    hold nx 1s\n    hold refused 1s\n    hold timeout 1s\n    hold other 1s\n"
    },
    "kind": "ConfigMap",
    "metadata": {
@@ -1824,7 +1824,12 @@
         },
         "name": "config"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2596,7 +2601,12 @@
          "readOnly": true
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2696,7 +2706,12 @@
         },
         "name": "model"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2779,7 +2794,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2871,7 +2891,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -2947,7 +2972,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3053,7 +3083,12 @@
          "readOnly": true
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3146,7 +3181,12 @@
         },
         "name": "narwhal-input"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3217,7 +3257,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3285,7 +3330,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3364,7 +3414,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3438,7 +3493,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3538,7 +3598,12 @@
         },
         "name": "model"
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3614,7 +3679,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }
@@ -3693,7 +3763,12 @@
          "claimName": "narwhal-state"
         }
        }
-      ]
+      ],
+      "securityContext": {
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      }
      }
     }
    }

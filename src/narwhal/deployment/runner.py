@@ -61,6 +61,7 @@ __all__ = [
     "Decision",
     "HelpersSurvived",
     "Input",
+    "Interrupted",
     "LiveCheck",
     "Outcome",
     "Refreshed",
@@ -207,6 +208,12 @@ class Stop:
 
 class Cancelled(Exception):
     """What an action raises once its stage was cancelled and it has removed what it started."""
+
+
+class Interrupted(Exception):
+    """What an action raises when it loses sight of work that may still run, such as a Job
+    whose log the API would not give. The attempt is recorded interrupted and the pass ends
+    with `StageFailed`; the next pass asks the action to adopt that work, as after a restart."""
 
 
 def check_directory(directory: Path) -> None:
@@ -1185,6 +1192,9 @@ class _Run:
             self._finish(spec, entry, FAILED, error)
             self._spend(error)
             raise _Restart(key(error.fact, error.instance)) from error
+        except Interrupted as error:
+            self._finish(spec, entry, INTERRUPTED, error)
+            raise StageFailed(name, entry) from error
         except Cancelled as error:
             if self.stop is None or not self.stop.cancelled(spec.name):
                 # Only the pass's Stop cancels a stage; any other is the action's failure.

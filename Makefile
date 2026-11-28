@@ -115,7 +115,8 @@ observe: $(BOOTSTRAP)
 # The Helm charts. The main chart is rendered for the synthetic fleet of the chart tests and
 # validated against the Kubernetes API schemas of CHART_KUBE_VERSION. kubeconform has no schema
 # for a CustomResourceDefinition, so the CRD chart's test compares its rendered CRD with the
-# one fleet_resource defines.
+# one fleet_resource defines. It has none for the NarwhalFleet either, which helm checks against
+# the same schema in the chart's values.schema.json.
 CHART := deploy/helm/narwhal
 CRD_CHART := deploy/helm/narwhal-crds
 CHART_TOOLS := local/bin
@@ -139,7 +140,7 @@ chart-check: $(BOOTSTRAP) chart-tools
 	  $(HELM) template narwhal $(CHART) --namespace example --kube-version $(CHART_KUBE_VERSION) \
 	    -f $(CHART_OUT)/$$fleet.json > $(CHART_OUT)/$$fleet.manifests.yaml && \
 	  $(KUBECONFORM) -strict -summary -kubernetes-version $(CHART_KUBE_VERSION) \
-	    $(CHART_OUT)/$$fleet.manifests.yaml || exit 1; \
+	    -skip NarwhalFleet $(CHART_OUT)/$$fleet.manifests.yaml || exit 1; \
 	done
 	HELM=$(HELM) $(VENV_PYTHON) -m unittest tests.deployment.test_helm_chart \
 	  tests.deployment.test_crd_chart

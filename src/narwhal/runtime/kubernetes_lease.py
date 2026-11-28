@@ -108,6 +108,10 @@ class KubernetesLease:
     blocks. One lock orders the calls of every thread.
     """
 
+    # A standby may start the pair cold on this Lease: every claim is a conditional update, so
+    # two routers that both find it absent or long expired elect one holder.
+    cold_start = True
+
     def __init__(
         self,
         client: LeaseClient,

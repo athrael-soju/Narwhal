@@ -1,10 +1,13 @@
-"""Write the NarwhalFleet CRD into deploy/helm/narwhal-crds from `fleet_resource.SCHEMA`.
+"""Write the NarwhalFleet CRD and the narwhal chart's generated files from `fleet_resource`.
 
-Run it after changing `src/narwhal/deployment/fleet_resource.py`. With `--check` it changes
-nothing and exits 1 when a chart file differs from the schema; the unit suite runs that check.
+Run it after changing `src/narwhal/deployment/fleet_resource.py`, or the gate kinds or model
+volume name in `kubernetes_objects.py`. With `--check` it changes nothing and exits 1 when a
+chart file differs from what it renders; the unit suite runs that check.
 
-`group_template()` renders the `narwhal.group` template and `values_schema()` the JSON schema
-of a chart's `fleet` value, for a chart that installs a fleet.
+`group_template()` renders the `narwhal.group` template and `fleet_template()` the names and
+patterns the narwhal chart's admission policy shares with `fleet_resource` and
+`kubernetes_objects`. `values_schema()` renders the JSON schema of a chart's `fleet` value,
+which the narwhal chart's `values.schema.json` holds.
 """
 
 from __future__ import annotations
@@ -18,10 +21,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from narwhal.deployment import fleet_resource
+from narwhal.deployment import fleet_resource, kubernetes_objects
+from narwhal.deployment.launch_engine.kubernetes import MODEL_VOLUME_SOURCES
 
 ROOT = Path(__file__).resolve().parents[2]
 CRD_CHART = ROOT / "deploy/helm/narwhal-crds"
+CHART = ROOT / "deploy/helm/narwhal"
 SOURCE = "src/narwhal/deployment/fleet_resource.py"
 HEADER = (
     f"{{{{- /* Generated from {SOURCE} by tools/maintenance/crd_schema.py. "
@@ -115,6 +120,48 @@ def group_template() -> str:
     )
 
 
+def _define(name: str, value: str) -> str:
+    return f'{{{{- define "{name}" -}}}}{value}{{{{- end -}}}}'
+
+
+def fleet_template() -> str:
+    """The `narwhal.fleet.*` templates: the fleet's API version, kind and name, the CRD and
+    controller Lease names, the gate label, and the model volume rules of
+    `fleet_resource.check_model_volume`, for the chart's fleet, RBAC and admission policy.
+
+    Each pattern is a CEL raw string, so it must hold no single quote."""
+    patterns = {
+        "narwhal.fleet.hostPathRefused": fleet_resource.HOST_PATH_REFUSED,
+        "narwhal.fleet.normalisedPath": fleet_resource._NORMALISED,
+        "narwhal.fleet.dotSegment": fleet_resource._DOT_SEGMENT,
+        "narwhal.fleet.digest": fleet_resource._DIGEST,
+    }
+    for name, pattern in patterns.items():
+        if "'" in pattern or "{{" in pattern or "}}" in pattern:
+            raise ValueError(f"{name} cannot be written into a CEL raw string")
+    values = {
+        "narwhal.fleet.apiVersion": fleet_resource.API_VERSION,
+        "narwhal.fleet.kind": fleet_resource.KIND,
+        "narwhal.fleet.name": fleet_resource.NAME,
+        "narwhal.fleet.plural": fleet_resource.PLURAL,
+        "narwhal.fleet.crdName": fleet_resource.CRD_NAME,
+        "narwhal.fleet.controllerLease": fleet_resource.CONTROLLER_LEASE,
+        "narwhal.fleet.gateLabel": fleet_resource.GATE_LABEL,
+        "narwhal.fleet.modelVolume": kubernetes_objects.MODEL_VOLUME,
+        # JSON lists, which are CEL list literals too.
+        "narwhal.fleet.modelVolumeSources": json.dumps(list(MODEL_VOLUME_SOURCES)),
+        "narwhal.fleet.hostNetworkGates": json.dumps(list(kubernetes_objects.HOST_NETWORK_KINDS)),
+        **patterns,
+    }
+    lines = [
+        HEADER,
+        "{{/* The fleet resource's names, and the rules the admission policy shares with the "
+        "controller. */}}",
+        *(_define(name, value) for name, value in values.items()),
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _json_schema(node: Any) -> Any:
     if isinstance(node, list):
         return [_json_schema(item) for item in node]
@@ -141,8 +188,23 @@ def values_schema() -> dict:
     return dict(_json_schema(copy.deepcopy(fleet_resource.SCHEMA["properties"]["spec"])))
 
 
+def chart_values_schema() -> str:
+    """The narwhal chart's `values.schema.json`, with its `fleet` value from `values_schema()`
+    and every other value as the file holds it."""
+    document = json.loads((CHART / "values.schema.json").read_text())
+    document["properties"]["fleet"] = {
+        **values_schema(),
+        "description": "The NarwhalFleet the chart installs, as its spec; leave it out to "
+        "apply the fleet another way",
+    }
+    return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+
+
 FILES: dict[Path, Callable[[], str]] = {
     CRD_CHART / "templates" / f"{fleet_resource.PLURAL}.yaml": crd_template,
+    CHART / "templates" / "_group.tpl": group_template,
+    CHART / "templates" / "_fleet.tpl": fleet_template,
+    CHART / "values.schema.json": chart_values_schema,
 }
 
 

@@ -2,59 +2,48 @@
 # that leaves one out. Keep a filled values file in the ignored config/helm/ directory.
 
 images:
-  # The Narwhal image by registry digest, <repository>@sha256:<hex>. The routers, the gate
-  # Jobs and the engines' attestation sidecars run it.
+  # The Narwhal image by registry digest, <repository>@sha256:<hex>, which the controller runs.
   narwhal: ""
-  # The HAProxy image by registry digest.
-  haproxy: ""
-  # The image the fabric Jobs run ib_write_bw from, by registry digest. Required with fabric
-  # gates.
-  fabric: ""
 
-# The engines, as chart_values derives them from every engine's Kubernetes launch directory.
-engines: {}
+# The fleet controller, which runs the stage graph for the namespace's NarwhalFleet and owns
+# the engines, gate Jobs and HAProxy it derives.
+controller:
+  # The non-root user and group the controller runs as. They own the run directories on the
+  # state volume.
+  runAsUser: 10001
+  runAsGroup: 10001
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+
+# The non-root user each engine pod's attestation sidecar runs as. The engine runs as root
+# with only IPC_LOCK, so it can neither read the sidecar's token nor rewrite its evidence.
+sidecarUser: 10002
+
+# The NarwhalFleet the chart installs, as its spec; `kubectl explain narwhalfleet.spec` describes
+# each field. Leave it out to apply the fleet with narwhal deploy or a GitOps tool.
+# fleet: {}
 
 # Engines that start directly from their image, as narwhal dev starts them on a host, with no
 # launch plan or attestation; direct_values derives them. They serve on CPUs, for a chart test
-# or a development cluster. Their fleet has no engine_contract, so set either engines or these.
+# or a development cluster. Their fleet has no engine_contract.
 directEngines: {}
 
-# The state volume: the fleet file, profiles, calibration and every stage's evidence. The
-# engine pods, the routers and the gate Jobs on different nodes share it.
+# The state volume: the controller's run directories, the fleet file, profiles, calibration and
+# every stage's evidence. The controller's engine pods, routers and gate Jobs on different nodes
+# share it. helm uninstall keeps the claim.
 state:
+  claimName: narwhal-state
   storageClassName: ""
   size: ""
-
-routers:
-  # Run the router pair and HAProxy. narwhal deploy --target kubernetes leaves them off until
-  # its router-start stage, so the engines and gate Jobs run first.
-  enabled: true
-  # The fleet file's path on the state volume.
-  fleet: ""
-  # Each router's own volume, for its journal and state handoff.
-  storageClassName: ""
-  size: ""
-  # More narwhal-serve options, such as ["--lease-ttl", "6"]. The routers elect the primary
-  # through the Lease narwhal-router in the release's namespace.
-  args: []
 
 haproxy:
-  replicas: 1
+  # The cluster's DNS domain, in the addresses Prometheus scrapes.
   clusterDomain: cluster.local
 
-# The engines' API credential, which the routers and the gate Jobs that reach engines read
-# from a Secret: {"env": <variable>, "secretName": <name>, "key": <key>}.
-credentials: {}
-
-# The gate Jobs of the current deployment stage. narwhal deploy --target kubernetes sets them.
-gates: []
-
-# The node each engine role's pod runs on, {"engine-1": "<node>"}. narwhal deploy sets it
-# with engines: the chart holds each engine pod at a scheduling gate until the run pins it there.
-placement: {}
-
 # The cluster admin's allow-lists for a fleet's model volume. The controller refuses a fleet
-# whose model volume uses a source this list leaves out.
+# whose model volume uses a source this list leaves out, and the admission policy refuses a pod
+# whose model volume does.
 modelVolumeSources: [persistentVolumeClaim]
 # With hostPath listed above, the host directories the volume may be or lie in, such as
 # ["/srv/models"], matched by whole path segments. Empty turns hostPath off.
@@ -63,6 +52,18 @@ modelHostPathPrefixes: []
 modelNfsServers: []
 # With csi listed above, the CSI drivers the volume may use. Empty turns csi off.
 modelCsiDrivers: []
+# The RuntimeClasses a pod in the namespace may name, such as ["nvidia"] for nodes whose
+# default container runtime exposes no GPUs. Empty allows only the default runtime.
+runtimeClassNames: []
+
+# The NetworkPolicy that admits connections to the routers only from HAProxy, the gate Jobs,
+# the other router and monitoring. HAProxy forwards only the serving routes, so only those
+# reach the control routes.
+networkPolicy:
+  enabled: true
+  # More NetworkPolicy peers that may scrape the routers, such as a cluster Prometheus:
+  # [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}].
+  monitoring: []
 
 # Prometheus and Grafana, from the configuration files `make observe` uses. Prometheus scrapes
 # both routers and finds the engines through the load balancer's /narwhal/targets.
@@ -87,5 +88,8 @@ monitoring:
     dashboard: ""
     # The Secret that holds the Grafana admin login: {"secretName", "userKey", "passwordKey"}.
     admin: {}
+    # Let anyone who reaches Grafana view the dashboards without signing in, as make observe
+    # does on a workstation.
+    anonymous: false
     # storage: {}
     resources: {}

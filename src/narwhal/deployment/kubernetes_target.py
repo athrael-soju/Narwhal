@@ -1,46 +1,106 @@
 """`narwhal deploy --target kubernetes`: the stage graph's actions, live checks and topology on
-a Kubernetes cluster.
+a Kubernetes cluster, for one `NarwhalFleet`.
 
-The workstation drives `helm` and `kubectl` as subprocesses. Every stage that checks something
-in the cluster runs it as a gate Job of the Helm chart: the runner sets the chart's `gates`
-list to that stage's Jobs and upgrades the release, so the engines and routers it already
-runs stay as they are. A Job's inputs travel in a ConfigMap the runner makes for it; its
-outputs come back in its log, as `kubernetes_gate` prints them, and land in the stage's
-attempt directory. Jobs that check the engines read and write the state volume, where the
-engine pods keep their records.
+The actions reach the cluster through a `Cluster`: `ApiCluster` over the API client in the
+fleet controller, or `KubectlCluster` from a workstation. Every object they make is built by
+`kubernetes_objects` with the fleet as its controlling owner and applied server-side, so
+deleting the fleet leaves the cleanup to the garbage collector.
 
-The release holds no router until `router-start`, so the engines and Jobs run first. An engine
+Every stage that checks something in the cluster runs it as a gate Job. A Job's name follows
+from the fleet's uid, the stage instance, the attempt and the Job's place in the attempt, and
+the run record names it before the Job is created. A replayed attempt therefore meets each Job
+it had started under the same name: the create conflicts, and the action adopts the Job, waits
+for it and reads its log. A Job's inputs travel in a ConfigMap; its outputs come back in its
+log, as `kubernetes_gate` prints them, and land in the stage's attempt directory, which stays
+on the machine that runs the stage. Jobs that check the engines read and write the state
+volume, where the engine pods keep their records. Every Job delete propagates in the
+background, so the Job's pods go with it.
+
+A Job or pod that cannot run fails its stage at once: a container whose configuration the
+kubelet cannot build, a pod the kubelet refuses at admission, and an engine or router pod no
+node can schedule.
+
+The engine API key never reaches the runner. The fleet names the Secret that holds it, and the
+pods and Jobs that call the engines read it from there.
+
+The fleet holds no router until `router-start`, so the engines and Jobs run first. An engine
 pod's launch directory lives at `engines/<role>/launches/<pod UID>` on the state volume, where
 its attestation sidecar waits for it.
 """
 
 from __future__ import annotations
 
-import base64
 import copy
+import functools
 import hashlib
 import inspect
 import json
 import math
+import os
 import re
+import secrets
 import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from narwhal import provenance
+from narwhal.contracts import canonical_digest
 from narwhal.engines.attestation import AttestationDocument, launch_digest
+from narwhal.runtime import kubernetes_api
+from narwhal.runtime.kubernetes_api import (
+    CONFIG_MAP,
+    DEPLOYMENT,
+    JOB,
+    NODE,
+    POD,
+    SERVICE,
+    STATEFUL_SET,
+    ApiClient,
+    Conflict,
+    Kind,
+    KubernetesError,
+    LogTooLarge,
+    NotFound,
+    OutcomeUnknown,
+    Unavailable,
+)
 
-from . import cache_groups, discovery, fabric, install, kubernetes_gate, remote, run_record
-from .deploy import CALIBRATION, MARGIN, PROFILE, SLO, InputError, settings
+from . import (
+    cache_groups,
+    discovery,
+    fabric,
+    fleet_resource,
+    install,
+    kubernetes_gate,
+    kubernetes_objects,
+    remote,
+    run_record,
+)
+from .deploy import InputError, settings
 from .deploy import recovery_url as recovery_url
 from .deploy_graph import CACHE_CAPTURE, EDGE, ENGINE, GROUP, TRANSFER_MEASUREMENT
 from .engine_launch import load_launches
-from .hosts import SSH, Host, write_private
+from .fleet_resource import (
+    FABRIC_IMAGE_ENV,
+    FLEET_UID_ENV,
+    HAPROXY_ENV,
+    HAPROXY_IMAGE_ENV,
+    ROUTERS_ENV,
+    VolumePolicy,
+    check_model_volume,
+    spec_env,
+    variable_fact,
+)
+from .graph import INPUT as INPUT_FACT
+from .hosts import HOST_CAUSE, SSH, Host, write_private
 from .kubernetes_graph import KUBERNETES_GRAPH
+from .kubernetes_objects import GateJob, Owner, controlled
 from .launch_engine import checkpoint as checkpoint_manifest
 from .launch_engine import engine_set
 from .launch_engine.accelerators import gpu_inventory
@@ -53,49 +113,95 @@ from .launch_engine.backend import (
     plan_launcher,
     transfer_measurement,
 )
-from .launch_engine.kubernetes import LAUNCHES
-from .launch_engine.plan import conv_state_layers
+from .launch_engine.kubernetes import (
+    API_KEY_SECRET_ENV,
+    LAUNCHES,
+    SERVICE_ACCOUNT_ENV,
+    SIDECAR_IMAGE_ENV,
+    SIDECAR_USER_ENV,
+    api_key_secret,
+    sidecar_user,
+)
+from .launch_engine.plan import API_KEY_ENV, conv_state_layers
 from .role_env import HELPER_DIRECTORY, helpers, read_environment, select_values, write_environment
 from .run_record import PASSED, key
-from .runner import Input, Outcome, Runner, StageContext, Unobserved, check_directory
+from .runner import (
+    Cancelled,
+    Input,
+    Interrupted,
+    Outcome,
+    Runner,
+    RunResult,
+    StageContext,
+    Stop,
+    Unobserved,
+    check_directory,
+)
 
 TARGET = "kubernetes"
-# What this run's last passed access and install gave the cluster, in the run directory.
-OWNED = "kubernetes"
 LAST_STAGE = "router-start"
 
-NAMESPACE = "NARWHAL_KUBERNETES_NAMESPACE"
-RELEASE = "NARWHAL_KUBERNETES_RELEASE"
+NAMESPACE = fleet_resource.NAMESPACE_ENV
+FLEET_UID = FLEET_UID_ENV
 CONTEXT = "NARWHAL_KUBERNETES_CONTEXT"
 KUBECTL = "NARWHAL_KUBECTL"
-HELM = "NARWHAL_HELM"
-CHART = "NARWHAL_KUBERNETES_CHART"
-VALUES = "NARWHAL_KUBERNETES_VALUES"
 STATE_CLAIM = "NARWHAL_KUBERNETES_STATE_CLAIM"
 GPU_RESOURCE = "NARWHAL_KUBERNETES_GPU_RESOURCE"
 RDMA_RESOURCE = "NARWHAL_KUBERNETES_RDMA_RESOURCE"
 MODEL_VOLUME = "NARWHAL_KUBERNETES_MODEL_VOLUME"
 RUNTIME_CLASS = "NARWHAL_KUBERNETES_RUNTIME_CLASS"
-CLUSTER_INPUTS = (CONTEXT, NAMESPACE, RELEASE, KUBECTL, HELM)
+# The engines' ServiceAccount, which the chart makes as `<release>-engine` and names in the
+# controller's settings; no fleet sets it.
+ENGINE_ACCOUNT = SERVICE_ACCOUNT_ENV
+# The user the engine pods' attestation sidecars run as, from the controller's settings.
+SIDECAR_USER = SIDECAR_USER_ENV
+# How the workstation reaches the cluster; the controller in the cluster needs neither.
+WORKSTATION_INPUTS = (CONTEXT, KUBECTL)
+# The inputs `narwhal-engine prepare --backend kubernetes` reads from its Job's role file.
+POD_INPUTS = (
+    GPU_RESOURCE,
+    RDMA_RESOURCE,
+    MODEL_VOLUME,
+    STATE_CLAIM,
+    RUNTIME_CLASS,
+    API_KEY_SECRET_ENV,
+    ENGINE_ACCOUNT,
+    SIDECAR_IMAGE_ENV,
+    SIDECAR_USER,
+)
 # The engine node of engine role n.
-NODE = re.compile(r"NARWHAL_NODE_([1-9][0-9]*)_KUBERNETES_NODE")
+NODE_NAME = re.compile(r"NARWHAL_NODE_([1-9][0-9]*)_KUBERNETES_NODE")
 DNS_NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
+DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 DIGEST = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
+UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+# The fleet, as the API serves it.
+FLEET = Kind(
+    fleet_resource.GROUP, fleet_resource.VERSION, fleet_resource.KIND, fleet_resource.PLURAL
+)
 
 # Where the cluster's containers see things.
 STATE = "/narwhal-state"
 INPUT = "/narwhal-input"
 MODEL = "/model"
 ROUTER_HOME = "/narwhal-router"
-ROUTER_URL = "http://haproxy:8000"
-ROUTERS = ("router-0", "router-1")
+ROUTERS = kubernetes_objects.ROUTER_PODS
+# The first router pod, by its name in the routers' headless Service of the fleet's namespace.
+# HAProxy forwards only the serving routes, so a router's own address stands for the router.
+ROUTER_URL = (
+    f"http://{ROUTERS[0]}.{kubernetes_objects.ROUTER_SERVICE}:{kubernetes_objects.ROUTER_PORT}"
+)
+ROUTER_COMPONENT = "router"
 # Where a host-script Job unpacks its inputs, as an SSH host's deployment directory.
 REMOTE_DIR = "/tmp/narwhal-in"
 ENGINE_CONTAINER = "engine"
 SIDECAR_CONTAINER = "attestation"
-GATE_CONTAINER = "gate"
-# The scheduling gate the chart holds each engine pod at until engine-start pins it to its node.
-PLACEMENT_GATE = "narwhal.io/placement"
+GATE_CONTAINER = kubernetes_objects.GATE
+# The scheduling gate each engine pod waits at until engine-start pins it to its node.
+PLACEMENT_GATE = fleet_resource.PLACEMENT_GATE
+# The label the Job controller gives each pod of a Job.
+JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
 
 # Seconds each Job may run, and how long the runner waits on the cluster around it.
 JOB_SECONDS = {
@@ -113,13 +219,30 @@ JOB_SECONDS = {
     "calibrate": 3600,
     "preflight": 1800,
     "router-check": 600,
+    "key-check": 300,
 }
 GRACE_SECONDS = 120
 POLL_SECONDS = 2.0
 START_SECONDS = 1800
 ROUTER_SECONDS = 600
+# A router pod may wait this long for a node, as when a cluster autoscaler adds one.
+ROUTER_UNSCHEDULABLE_SECONDS = 300
+# How long a Job being deleted may take to go before its name is free again.
+GONE_SECONDS = 120
+# Reads of a finished Job's log, and the longest wait between reads the API refused.
+LOG_TRIES = 5
+BACKOFF_SECONDS = 30.0
 PUBLISH_SECONDS = 900
-HELM_SECONDS = 600
+# A gate's log is read whole; the kubelet rotates a container log at 10 MiB by default.
+LOG_BYTES = kubernetes_api.LOG_MAX_BYTES
+# A write whose outcome is unknown is read back, and made again at most this many times.
+WRITE_TRIES = 3
+
+# A container that waits for one of these never starts by itself.
+# CreateContainerError is left out: the runtime gives it for passing causes too.
+NEVER_STARTS = ("CreateContainerConfigError", "InvalidImageName")
+# An engine pod that waits for its image this way runs no other image.
+IMAGE_FAILURES = ("ErrImagePull", "ImagePullBackOff")
 
 _COMPLETION_PROMPT = "Return one sentence about narwhals."
 _FABRIC_TEST = re.compile(r"NARWHAL_(FABRIC_TEST_PORT|(NODE_[1-9][0-9]*_)?RDMA_.*)")
@@ -128,15 +251,37 @@ _NOT_INPUTS = re.compile(
     r"|STAGE_CLEANUP_GRACE_SECONDS|STAGE_KILL_GRACE_SECONDS|TRIAL_.*)"
 )
 _ROUTER_INPUTS = ("NARWHAL_ROUTER_URL",)
+# The Helm inputs the target read before the NarwhalFleet held its settings.
+RETIRED = (
+    "NARWHAL_KUBERNETES_VALUES",
+    "NARWHAL_KUBERNETES_CHART",
+    "NARWHAL_KUBERNETES_RELEASE",
+    "NARWHAL_HELM",
+)
+
+# The key check: its Job reports the HMAC of the engine API key under the fleet's salt, which
+# the run directory keeps in CREDENTIAL_FILE with the last HMAC.
+KEY_CHECK = "key-check"
+CREDENTIAL_FILE = "credential.json"
+HEX64 = re.compile(r"[0-9a-f]{64}")
+_KEY_HMAC = f"""import hashlib, hmac, json, os
+salt = bytes.fromhex(open('/tmp/narwhal-in/salt').read().strip())
+key = os.environ[{API_KEY_ENV!r}].encode()
+digest = hmac.new(salt, key, hashlib.sha256).hexdigest()
+with open('/tmp/narwhal-key.json', 'w') as out:
+    json.dump({{"hmac_sha256": digest}}, out)
+"""
+
+# The digest of a gate Job's spec and inputs, which adoption matches exactly.
+SPEC_ANNOTATION = fleet_resource.qualified("spec-sha256")
+
+# The time functions the deployment waits with.
+_sleep: Callable[[float], None] = time.sleep
+_clock: Callable[[], float] = time.monotonic
 
 
-class ClusterError(RuntimeError):
-    """A `kubectl` or `helm` command failed."""
-
-    def __init__(self, argv: Sequence[str], status: int, cause: str, log: Path) -> None:
-        self.context = {"command": argv[0], "exit_status": status, "log": str(log)}
-        detail = cause.strip().splitlines()[-1] if cause.strip() else "no output"
-        super().__init__(f"{shlex.join(argv[:3])} exited {status}: {detail}; inspect {log}")
+# A failed request to the cluster: the API's own errors, or a kubectl that failed.
+ClusterError = KubernetesError
 
 
 class GateFailed(remote.StepFailed):
@@ -147,112 +292,299 @@ class GateOutputError(ValueError):
     """A gate Job's log holds no complete set of returned files."""
 
 
-# The cluster: `kubectl` and `helm` as subprocesses.
+# What the runner may do in the fleet's namespace, and in the cluster: each verb a `Cluster`
+# call below sends, as a Role's rules name them. The narwhal chart grants the controller these.
+RULES: tuple[dict[str, Any], ...] = (
+    {"apiGroups": [fleet_resource.GROUP], "resources": [FLEET.plural], "verbs": ["get"]},
+    {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["get", "list", "create", "delete"]},
+    {"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "patch", "delete"]},
+    {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+    {
+        "apiGroups": [""],
+        "resources": ["configmaps", "services"],
+        "verbs": ["get", "list", "create", "patch", "delete"],
+    },
+    {
+        "apiGroups": ["apps"],
+        "resources": ["statefulsets", "deployments"],
+        "verbs": ["get", "list", "create", "patch", "delete"],
+    },
+)
+CLUSTER_RULES: tuple[dict[str, Any], ...] = (
+    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get"]},
+)
+# The RBAC verbs each `Cluster` method needs. A server-side apply that makes an object needs
+# `create` as well as `patch`.
+VERBS = {
+    "get": ("get",),
+    "list": ("list",),
+    "create": ("create",),
+    "apply": ("create", "patch"),
+    "patch": ("patch",),
+    "delete": ("delete",),
+    "log": ("get",),
+}
 
 
-class Cluster:
-    """`kubectl` and `helm` against one namespace and release, each call logged."""
+# The cluster.
+
+
+class Cluster(Protocol):
+    """The API verbs the actions use, on plain dictionaries, in the fleet's namespace.
+
+    `get` returns None for an object that does not exist, and `delete` False. A write raises
+    `Conflict` for a name that exists and `OutcomeUnknown` when it may have taken effect;
+    the caller reads the object again before it decides.
+    """
+
+    namespace: str
+
+    def get(self, kind: Kind, name: str) -> dict[str, Any] | None: ...
+
+    def list(self, kind: Kind, labels: Mapping[str, str] | None = None) -> list[dict[str, Any]]: ...
+
+    def create(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def apply(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def patch(
+        self, kind: Kind, name: str, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]: ...
+
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool: ...
+
+    def log(self, pod: str, container: str) -> bytes: ...
+
+
+def _typed(kind: Kind, items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """List items with their apiVersion and kind, which the API leaves off them."""
+    return [{"apiVersion": kind.api_version, "kind": kind.kind, **dict(item)} for item in items]
+
+
+class ApiCluster:
+    """A `Cluster` over the API client, as the fleet controller reaches its own namespace.
+
+    Applies take every field they set, as `kubernetes_objects.MANAGER`, and every delete
+    propagates in the background.
+    """
+
+    def __init__(self, client: ApiClient) -> None:
+        self.client = client
+        self.namespace = client.namespace
+
+    def get(self, kind: Kind, name: str) -> dict[str, Any] | None:
+        return self.client.get(kind, name)
+
+    def list(self, kind: Kind, labels: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+        return _typed(kind, self.client.list(kind, labels=labels).items)
+
+    def create(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        return self.client.create(kind, obj)
+
+    def apply(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        return self.client.apply(kind, obj, force=True)
+
+    def patch(
+        self, kind: Kind, name: str, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        return self.client.patch(kind, name, operations)
+
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool:
+        return self.client.delete(kind, name, propagation=kubernetes_objects.BACKGROUND, uid=uid)
+
+    def log(self, pod: str, container: str) -> bytes:
+        return self.client.log(pod, container=container, limit_bytes=LOG_BYTES)
+
+
+def in_cluster(env: Mapping[str, str], logs: Path) -> Cluster:
+    """The cluster as the pod this runs in reaches it, through its ServiceAccount."""
+    del env, logs
+    connection = kubernetes_api.in_cluster()
+    return ApiCluster(ApiClient(connection, field_manager=kubernetes_objects.MANAGER))
+
+
+class KubectlCluster:
+    """A `Cluster` through `kubectl` on a workstation, each call logged under `logs`."""
 
     def __init__(self, env: Mapping[str, str], logs: Path) -> None:
         self.namespace = env.get(NAMESPACE, "")
-        self.release = env.get(RELEASE) or "narwhal"
         self.context = env.get(CONTEXT, "")
         self.kubectl_path = env.get(KUBECTL) or "kubectl"
-        self.helm_path = env.get(HELM) or "helm"
         self.log_dir = logs
         self._count = 0
 
-    def _run(self, argv: list[str], data: str | None, timeout: float) -> str:
+    def _run(self, argv: list[str], data: str | None, timeout: float, *, write: bool) -> str:
         self.log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._count += 1
-        log = self.log_dir / f"{self._count:03d}-{Path(argv[0]).name}-{argv[1]}.log"
+        log = self.log_dir / f"{self._count:03d}-kubectl-{argv[1]}.log"
         try:
+            # kubectl reads standard input only for a write; it never reads the runner's.
             result = subprocess.run(
-                argv, input=data, capture_output=True, text=True, timeout=timeout, check=False
+                argv,
+                input=data,
+                stdin=None if data is not None else subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             write_private(log, f"$ {shlex.join(argv)}\ntimed out after {timeout:g}s\n".encode())
-            raise ClusterError(argv, 124, f"timed out after {timeout:g} seconds", log) from None
+            raise _kubectl_error(argv, 124, "timed out", log, write=write) from None
         # Logs keep the command and its standard error; standard output is the caller's.
         write_private(
             log, f"$ {shlex.join(argv)}\nexit {result.returncode}\n{result.stderr}".encode()
         )
         if result.returncode:
-            raise ClusterError(argv, result.returncode, result.stderr or result.stdout, log)
+            raise _kubectl_error(
+                argv, result.returncode, result.stderr or result.stdout, log, write=write
+            )
         return result.stdout
 
-    def kubectl(self, *args: str, data: str | None = None, timeout: float = 120) -> str:
+    def kubectl(
+        self, *args: str, data: str | None = None, timeout: float = 120, write: bool = False
+    ) -> str:
         context = ["--context", self.context] if self.context else []
         argv = [self.kubectl_path, *args[:1], *context, "--namespace", self.namespace, *args[1:]]
-        return self._run(argv, data, timeout)
+        return self._run(argv, data, timeout, write=write)
 
-    def helm(self, *args: str, data: str | None = None, timeout: float = HELM_SECONDS) -> str:
-        context = ["--kube-context", self.context] if self.context else []
-        argv = [self.helm_path, *args[:1], *context, "--namespace", self.namespace, *args[1:]]
-        return self._run(argv, data, timeout)
+    @staticmethod
+    def _resource(kind: Kind) -> str:
+        return f"{kind.plural}.{kind.group}" if kind.group else kind.plural
 
-    def get(self, kind: str, name: str) -> dict | None:
-        """The object, or None when the namespace has none of that name."""
-        output = self.kubectl("get", kind, name, "--ignore-not-found", "--output", "json")
+    def get(self, kind: Kind, name: str) -> dict[str, Any] | None:
+        output = self.kubectl(
+            "get", self._resource(kind), name, "--ignore-not-found", "--output", "json"
+        )
         return json.loads(output) if output.strip() else None
 
-    def items(self, kind: str, selector: str) -> list[dict]:
-        output = self.kubectl("get", kind, "--selector", selector, "--output", "json")
-        return list(json.loads(output)["items"])
+    def list(self, kind: Kind, labels: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+        selector = ",".join(f"{name}={value}" for name, value in sorted((labels or {}).items()))
+        args = ["get", self._resource(kind), "--output", "json"]
+        if selector:
+            args += ["--selector", selector]
+        return _typed(kind, json.loads(self.kubectl(*args))["items"])
 
-    def apply(self, document: Mapping[str, Any]) -> None:
-        self.kubectl("apply", "--filename", "-", data=json.dumps(document))
-
-    def delete(self, kind: str, name: str) -> None:
-        self.kubectl("delete", kind, name, "--ignore-not-found", "--wait=false")
-
-    def patch(self, kind: str, name: str, operations: Sequence[Mapping[str, Any]]) -> None:
-        self.kubectl("patch", kind, name, "--type", "json", "--patch", json.dumps(operations))
-
-    def logs(self, job: str) -> str:
-        return self.kubectl("logs", f"job/{job}", "--container", GATE_CONTAINER, timeout=300)
-
-    def upgrade(self, chart: Path, values: Mapping[str, Any]) -> None:
-        self.helm(
-            "upgrade",
-            self.release,
-            str(chart),
-            "--install",
-            "--values",
-            "-",
-            data=json.dumps(values),
+    def create(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        output = self.kubectl(
+            "create", "--filename", "-", "--output", "json", data=json.dumps(obj), write=True
         )
+        return dict(json.loads(output))
 
-    def current_context(self) -> str:
-        """The kubeconfig context kubectl uses: the one the environment names, or the current."""
-        return self.context or self.kubectl("config", "current-context").strip()
+    def apply(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        output = self.kubectl(
+            "apply",
+            "--server-side",
+            "--force-conflicts",
+            f"--field-manager={kubernetes_objects.MANAGER}",
+            "--filename",
+            "-",
+            "--output",
+            "json",
+            data=json.dumps(obj),
+            write=True,
+        )
+        return dict(json.loads(output))
 
-    def api_server(self) -> str:
-        """The API server URL of that context."""
-        jsonpath = "jsonpath={.clusters[0].cluster.server}"
-        return self.kubectl("config", "view", "--minify", "--output", jsonpath).strip()
+    def patch(
+        self, kind: Kind, name: str, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        output = self.kubectl(
+            "patch",
+            self._resource(kind),
+            name,
+            "--type",
+            "json",
+            "--patch",
+            json.dumps(list(operations)),
+            "--output",
+            "json",
+            write=True,
+        )
+        return dict(json.loads(output))
 
-    def release_values(self) -> dict:
-        """The values the release runs now, or {} before the first install."""
-        try:
-            output = self.helm("get", "values", self.release, "--output", "json")
-        except ClusterError as error:
-            if "not found" in str(error):
-                return {}
-            raise
-        return dict(json.loads(output) or {})
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool:
+        if uid is not None:
+            # kubectl names no precondition, so the delete goes to the object's own path with
+            # DeleteOptions that hold the uid.
+            options = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Background",
+                "preconditions": {"uid": uid},
+            }
+            try:
+                self.kubectl(
+                    "delete",
+                    "--raw",
+                    f"{kind.path(self.namespace)}/{name}",
+                    "-f",
+                    "-",
+                    data=json.dumps(options),
+                    write=True,
+                )
+            except NotFound:
+                return False
+            return True
+        output = self.kubectl(
+            "delete",
+            self._resource(kind),
+            name,
+            "--ignore-not-found",
+            "--wait=false",
+            "--cascade=background",
+            write=True,
+        )
+        return bool(output.strip())
 
-    def version(self) -> dict:
-        return dict(json.loads(self.kubectl("version", "--output", "json")))
+    def log(self, pod: str, container: str) -> bytes:
+        output = self.kubectl(
+            "logs", f"pod/{pod}", "--container", container, f"--limit-bytes={LOG_BYTES + 1}"
+        )
+        data = output.encode()
+        if len(data) > LOG_BYTES:
+            raise LogTooLarge(0, "LogTooLarge", f"pod {pod} logged more than {LOG_BYTES} bytes")
+        return data
 
-    def helm_version(self) -> str:
-        return self.helm("version", "--short").strip()
 
-    def can_i(self, verb: str, resource: str) -> bool:
-        try:
-            return self.kubectl("auth", "can-i", verb, resource).strip() == "yes"
-        except ClusterError:
-            return False
+def _kubectl_error(
+    argv: Sequence[str], status: int, cause: str, log: Path, *, write: bool
+) -> KubernetesError:
+    """The API error a failed kubectl reports, by the reason it prints."""
+    detail = cause.strip().splitlines()[-1] if cause.strip() else "no output"
+    message = f"{shlex.join(argv[:3])} exited {status}: {detail}; inspect {log}"
+    if "(AlreadyExists)" in cause or "(Conflict)" in cause:
+        return Conflict(409, "Conflict", message)
+    if "(NotFound)" in cause:
+        return NotFound(404, "NotFound", message)
+    lost = status == 124 or any(
+        text in cause for text in ("Unable to connect", "i/o timeout", "connection refused")
+    )
+    if lost:
+        if write:
+            return OutcomeUnknown(0, "OutcomeUnknown", f"{message}; read the object again")
+        return Unavailable(0, "Unavailable", message)
+    return KubernetesError(status, "KubectlFailed", message)
+
+
+# The kinds of the objects the fleet owns, by name.
+KINDS = {kind.kind: kind for kind in (CONFIG_MAP, SERVICE, STATEFUL_SET, DEPLOYMENT, JOB, POD)}
+# What `stop` deletes, and the order of the components it deletes.
+STOP_KINDS = (DEPLOYMENT, STATEFUL_SET, JOB, SERVICE, CONFIG_MAP)
+STOP_ORDER = (
+    ROUTER_COMPONENT,
+    kubernetes_objects.HAPROXY,
+    kubernetes_objects.ENGINE,
+    kubernetes_objects.GATE,
+)
+
+
+def kind_of(document: Mapping[str, Any]) -> Kind:
+    """The kind of an object `kubernetes_objects` built."""
+    found = KINDS.get(str(document.get("kind")))
+    if found is None or document.get("apiVersion") != found.api_version:
+        raise ValueError(f"{document.get('apiVersion')} {document.get('kind')} is no fleet object")
+    return found
 
 
 # Gate Jobs.
@@ -308,57 +640,6 @@ def gate_files(output: str) -> dict[str, bytes]:
     return files
 
 
-# The release's objects, which helm reads, creates, changes and removes; helm keeps its
-# releases in Secrets.
-_RELEASE_KINDS = (
-    "secrets",
-    "configmaps",
-    "services",
-    "serviceaccounts",
-    "persistentvolumeclaims",
-    "statefulsets.apps",
-    "deployments.apps",
-    "jobs.batch",
-    "roles.rbac.authorization.k8s.io",
-    "rolebindings.rbac.authorization.k8s.io",
-)
-# Helm keeps each release revision in a Secret: it reads and lists them, creates the new one,
-# updates the one it supersedes and deletes those past its history limit.
-HELM_STORAGE = tuple((verb, "secrets") for verb in ("get", "list", "create", "update", "delete"))
-# Every verb and resource a run needs, as `kubectl auth can-i` takes them.
-PERMISSIONS = (
-    *HELM_STORAGE,
-    *(
-        (verb, kind)
-        for kind in _RELEASE_KINDS
-        for verb in ("get", "list", "create", "patch", "delete")
-        if (verb, kind) not in HELM_STORAGE
-    ),
-    ("get", "pods"),
-    ("list", "pods"),
-    ("patch", "pods"),
-    ("delete", "pods"),
-    ("get", "pods/log"),
-    ("get", "nodes"),
-    # RBAC lets an identity grant only what it holds, so installing the routers' Role takes the
-    # Lease verbs that Role grants.
-    *((verb, "leases.coordination.k8s.io") for verb in ("get", "create", "update")),
-)
-# Pod scheduling gates are on by default from this Kubernetes version.
-MINIMUM_SERVER = (1, 27)
-
-
-def server_version(server: Mapping[str, Any]) -> tuple[int, int]:
-    """The server's major and minor version, as (0, 0) when it reports none."""
-    match = re.match(r"v?(\d+)\.(\d+)", str(server.get("gitVersion", "")))
-    return (int(match[1]), int(match[2])) if match else (0, 0)
-
-
-def _job_name(kind: str, label: str, seed: str) -> str:
-    stem = re.sub(r"[^a-z0-9-]+", "-", f"{kind}-{label}".lower()).strip("-")[:48].strip("-")
-    return f"{stem}-{hashlib.sha256(seed.encode()).hexdigest()[:10]}"
-
-
 def _gate_command(*, inputs: bool, returns: Mapping[str, str], command: Sequence[str]) -> list[str]:
     """A Narwhal image's command around `command`: unpack the inputs, return the files."""
     argv = ["python", "-m", "narwhal.deployment.kubernetes_gate", "run"]
@@ -380,6 +661,47 @@ exit "$(cat "${KEEP_ENV}/status")"
 
 def _shell(script: str) -> list[str]:
     return ["sh", "-c", "set -eu\n" + script]
+
+
+def _conditions(obj: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    return {c.get("type"): c for c in (obj.get("status") or {}).get("conditions") or []}
+
+
+def never_runs(pod: Mapping[str, Any], *, scheduled: bool) -> str | None:
+    """Why a pod will never run by itself, or None: a container whose configuration the
+    kubelet cannot build, a pod the kubelet refused at admission, such as `OutOfnvidia.com/gpu`
+    on a node a Job is pinned to, or, with `scheduled`, a pod no node can schedule."""
+    status = pod.get("status") or {}
+    if status.get("phase") == "Failed" and status.get("reason"):
+        node = (pod.get("spec") or {}).get("nodeName") or "its node"
+        return f"the kubelet on {node} refused the pod: {status['reason']}: " + str(
+            status.get("message") or "no message"
+        )
+    containers = [
+        *(status.get("initContainerStatuses") or []),
+        *(status.get("containerStatuses") or []),
+    ]
+    for container in containers:
+        waiting = (container.get("state") or {}).get("waiting") or {}
+        if waiting.get("reason") in NEVER_STARTS:
+            return f"container {container.get('name')}: {waiting['reason']}: " + str(
+                waiting.get("message") or "no message"
+            )
+    if scheduled and (cause := unschedulable(pod)):
+        return cause
+    return None
+
+
+def unschedulable(pod: Mapping[str, Any]) -> str | None:
+    """Why the scheduler finds no node for the pod, or None. A pod that waits for its
+    PersistentVolumeClaims to bind is not unschedulable: the claim binds by itself."""
+    placed = _conditions(pod).get("PodScheduled") or {}
+    if placed.get("status") != "False" or placed.get("reason") != "Unschedulable":
+        return None
+    message = str(placed.get("message") or "Unschedulable")
+    if "unbound" in message and "PersistentVolumeClaim" in message:
+        return None
+    return f"no node can schedule the pod: {message}"
 
 
 # Discovery in the engine image, which holds the engine's Python but not Narwhal.
@@ -485,14 +807,14 @@ def engine_nodes(env: Mapping[str, str]) -> dict[str, str]:
     found = {
         f"engine-{match[1]}": value
         for name, value in env.items()
-        if (match := NODE.fullmatch(name))
+        if (match := NODE_NAME.fullmatch(name))
     }
     return dict(sorted(found.items(), key=lambda item: _node(item[0])))
 
 
 def target_env(env: Mapping[str, str]) -> dict[str, str]:
-    """The environment as the cluster's containers see it: the model at /model, the router
-    behind HAProxy unless set."""
+    """The environment as the cluster's containers see it: the model at /model, and the first
+    router pod's address unless the router URL is set."""
     return {
         **env,
         "NARWHAL_MODEL_DIR": MODEL,
@@ -501,74 +823,103 @@ def target_env(env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def chart_path(env: Mapping[str, str]) -> Path:
-    if env.get(CHART):
-        return Path(env[CHART])
-    return Path(__file__).resolve().parents[3] / "deploy/helm/narwhal"
+def _object(env: Mapping[str, str], name: str) -> dict[str, Any]:
+    """A variable that holds one JSON object, as `spec_env` writes a fleet's blocks."""
+    try:
+        value = json.loads(env.get(name) or "{}")
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must hold one JSON object")
+    return value
 
 
-def base_values(env: Mapping[str, str]) -> dict:
-    path = Path(env.get(VALUES, ""))
-    if not env.get(VALUES) or not path.is_file():
-        raise ValueError(f"set {VALUES} to the chart values file, in JSON, of this fleet")
-    document = json.loads(path.read_text())
-    if not isinstance(document, dict):
-        raise ValueError(f"{path} must hold one JSON object of chart values")
-    return document
+def fact_of(name: str) -> str | None:
+    """The input fact a variable belongs to, or None for a variable that is no input."""
+    if not name.startswith("NARWHAL_") or _NOT_INPUTS.fullmatch(name):
+        return None
+    if name in WORKSTATION_INPUTS:
+        return "cluster"
+    if name in _ROUTER_INPUTS:
+        return "router"
+    if _FABRIC_TEST.fullmatch(name):
+        return "fabric_test"
+    return variable_fact(name)
 
 
-def _tree_digest(root: Path) -> str:
-    read = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        read.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
-    return "sha256:" + read.hexdigest()
+def settings_env(fleet: Mapping[str, Any], settings: Mapping[str, Any]) -> dict[str, str]:
+    """The variables `inputs()` reads, from a NarwhalFleet and the controller's settings.
+
+    The narwhal chart writes the settings to controller.json: `stateClaim`, the engines'
+    ServiceAccount in `engineServiceAccount`, the sidecars' user in `sidecarUser` (the launch's
+    default when unset) and the cluster admin's model volume allow-lists.
+    """
+    policy = VolumePolicy.from_values(settings)
+    env = spec_env(fleet, state_claim=str(settings["stateClaim"]), policy=policy)
+    env[ENGINE_ACCOUNT] = str(settings["engineServiceAccount"])
+    if "sidecarUser" in settings:
+        env[SIDECAR_USER] = str(settings["sidecarUser"])
+    return env
 
 
-def _values(env: Mapping[str, str], names: Sequence[str]) -> dict[str, str]:
-    return {name: env[name] for name in names if name in env}
+def _check_model_volume(env: Mapping[str, str], policy: VolumePolicy) -> None:
+    source = json.loads(env[MODEL_VOLUME])
+    check_model_volume({"spec": {"engines": {"modelVolume": source}}}, policy)
 
 
-def inputs(env: Mapping[str, str]) -> dict[str, Input]:
+def inputs(env: Mapping[str, str], *, policy: VolumePolicy | None = None) -> dict[str, Input]:
     """The digest of every input fact of the Kubernetes graph, after checking each input.
 
+    `policy` is the cluster admin's allow-list of model volumes, the narwhal chart's by default.
     Raises `InputError` naming every missing or malformed input, before the cluster is touched.
     """
+    policy = policy or VolumePolicy()
     problems: list[str] = []
     env = target_env(env)
     try:
         settings(env)
     except InputError as error:
         problems.extend(error.problems)
-    if not DNS_NAME.fullmatch(env.get(NAMESPACE, "")):
+    if not DNS_LABEL.fullmatch(env.get(NAMESPACE, "")):
         problems.append(f"set {NAMESPACE} to the namespace the fleet runs in")
-    values: dict = {}
-    try:
-        values = base_values(env)
-    except (ValueError, OSError) as error:
-        problems.append(str(error))
-    images = values.get("images", {}) if isinstance(values.get("images"), dict) else {}
     problems.extend(
-        f"{VALUES}: set images.{name} to an image by registry digest"
-        for name in ("narwhal", "fabric")
-        if not DIGEST.fullmatch(str(images.get(name, "")))
+        f"unset {name}; the NarwhalFleet now holds the settings it gave"
+        for name in RETIRED
+        if name in env
     )
+    if not UID.fullmatch(env.get(FLEET_UID, "")):
+        problems.append(f"set {FLEET_UID} to the uid of the NarwhalFleet this run deploys")
     problems.extend(
-        f"{VALUES}: leave {name} unset; the runner sets it"
-        for name in ("engines", "directEngines", "gates")
-        if values.get(name)
-    )
-    credentials = (
-        values.get("credentials", {}) if isinstance(values.get("credentials"), dict) else {}
-    )
-    named = (credentials.get("engineApiKey") or {}).get("env")
-    if env.get("NARWHAL_ENGINE_KEY") and named != "NARWHAL_ENGINE_KEY":
-        problems.append(
-            f"{VALUES}: set credentials.engineApiKey.env to NARWHAL_ENGINE_KEY, the variable the "
-            "fleet reads the engine API key from, so the Jobs and routers receive it"
+        f"set {name} to the {what} image by registry digest"
+        for name, what in (
+            (SIDECAR_IMAGE_ENV, "Narwhal"),
+            (FABRIC_IMAGE_ENV, "fabric"),
+            (HAPROXY_IMAGE_ENV, "HAProxy"),
         )
-    chart = chart_path(env)
-    if not (chart / "Chart.yaml").is_file():
-        problems.append(f"set {CHART} to the Narwhal Helm chart directory")
+        if not DIGEST.fullmatch(env.get(name, ""))
+    )
+    if not DNS_NAME.fullmatch(env.get(ENGINE_ACCOUNT, "")):
+        problems.append(
+            f"set {ENGINE_ACCOUNT} to the engines' ServiceAccount, which the chart makes"
+        )
+    for name in (ROUTERS_ENV, HAPROXY_ENV):
+        try:
+            block = _object(env, name)
+        except ValueError as error:
+            problems.append(str(error))
+            continue
+        if name == ROUTERS_ENV and not {"storageClassName", "size"} <= set(block):
+            problems.append(f"set {ROUTERS_ENV} to the routers block, with its storage")
+    for check in (api_key_secret, sidecar_user):
+        try:
+            check(env)
+        except ValueError as error:
+            problems.append(str(error))
+    if env.get(API_KEY_ENV):
+        problems.append(
+            f"{API_KEY_ENV} holds the engine API key; the fleet reads it from the Secret "
+            f"{API_KEY_SECRET_ENV} names, so unset it"
+        )
     nodes = engine_nodes(env)
     if len(nodes) < 2:
         problems.append("set NARWHAL_NODE_<n>_KUBERNETES_NODE for each engine, at least two")
@@ -593,9 +944,14 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
             )
     problems.extend(
         f"set {name}; the engine pods read it"
-        for name in (GPU_RESOURCE, MODEL_VOLUME, STATE_CLAIM)
+        for name in (GPU_RESOURCE, RDMA_RESOURCE, MODEL_VOLUME, STATE_CLAIM)
         if not env.get(name)
     )
+    if env.get(MODEL_VOLUME):
+        try:
+            _check_model_volume(env, policy)
+        except ValueError as error:
+            problems.append(f"{MODEL_VOLUME}: {error}")
     try:
         fabric.inputs(env)
     except ValueError as error:
@@ -604,43 +960,17 @@ def inputs(env: Mapping[str, str]) -> dict[str, Input]:
         problems.append("set NARWHAL_ENGINE_MODEL_NAME to the served model name")
     if problems:
         raise InputError(list(dict.fromkeys(problems)))
-    claimed = {*SLO, MARGIN, *PROFILE, *CALIBRATION, *_ROUTER_INPUTS, *CLUSTER_INPUTS}
-    claimed |= {name for _, name, _ in fabric.WORKLOAD} | {CHART, VALUES}
-    discovered = {
-        name: value
-        for name, value in env.items()
-        if name.startswith("NARWHAL_")
-        and name not in claimed
-        and not _NOT_INPUTS.fullmatch(name)
-        and not _FABRIC_TEST.fullmatch(name)
+    facts: dict[str, dict[str, str]] = {
+        name: {} for name, fact in KUBERNETES_GRAPH.facts.items() if fact.kind == INPUT_FACT
     }
-    discovered["images"] = json.dumps(images, sort_keys=True)
-    router = {
-        name: values.get(name)
-        for name in ("routers", "haproxy", "credentials", "monitoring", "state")
-    }
-    source = "environment"
+    for name, value in env.items():
+        fact = fact_of(name)
+        if fact is not None:
+            facts[fact][name] = value
+    facts["revision"] = {"source": provenance.source_digest()}
+    sources = {"revision": "the installed package"}
     return {
-        "cluster": Input.value(_values(env, CLUSTER_INPUTS), source),
-        "discovery": Input.value(discovered, f"environment and {env[VALUES]}"),
-        "revision": Input.value(
-            {"source": provenance.source_digest(), "chart": _tree_digest(chart)},
-            "the installed package and the chart",
-        ),
-        "slo": Input.value(_values(env, SLO), source),
-        "deadline_margin": Input.value(_values(env, (MARGIN,)), source),
-        "profiling": Input.value(_values(env, PROFILE), source),
-        "calibration": Input.value(_values(env, CALIBRATION), source),
-        "fabric_workload": Input.value(
-            _values(env, [name for _, name, _ in fabric.WORKLOAD]), source
-        ),
-        "fabric_test": Input.value(
-            {name: value for name, value in env.items() if _FABRIC_TEST.fullmatch(name)}, source
-        ),
-        "router": Input.value(
-            {"env": _values(env, _ROUTER_INPUTS), "values": router},
-            f"environment and {env[VALUES]}",
-        ),
+        name: Input.value(values, sources.get(name, "the fleet")) for name, values in facts.items()
     }
 
 
@@ -676,8 +1006,114 @@ def container_identity(pod: Mapping[str, Any], name: str) -> dict | None:
     }
 
 
+def stamp(job: dict[str, Any], inputs: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Annotate a gate Job with the digest of everything it runs: its labels, which name the
+    run, its whole pod template, with image, env, command, volumes and keep subPath, and its
+    inputs ConfigMap's content."""
+    content = (inputs or {}).get("binaryData") or {}, (inputs or {}).get("data") or {}
+    digest = canonical_digest(
+        {
+            "labels": job["metadata"].get("labels") or {},
+            "spec": job["spec"],
+            "inputs": content,
+        }
+    )
+    job["metadata"].setdefault("annotations", {})[SPEC_ANNOTATION] = digest
+    return job
+
+
+def _same_gate(live: Mapping[str, Any], desired: Mapping[str, Any]) -> bool:
+    """Whether a Job found under a name is the one `desired` describes, to the digest of its
+    spec and inputs. A Job another run, attempt or older Narwhal made under the name is not."""
+
+    def digest(job: Mapping[str, Any]) -> str | None:
+        return (job["metadata"].get("annotations") or {}).get(SPEC_ANNOTATION)
+
+    return digest(desired) is not None and digest(live) == digest(desired)
+
+
+def _finished(job: Mapping[str, Any] | None) -> bool:
+    """Whether a Job has completed or failed; a missing Job has finished too."""
+    if job is None:
+        return True
+    return any(
+        _conditions(job).get(kind, {}).get("status") == "True" for kind in ("Complete", "Failed")
+    )
+
+
+def _empty(directory: Path) -> None:
+    """Remove what an interrupted attempt wrote in its own directory, without following links."""
+    for path in directory.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
+class _Action:
+    """A stage action as the runner calls it, with the Jobs of its attempt kept in order.
+
+    A new attempt first deletes the Jobs earlier attempts left, which the record names in
+    `stale_jobs`. An attempt that passes deletes its own Jobs, and one that fails keeps them
+    for inspection until the next attempt. `adopt` tells the runner whether an interrupted
+    attempt's Jobs still exist, so it resumes that attempt. A resumed attempt starts from an
+    empty directory and reads each adopted Job's evidence again from its log.
+    """
+
+    def __init__(
+        self,
+        deployment: KubernetesDeployment,
+        name: str,
+        action: Callable[[StageContext], Outcome | None],
+    ) -> None:
+        self.deployment = deployment
+        self.name = name
+        self.action = action
+
+    def __call__(self, context: StageContext) -> Outcome | None:
+        deployment = self.deployment
+        where = key(self.name, context.instance)
+        resumed = " (resumed)" if context.resumed else ""
+        deployment.announce(f"{where}: attempt {context.attempt}{resumed}")
+        deployment.begin(context)
+        deployment.save_credential()
+        if context.resumed:
+            _empty(context.directory)
+        else:
+            deployment.remove_stale(context)
+        outcome = self.action(context)
+        deployment.clean_up(context)
+        deployment.announce(f"{where}: passed")
+        return outcome
+
+    def adopt(self, previous: Mapping[str, Any]) -> bool:
+        return self.deployment.adopt(previous)
+
+
+class KeyedRunner(Runner):
+    """The deployment's runner, whose `credential` input also holds the HMAC of the engine API
+    key itself, so an edit of the Secret in place reruns the engines and the routers.
+
+    `run` reads the key's HMAC through a key-check Job first. `plan` takes the HMAC the last
+    run recorded, and starts no Job.
+    """
+
+    def __init__(self, deployment: KubernetesDeployment, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.deployment = deployment
+
+    def run(
+        self, inputs: Mapping[str, Input], *, until: str | None = None, stop: Stop | None = None
+    ) -> RunResult:
+        keyed = self.deployment.keyed(inputs, observe=True)
+        return super().run(keyed, until=until, stop=stop)
+
+    def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
+        return super().plan(self.deployment.keyed(inputs, observe=False), until=until)
+
+
 class KubernetesDeployment:
-    """The actions, live checks and topology of one Kubernetes deployment in one run directory."""
+    """The actions, live checks and topology of one fleet's deployment in one run directory."""
 
     def __init__(
         self,
@@ -686,22 +1122,27 @@ class KubernetesDeployment:
         *,
         dry: bool = False,
         cluster: Callable[[Mapping[str, str], Path], Cluster] | None = None,
+        max_age: Mapping[str, float] | None = None,
     ) -> None:
         self.directory = directory
         self.env = target_env(env)
         # A dry deployment runs no Job: `plan`, and `status` while another runner holds the run.
         self.dry = dry
-        self._cluster = cluster or Cluster
-        self.sleep: Callable[[float], None] = time.sleep
-        self.clock: Callable[[], float] = time.monotonic
+        self._cluster = cluster or KubectlCluster
+        self.max_age = dict(max_age or {})
+        self.sleep: Callable[[float], None] = _sleep
+        self.clock: Callable[[], float] = _clock
         self.announce: Callable[[str], None] = lambda line: print(line, flush=True)
         self._fabric: tuple[str, fabric.Fabric] | None = None
-        # The fleet file router-start gives the routers, while it runs.
-        self._started = 0
+        self._fleet: kubernetes_objects.Fleet | None = None
+        # The Jobs each running attempt started, in order, by stage instance and attempt.
+        self._jobs: dict[tuple[str, str, int], list[str]] = {}
+        # The key check's salt and HMAC, until the run directory can keep them.
+        self._credential: dict[str, str] | None = None
 
     # The runner.
 
-    def runner(self) -> Runner:
+    def runner(self) -> KeyedRunner:
         actions = {
             "access": self.access,
             "discover": self.discover,
@@ -724,12 +1165,13 @@ class KubernetesDeployment:
             "preflight": self.preflight,
             "router-start": self.router_start,
         }
-        return Runner(
+        return KeyedRunner(
+            self,
             KUBERNETES_GRAPH,
             self.directory,
             target=TARGET,
             revision=provenance.source_digest(),
-            actions={name: self._announced(name, action) for name, action in actions.items()},
+            actions={name: _Action(self, name, action) for name, action in actions.items()},
             topology=Topology(self),
             probes={
                 "engine_identity": self.engine_running,
@@ -737,18 +1179,8 @@ class KubernetesDeployment:
                 "sidecar_identity": self.sidecar_running,
                 "router_identity": self.routers_running,
             },
+            max_age=self.max_age,
         )
-
-    def _announced(
-        self, name: str, action: Callable[[StageContext], Outcome | None]
-    ) -> Callable[[StageContext], Outcome | None]:
-        def announced(context: StageContext) -> Outcome | None:
-            self.announce(f"{key(name, context.instance)}: attempt {context.attempt}")
-            outcome = action(context)
-            self.announce(f"{key(name, context.instance)}: passed")
-            return outcome
-
-        return announced
 
     # Recorded outputs.
 
@@ -783,7 +1215,132 @@ class KubernetesDeployment:
         relative = context.directory.relative_to(context.run_directory).as_posix()
         return f"{STATE}/deploy/{context.run_id}/{relative}"
 
-    # The chart's values and gate Jobs.
+    # The fleet.
+
+    # The engine API key, seen only through its HMAC.
+
+    def keyed(self, inputs: Mapping[str, Input], *, observe: bool) -> dict[str, Input]:
+        """`inputs` with the key's HMAC added to the `credential` fact. With `observe`, a
+        key-check Job reads it; otherwise it is the one the last run recorded."""
+        found = dict(inputs)
+        if "credential" not in found or api_key_secret(self.env) is None:
+            return found
+        if observe and not self._fleet_holds():
+            # Its Job would go with the fleet it names; `access` says why the run stops.
+            return found
+        digest = self.key_hmac(observe=observe)
+        if digest is not None:
+            reference = found["credential"]
+            found["credential"] = Input.value(
+                {"reference": reference.digest, "key_hmac_sha256": digest}, reference.source
+            )
+        return found
+
+    def _fleet_holds(self) -> bool:
+        """Whether the namespace holds the fleet of this run's uid."""
+        live = self.cluster().get(FLEET, fleet_resource.NAME)
+        return live is not None and live["metadata"].get("uid") == self.env[FLEET_UID]
+
+    def recorded_credential(self) -> dict[str, str] | None:
+        """The salt and the HMAC the last key check left in the run directory, or None."""
+        path = self.directory / CREDENTIAL_FILE
+        if not path.is_file():
+            return None
+        found = _json(path)
+        if not isinstance(found, dict) or not all(
+            isinstance(found.get(field), str) and HEX64.fullmatch(found[field])
+            for field in ("salt", "hmac")
+        ):
+            raise ValueError(f"{path} holds no salt and HMAC; remove it and run again")
+        return {"salt": found["salt"], "hmac": found["hmac"]}
+
+    def key_hmac(self, *, observe: bool) -> str | None:
+        """The HMAC-SHA256 of the engine API key under the fleet's salt.
+
+        The salt is drawn once per run directory and kept there, so the digest shows a change
+        of the key and nothing about it: never the key, and no plain hash of it.
+        """
+        recorded = self.recorded_credential()
+        if not observe:
+            return recorded["hmac"] if recorded else None
+        salt = recorded["salt"] if recorded else secrets.token_hex(32)
+        digest = self._key_check(salt)
+        self._credential = {"salt": salt, "hmac": digest}
+        self.save_credential()
+        return digest
+
+    def save_credential(self) -> None:
+        """Keep the key check's salt and HMAC once the run directory holds its record."""
+        if self._credential is None or not (self.directory / run_record.RECORD).is_file():
+            return
+        path = self.directory / CREDENTIAL_FILE
+        if path.is_file() and _json(path) == self._credential:
+            return
+        pending = path.with_name(f".{CREDENTIAL_FILE}.{os.getpid()}")
+        write_private(pending, (json.dumps(self._credential) + "\n").encode())
+        os.replace(pending, path)
+
+    def _key_check(self, salt: str) -> str:
+        """Run a key-check Job, which holds the key from its Secret, and return its HMAC."""
+        cluster = self.cluster()
+        name = kubernetes_objects.job_name(
+            KEY_CHECK, self.env[FLEET_UID], KEY_CHECK, "", secrets.randbelow(2**31), 0
+        )
+        command = _gate_command(
+            inputs=True,
+            returns={"key.json": "/tmp/narwhal-key.json"},
+            command=["python", "-c", _KEY_HMAC],
+        )
+        files = {kubernetes_gate.INPUTS: kubernetes_gate.pack({"salt": salt.encode()})}
+        gate = Gate(KEY_CHECK, KEY_CHECK, command, files=files)
+        job = self._gate_job_at(gate, name, f"deploy/{KEY_CHECK}/{name}", None)
+        fleet = self.fleet()
+        inputs = kubernetes_objects.inputs(fleet, job, gate.files)
+        with tempfile.TemporaryDirectory() as folder:
+            logs = Path(folder)
+            if (self.directory / run_record.RECORD).is_file():
+                logs = self.directory / "live" / KEY_CHECK
+            context = cast(StageContext, _KeyContext(logs))
+            try:
+                self.apply(cluster, inputs)
+                self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
+                result = self.finish_gate(context, gate, name)
+            finally:
+                self.remove(cluster, JOB, name)
+                self.remove(cluster, CONFIG_MAP, name)
+        reported = json.loads(result.files["key.json"])
+        digest = reported.get("hmac_sha256") if isinstance(reported, dict) else None
+        if not isinstance(digest, str) or not HEX64.fullmatch(digest):
+            raise GateOutputError(f"Job {name} reported no HMAC of the engine API key")
+        return digest
+
+    def owner(self) -> Owner:
+        return Owner(fleet_resource.NAME, self.env[FLEET_UID], self.env[NAMESPACE])
+
+    def fleet(self) -> kubernetes_objects.Fleet:
+        """What every object this deployment builds shares, from the fleet's inputs."""
+        if self._fleet is None:
+            env = self.env
+            secret = api_key_secret(env)
+            haproxy = _object(env, HAPROXY_ENV)
+            self._fleet = kubernetes_objects.Fleet(
+                self.owner(),
+                narwhal_image=env[SIDECAR_IMAGE_ENV],
+                state_claim=env[STATE_CLAIM],
+                haproxy_image=env.get(HAPROXY_IMAGE_ENV) or None,
+                fabric_image=env.get(FABRIC_IMAGE_ENV) or None,
+                api_key=(
+                    kubernetes_objects.ApiKey(API_KEY_ENV, secret["name"], secret["key"])
+                    if secret
+                    else None
+                ),
+                engine_account=env.get(ENGINE_ACCOUNT) or None,
+                rdma_resource=env.get(RDMA_RESOURCE) or None,
+                model_volume=json.loads(env[MODEL_VOLUME]),
+                cluster_domain=str(haproxy.get("clusterDomain", "cluster.local")),
+                haproxy_replicas=int(haproxy.get("replicas", 1)),
+            )
+        return self._fleet
 
     def launches(self) -> dict[str, Path]:
         """Each engine's prepared launch directory, from the passed engine-prepare stages."""
@@ -799,154 +1356,356 @@ class KubernetesDeployment:
             )
         return {role: nodes[role] for role in roles}
 
-    def values(
-        self,
-        cluster: Cluster,
-        gates: Sequence[Mapping[str, Any]] = (),
-        *,
-        engines: Mapping[str, Any] | None = None,
-        fleet: str | None = None,
-    ) -> dict:
-        """The release's values for one upgrade: the base values, the gate Jobs, and what the
-        release runs now.
+    # Writes. Each reads the object back when its outcome is unknown.
 
-        Every upgrade keeps the engines, their placement, the routers and the rendered
-        dashboard the release runs, read from the release itself, so a stage that only runs
-        Jobs leaves them running. `engines` replaces the engines, and `fleet` starts the
-        routers on that fleet file, or stops them when empty.
+    def apply(self, cluster: Cluster, document: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply one object the fleet owns. An apply is idempotent, so one whose outcome is
+        unknown is made again."""
+        kind = kind_of(document)
+        for attempt in range(WRITE_TRIES):
+            try:
+                return cluster.apply(kind, document)
+            except OutcomeUnknown:
+                if attempt + 1 == WRITE_TRIES:
+                    raise
+        raise AssertionError("unreachable")
+
+    def controls(self, cluster: Cluster, live: Mapping[str, Any]) -> bool:
+        """Whether the fleet controls an object: directly, or for a pod through the
+        StatefulSet or Job that controls it."""
+        owner = self.owner()
+        if controlled(owner, live):
+            return True
+        if live.get("kind") != POD.kind:
+            return False
+        for reference in live["metadata"].get("ownerReferences") or []:
+            kind = {"StatefulSet": STATEFUL_SET, "Job": JOB}.get(reference.get("kind", ""))
+            if reference.get("controller") is True and kind is not None:
+                parent = cluster.get(kind, reference.get("name", ""))
+                return (
+                    parent is not None
+                    and parent["metadata"].get("uid") == reference.get("uid")
+                    and controlled(owner, parent)
+                )
+        return False
+
+    def remove(self, cluster: Cluster, kind: Kind, name: str) -> None:
+        """Delete one object the fleet controls, in the background; one another owner controls
+        stays. The delete names the uid that was read, so an object made again under the name
+        in between stays. A delete whose outcome is unknown is made again until the object is
+        gone."""
+        for attempt in range(WRITE_TRIES):
+            live = cluster.get(kind, name)
+            if (
+                live is None
+                or (live.get("metadata") or {}).get("deletionTimestamp")
+                or not self.controls(cluster, live)
+            ):
+                return
+            try:
+                cluster.delete(kind, name, uid=live["metadata"]["uid"])
+                return
+            except Conflict:
+                # Another object holds the name now; the next read decides on it.
+                continue
+            except OutcomeUnknown:
+                if attempt + 1 == WRITE_TRIES:
+                    raise
+
+    def create_job(self, cluster: Cluster, job: Mapping[str, Any]) -> bool:
+        """Create a gate Job, or adopt the one of its name: returns whether it was adopted.
+
+        The name follows from the fleet and the attempt, so a Job of that name that the fleet
+        controls and whose spec digest matches is this attempt's own, started before the runner
+        restarted. One another owner controls is refused, as its log is not this gate's. One
+        the fleet controls with another digest, which another run directory, a replay that took
+        another path or an older Narwhal made, is deleted with its uid as precondition and the
+        Job created again, as is one already being deleted once it is gone.
         """
-        current = cluster.release_values()
-        values = copy.deepcopy(base_values(self.env))
-        values.setdefault("state", {})["claimName"] = self.env[STATE_CLAIM]
-        if engines is None:
-            values["engines"] = copy.deepcopy(current.get("engines") or {})
-            values["placement"] = dict(current.get("placement") or {})
-        else:
-            values["engines"] = dict(engines)
-            roles = [f"engine-{n}" for n in range(1, int(engines.get("count", 0)) + 1)]
-            values["placement"] = self.placement(roles) if engines else {}
-        routers = values.setdefault("routers", {})
-        running = current.get("routers") or {}
-        if fleet is None:
-            routers["enabled"] = bool(running.get("enabled"))
-            if routers["enabled"]:
-                routers["fleet"] = running["fleet"]
-        else:
-            routers["enabled"] = bool(fleet)
-            if fleet:
-                routers["fleet"] = fleet
-        values["gates"] = list(gates)
-        monitoring = values.get("monitoring") or {}
-        # The chart's schema needs the dashboard whenever monitoring is on, though the chart
-        # runs monitoring only with the routers.
-        if monitoring.get("enabled"):
-            grafana = monitoring.setdefault("grafana", {})
-            # The dashboard of the installed Narwhal, unless the values file sets one.
-            if not grafana.get("dashboard"):
-                grafana["dashboard"] = self._dashboard()
-        return values
+        name = job["metadata"]["name"]
+        for attempt in range(WRITE_TRIES):
+            try:
+                cluster.create(JOB, job)
+                return False
+            except (Conflict, OutcomeUnknown) as error:
+                live = cluster.get(JOB, name)
+                if live is None:
+                    if isinstance(error, Conflict) or attempt + 1 == WRITE_TRIES:
+                        raise
+                    continue
+                if not controlled(self.owner(), live):
+                    raise ValueError(
+                        f"Job {name} exists and another owner controls it; this fleet's gate "
+                        "cannot run under its name, so remove it"
+                    ) from None
+                if (live.get("metadata") or {}).get("deletionTimestamp"):
+                    self._gone(cluster, name)
+                    continue
+                if not _same_gate(live, job):
+                    self.announce(f"Job {name} is another run's or attempt's; replacing it")
+                    self.remove(cluster, JOB, name)
+                    self._gone(cluster, name)
+                    continue
+                if isinstance(error, Conflict):
+                    self.announce(f"adopted Job {name}")
+                    return True
+                return False
+        raise ValueError(f"Job {name} could not be created after {WRITE_TRIES} tries")
+
+    def _gone(self, cluster: Cluster, name: str) -> None:
+        """Wait until the Job of `name` and its pods are deleted."""
+        deadline = self.clock() + GONE_SECONDS
+        while cluster.get(JOB, name) is not None:
+            if self.clock() > deadline:
+                raise ValueError(f"Job {name} was not deleted within {GONE_SECONDS}s")
+            self.sleep(POLL_SECONDS)
+
+    # Jobs across restarts.
 
     @staticmethod
-    def _dashboard() -> str:
-        """The Grafana dashboard the chart serves, rendered as `make observe` renders it."""
-        from ..observability.stack.chart_dashboard import chart_dashboard
+    def _attempt(context: StageContext) -> tuple[str, str, int]:
+        return (context.stage, context.instance, context.attempt)
 
-        return chart_dashboard()
+    def begin(self, context: StageContext) -> None:
+        """Number this attempt's Jobs from the first again: a resumed attempt replays its
+        action and meets each Job it started under the same name."""
+        self._jobs[self._attempt(context)] = []
 
-    def _entry(self, gate: Gate, name: str, inputs: str | None) -> dict[str, Any]:
-        entry: dict[str, Any] = {
-            "name": name,
-            "kind": gate.kind,
-            "command": list(gate.command),
-            "deadlineSeconds": JOB_SECONDS[gate.kind],
-        }
-        optional = {
-            "node": gate.node,
-            "env": dict(gate.env) or None,
-            "resources": dict(gate.resources) or None,
-            "image": gate.image,
-            "runtimeClassName": gate.runtime_class,
-            "hostNetwork": gate.host_network or None,
-            "inputs": inputs,
-            "modelVolume": dict(gate.model_volume) if gate.model_volume else None,
-            "serviceAccount": gate.service_account or None,
-        }
-        entry.update({name: value for name, value in optional.items() if value is not None})
-        return entry
-
-    def start_gates(
-        self, context: StageContext, gates: Sequence[Gate], running: Sequence[Mapping] = ()
-    ) -> list[dict[str, Any]]:
-        """Make each gate's inputs ConfigMap and upgrade the release with the gates' Jobs,
-        keeping the `running` entries; return the new entries."""
-        cluster = self.cluster(context)
-        entries = []
-        for gate in gates:
-            # Each Job of one attempt gets its own name, as Job specs cannot change.
-            self._started += 1
-            seed = f"{context.run_id}/{context.stage}/{context.instance}/{context.attempt}"
-            name = _job_name(gate.kind, gate.label, f"{seed}/{self._started}")
-            inputs = None
-            if gate.files:
-                inputs = name
-                cluster.apply(
-                    {
-                        "apiVersion": "v1",
-                        "kind": "ConfigMap",
-                        "metadata": {
-                            "name": name,
-                            "labels": {"narwhal.io/run": context.run_id, "narwhal.io/gate": name},
-                        },
-                        "binaryData": {
-                            file: _b64(data) for file, data in sorted(gate.files.items())
-                        },
-                    }
+    def adopt(self, previous: Mapping[str, Any]) -> bool:
+        """Whether any Job an interrupted attempt recorded still exists, for the runner to
+        resume that attempt and adopt it. A recorded name another owner holds is refused."""
+        cluster = self.cluster()
+        found = False
+        for name in previous.get("jobs") or []:
+            live = cluster.get(JOB, name)
+            if live is None or (live.get("metadata") or {}).get("deletionTimestamp"):
+                continue
+            if not controlled(self.owner(), live):
+                raise ValueError(
+                    f"Job {name}, which {key(previous['stage'], previous['instance'])} recorded, "
+                    "exists and another owner controls it; remove it"
                 )
-            kept = replace(gate, command=["sh", "-c", _KEEP, "sh", *gate.command])
-            entry = self._entry(kept, name, inputs)
-            # The chart sets the Job's keep directory, the only one a confined Job may write.
-            entry["keep"] = self.state_dir(context).removeprefix(f"{STATE}/") + f"/jobs/{name}"
-            entries.append(entry)
-        cluster.upgrade(chart_path(self.env), self.values(cluster, [*running, *entries]))
-        return entries
+            found = True
+        return found
+
+    def remove_stale(self, context: StageContext) -> None:
+        """Delete the Jobs, and their inputs, that earlier attempts of this stage left."""
+        stale = list(context.stale_jobs)
+        if not stale:
+            return
+        cluster = self.cluster(context)
+        for name in stale:
+            self.remove(cluster, JOB, name)
+            self.remove(cluster, CONFIG_MAP, name)
+        context.jobs_deleted(stale)
+
+    def clean_up(self, context: StageContext) -> None:
+        """Delete the Jobs of an attempt that passed, with those a resumed attempt recorded
+        before it restarted and did not meet again. A Job left behind goes with the next
+        attempt, or with the fleet."""
+        cluster = self.cluster(context)
+        started = self._jobs.pop(self._attempt(context), [])
+        recorded = list(context.previous["jobs"]) if context.resumed and context.previous else []
+        for name in dict.fromkeys([*started, *recorded]):
+            try:
+                self.remove(cluster, JOB, name)
+            except KubernetesError as error:
+                self.announce(f"{key(context.stage, context.instance)}: Job {name} stays: {error}")
+
+    # Gate Jobs.
+
+    def _job_name(self, context: StageContext, kind: str) -> str:
+        started = self._jobs.setdefault(self._attempt(context), [])
+        name = kubernetes_objects.job_name(
+            kind,
+            self.env[FLEET_UID],
+            context.stage,
+            context.instance,
+            context.attempt,
+            len(started),
+        )
+        started.append(name)
+        return name
+
+    def next_job_name(self, context: StageContext, kind: str) -> str:
+        """The name the attempt's next Job takes, without taking it."""
+        started = self._jobs.get(self._attempt(context), [])
+        return kubernetes_objects.job_name(
+            kind,
+            self.env[FLEET_UID],
+            context.stage,
+            context.instance,
+            context.attempt,
+            len(started),
+        )
+
+    def _gate_job(self, context: StageContext, gate: Gate, name: str) -> GateJob:
+        keep = self.state_dir(context).removeprefix(f"{STATE}/") + f"/jobs/{name}"
+        return self._gate_job_at(gate, name, keep, context.run_id)
+
+    @staticmethod
+    def _gate_job_at(gate: Gate, name: str, keep: str, run: str | None) -> GateJob:
+        return GateJob(
+            name=name,
+            kind=gate.kind,
+            command=["sh", "-c", _KEEP, "sh", *gate.command],
+            deadline_seconds=JOB_SECONDS[gate.kind],
+            keep=keep,
+            node=gate.node,
+            env=dict(gate.env),
+            resources=dict(gate.resources),
+            image=gate.image,
+            runtime_class=gate.runtime_class,
+            host_network=gate.host_network,
+            inputs=name if gate.files else None,
+            model_volume=gate.model_volume,
+            service_account=gate.service_account,
+            run=run,
+        )
+
+    def start_gates(self, context: StageContext, gates: Sequence[Gate]) -> list[str]:
+        """Start each gate's Job, with its inputs ConfigMap, and return their names.
+
+        The run record names every Job before the first is created, so a runner that restarts
+        finds them. A Job that already exists under its name is adopted.
+        """
+        cluster = self.cluster(context)
+        fleet = self.fleet()
+        names = [self._job_name(context, gate.kind) for gate in gates]
+        record = getattr(context, "record_jobs", None)
+        if record is not None:
+            record(names)
+        for gate, name in zip(gates, names, strict=True):
+            job = self._gate_job(context, gate, name)
+            inputs = kubernetes_objects.inputs(fleet, job, gate.files) if gate.files else None
+            if inputs is not None:
+                self.apply(cluster, inputs)
+            self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
+        return names
+
+    def job_pods(self, cluster: Cluster, job: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """The Job's own pods, newest last."""
+        uid = job["metadata"].get("uid")
+        pods = [
+            pod
+            for pod in cluster.list(POD, {JOB_NAME_LABEL: job["metadata"]["name"]})
+            if any(r.get("uid") == uid for r in pod["metadata"].get("ownerReferences") or [])
+        ]
+        return sorted(pods, key=lambda pod: pod["metadata"].get("creationTimestamp", ""))
+
+    def job_log(self, cluster: Cluster, job: Mapping[str, Any], *, finished: bool = True) -> str:
+        """The log of the Job's newest pod.
+
+        For a finished Job the log is its evidence: a read the API refuses is tried again with
+        backoff, and one that still fails interrupts the attempt, whose next pass adopts the
+        Job and reads it again. While the Job runs, as a sample waits for its server, a pod
+        with no log to read yet gives "".
+        """
+        name = job["metadata"]["name"]
+        backoff = POLL_SECONDS
+        for attempt in range(LOG_TRIES):
+            try:
+                pods = self.job_pods(cluster, job)
+                if not pods:
+                    if finished:
+                        raise Interrupted(f"Job {name} finished and no pod of it is left to read")
+                    return ""
+                return cluster.log(pods[-1]["metadata"]["name"], GATE_CONTAINER).decode(
+                    errors="replace"
+                )
+            except LogTooLarge as error:
+                raise GateOutputError(f"Job {name}: {error}") from None
+            except KubernetesError as error:
+                if not finished:
+                    return ""
+                if isinstance(error, Unavailable):
+                    # An outage is the caller's to wait out.
+                    raise
+                if attempt + 1 == LOG_TRIES:
+                    raise Interrupted(
+                        f"Job {name}: its log could not be read ({error}); the next pass "
+                        "adopts the Job and reads it again"
+                    ) from error
+                self.sleep(backoff)
+                backoff = min(backoff * 2, BACKOFF_SECONDS)
+        raise AssertionError("unreachable")
+
+    def _patient(self, name: str, limit: float, call: Callable[[], Any]) -> Any:
+        """`call`, tried again with backoff while the API is unavailable, for up to `limit`
+        seconds; past that the attempt is interrupted, for the next pass to adopt its Job."""
+        started = self.clock()
+        backoff = POLL_SECONDS
+        while True:
+            try:
+                return call()
+            except Unavailable as error:
+                if self.clock() - started > limit:
+                    raise Interrupted(
+                        f"Job {name}: the API was unavailable for {self.clock() - started:.0f}s; "
+                        "the next pass adopts the Job"
+                    ) from error
+                self.sleep(backoff)
+                backoff = min(backoff * 2, BACKOFF_SECONDS)
+
+    def _cancel(self, context: StageContext, cluster: Cluster) -> None:
+        """Delete every Job the cancelled attempt started, then end it."""
+        for name in self._jobs.get(self._attempt(context), []):
+            self.remove(cluster, JOB, name)
+            self.remove(cluster, CONFIG_MAP, name)
+        raise Cancelled(f"{key(context.stage, context.instance)} was cancelled; its Jobs are gone")
 
     def finish_gate(
-        self, context: StageContext, gate: Gate, entry: Mapping[str, Any], where: str = ""
+        self, context: StageContext, gate: Gate, name: str, where: str = ""
     ) -> GateResult:
-        """Wait for one gate Job, keep its log, and return its output and files."""
+        """Wait for one gate Job, keep its log, and return its output and files.
+
+        A cancelled stage deletes its Jobs. A Job whose pod will never run fails at once and
+        is deleted, so its pod holds nothing on its node.
+        """
         cluster = self.cluster(context)
-        name = str(entry["name"])
-        deadline = self.clock() + JOB_SECONDS[gate.kind] + GRACE_SECONDS
+        here = where or gate.node or "cluster"
+        limit = JOB_SECONDS[gate.kind] + GRACE_SECONDS
+        deadline = self.clock() + limit
         while True:
-            job = cluster.get("job", name) or {}
-            conditions = {
-                c.get("type"): c for c in job.get("status", {}).get("conditions", []) or []
-            }
+            if getattr(context, "cancelled", False):
+                self._cancel(context, cluster)
+            # An API outage while the Job runs is waited out for as long as the Job may run.
+            job = self._patient(name, limit, lambda: cluster.get(JOB, name))
+            if job is None:
+                raise GateFailed(
+                    here, f"Job {name}", 4, "the Job is gone before it finished", context.directory
+                )
+            conditions = _conditions(job)
             done = [c for t, c in conditions.items() if t in ("Complete", "Failed")]
             if any(c.get("status") == "True" for c in done):
                 break
+            pods = self._patient(name, limit, functools.partial(self.job_pods, cluster, job))
+            for pod in pods:
+                if cause := never_runs(pod, scheduled=False):
+                    self.remove(cluster, JOB, name)
+                    raise GateFailed(here, f"Job {name}", 4, cause, context.directory / "logs")
             if self.clock() > deadline:
                 raise GateFailed(
-                    where or gate.node or "cluster",
+                    here,
                     f"Job {name}",
                     124,
                     "did not finish within its time limit",
                     context.directory / "logs",
                 )
             self.sleep(POLL_SECONDS)
-        pods = cluster.items("pod", f"job-name={name}")
-        pod = pods[0] if pods else {}
-        output = ""
-        try:
-            output = cluster.logs(name)
-        except ClusterError:
+        pods = self._patient(name, limit, lambda: self.job_pods(cluster, job))
+        pod = pods[-1] if pods else {}
+        failed = conditions.get("Failed", {}).get("status") == "True"
+        if failed and pod and never_runs(pod, scheduled=False):
+            # A pod the kubelet refused ran nothing, so it has no log to read.
             output = ""
+        else:
+            output = self._patient(name, limit, lambda: self.job_log(cluster, job))
         log = context.directory / "logs" / f"{name}.log"
         log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         write_private(log, output.encode())
         if gate.files:
-            cluster.delete("configmap", name)
-        failed = conditions.get("Failed", {}).get("status") == "True"
+            self._patient(name, limit, lambda: self.remove(cluster, CONFIG_MAP, name))
         if failed:
             terminated = (_container(pod, GATE_CONTAINER) or {}).get("state", {}).get("terminated")
             status = int((terminated or {}).get("exitCode", 4))
@@ -956,8 +1715,10 @@ class KubernetesDeployment:
                 if line.startswith(("narwhal-gate: ", "narwhal-host: ", "narwhal: "))
             ]
             reason = conditions["Failed"].get("message") or conditions["Failed"].get("reason", "")
+            if not causes and (refused := never_runs(pod, scheduled=False)):
+                causes = [refused]
             cause = causes[-1] if causes else (reason or f"exited {status}")
-            raise GateFailed(where or gate.node or "cluster", f"Job {name}", status, cause, log)
+            raise GateFailed(here, f"Job {name}", status, cause, log)
         files = {} if gate.plain else gate_files(output)
         return GateResult(name, log, output, files, pod)
 
@@ -965,11 +1726,15 @@ class KubernetesDeployment:
         self, context: StageContext, gates: Sequence[Gate], into: Path | None = None
     ) -> list[GateResult]:
         """Run gate Jobs together; write each one's returned files under `into`."""
-        entries = self.start_gates(context, gates)
+        names = self.start_gates(context, gates)
         results = [
-            self.finish_gate(context, gate, entry)
-            for gate, entry in zip(gates, entries, strict=True)
+            self.finish_gate(context, gate, name) for gate, name in zip(gates, names, strict=True)
         ]
+        if isinstance(context, _LiveContext):
+            # A live check's Jobs belong to no attempt, so none outlives its check.
+            cluster = self.cluster(context)
+            for name in names:
+                self.remove(cluster, JOB, name)
         for result in results:
             remote.write(into or context.directory, result.files)
         return results
@@ -996,29 +1761,31 @@ class KubernetesDeployment:
     # access
 
     def access(self, context: StageContext) -> None:
+        """Check that the namespace holds the fleet this run deploys, and that each engine's
+        node offers the engine pods' resources."""
         cluster = self.cluster(context)
-        version = cluster.version()
-        helm = cluster.helm_version()
-        namespace = cluster.kubectl("get", "namespace", cluster.namespace, "--output", "name")
         problems = []
-        server = version.get("serverVersion", {})
-        if server_version(server) < MINIMUM_SERVER:
+        found = cluster.get(FLEET, fleet_resource.NAME)
+        uid = (found or {}).get("metadata", {}).get("uid")
+        if found is None:
             problems.append(
-                f"the cluster runs Kubernetes {server.get('gitVersion', 'of an unknown version')}; "
-                "the chart holds engine pods at a scheduling gate, which needs "
-                f"{'.'.join(map(str, MINIMUM_SERVER))} or later"
+                f"namespace {cluster.namespace} holds no {fleet_resource.KIND} "
+                f"{fleet_resource.NAME}"
             )
-        denied = [
-            f"{verb} {resource}"
-            for verb, resource in PERMISSIONS
-            if not cluster.can_i(verb, resource)
-        ]
+        elif uid != self.env[FLEET_UID]:
+            problems.append(
+                f"the {fleet_resource.KIND} in {cluster.namespace} has uid {uid}, not "
+                f"{self.env[FLEET_UID]}; the fleet was deleted and made again, so start a new run"
+            )
         nodes = {}
         resource = self.env[GPU_RESOURCE]
         rdma = self.env.get(RDMA_RESOURCE, "")
         for role, name in engine_nodes(self.env).items():
-            node = cluster.kubectl("get", "node", name, "--output", "json")
-            allocatable = json.loads(node).get("status", {}).get("allocatable", {})
+            node = cluster.get(NODE, name)
+            if node is None:
+                problems.append(f"the cluster has no node {name} for {role}")
+                continue
+            allocatable = node.get("status", {}).get("allocatable", {})
             nodes[role] = {"node": name, "allocatable": allocatable}
             if (
                 not str(allocatable.get(resource, "0")).isdigit()
@@ -1030,25 +1797,15 @@ class KubernetesDeployment:
         _private(
             context.directory / "access.json",
             {
-                # down acts only on this context, namespace and release.
-                "cluster": self.identity(),
-                "server": server,
-                "client": version.get("clientVersion", {}),
-                "helm": helm,
-                "namespace": namespace.strip(),
-                "denied": denied,
+                "namespace": cluster.namespace,
+                "fleet": {"name": fleet_resource.NAME, "uid": uid},
                 "nodes": nodes,
             },
         )
-        if denied:
-            problems.append(
-                f"the Kubernetes identity may not {', '.join(denied)} in {cluster.namespace}"
-            )
         if problems:
             raise GateFailed(
                 "cluster", "access", 1, "; ".join(problems), context.directory / "access.json"
             )
-        self._own("cluster.json", _json(context.directory / "access.json")["cluster"])
 
     # discover
 
@@ -1065,12 +1822,8 @@ class KubernetesDeployment:
                 )
             if engine.model_file_packages:
                 packages += "|" + engine.model_file_packages
-        values = base_values(env)
-        job_env = sorted(
-            name
-            for name in (values.get("credentials", {}).get("engineApiKey", {}).get("env"),)
-            if name
-        )
+        # The Job's own variables that the runner sets, which the image's environment is not.
+        job_env = [API_KEY_ENV] if env.get(API_KEY_SECRET_ENV) else []
         selected = {
             "image": discovery.value(env, n, "ENGINE_IMAGE"),
             "model_dir": MODEL,
@@ -1139,10 +1892,9 @@ class KubernetesDeployment:
         roles = self.engines()
         pending = {role: self._discovery_gates(role) for role in roles}
         gates = [gate for role in roles for gate in pending[role][:2]]
-        entries = self.start_gates(context, gates)
+        names = self.start_gates(context, gates)
         results = [
-            self.finish_gate(context, gate, entry)
-            for gate, entry in zip(gates, entries, strict=True)
+            self.finish_gate(context, gate, name) for gate, name in zip(gates, names, strict=True)
         ]
         for index, role in enumerate(roles):
             remote.write(context.directory / "inspection" / role, results[2 * index].files)
@@ -1215,11 +1967,17 @@ class KubernetesDeployment:
         config = context.directory / "config"
         config.mkdir(mode=0o700)
         stage_env = {**env, **derived}
-        revision = base_values(env)["images"]["narwhal"].rpartition("@sha256:")[2]
+        revision = env[SIDECAR_IMAGE_ENV].rpartition("@sha256:")[2]
+        if env.get(API_KEY_SECRET_ENV):
+            # The routers and the Jobs that call engines hold the key in this variable, from
+            # the Secret; no file the runner writes holds it.
+            fleet.setdefault("engine", {})["engine_api_key_env"] = API_KEY_ENV
         engine = launcher(fleet.get("engine", {}).get("backend"))
         selected = {}
         for role in launches["engines"]:
-            selected[role] = select_values("engine", _node(role), fleet, stage_env)
+            selected[role] = select_values(
+                "engine", _node(role), fleet, stage_env, by_reference=True
+            )
             selected[role]["NARWHAL_DEPLOYMENT_REVISION"] = revision
         _private(config / "engine-launch.json", launches)
         records = load_launches(config / "engine-launch.json", list(selected), selected)
@@ -1230,7 +1988,7 @@ class KubernetesDeployment:
                 selected[role][helper.sha256_env] = hashlib.sha256(
                     snapshots[helper.name]
                 ).hexdigest()
-        router = select_values("router", None, fleet, stage_env)
+        router = select_values("router", None, fleet, stage_env, by_reference=True)
         package = context.directory / "package"
         for host in hosts:
             folder = package / host.id
@@ -1255,19 +2013,26 @@ class KubernetesDeployment:
 
     # engine-prepare
 
-    def job_env(self, role_env: Mapping[str, str], *, credential: bool) -> bytes:
+    def job_env(
+        self,
+        role_env: Mapping[str, str],
+        *,
+        credential: bool,
+        extra: Mapping[str, str] | None = None,
+    ) -> bytes:
         """A role file for a Job's inputs ConfigMap, which holds no secret. With `credential`,
-        the engine API key comes from the Job's own variable, which the chart sets from its
-        Secret for the gates that need it; without, the file names no key."""
+        for a Job that calls engines, the engine tools' `NARWHAL_ENGINE_API_KEY` comes from the
+        Job's own variable, which its Secret sets; without, the file names no key."""
         fleet = _json(self.package() / "fleet.json")
         key = fleet.get("engine", {}).get("engine_api_key_env")
-        lines = []
-        for name, value in sorted(role_env.items()):
-            if key and name in (key, "NARWHAL_ENGINE_API_KEY"):
-                if credential:
-                    lines.append(f'export {name}="${{{key}:?the Job has no {key}}}"\n')
-            else:
-                lines.append(f"export {name}={shlex.quote(value)}\n")
+        values = {**role_env, **(extra or {})}
+        lines = [
+            f"export {name}={shlex.quote(value)}\n"
+            for name, value in sorted(values.items())
+            if name not in (key, "NARWHAL_ENGINE_API_KEY")
+        ]
+        if credential and key:
+            lines.append(f'export NARWHAL_ENGINE_API_KEY="${{{key}:?the Job has no {key}}}"\n')
         return "".join(lines).encode()
 
     def engine_prepare(self, context: StageContext) -> Outcome:
@@ -1275,8 +2040,10 @@ class KubernetesDeployment:
         package = self.package()
         host = self.node(role)
         role_env = read_environment(package / host / f".env.{role}")
+        # The launch names the engines' Secret and reads none: preparing calls no engine.
+        pod_inputs = {name: self.env[name] for name in POD_INPUTS if self.env.get(name)}
         files = {
-            ".env": self.job_env(role_env, credential=True),
+            ".env": self.job_env(role_env, credential=False, extra=pod_inputs),
             f"config/engine-launch.{role}.json": (
                 package / host / f"engine-launch.{role}.json"
             ).read_bytes(),
@@ -1311,49 +2078,32 @@ class KubernetesDeployment:
 
     # install
 
-    def _retained_maps(self, cluster: Cluster, values: Mapping[str, Any]) -> list[dict]:
-        """The hook ConfigMaps the running engine pods mount that the new values drop.
-
-        An OnDelete pod keeps the spec it started with until engine-start replaces it, so the
-        release keeps the ConfigMaps it mounts until then.
-        """
-        engines = values.get("engines") or {}
-        kept = {item["metadata"]["name"] for item in engines.get("configMaps", [])}
-        retained = []
-        for pod in cluster.items("pod", "app.kubernetes.io/component=engine"):
-            for volume in pod.get("spec", {}).get("volumes", []) or []:
-                sources = [volume.get("configMap")] + [
-                    source.get("configMap")
-                    for source in (volume.get("projected") or {}).get("sources", [])
-                ]
-                for source in sources:
-                    name = (source or {}).get("name")
-                    if not name or name in kept or name == "kube-root-ca.crt":
-                        continue
-                    live = cluster.get("configmap", name)
-                    if live is not None:
-                        kept.add(name)
-                        retained.append(
-                            {
-                                "apiVersion": "v1",
-                                "kind": "ConfigMap",
-                                "metadata": {"name": name},
-                                **{k: live[k] for k in ("data", "binaryData") if k in live},
-                            }
-                        )
-        return retained
+    def engine_objects(self) -> list[dict[str, Any]]:
+        """The engines' hook ConfigMaps, Service and StatefulSet, from every prepared launch,
+        with each pod held at the placement gate."""
+        values = engine_set.chart_values(list(self.launches().values()))
+        roles = [f"engine-{n}" for n in range(1, int(values["count"]) + 1)]
+        return kubernetes_objects.engines(self.fleet(), values, self.placement(roles))
 
     def install(self, context: StageContext) -> None:
+        """Apply the engines' objects, then delete the engine objects the fleet no longer
+        holds. A hook ConfigMap a running engine pod mounts stays until engine-start replaces
+        the pod, which keeps the spec it started with."""
         cluster = self.cluster(context)
-        launches = self.launches()
-        values = self.values(cluster, engines=engine_set.chart_values(list(launches.values())))
-        if retained := self._retained_maps(cluster, values):
-            values["engines"]["configMaps"] = [*values["engines"]["configMaps"], *retained]
-        _private(context.directory / "values.json", _redacted(values))
-        cluster.upgrade(chart_path(self.env), values)
-        names = sorted(item["metadata"]["name"] for item in values["engines"]["configMaps"])
-        self._own("installed.json", {"configMaps": names})
-        statefulset = cluster.get("statefulset", engine_set.STATEFULSET) or {}
+        desired = self.engine_objects()
+        _private(context.directory / "objects.json", _redacted(desired))
+        for document in desired:
+            self.apply(cluster, document)
+        component = {kubernetes_objects.COMPONENT_LABEL: kubernetes_objects.ENGINE}
+        live = [
+            item
+            for kind in (STATEFUL_SET, SERVICE, CONFIG_MAP)
+            for item in cluster.list(kind, component)
+        ]
+        pods = cluster.list(POD, component)
+        for deletion in kubernetes_objects.prune(self.owner(), desired, live, pods):
+            self.remove(cluster, KINDS[deletion.kind], deletion.name)
+        statefulset = cluster.get(STATEFUL_SET, engine_set.STATEFULSET) or {}
         _private(context.directory / "statefulset.json", statefulset.get("status", {}))
 
     # engine-start
@@ -1364,8 +2114,8 @@ class KubernetesDeployment:
         launch = context.product("launch", role)
         previous = context.previous
         recorded = (previous or {}).get("products", {}).get("engine_identity") if previous else None
-        pod = cluster.get("pod", role)
-        statefulset = cluster.get("statefulset", engine_set.STATEFULSET) or {}
+        pod = cluster.get(POD, role)
+        statefulset = cluster.get(STATEFUL_SET, engine_set.STATEFULSET) or {}
         revision = statefulset.get("status", {}).get("updateRevision", "")
         if pod is not None:
             current = pod.get("metadata", {}).get("labels", {}).get("controller-revision-hash")
@@ -1381,14 +2131,14 @@ class KubernetesDeployment:
             if not placed or (not same and current != revision):
                 why = f"on node {node}" if not placed else f"of revision {current}"
                 self.announce(f"engine-start[{role}]: replacing pod {role} {why}")
-                cluster.delete("pod", role)
                 old = pod["metadata"].get("uid")
+                self.remove(cluster, POD, role)
                 pod = self._wait_pod(context, role, lambda p: p["metadata"].get("uid") != old)
         self._pin(cluster, self._wait_pod(context, role, lambda p: True), role)
         identity = None
         deadline = self.clock() + START_SECONDS
         while identity is None:
-            pod = cluster.get("pod", role)
+            pod = cluster.get(POD, role)
             if pod is not None:
                 running = container_identity(pod, ENGINE_CONTAINER)
                 status = _container(pod, ENGINE_CONTAINER) or {}
@@ -1396,17 +2146,12 @@ class KubernetesDeployment:
                     identity = running
                     break
                 waiting = status.get("state", {}).get("waiting") or {}
-                if waiting.get("reason") in (
-                    "ErrImagePull",
-                    "ImagePullBackOff",
-                    "CreateContainerConfigError",
-                ):
+                cause = never_runs(pod, scheduled=True)
+                if cause is None and waiting.get("reason") in IMAGE_FAILURES:
+                    cause = waiting.get("message", waiting["reason"])
+                if cause is not None:
                     raise GateFailed(
-                        self.node(role),
-                        f"{role} start",
-                        4,
-                        waiting.get("message", waiting["reason"]),
-                        context.directory / "logs",
+                        self.node(role), f"{role} start", 4, cause, context.directory / "logs"
                     )
             if self.clock() > deadline:
                 raise GateFailed(
@@ -1443,13 +2188,26 @@ class KubernetesDeployment:
         return Outcome({"engine_identity": value}, ({"name": role, "host": node, **value},))
 
     def _pin(self, cluster: Cluster, pod: Mapping[str, Any], role: str) -> None:
-        """Pin a pod the chart holds at its scheduling gate to the node discovery measured its
-        engine on, then release it to the scheduler.
+        """Pin a pod held at its scheduling gate to the node discovery measured its engine on,
+        then release it to the scheduler.
 
         A gated pod accepts added node affinity, so each pod of the one StatefulSet lands on
         its own node. A pin an earlier attempt half applied, with the affinity already naming
-        this node, only needs the gate removed.
+        this node, only needs the gate removed. A patch whose outcome is unknown is followed by
+        a read of the pod, and the pin goes on from what that read shows.
         """
+        for attempt in range(WRITE_TRIES):
+            try:
+                self._pin_once(cluster, pod, role)
+                return
+            except OutcomeUnknown:
+                if attempt + 1 == WRITE_TRIES:
+                    raise
+                pod = cluster.get(POD, role) or {}
+                if pod.get("metadata", {}).get("uid") is None:
+                    raise
+
+    def _pin_once(self, cluster: Cluster, pod: Mapping[str, Any], role: str) -> None:
         spec = pod.get("spec", {})
         gates = [gate.get("name") for gate in spec.get("schedulingGates", []) or []]
         if PLACEMENT_GATE not in gates:
@@ -1458,11 +2216,14 @@ class KubernetesDeployment:
         term = {"matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]}
         affinity = {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [term]}}
         present = (spec.get("affinity") or {}).get("nodeAffinity")
+        uid = pod["metadata"]["uid"]
+        # Each patch applies only to the pod that was read, never to a new pod of its name.
+        same = {"op": "test", "path": "/metadata/uid", "value": uid}
         if present is None:
             value = {**(spec.get("affinity") or {}), "nodeAffinity": affinity}
             operation = "replace" if "affinity" in spec else "add"
             cluster.patch(
-                "pod", role, [{"op": operation, "path": "/spec/affinity", "value": value}]
+                POD, role, [same, {"op": operation, "path": "/spec/affinity", "value": value}]
             )
         elif present != affinity:
             raise ValueError(
@@ -1472,9 +2233,10 @@ class KubernetesDeployment:
         index = gates.index(PLACEMENT_GATE)
         path = f"/spec/schedulingGates/{index}"
         cluster.patch(
-            "pod",
+            POD,
             role,
             [
+                same,
                 # The gate at this index must still be this one when the API applies the patch.
                 {"op": "test", "path": f"{path}/name", "value": PLACEMENT_GATE},
                 {"op": "remove", "path": path},
@@ -1488,7 +2250,7 @@ class KubernetesDeployment:
         cluster = self.cluster(context)
         deadline = self.clock() + START_SECONDS
         while True:
-            pod = cluster.get("pod", name)
+            pod = cluster.get(POD, name)
             if pod is not None and condition(pod):
                 return pod
             if self.clock() > deadline:
@@ -1528,6 +2290,8 @@ else
   mkdir -p "$(dirname "$target")"
   cp -R /tmp/narwhal-in "$stage"
   narwhal-engine check --run "$stage" --pod-evidence {evidence}
+  # The attestation sidecar, another user, reads the launch, which holds no key.
+  chmod -R u=rwX,go=rX "$stage"
   mv "$stage" "$target"
 fi
 """
@@ -1733,7 +2497,7 @@ fi
         cluster = self.cluster(context)
         deadline = self.clock() + START_SECONDS
         while True:
-            pod = cluster.get("pod", role) or {}
+            pod = cluster.get(POD, role) or {}
             if pod.get("metadata", {}).get("uid") != engine["pod_uid"]:
                 raise GateFailed(
                     engine["node"],
@@ -1929,7 +2693,7 @@ fi
     def _routers(self, cluster: Cluster) -> dict[str, dict] | None:
         found = {}
         for name in ROUTERS:
-            pod = cluster.get("pod", name)
+            pod = cluster.get(POD, name)
             identity = container_identity(pod or {}, "router")
             if (
                 pod is None
@@ -1940,22 +2704,55 @@ fi
             found[name] = {"pod_uid": pod["metadata"]["uid"], **identity}
         return found
 
+    def router_objects(self, fleet_file: str) -> list[dict[str, Any]]:
+        """The router pair's objects on `fleet_file`, a path of the state volume, from the
+        fleet's `routers` block, and HAProxy's."""
+        fleet = self.fleet()
+        settings = kubernetes_objects.Routers.of(_object(self.env, ROUTERS_ENV), fleet_file)
+        return [*kubernetes_objects.routers(fleet, settings), *kubernetes_objects.haproxy(fleet)]
+
     def router_start(self, context: StageContext) -> Outcome:
         cluster = self.cluster(context)
         fleet_path = self._limits(context)
         fleet = context.outputs("fleet-limits") / "fleet.json"
         engines = {role: context.product("engine_identity", role) for role in self.engines()}
-        state = {"fleet_sha256": _digest(fleet), "fleet": fleet_path, "engines": engines}
+        objects = self.router_objects(fleet_path)
+        # The routers are readmitted only while their objects are the ones they run, so a
+        # new Secret or router setting restarts them.
+        state = {
+            "fleet_sha256": _digest(fleet),
+            "fleet": fleet_path,
+            "engines": engines,
+            "objects_sha256": hashlib.sha256(
+                json.dumps(objects, sort_keys=True).encode()
+            ).hexdigest(),
+        }
         previous = context.previous
         if previous is not None and previous["status"] == PASSED:
             kept = self._readmit(context, cluster, previous, state)
             if kept is not None:
                 return kept
-        values = self.values(cluster, fleet=fleet_path)
-        _private(context.directory / "values.json", _redacted(values))
-        cluster.upgrade(chart_path(self.env), values)
+        _private(context.directory / "objects.json", _redacted(objects))
+        for document in objects:
+            self.apply(cluster, document)
         deadline = self.clock() + ROUTER_SECONDS
+        # When each router pod, by uid, was first found with no node to run on.
+        waiting: dict[str, float] = {}
         while (routers := self._routers(cluster)) is None:
+            for name in ROUTERS:
+                pod = cluster.get(POD, name)
+                if pod is None:
+                    continue
+                cause = never_runs(pod, scheduled=False)
+                if cause is None and (pending := unschedulable(pod)):
+                    # Routers schedule anywhere the chart allows, so a node may yet come.
+                    since = waiting.setdefault(pod["metadata"]["uid"], self.clock())
+                    if self.clock() - since > ROUTER_UNSCHEDULABLE_SECONDS:
+                        cause = f"{pending}, for {ROUTER_UNSCHEDULABLE_SECONDS}s"
+                if cause:
+                    raise GateFailed(
+                        "cluster", f"router {name}", 4, cause, context.directory / "logs"
+                    )
             if self.clock() > deadline:
                 raise GateFailed(
                     "cluster",
@@ -1984,7 +2781,11 @@ fi
         if not earlier.is_file() or recorded is None:
             return None
         before = _json(earlier)
-        if before["fleet_sha256"] != state["fleet_sha256"] or self._routers(cluster) != recorded:
+        if (
+            before["fleet_sha256"] != state["fleet_sha256"]
+            or before.get("objects_sha256") != state["objects_sha256"]
+            or self._routers(cluster) != recorded
+        ):
             return None
         restarted = sorted(
             role
@@ -1996,7 +2797,7 @@ fi
         starts = _json(lifecycle).get("process_starts", {}) if lifecycle.is_file() else {}
         engines = [f"{iid}={starts[iid]!r}" if iid in starts else iid for iid in iids]
         self.announce(f"router-start: readmitting {', '.join(iids) or 'no engines'}")
-        self._host_http(context, "readmit", "readmit", ROUTER_URL, "120", *engines)
+        self._host_http(context, "readmit", "readmit", "120", *engines)
         _private(context.directory / "router.json", state)
         self._router_responses(context, completion=False)
         return Outcome(
@@ -2004,8 +2805,32 @@ fi
             tuple({"name": name, "host": "cluster", **value} for name, value in recorded.items()),
         )
 
-    def _host_http(self, context: StageContext, into: str, *args: str) -> None:
-        command = ["python", "-m", "narwhal.deployment.host_http", *args]
+    def router_urls(self) -> list[str]:
+        """Each router pod's own address. HAProxy forwards only the serving routes, so the
+        router checks and lifecycle calls reach a router here."""
+        fleet = self.fleet()
+        domain = f"{kubernetes_objects.ROUTER_SERVICE}.{self.env[NAMESPACE]}.svc"
+        return [
+            f"http://{pod}.{domain}.{fleet.cluster_domain}:{kubernetes_objects.ROUTER_PORT}"
+            for pod in ROUTERS
+        ]
+
+    def _host_http(self, context: StageContext, into: str, action: str, *args: str) -> None:
+        """Run a `host_http` action at the router that controls the fleet, the one whose
+        `/narwhal/targets` answers 200, in a router-check Job."""
+        tool = "python -m narwhal.deployment.host_http"
+        bases = self.router_urls()
+        missing = shlex.quote(f"{HOST_CAUSE}no router controls the fleet at {', '.join(bases)}")
+        script = (
+            f"for base in {shlex.join(bases)}; do\n"
+            f'  if [ "$({tool} status "$base/narwhal/targets")" = 200 ]; then\n'
+            f'    exec {tool} {shlex.quote(action)} "$base" {shlex.join(args)}\n'
+            "  fi\n"
+            "done\n"
+            f"echo {missing} >&2\n"
+            "exit 1\n"
+        )
+        command = ["sh", "-c", script]
         result = self.gate(context, Gate("router-check", context.stage, command, plain=True))
         remote.write(context.directory / into, remote.files(result.output))
 
@@ -2016,14 +2841,13 @@ fi
             context,
             "router",
             "responses",
-            ROUTER_URL,
             *(["--completion", body] if completion else []),
         )
 
     # Live checks: each returns the recorded value while it still holds, and None once gone.
 
     def engine_running(self, instance: str, recorded: Any) -> Any:
-        pod = self.cluster().get("pod", recorded["pod"])
+        pod = self.cluster().get(POD, recorded["pod"])
         if pod is None or pod["metadata"].get("uid") != recorded["pod_uid"]:
             return None
         identity = container_identity(pod, ENGINE_CONTAINER)
@@ -2032,7 +2856,7 @@ fi
         return recorded
 
     def sidecar_running(self, instance: str, recorded: Any) -> Any:
-        pod = self.cluster().get("pod", recorded["pod"])
+        pod = self.cluster().get(POD, recorded["pod"])
         if pod is None or pod["metadata"].get("uid") != recorded["pod_uid"]:
             return None
         identity = container_identity(pod, SIDECAR_CONTAINER)
@@ -2057,15 +2881,35 @@ fi
 
     # down
 
-    def down(self) -> list[dict[str, Any]]:
-        """Remove the routers, engines and gate Jobs this run installed, keeping the volumes.
+    def stop(self, cluster: Cluster) -> list[kubernetes_objects.Deletion]:
+        """Delete every workload the fleet controls, keeping the volumes: the routers, HAProxy,
+        the engines and then the Jobs, each workload before the Services and ConfigMaps it
+        uses. Only objects whose controlling owner is this fleet are deleted."""
+        live = [item for kind in STOP_KINDS for item in cluster.list(kind)]
+        components = {
+            (item["kind"], item["metadata"]["name"]): (item["metadata"].get("labels") or {}).get(
+                kubernetes_objects.COMPONENT_LABEL, ""
+            )
+            for item in live
+        }
+        deletions = kubernetes_objects.prune(self.owner(), [], live)
 
-        Only a release this run installed is changed: the record must be a Kubernetes run, the
-        environment must reach the context, API server, namespace and release the run's last
-        passed access recorded, and the release must run only the engines the run's last
-        passed install gave it and this run's fleet. Later failed or invalidated attempts of
-        access or install change neither. Reports each process the run recorded, and whether
-        it ran until now.
+        def order(deletion: kubernetes_objects.Deletion) -> tuple[int, int, str]:
+            component = components[(deletion.kind, deletion.name)]
+            rank = STOP_ORDER.index(component) if component in STOP_ORDER else len(STOP_ORDER)
+            return rank, kubernetes_objects.PRUNED_KINDS.index(deletion.kind), deletion.name
+
+        deletions = sorted(deletions, key=order)
+        for deletion in deletions:
+            self.remove(cluster, KINDS[deletion.kind], deletion.name)
+        return deletions
+
+    def down(self) -> list[dict[str, Any]]:
+        """Stop the routers, engines and gate Jobs of this run's fleet, keeping the volumes.
+
+        Only a fleet this run deployed is changed: the record must be a Kubernetes run whose
+        last passed access found the fleet the environment names, by uid. Reports each process
+        the run recorded, and whether it ran until now.
         """
         check_directory(self.directory)
         stopped = []
@@ -2073,91 +2917,45 @@ fi
             record = run_record.read(self.directory)
             if record["target"] != TARGET:
                 raise ValueError(f"{self.directory} holds a {record['target']} run")
-            owned = self.directory / OWNED
-            if not (owned / "cluster.json").is_file():
-                # access never passed, so no stage of this run reached the cluster's release.
-                self.announce(f"{self.directory}: access never passed; this run changed no release")
+            entry = record["stages"].get("access")
+            if entry is None or not (self.directory / entry["directory"] / "access.json").is_file():
+                self.announce(f"{self.directory}: access never ran; this run changed no fleet")
                 return []
-            recorded_cluster = _json(owned / "cluster.json")
-            here = self.identity()
-            if differing := sorted(k for k in here if recorded_cluster.get(k) != here[k]):
+            access = _json(self.directory / entry["directory"] / "access.json")
+            uid = (access.get("fleet") or {}).get("uid")
+            if access.get("namespace") != self.env[NAMESPACE] or uid != self.env[FLEET_UID]:
                 raise ValueError(
-                    f"down changed nothing: the run deployed to another {', '.join(differing)} "
-                    f"than the environment reaches ({recorded_cluster}); load the environment "
-                    "the run used"
+                    f"down changed nothing: the run deployed fleet {uid} in "
+                    f"{access.get('namespace')}, and the environment names "
+                    f"{self.env[FLEET_UID]} in {self.env[NAMESPACE]}; load the environment the "
+                    "run used"
                 )
             cluster = self.cluster()
-            current = cluster.release_values()
-            self._owned(record, current)
             for entry in record["stages"].values():
                 if entry["stage"] not in ("router-start", "sidecar-start", "engine-start"):
                     continue
                 for process in entry["processes"]:
-                    pod = cluster.get("pod", process.get("pod", process["name"]))
-                    uid = process.get("pod_uid")
-                    ran = pod is not None and (uid is None or pod["metadata"].get("uid") == uid)
+                    pod = cluster.get(POD, process.get("pod", process["name"]))
+                    recorded = process.get("pod_uid")
+                    ran = pod is not None and recorded in (None, pod["metadata"].get("uid"))
                     host = process.get("host", "cluster")
                     stopped.append({"name": process["name"], "host": host, "stopped": ran})
-            if current:
-                values = self.values(cluster, engines={}, fleet="")
-                cluster.upgrade(chart_path(self.env), values)
+            self.stop(cluster)
         return stopped
 
-    def _own(self, name: str, document: Any) -> None:
-        """Record what a passed stage gave the cluster, which later attempts keep until they
-        pass themselves."""
-        owned = self.directory / OWNED
-        owned.mkdir(mode=0o700, exist_ok=True)
-        _private(owned / f".{name}.new", document)
-        (owned / f".{name}.new").replace(owned / name)
 
-    def identity(self) -> dict[str, str]:
-        """The context, API server, namespace and release kubectl and helm reach now."""
-        cluster = self.cluster()
-        return {
-            "context": cluster.current_context(),
-            "server": cluster.api_server(),
-            "namespace": cluster.namespace,
-            "release": cluster.release,
-        }
-
-    def _owned(self, record: Mapping[str, Any], current: Mapping[str, Any]) -> None:
-        """Refuse a release that runs engines or a fleet another run gave it."""
-        installed = self.directory / OWNED / "installed.json"
-        names = set(_json(installed)["configMaps"]) if installed.is_file() else set()
-        engines = current.get("engines") or {}
-        live = {item["metadata"]["name"] for item in engines.get("configMaps", [])}
-        if not live <= names:
-            raise ValueError(
-                "down changed nothing: the release runs engines this run did not install; down "
-                "leaves them to the run that did"
-            )
-        routers = current.get("routers") or {}
-        if routers.get("enabled") and not str(routers.get("fleet", "")).startswith(
-            f"deploy/{record['run_id']}/"
-        ):
-            raise ValueError(
-                f"down changed nothing: the release's routers serve {routers.get('fleet')}, "
-                "another run's fleet; down leaves them to that run"
-            )
-
-
-def _b64(data: bytes) -> str:
-    return base64.b64encode(data).decode()
-
-
-def _redacted(values: Mapping[str, Any]) -> dict:
-    """The chart values the attempt keeps: every ConfigMap's content by its digest only."""
-    kept = copy.deepcopy(dict(values))
-    for item in (kept.get("engines") or {}).get("configMaps", []):
+def _redacted(objects: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The objects an attempt keeps: every ConfigMap's content by its digest only."""
+    kept = copy.deepcopy([dict(item) for item in objects])
+    for item in kept:
+        if item.get("kind") != "ConfigMap":
+            continue
         for field_name in ("data", "binaryData"):
             if field_name in item:
                 item[field_name] = {
                     name: hashlib.sha256(str(value).encode()).hexdigest()
                     for name, value in item[field_name].items()
                 }
-    if kept.get("monitoring", {}).get("grafana", {}).get("dashboard"):
-        kept["monitoring"]["grafana"]["dashboard"] = "<rendered>"
     return kept
 
 
@@ -2275,18 +3073,18 @@ test "$status" -eq 0 ||
             host_network=True,
             plain=True,
         )
-        [server_entry] = deployment.start_gates(context, [server_gate])
+        [server_name] = deployment.start_gates(context, [server_gate])
         cluster = deployment.cluster(context)
         deadline = deployment.clock() + JOB_SECONDS["fabric-server"]
         while True:
-            try:
-                if "narwhal-listening" in cluster.logs(str(server_entry["name"])):
-                    break
-            except ClusterError:
-                pass
-            job = cluster.get("job", str(server_entry["name"])) or {}
-            if job.get("status", {}).get("failed") or deployment.clock() > deadline:
-                deployment.finish_gate(context, server_gate, server_entry, where)
+            job = cluster.get(JOB, server_name) or {}
+            if job and "narwhal-listening" in deployment.job_log(cluster, job, finished=False):
+                break
+            finished = any(
+                c.get("status") == "True" for t, c in _conditions(job).items() if t != "Suspended"
+            )
+            if not job or finished or deployment.clock() > deadline:
+                deployment.finish_gate(context, server_gate, server_name, where)
                 raise GateFailed(
                     sample.destination.host.id,
                     f"{where} {server[0]} server",
@@ -2295,15 +3093,35 @@ test "$status" -eq 0 ||
                     context.directory / "logs",
                 )
             deployment.sleep(POLL_SECONDS)
-        [client_entry] = deployment.start_gates(context, [client_gate], [server_entry])
+        if getattr(context, "resumed", False) and _finished(cluster.get(JOB, server_name)):
+            following = deployment.next_job_name(context, "fabric-client")
+            if cluster.get(JOB, following) is None:
+                # A resumed sample whose server window passed while no runner ran has no
+                # server for its client. Its server goes, and the next pass, which adopts the
+                # attempt again, measures the sample with a new one.
+                deployment.remove(cluster, JOB, server_name)
+                deployment.remove(cluster, CONFIG_MAP, server_name)
+                raise Interrupted(
+                    f"{where}: the {server[0]} server's window passed while no runner ran"
+                )
+        [client_name] = deployment.start_gates(context, [client_gate])
         try:
-            result = deployment.finish_gate(context, client_gate, client_entry, where)
+            result = deployment.finish_gate(context, client_gate, client_name, where)
         finally:
-            deployment.finish_gate(context, server_gate, server_entry, where)
+            deployment.finish_gate(context, server_gate, server_name, where)
         report = remote.files(result.output).get("report")
         if report is None:
             raise GateOutputError(f"{where}: the {client[0]} client's log holds no report")
         return report + b"\n"
+
+
+@dataclass
+class _KeyContext:
+    """The parts of a stage context the key check's Job uses: where its log goes."""
+
+    directory: Path
+    stage: str = KEY_CHECK
+    instance: str = ""
 
 
 @dataclass
@@ -2318,6 +3136,8 @@ class _LiveContext:
     def __post_init__(self) -> None:
         self.directory = self.run_directory / "live"
         self.run_id = str(run_record.read(self.run_directory)["run_id"])
+        # A live check's Jobs are deleted once read, so their names need not repeat.
+        self.attempt = secrets.randbelow(2**31)
 
 
 class Topology:

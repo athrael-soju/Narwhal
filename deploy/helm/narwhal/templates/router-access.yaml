@@ -1,4 +1,3 @@
-{{- if .Values.routers.enabled }}
 {{- $name := include "narwhal.routerName" . }}
 # The routers elect the primary through the Lease {{ $name }}. Their ServiceAccount may read,
 # renew, take over and release that one Lease, and create it when it does not exist yet.
@@ -42,4 +41,3 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}
-{{- end }}

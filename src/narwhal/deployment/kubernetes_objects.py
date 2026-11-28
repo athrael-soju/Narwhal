@@ -1,8 +1,9 @@
 """The Kubernetes objects the fleet controller derives from a `NarwhalFleet`.
 
 Each builder returns complete objects for server-side apply: the engines' StatefulSet, Service
-and hook ConfigMaps, a gate Job and its inputs ConfigMap, and HAProxy. They carry the pod specs
-the chart's templates rendered before the controller took them over.
+and hook ConfigMaps, a gate Job and its inputs ConfigMap, HAProxy, and the router pair's
+StatefulSet and Service. They carry the pod specs the chart's templates rendered before the
+controller took them over. The routers' ServiceAccount and its Lease Role stay in the chart.
 
 Every object names the fleet as its controlling owner, so deleting the fleet leaves its removal
 to the garbage collector. The owner reference sets no `blockOwnerDeletion`: nothing waits on a
@@ -38,6 +39,7 @@ from .fleet_resource import (
     ENGINE_SERVICE,
     GROUP,
     KIND,
+    MAX_ROUTER_ARGS,
     PLACEMENT_GATE,
 )
 from .launch_engine import engine_set
@@ -72,6 +74,18 @@ HAPROXY = "haproxy"
 ROUTER_SERVICE = "routers"
 ROUTER_PODS = ("router-0", "router-1")
 HAPROXY_PORT = 8000
+# The routes HAProxy forwards to the active router: the completion routes, what a client or an
+# external load balancer reads about the fleet, and the engine targets Prometheus reads. Every
+# other route, such as /narwhal/state, /metrics or a lifecycle action, answers 404 there, and
+# the gate Jobs, the other router and monitoring reach it at a router's own address.
+SERVING_ROUTES = (
+    ("POST", "/v1/completions"),
+    ("POST", "/v1/chat/completions"),
+    ("GET", "/v1/models"),
+    ("GET", "/health"),
+    ("GET", "/ready"),
+    ("GET", "/narwhal/targets"),
+)
 
 # Gate Jobs, as `kubernetes_target` runs them.
 GATE_KINDS = (
@@ -89,11 +103,15 @@ GATE_KINDS = (
     "calibrate",
     "preflight",
     "router-check",
+    "key-check",
 )
-# The gates that call engines, or prepare the launch whose checks read the key, get the key.
+# The gates that call engines get the key. Preparing a launch names the key's Secret and calls
+# no engine, so no launch file holds the key.
+# A key check holds the key to report its HMAC, which shows an edit of the Secret in place.
 CREDENTIAL_KINDS = (
-    "prepare",
+    "key-check",
     "transfer-measure",
+    "sidecar-verify",
     "finalize-fleet",
     "profile",
     "calibrate",
@@ -101,6 +119,10 @@ CREDENTIAL_KINDS = (
 )
 # The gates that inspect or measure one node run there.
 NODE_KINDS = ("discovery", "fabric-probe", "fabric-server", "fabric-client", "transfer-measure")
+# The gates that run on the host's network: a fabric Job measures the interface KV uses, as
+# a transfer measurement does. The chart's admission policy allows the host network and
+# IPC_LOCK on these and on the engine pods only.
+HOST_NETWORK_KINDS = ("fabric-probe", "fabric-server", "fabric-client", "transfer-measure")
 # The one gate that reads the engine pods through the API, as their sidecars do.
 ACCOUNT_KIND = "sidecar-verify"
 KEEP_ENV = "NARWHAL_GATE_KEEP"
@@ -128,6 +150,7 @@ KEEP = re.compile(r"deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+")
 FILE_NAME = re.compile(r"[-._A-Za-z0-9]+")
 
 BACKGROUND = "Background"
+RUNTIME_DEFAULT = "RuntimeDefault"
 # What prune may delete, in the order it deletes them: workloads before what they mount.
 PRUNED_KINDS = ("Deployment", "StatefulSet", "Job", "Service", "ConfigMap")
 
@@ -330,7 +353,8 @@ class Fleet:
 
     `engine_account` is the engines' ServiceAccount, which the chart makes. `rdma_resource` and
     `model_volume` are the engines' RDMA resource name and model volume source, which fabric
-    and discovery gates use.
+    and discovery gates use. `run_as_user` and `run_as_group` are the non-root IDs the routers
+    run as, the chart's `controller.runAsUser` and `runAsGroup`.
     """
 
     owner: Owner
@@ -344,6 +368,8 @@ class Fleet:
     model_volume: Mapping[str, Any] | None = None
     cluster_domain: str = "cluster.local"
     haproxy_replicas: int = 1
+    run_as_user: int = 10001
+    run_as_group: int = 10001
 
     def __post_init__(self) -> None:
         _digest(self.narwhal_image, "the Narwhal image")
@@ -354,12 +380,21 @@ class Fleet:
         _name(self.cluster_domain, "the cluster domain")
         if self.engine_account is not None:
             _name(self.engine_account, "the engines' ServiceAccount")
+            # The routers' ServiceAccount may take over the router Lease.
+            if self.engine_account == ROUTER_ACCOUNT:
+                raise ValueError(
+                    f"the engines' ServiceAccount may not be {ROUTER_ACCOUNT}, the routers'"
+                )
         if self.rdma_resource is not None and not RESOURCE_NAME.fullmatch(self.rdma_resource):
             raise ValueError(f"{self.rdma_resource!r} is not a resource name")
         if self.model_volume is not None:
             _volume_source(self.model_volume, "the model volume")
         if not isinstance(self.haproxy_replicas, int) or self.haproxy_replicas < 1:
             raise ValueError("HAProxy needs at least one replica")
+        for value, what in ((self.run_as_user, "user"), (self.run_as_group, "group")):
+            # 0 is root; Kubernetes takes IDs up to 2^31 - 1.
+            if type(value) is not int or not 0 < value < 2**31:
+                raise ValueError(f"the routers run as a non-root {what} ID, not {value!r}")
 
 
 def _volume_source(source: Mapping[str, Any], what: str) -> None:
@@ -563,6 +598,10 @@ class GateJob:
             _name(self.inputs, f"{self.name}'s inputs ConfigMap")
         if self.model_volume is not None:
             _volume_source(self.model_volume, f"{self.name}'s model volume")
+        if self.host_network and self.kind not in HOST_NETWORK_KINDS:
+            raise ValueError(
+                f"{self.name}: only {', '.join(HOST_NETWORK_KINDS)} Jobs run on the host network"
+            )
         if self.service_account and self.kind != ACCOUNT_KIND:
             raise ValueError(
                 f"{self.name}: only a {ACCOUNT_KIND} Job runs as the engines' ServiceAccount"
@@ -640,7 +679,12 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
         volumes.append({"name": INPUT_VOLUME, "configMap": {"name": gate.inputs}})
     if model:
         volumes.append({"name": MODEL_VOLUME, **copy.deepcopy(dict(model))})
-    spec: dict[str, Any] = {"restartPolicy": "Never", "enableServiceLinks": False}
+    spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "enableServiceLinks": False,
+        # The chart's admission policy refuses a pod outside the engines without a seccomp filter.
+        "securityContext": {"seccompProfile": {"type": RUNTIME_DEFAULT}},
+    }
     if gate.service_account:
         # Verifying a sidecar reads the engine pod through the API, as the sidecar does.
         spec["serviceAccountName"] = fleet.engine_account
@@ -696,10 +740,28 @@ def inputs(fleet: Fleet, gate: GateJob, files: Mapping[str, bytes]) -> dict[str,
 # HAProxy.
 
 
+def route_rules() -> str:
+    """The frontend lines that refuse every request but those `SERVING_ROUTES` names, matched
+    by method and by the exact path, so no encoding or extra slash reaches another route."""
+    lines = []
+    methods = sorted({method for method, _ in SERVING_ROUTES})
+    for method in methods:
+        paths = " ".join(path for verb, path in SERVING_ROUTES if verb == method)
+        lines.append(f"    acl narwhal_{method.lower()} method {method}")
+        lines.append(f"    acl narwhal_{method.lower()}_routes path {paths}")
+    allowed = " || ".join(f"narwhal_{m.lower()} narwhal_{m.lower()}_routes" for m in methods)
+    lines.append(f"    http-request deny deny_status 404 unless {allowed}")
+    return "\n".join(lines) + "\n"
+
+
 def haproxy_config(namespace: str, cluster_domain: str) -> str:
-    """deploy/ha/haproxy.cfg, with each router found by its pod's DNS name. A replaced router
-    pod is found at its new address within a second."""
+    """deploy/ha/haproxy.cfg, forwarding only `SERVING_ROUTES` and finding each router by its
+    pod's DNS name. A replaced router pod is found at its new address within a second."""
     config = resources.files("narwhal.deployment").joinpath("haproxy.cfg").read_text()
+    bind = f"    bind :{HAPROXY_PORT}\n"
+    if config.count(bind) != 1:
+        raise ValueError(f"deploy/ha/haproxy.cfg has no single line {bind.strip()!r}")
+    config = config.replace(bind, bind + route_rules())
     domain = f"{ROUTER_SERVICE}.{namespace}.svc.{cluster_domain}"
     for server, pod in zip("ab", ROUTER_PODS, strict=True):
         placeholder = f"server router-{server} ROUTER_{server.upper()}_ADDRESS:{HAPROXY_PORT}"
@@ -741,6 +803,7 @@ def haproxy(fleet: Fleet) -> list[dict[str, Any]]:
                     "spec": {
                         "enableServiceLinks": False,
                         "automountServiceAccountToken": False,
+                        "securityContext": {"seccompProfile": {"type": RUNTIME_DEFAULT}},
                         "containers": [
                             {
                                 "name": HAPROXY,
@@ -767,6 +830,328 @@ def haproxy(fleet: Fleet) -> list[dict[str, Any]]:
             "spec": {
                 "selector": selector,
                 "ports": [{"name": "http", "port": HAPROXY_PORT, "targetPort": "http"}],
+            },
+        },
+    ]
+    return [_finished(document) for document in documents]
+
+
+# Routers.
+
+ROUTER = "router"
+# The router pair's StatefulSet: its pods are ROUTER_PODS.
+ROUTER_SET = "router"
+# The chart makes this ServiceAccount, with a Role that may read, renew, take over and create
+# the Lease of the same name and nothing else. The controller has no RBAC or ServiceAccount
+# verbs, and RBAC lets an identity grant only what it holds, so it cannot make them itself.
+ROUTER_ACCOUNT = "narwhal-router"
+ROUTER_LEASE = "narwhal-router"
+ROUTER_PORT = 8000
+# Each router's own volume, for its journal and state handoff.
+ROUTER_HOME = "/narwhal-router"
+ROUTER_VOLUME = "router-state"
+API_VOLUME = "narwhal-api"
+TOKEN_MOUNT = "/var/run/secrets/kubernetes.io/serviceaccount"
+TOKEN_SECONDS = 3600
+# The read-only root filesystem leaves the router this scratch directory beside its volume.
+TMP_VOLUME = "tmp"
+TMP_MOUNT = "/tmp"
+TMP_LIMIT = "64Mi"
+# A fleet file on the state volume: relative, with no hidden or parent part.
+ROUTER_FLEET = re.compile(r"([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.json")
+ROUTER_ARG_LENGTH = 256
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# The narwhal-serve options `routers` and ROUTER_START set, and the file lease's, which more
+# options may not set again: argparse takes the last value, so a repeated --kubernetes-lease
+# or a --lease-path would move a router off the Lease that fences the pair.
+ROUTER_OPTIONS = (
+    "--fleet",
+    "--host",
+    "--port",
+    "--journal",
+    "--kubernetes-lease",
+    "--lease-path",
+    "--lease-witness",
+    "--router-id",
+    "--standby-of",
+    "--first-start-primary",
+)
+# The narwhal-serve options a fleet may add, each whole or as --name=value. Anything else that
+# starts with a dash is refused: --help, --version and -h exit, -- ends option parsing, and an
+# abbreviation or an unknown option stops the router at start.
+ROUTER_SERVE_OPTIONS = (
+    "--log-level",
+    "--max-concurrent",
+    "--graceful-timeout",
+    "--shutdown-drain",
+    "--standby-probe-interval",
+    "--standby-takeover-after",
+    "--standby-max-handoff-age",
+    "--lease-ttl",
+    "--lease-renew-interval",
+    "--lease-safety-margin",
+    "--deployment-status",
+    "--resume",
+)
+NEGATIVE_NUMBER = re.compile(r"-[0-9.]+")
+
+# Refuses to start a router whose own volume, its working directory, it cannot write: one an
+# image with another UID wrote, on a hostPath volume where fsGroup changes nothing.
+ROUTER_VOLUME_CHECK = """\
+home = os.getcwd()
+probe = os.path.join(home, f".narwhal-write-check-{os.getpid()}")
+try:
+    os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    os.unlink(probe)
+except OSError as error:
+    sys.exit(
+        f"narwhal: the router volume {home} is not writable by UID {os.getuid()}: {error}. "
+        "Delete this router's router-state PVC if an earlier image wrote it."
+    )
+"""
+
+# The router container's command: python3 -I -c ROUTER_START <narwhal-serve arguments>.
+ROUTER_START = """\
+# Start one router of the pair, router-0 or router-1, with the narwhal-serve arguments after
+# its own. The routers elect the primary through the Kubernetes Lease. On the first install,
+# router-0 finds no handoff at its state path and starts with --first-start-primary: it claims
+# the Lease while the Lease is absent or free, and otherwise shadows the other router. Every
+# other start is a standby of the other router, as a supervisor restarts a router of the pair.
+import json
+import os
+import sys
+
+{check}
+name = os.environ["NARWHAL_POD_NAME"]
+base, _, index = name.rpartition("-")
+peer = f"http://{base}-{1 - int(index)}.{os.environ['NARWHAL_ROUTERS_DOMAIN']}:8000"
+arguments = sys.argv[1:]
+with open(arguments[arguments.index("--fleet") + 1]) as stream:
+    recovery = json.load(stream).get("recovery") or {}
+saved = os.path.exists(recovery.get("state_path", "runs/state.json"))
+standby = ["--standby-of", peer]
+if index == "0" and not saved:
+    standby.append("--first-start-primary")
+argv = [sys.executable, "-I", "-m", "narwhal.cli", *arguments, "--router-id", name, *standby]
+os.execv(sys.executable, argv)  # noqa: S606 - the router replaces this process
+""".replace("{check}\n", ROUTER_VOLUME_CHECK)
+
+
+def _option_problem(argument: str) -> str:
+    """Why a fleet may not add this narwhal-serve argument, or "" for an option of
+    ROUTER_SERVE_OPTIONS or a value."""
+    if not argument.startswith("-") or NEGATIVE_NUMBER.fullmatch(argument):
+        return ""
+    option = argument.split("=", 1)[0]
+    if option in ROUTER_SERVE_OPTIONS:
+        return ""
+    for reserved in ROUTER_OPTIONS:
+        if option.startswith("--") and reserved.startswith(option):
+            return f"sets {reserved}, the pair's own"
+    return f"is no option the pair takes; it takes {', '.join(ROUTER_SERVE_OPTIONS)}"
+
+
+@dataclass(frozen=True)
+class Routers:
+    """The router pair's settings: the fleet file on the state volume, each router's own
+    volume, and more narwhal-serve options."""
+
+    fleet_file: str
+    storage_class: str
+    size: str
+    args: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fleet_file, str) or not ROUTER_FLEET.fullmatch(self.fleet_file):
+            raise ValueError(
+                "the routers' fleet file must be a .json path on the state volume, with no "
+                f"hidden or parent part, not {self.fleet_file!r}"
+            )
+        _name(self.storage_class, "the routers' storage class")
+        if not isinstance(self.size, str) or not QUANTITY.fullmatch(self.size):
+            raise ValueError(f"the routers' volume size {self.size!r} is not a quantity")
+        if not isinstance(self.args, tuple) or len(self.args) > MAX_ROUTER_ARGS:
+            raise ValueError(f"the routers take a tuple of at most {MAX_ROUTER_ARGS} options")
+        for argument in self.args:
+            if (
+                not isinstance(argument, str)
+                or len(argument) > ROUTER_ARG_LENGTH
+                or CONTROL.search(argument)
+            ):
+                raise ValueError(f"the router option {argument!r} is not a printable string")
+            if problem := _option_problem(argument):
+                raise ValueError(f"the router option {argument} {problem}")
+
+    @classmethod
+    def of(cls, spec: Mapping[str, Any], fleet_file: str) -> Routers:
+        """The settings in a fleet's `spec.routers`, around the fleet file fleet-limits wrote."""
+        return cls(
+            fleet_file,
+            spec.get("storageClassName", ""),
+            spec.get("size", ""),
+            tuple(spec.get("args") or ()),
+        )
+
+
+# The routers' ServiceAccount, Role and RoleBinding stay in the chart, decided for task 26:
+# the controller holds no RBAC or ServiceAccount verbs. RBAC lets an identity create a Role or
+# RoleBinding only for permissions it holds itself, so building them here would need get and
+# update on the router Lease, with which the controller could take that Lease over.
+def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
+    """The router pair's headless Service and StatefulSet.
+
+    The pods run as ROUTER_ACCOUNT and elect the primary through ROUTER_LEASE. Only the router
+    container mounts a ServiceAccount token, a projected one of an hour. The pods never share
+    a node while another node can take one.
+
+    Each router runs as the fleet's non-root user on a read-only root filesystem, with no
+    capability and the runtime's default seccomp filter. It writes only its own volume at
+    ROUTER_HOME (the journal and its handoff state) and the scratch directory at TMP_MOUNT.
+    """
+    owner = fleet.owner
+    domain = f"{ROUTER_SERVICE}.{owner.namespace}.svc.{fleet.cluster_domain}"
+    selector = labels(ROUTER)
+    command = [
+        "python3",
+        "-I",
+        "-c",
+        ROUTER_START,
+        "--fleet",
+        f"{STATE_MOUNT}/{settings.fleet_file}",
+        "--host",
+        "$(NARWHAL_POD_IP)",
+        "--port",
+        str(ROUTER_PORT),
+        "--journal",
+        f"{ROUTER_HOME}/journal.jsonl",
+        "--kubernetes-lease",
+        ROUTER_LEASE,
+        # The kubelet expands $(NAME) in a command; a fleet's option stays as written.
+        *(engine_set.escape(argument) for argument in settings.args),
+    ]
+    env: list[dict[str, Any]] = [
+        {"name": "NARWHAL_POD_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
+        {"name": "NARWHAL_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+        {"name": "NARWHAL_ROUTERS_DOMAIN", "value": domain},
+    ]
+    if fleet.api_key:
+        env.append(fleet.api_key.variable())
+    container = {
+        "name": ROUTER,
+        "image": fleet.narwhal_image,
+        # ROUTER_START decides whether this router starts as the primary or as a standby.
+        "command": command,
+        "env": env,
+        # A relative recovery.state_path lies on the router's own volume.
+        "workingDir": ROUTER_HOME,
+        "ports": [{"name": "http", "containerPort": ROUTER_PORT}],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "capabilities": {"drop": ["ALL"]},
+        },
+        "volumeMounts": [
+            {"name": STATE_VOLUME, "mountPath": STATE_MOUNT, "readOnly": True},
+            {"name": API_VOLUME, "mountPath": TOKEN_MOUNT, "readOnly": True},
+            {"name": ROUTER_VOLUME, "mountPath": ROUTER_HOME},
+            {"name": TMP_VOLUME, "mountPath": TMP_MOUNT},
+        ],
+    }
+    token = {
+        "name": API_VOLUME,
+        "projected": {
+            "defaultMode": 0o444,
+            "sources": [
+                {"serviceAccountToken": {"path": "token", "expirationSeconds": TOKEN_SECONDS}},
+                {
+                    "configMap": {
+                        "name": "kube-root-ca.crt",
+                        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                    }
+                },
+                {
+                    "downwardAPI": {
+                        "items": [
+                            {
+                                "path": "namespace",
+                                "fieldRef": {"fieldPath": "metadata.namespace"},
+                            }
+                        ]
+                    }
+                },
+            ],
+        },
+    }
+    spec = {
+        "enableServiceLinks": False,
+        # Only the router container mounts the token, for the router Lease.
+        "serviceAccountName": ROUTER_ACCOUNT,
+        "automountServiceAccountToken": False,
+        # fsGroup lets the router's user write its own volume; the kubelet leaves the read-only
+        # state volume as it is.
+        "securityContext": {
+            "runAsNonRoot": True,
+            "runAsUser": fleet.run_as_user,
+            "runAsGroup": fleet.run_as_group,
+            "fsGroup": fleet.run_as_group,
+            "fsGroupChangePolicy": "OnRootMismatch",
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        # On several nodes the two routers never share one, so losing a node leaves a router.
+        # On one node both still schedule. Tainted nodes the routers cannot run on do not count.
+        "topologySpreadConstraints": [
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                "nodeTaintsPolicy": "Honor",
+                "labelSelector": {"matchLabels": dict(selector)},
+            }
+        ],
+        "containers": [container],
+        "volumes": [
+            {
+                "name": STATE_VOLUME,
+                "persistentVolumeClaim": {"claimName": fleet.state_claim, "readOnly": True},
+            },
+            token,
+            {"name": TMP_VOLUME, "emptyDir": {"sizeLimit": TMP_LIMIT}},
+        ],
+    }
+    documents = [
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": metadata(owner, ROUTER_SERVICE, ROUTER),
+            "spec": {
+                "clusterIP": "None",
+                # A standby answers /ready with 503 and must still resolve, for its peer and
+                # for HAProxy.
+                "publishNotReadyAddresses": True,
+                "selector": selector,
+                "ports": [{"name": "http", "port": ROUTER_PORT}],
+            },
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": metadata(owner, ROUTER_SET, ROUTER),
+            "spec": {
+                "serviceName": ROUTER_SERVICE,
+                "replicas": len(ROUTER_PODS),
+                "podManagementPolicy": "Parallel",
+                "selector": {"matchLabels": selector},
+                "template": {"metadata": {"labels": dict(selector)}, "spec": spec},
+                "volumeClaimTemplates": [
+                    {
+                        "metadata": {"name": ROUTER_VOLUME},
+                        "spec": {
+                            "accessModes": ["ReadWriteOnce"],
+                            "storageClassName": settings.storage_class,
+                            "resources": {"requests": {"storage": settings.size}},
+                        },
+                    }
+                ],
             },
         },
     ]

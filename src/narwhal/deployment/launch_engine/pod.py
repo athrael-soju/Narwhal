@@ -7,7 +7,10 @@ file against its SHA-256 in the launch's pod specification.
 
 Each step takes its arguments after its name:
 
-- `checkpoint` hashes the model files the pod serves and records the tree digest.
+- `checkpoint <sidecar user>` hands the pod's directory of the state volume to the attestation
+  sidecar's user, then hashes the model files the pod serves and records the tree digest. The
+  directory keeps its group, root, so the runtime check, which runs as root without
+  CAP_DAC_OVERRIDE, still writes its record there.
 - `runtime-check <seconds> <probe arguments>` runs the runtime probe within that budget, with
   UCX_NET_DEVICES set to the HCA the device plugin allocated, and records its output with the
   verdict on it that `narwhal-engine check` gives.
@@ -162,7 +165,16 @@ def fail(message: str) -> int:
     return 1
 
 
-def checkpoint() -> int:
+def hand_over(user: int) -> None:
+    """Give the pod's directory of the state volume to the sidecar's user. The directory keeps
+    its group, root's as the kubelet makes it, and lets that group write."""
+    directory = local(STATE)
+    os.chown(directory, user, -1)
+    directory.chmod(0o775)
+
+
+def checkpoint(user: int) -> int:
+    hand_over(user)
     plan, plan_sha256 = launch_plan()
     header = record_header(plan_sha256)
     try:
@@ -397,13 +409,15 @@ def serve(arguments: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if argv[:1] == ["checkpoint"] and len(argv) == 1:
-        return checkpoint()
+    if argv[:1] == ["checkpoint"] and len(argv) == 2 and argv[1].isdigit():
+        return checkpoint(int(argv[1]))
     if argv[:1] == ["runtime-check"] and len(argv) > 2:
         return runtime_check(float(argv[1]), argv[2:])
     if argv[:1] == ["serve"] and len(argv) > 1:
         return serve(argv[1:])
-    return fail("usage: pod.py checkpoint | runtime-check <seconds> <probe> | serve <engine>")
+    return fail(
+        "usage: pod.py checkpoint <user> | runtime-check <seconds> <probe> | serve <engine>"
+    )
 
 
 if __name__ == "__main__":

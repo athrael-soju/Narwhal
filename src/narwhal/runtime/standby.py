@@ -107,6 +107,22 @@ def _fresh(doc: dict[str, Any] | None, max_age_s: float) -> bool:
     return age <= max_age_s
 
 
+def _cold(lease: RouterLease, max_age_s: float) -> bool:
+    """Whether the pair starts cold: the lease is absent, or it expired longer ago than a
+    handoff stays fresh, so no router of the pair can hold state worth taking over.
+
+    A standby applies this while its own handoff is stale, so a pair that stopped together,
+    both as standbys, elects a primary. Only a lease whose `cold_start` is true takes it, a
+    Kubernetes Lease, whose claims are conditional updates: its expiry is this router's own
+    estimate, from when it first saw the Lease unchanged, so a holder still renewing never
+    reads as cold. A lease file never does; its first start applies task 10's rule.
+    """
+    if not getattr(lease, "cold_start", False):
+        return False
+    record = lease.read()
+    return record is None or time.time() - record.expires_at > max_age_s
+
+
 async def _takeover_problem(router: NarwhalRouter, report: handoff_state.HandoffReport) -> str:
     """Return why the router cannot serve the engine set the handoff left it, or "".
 
@@ -226,89 +242,114 @@ async def _shadow(
                     handoff_state.write(router.cfg.state_path, doc)
 
             if misses >= takeover_after:
-                if not _fresh(doc, max_handoff_age_s):
-                    router.failover_blocked = transient = "no fresh handoff"
-                else:
-                    try:
-                        claimed = await asyncio.to_thread(lease.claim)
-                    except LeaseError as exc:
-                        router.failover_blocked = transient = f"lease unavailable: {exc}"
+                fresh_handoff = _fresh(doc, max_handoff_age_s)
+                try:
+                    cold = not fresh_handoff and await asyncio.to_thread(
+                        _cold, lease, max_handoff_age_s
+                    )
+                    if not (fresh_handoff or cold):
+                        router.failover_blocked = transient = "no fresh handoff"
+                        claimed = False
                     else:
-                        if claimed:
-                            if doc is None:
-                                router.failover_blocked = "no handoff after lease claim"
-                                await asyncio.to_thread(lease.release)
-                                return
-                            previous_epoch = int(doc.get("epoch", 0))
-                            if previous_epoch != lease.epoch - 1:
-                                router.failover_blocked = (
-                                    f"handoff epoch {previous_epoch} cannot precede "
-                                    f"claimed epoch {lease.epoch}"
-                                )
-                                await asyncio.to_thread(lease.release)
-                                return
-                            try:
-                                if delay := lease.serving_delay():
-                                    # The claim may hide a holder this router never saw.
-                                    log.warning(
-                                        "claimed epoch %d; waiting %.1fs for any unseen holder's "
-                                        "lease to lapse",
-                                        lease.epoch,
-                                        delay,
-                                    )
-                                    await asyncio.sleep(delay)
-                                report = handoff_state.apply(router, doc)
-                                if not report.applied:
-                                    router.failover_blocked = report.why
-                                    return
-                                if problem := await _takeover_problem(router, report):
-                                    router.failover_blocked = problem
-                                    return
-                                if not lease.valid():
-                                    router.failover_blocked = "lease expired while applying handoff"
-                                    return
-                                router.lease_epoch = lease.epoch
-                                router.lease_holder = lease.holder
-                                from .lifecycle.identity import (
-                                    allow_profile_recovery,
-                                    check_process_identities,
-                                )
-
-                                router.lifecycle.identities_ready = False
-                                router.controller.clear_prefill_risk()
-                                router.controller.clear_decode_risk()
-                                router.control_wakeup.clear()
-                                router.standby = False
-                                try:
-                                    if router.cfg.engine_contract is None:
-                                        for instance in router.scheduler.live_instances():
-                                            await allow_profile_recovery(router, instance.iid)
-                                        router.lifecycle.identities_ready = True
-                                    else:
-                                        await check_process_identities(router)
-                                except BaseException:
-                                    router.standby = True
-                                    router.failover_blocked = "identity validation interrupted"
-                                    raise
-                                if not lease.valid():
-                                    router.standby = True
-                                    router.failover_blocked = (
-                                        "lease expired during identity validation"
-                                    )
-                                    return
-                                router.failover_blocked = ""
-                                router.takeover_gap_s = time.monotonic() - last_good
-                                log.warning(
-                                    "TAKEOVER: claimed epoch %d after %d failed probes; "
-                                    "applied run %s with %d roles; %.2fs since last good answer",
-                                    lease.epoch,
-                                    misses,
-                                    report.run,
-                                    report.roles_applied,
-                                    router.takeover_gap_s,
-                                )
-                                return
-                            finally:
-                                if router.standby:
-                                    await asyncio.to_thread(lease.release)
+                        claimed = await asyncio.to_thread(lease.claim)
+                except LeaseError as exc:
+                    router.failover_blocked = transient = f"lease unavailable: {exc}"
+                else:
+                    if claimed:
+                        await _take_control(
+                            router, lease, None if cold else doc, misses=misses, last_good=last_good
+                        )
+                        return
             await asyncio.sleep(probe_interval_s)
+
+
+async def _take_control(
+    router: NarwhalRouter,
+    lease: RouterLease,
+    doc: dict[str, Any] | None,
+    *,
+    misses: int,
+    last_good: float,
+) -> None:
+    """Serve on the lease this standby just claimed, from the handoff `doc`, or, on a cold
+    start, from the router's own configuration. Any check that fails leaves it a blocked
+    standby and releases the lease."""
+    try:
+        report = handoff_state.HandoffReport(applied=False, why="cold start")
+        if doc is None and not getattr(lease, "cold_start", False):
+            # Only a conditional claim may serve without the previous epoch's handoff.
+            router.failover_blocked = "no handoff after lease claim"
+            return
+        if doc is not None:
+            previous_epoch = int(doc.get("epoch", 0))
+            if previous_epoch != lease.epoch - 1:
+                router.failover_blocked = (
+                    f"handoff epoch {previous_epoch} cannot precede claimed epoch {lease.epoch}"
+                )
+                return
+        if delay := lease.serving_delay():
+            # The claim may hide a holder this router never saw.
+            log.warning(
+                "claimed epoch %d; waiting %.1fs for any unseen holder's lease to lapse",
+                lease.epoch,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        if doc is not None:
+            report = handoff_state.apply(router, doc)
+            if not report.applied:
+                router.failover_blocked = report.why
+                return
+        if problem := await _takeover_problem(router, report):
+            router.failover_blocked = problem
+            return
+        if not lease.valid():
+            router.failover_blocked = "lease expired while applying handoff"
+            return
+        router.lease_epoch = lease.epoch
+        router.lease_holder = lease.holder
+        from .lifecycle.identity import allow_profile_recovery, check_process_identities
+
+        router.lifecycle.identities_ready = False
+        router.controller.clear_prefill_risk()
+        router.controller.clear_decode_risk()
+        router.control_wakeup.clear()
+        router.standby = False
+        try:
+            if router.cfg.engine_contract is None:
+                for instance in router.scheduler.live_instances():
+                    await allow_profile_recovery(router, instance.iid)
+                router.lifecycle.identities_ready = True
+            else:
+                await check_process_identities(router)
+        except BaseException:
+            router.standby = True
+            router.failover_blocked = "identity validation interrupted"
+            raise
+        if not lease.valid():
+            router.standby = True
+            router.failover_blocked = "lease expired during identity validation"
+            return
+        router.failover_blocked = ""
+        router.takeover_gap_s = time.monotonic() - last_good
+        if doc is None:
+            log.warning(
+                "COLD START: claimed epoch %d after %d failed probes with no fresh handoff; "
+                "serving the configured engine set; %.2fs since last good answer",
+                lease.epoch,
+                misses,
+                router.takeover_gap_s,
+            )
+        else:
+            log.warning(
+                "TAKEOVER: claimed epoch %d after %d failed probes; "
+                "applied run %s with %d roles; %.2fs since last good answer",
+                lease.epoch,
+                misses,
+                report.run,
+                report.roles_applied,
+                router.takeover_gap_s,
+            )
+    finally:
+        if router.standby:
+            await asyncio.to_thread(lease.release)

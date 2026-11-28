@@ -1,8 +1,8 @@
 apiVersion: v2
 name: narwhal
-description: A Narwhal fleet on Kubernetes - engines with attestation sidecars, a router pair behind HAProxy, and the gate Jobs of a deployment run.
+description: A Narwhal fleet on Kubernetes - the fleet controller with its RBAC and admission policy, the router pair, monitoring, and optionally the NarwhalFleet itself.
 type: application
 # Release Please sets both versions to the Narwhal release.
 version: 0.13.0
 appVersion: 0.13.0
-kubeVersion: ">=1.27.0-0"
+kubeVersion: ">=1.30.0-0"

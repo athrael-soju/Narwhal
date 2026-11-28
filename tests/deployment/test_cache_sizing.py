@@ -403,6 +403,8 @@ class CacheSizingTests(unittest.TestCase):
                 config = SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
                 self.assertEqual(core._initialize_kv_caches(config), "model-ready")
                 captured = output.read_text()
+                # A Kubernetes pod's attestation sidecar, another user, reads the record.
+                self.assertEqual(output.stat().st_mode & 0o777, 0o644)
                 # A restart of the same launch keeps the first capture.
                 self.assertEqual(Core()._initialize_kv_caches(config), "model-ready")
                 self.assertEqual(output.read_text(), captured)

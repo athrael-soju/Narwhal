@@ -26,6 +26,9 @@ from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
 # Launch backends: Docker on the host, a Kubernetes engine pod, or the host's Python runtime.
 BACKENDS = ("container", "kubernetes", "native")
+# The variable a Kubernetes container that calls an engine holds the engine API key in, from
+# its Secret.
+API_KEY_ENV = "NARWHAL_ENGINE_KEY"
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
 # An engine in an image reads NARWHAL_MODEL_DIR at this path, and its hook files at HOOK_MOUNT.
@@ -314,7 +317,15 @@ def read_env(path: Path) -> dict[str, str]:
 
 
 def launch_headers(run: Path, plan: dict) -> dict[str, str] | None:
-    key = read_env(run / env_file_name(plan)).get(plan_launcher(plan).api_key_env, "")
+    """The engine's authorization header. A Kubernetes plan keeps no key in its launch files: the
+    pod or Job that calls the engine holds the key from its Secret in `API_KEY_ENV`."""
+    if plan.get("backend") == "kubernetes":
+        named = plan.get("kubernetes", {}).get("api_key_secret")
+        key = os.environ.get(API_KEY_ENV, "") if named else ""
+        if named and not key:
+            raise ValueError(f"the engine needs its API key; this container has no {API_KEY_ENV}")
+    else:
+        key = read_env(run / env_file_name(plan)).get(plan_launcher(plan).api_key_env, "")
     return {"Authorization": f"Bearer {key}"} if key else None
 
 

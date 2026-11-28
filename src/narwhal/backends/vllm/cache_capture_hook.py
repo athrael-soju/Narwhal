@@ -80,10 +80,12 @@ if os.environ.get("NARWHAL_CAPTURE_CACHE") == "1":
                 "cache_capture_sha256": plan["cache_capture_sha256"],
                 "ranks": ranks,
             }
+            # A Kubernetes pod's attestation sidecar, another user, reads the record.
             write_once(
                 Path(os.environ["NARWHAL_CACHE_OUTPUT"]),
                 json.dumps(value, indent=2) + "\n",
                 "cache layout differs from this launch's earlier start",
+                0o644,
             )
             return result
 

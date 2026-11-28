@@ -128,9 +128,9 @@ FACTS = (
         "cluster",
         INPUT,
         WORKSTATION,
-        "Kubernetes context, namespace, release or tool paths",
-        "`NARWHAL_KUBERNETES_CONTEXT`, `NARWHAL_KUBERNETES_NAMESPACE`, "
-        "`NARWHAL_KUBERNETES_RELEASE`, `NARWHAL_KUBECTL` and `NARWHAL_HELM`",
+        "Namespace, fleet, Kubernetes context or kubectl path",
+        "`NARWHAL_KUBERNETES_NAMESPACE`, the fleet's uid in `NARWHAL_KUBERNETES_FLEET_UID`, "
+        "`NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL`",
         (Rerun("access", onward=True),),
     ),
     Fact(
@@ -145,9 +145,21 @@ FACTS = (
         "revision",
         INPUT,
         WORKSTATION,
-        "Narwhal release or chart",
-        "The SHA-256 of the installed package's Python files and of the chart's files",
+        "Narwhal release",
+        "The SHA-256 of the installed package's Python files, which build every object",
         (Rerun("discover", onward=True),),
+    ),
+    # The Secret holding the engine API key. Rotating the key is an edit of this reference to a
+    # new, immutable Secret; a key-check Job's HMAC of the key also catches an edit in place.
+    # Either restarts the engines on the key and gives the routers it.
+    Fact(
+        "credential",
+        INPUT,
+        WORKSTATION,
+        "Engine API key Secret, or the key in it",
+        "The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key "
+        "under the fleet's salt from a key-check Job, never the key itself",
+        _reruns("engine-prepare", "router-start"),
     ),
     *(
         _shared_fact(name)

@@ -15,15 +15,17 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def write_private(path: Path, data: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+def write_private(path: Path, data: str, mode: int = 0o600) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    # The mode holds whatever the process's umask.
+    os.fchmod(fd, mode)
     with os.fdopen(fd, "w") as stream:
         stream.write(data)
 
 
-def write_once(path: Path, text: str, mismatch: str) -> None:
+def write_once(path: Path, text: str, mismatch: str, mode: int = 0o600) -> None:
     try:
-        write_private(path, text)
+        write_private(path, text, mode)
     except FileExistsError:
         if path.read_text() != text:
             raise ValueError(mismatch) from None

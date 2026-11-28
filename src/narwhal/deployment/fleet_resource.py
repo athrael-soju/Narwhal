@@ -877,8 +877,9 @@ def check_model_volume(fleet: Mapping[str, Any], policy: VolumePolicy) -> None:
     The source must be one of `policy.sources`. A hostPath must also pass `_check_host_path`,
     an NFS export must come from one of `policy.nfs_servers`, and a CSI volume must use one of
     `policy.csi_drivers`; each list is empty by default, which turns that source off.
-    `spec_env` applies this check for the controller. The narwhal chart's admission policy,
-    which task 26 step H adds, is to apply the same rules.
+    `spec_env` applies this check for the controller. The narwhal chart's admission policy
+    applies the same rules to every pod's model volume; `tests/deployment/chart_live.py` checks
+    that the two agree on an API server.
     """
     source = _block(_block(_block(fleet, "spec"), "engines"), "modelVolume")
     if len(source) != 1 or next(iter(source)) not in MODEL_VOLUME_SOURCES:
