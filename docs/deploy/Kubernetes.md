@@ -102,7 +102,7 @@ spec:
     key: token
 ```
 
-Only the router containers and the gate Jobs that hold the token read it, through a `secretKeyRef`: the router-check Jobs of `router-start`, which readmit engines, and the key-check Job, which reports its HMAC beside the engine key's. The controller copies the reference and never reads the Secret. A new Secret, or a token edited in place, restarts only the routers. An environment that holds `NARWHAL_ROUTER_TOKEN` is refused.
+Only the router containers and the gate Jobs that hold the token read it, through a `secretKeyRef`: the router-check Jobs of `router-start`, which readmit engines, and the key-check Job, which reports its HMAC beside the engine key's. The controller copies the reference and never reads the Secret. A new Secret, or a token edited in place, restarts only the routers. A `controlTokenSecret` with the name and key of `engines.apiKeySecret` is refused, by the CRD and as `InputRefused`. The controller cannot see two Secrets that hold the same value, so the routers compare the token with the engine key when they start and refuse to start when they match. An environment that holds `NARWHAL_ROUTER_TOKEN` is refused.
 
 ## Checking cluster access
 

@@ -75,6 +75,12 @@ class TokenTests(unittest.TestCase):
                     create_app(cfg)
             with self.assertRaisesRegex(ValueError, "control_token"):
                 create_app(cfg, control_token="short")
+            cfg.engine_api_key_env = KEY_VARIABLE
+            with (
+                patch.dict(os.environ, {KEY_VARIABLE: CONTROL_TOKEN}),
+                self.assertRaisesRegex(ValueError, "equals the engine API key"),
+            ):
+                create_app(cfg)
 
 
 class ControlRouteTests(unittest.IsolatedAsyncioTestCase):

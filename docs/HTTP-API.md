@@ -35,7 +35,7 @@ The routes that change membership, trust or lifecycle need the router's control 
 
 A request without the token, or with another one, gets HTTP `401` with an empty body and `WWW-Authenticate: Bearer`, before the router checks whether it controls the fleet or reads the body. The router compares the token in constant time. Reads, completions, `/health`, `/ready` and `/metrics` need no token.
 
-The router reads the token from `NARWHAL_ROUTER_TOKEN` and refuses to start without one that holds at least 32 random bytes: 64 hex digits or 43 base64url characters. Generate one with:
+The router reads the token from `NARWHAL_ROUTER_TOKEN` and refuses to start without one that holds at least 32 random bytes: 64 hex digits or 43 base64url characters. It also refuses a token equal to the engine API key, which every engine holds. Generate one with:
 
 ```bash
 python -c 'import secrets; print(secrets.token_hex(32))'

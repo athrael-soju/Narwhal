@@ -71,6 +71,7 @@ from .hosts import (
 )
 from .launch_engine.backend import cache_capture, launcher, transfer_measurement
 from .launch_engine.evidence import CheckFailed
+from .launch_engine.plan import API_KEY_ENV as ENGINE_KEY_ENV
 from .reconcile import reconcile
 from .role_env import read_environment
 from .run_record import PASSED, key
@@ -368,6 +369,11 @@ def inputs(env: Mapping[str, str], trial: capacity.Snapshot | None = None) -> di
     # The routers require the control token; its keyed digest is part of `discovery`.
     if problem := token_problem(env.get(ROUTER_TOKEN_ENV, "")):
         problems.append(problem)
+    elif env[ROUTER_TOKEN_ENV] == env.get(ENGINE_KEY_ENV):
+        problems.append(
+            f"{ROUTER_TOKEN_ENV} equals the engine API key in {ENGINE_KEY_ENV}; the engines hold "
+            "that key, so generate a separate control token"
+        )
     known = Path(env.get("NARWHAL_SSH_KNOWN_HOSTS", ""))
     if not env.get("NARWHAL_SSH_KNOWN_HOSTS") or not known.is_file():
         problems.append("set NARWHAL_SSH_KNOWN_HOSTS to the known-hosts file with every host key")

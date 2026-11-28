@@ -623,6 +623,15 @@ class StallTests(ControllerTest):
         self.assertIn("spec.controlTokenSecret", stalled["message"])
         self.assertEqual(self.rig.workloads, [])
 
+    def test_a_control_token_in_the_engine_keys_secret_key_is_refused(self):
+        token = self.fleet()["spec"]["controlTokenSecret"]
+        self.edit({"engines": {"apiKeySecret": dict(token)}})
+        self.work(self.leader())
+        stalled = self.condition(fleet_resource.STALLED)
+        self.assertEqual((stalled["status"], stalled["reason"]), ("True", "InputRefused"))
+        self.assertIn("keep the control token in its own Secret", stalled["message"])
+        self.assertEqual(self.rig.workloads, [])
+
     def test_a_new_control_token_secret_restarts_only_the_routers(self):
         controller = self.ready()
         before = {key: entry["directory"] for key, entry in self.record()["stages"].items()}

@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "a4037cf319f467dec56fd97cc12294a47323e3685ae86cb7459163c76daec29d"
+    "narwhal.example.com/schema-sha256": "ddaae8401a63cb59f6e994f663a165eba21c0329d7fc5eb7f4ae5db8bb2fff74"
 spec:
   group: "narwhal.example.com"
   names:
@@ -744,6 +744,9 @@ spec:
                 - "fabric"
                 - "routers"
                 - "controlTokenSecret"
+              x-kubernetes-validations:
+                - rule: "!has(self.engines.apiKeySecret) || self.engines.apiKeySecret.name != self.controlTokenSecret.name || self.engines.apiKeySecret.key != self.controlTokenSecret.key"
+                  message: "controlTokenSecret names the Secret and key of engines.apiKeySecret; keep the control token in its own Secret"
             status:
               type: "object"
               description: "What the controller observed. Per-instance detail stays in the run record."

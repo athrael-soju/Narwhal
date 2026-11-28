@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -337,6 +339,19 @@ def _is_http_url(url: str) -> bool:
     except ValueError:
         return False
     return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
+# What the scrape token is derived for: it authorises `GET /metrics` and nothing else.
+SCRAPE_CONTEXT = b"narwhal-metrics-scrape"
+
+
+def scrape_token(token: str) -> str:
+    """The read-only token that `GET /metrics` accepts besides the control token.
+
+    It is `HMAC-SHA256(token, "narwhal-metrics-scrape")` in hex, so Prometheus can scrape the
+    service without holding a credential that can change the fleet.
+    """
+    return hmac.new(token.encode(), SCRAPE_CONTEXT, hashlib.sha256).hexdigest()
 
 
 def read_token(config: ControlConfig, env: Mapping[str, str] = os.environ) -> str:

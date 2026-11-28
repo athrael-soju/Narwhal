@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import math
+import os
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -118,6 +120,14 @@ def create_app(
     elif problem := token_problem(control_token, "control_token"):
         raise ValueError(problem)
     cfg = cfg or FleetConfig.from_env()
+    # The engines hold their key, so a token equal to it would let an engine change the fleet.
+    if cfg.engine_api_key_env and hmac.compare_digest(
+        control_token.encode(), (os.environ.get(cfg.engine_api_key_env) or "").encode()
+    ):
+        raise ValueError(
+            f"the control token equals the engine API key in {cfg.engine_api_key_env}; "
+            "generate a separate token"
+        )
     if claim_first and not standby_of:
         raise ValueError("claim_first needs standby_of, the peer to shadow after a lost claim")
     if sum(option is not None for option in (lease, lease_path, kubernetes_lease)) > 1:

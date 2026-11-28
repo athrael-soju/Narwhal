@@ -155,6 +155,11 @@ _DOTS = "must not hold a . or .. segment"
 _HOST_PATH = "spec.engines.modelVolume.hostPath.path"
 
 REFUSED: dict[str, Refusal] = {
+    "the control token in the engine key's Secret key": _rule(
+        lambda d: _engines(d).update(apiKeySecret=dict(d["spec"]["controlTokenSecret"])),
+        "spec",
+        fleet_resource.SHARED_SECRET,
+    ),
     "another fleet name": _rule(
         lambda d: d["metadata"].update(name="second"),
         "",

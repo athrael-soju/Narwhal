@@ -869,6 +869,8 @@ def control_token_secret(env: Mapping[str, str]) -> dict[str, str]:
             f"set {CONTROL_TOKEN_SECRET_ENV} to <secret name>/<key>, the Secret that holds the "
             "router control token: spec.controlTokenSecret"
         )
+    if f"{name}/{key}" == env.get(API_KEY_SECRET_ENV):
+        raise ValueError(fleet_resource.SHARED_SECRET)
     return {"name": name, "key": key}
 
 

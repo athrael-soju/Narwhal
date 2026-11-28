@@ -35,7 +35,7 @@ In the router shell, generate a token:
 export NARWHAL_CONTROL_TOKEN="$(openssl rand -hex 32)"
 ```
 
-Keep the token in your secret store. The console and every API request need it.
+Keep the token in your secret store. The console and every API request need it. It is an operator credential: with it a caller can join an engine, so never give it to monitoring or any other service. Prometheus scrapes `GET /metrics` with a read-only token derived from it, as [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) describes.
 
 The service sends the router's own [control token](../../HTTP-API.md#control-token) with each drain, readmission, join and removal, from `NARWHAL_ROUTER_TOKEN`. The router shell already exports it from the router's role file. The two tokens must differ, because the service's token reaches browsers and Prometheus; the service refuses to start when they match or when `NARWHAL_ROUTER_TOKEN` is unset or shorter than 32 random bytes.
 

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
+from narwhal.fleet_control.config import scrape_token
 from narwhal.observability.stack.make_targets import (
     TargetContract,
     metrics_authority,
@@ -98,6 +99,7 @@ class ControlTarget:
     """The fleet control service Prometheus scrapes for the dashboard's annotations."""
 
     authority: str
+    # The read-only scrape token, never the control token.
     token: str
 
 
@@ -115,7 +117,8 @@ def control_target(env: Mapping[str, str]) -> ControlTarget | None:
         raise ValueError(
             f"{CONTROL_METRICS_URL_ENV} requires the control bearer token in {CONTROL_TOKEN_ENV}"
         )
-    return ControlTarget(authority, token)
+    # Prometheus holds only the read-only scrape token: the control token can change the fleet.
+    return ControlTarget(authority, scrape_token(token))
 
 
 def tool_target(env: Mapping[str, str]) -> str | None:

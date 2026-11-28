@@ -101,6 +101,12 @@ FABRIC_IMAGE_ENV = "NARWHAL_KUBERNETES_FABRIC_IMAGE"
 ROUTERS_ENV = "NARWHAL_KUBERNETES_ROUTERS"
 # The Secret and key of the routers' control token, as <secret name>/<key>.
 CONTROL_TOKEN_SECRET_ENV = "NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET"
+# The engines hold their key, so the control token in the same Secret key would let an engine
+# change the fleet.
+SHARED_SECRET = (
+    "controlTokenSecret names the Secret and key of engines.apiKeySecret; keep the control "
+    "token in its own Secret"
+)
 HAPROXY_ENV = "NARWHAL_KUBERNETES_HAPROXY"
 TIMEOUT_ENV = "NARWHAL_STAGE_TIMEOUT_SECONDS"
 
@@ -648,6 +654,14 @@ _SPEC = _object(
         "routers",
         "controlTokenSecret",
     ],
+    rules=[
+        _rule(
+            "!has(self.engines.apiKeySecret) || "
+            "self.engines.apiKeySecret.name != self.controlTokenSecret.name || "
+            "self.engines.apiKeySecret.key != self.controlTokenSecret.key",
+            SHARED_SECRET,
+        )
+    ],
 )
 
 # metav1.Condition, as controller-gen writes it.
@@ -966,7 +980,8 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
     `NARWHAL_KUBERNETES_CHART` comes from a fleet.
 
     Raises `ValueError` for a fleet with another name, a launch input the fleet refuses, a
-    model volume `check_model_volume` refuses, or a control character in any value.
+    model volume `check_model_volume` refuses, a control token in the engine key's Secret key,
+    or a control character in any value.
     """
     metadata = _block(fleet, "metadata")
     if metadata.get("name") != NAME:
@@ -1057,6 +1072,8 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
     token = _block(spec, "controlTokenSecret")
     if token:
         env[CONTROL_TOKEN_SECRET_ENV] = f"{token.get('name', '')}/{token.get('key', '')}"
+        if env[CONTROL_TOKEN_SECRET_ENV] == env.get(API_KEY_SECRET_ENV):
+            raise ValueError(SHARED_SECRET)
     if "haproxy" in spec:
         env[HAPROXY_ENV] = canonical(spec["haproxy"]).decode()
     timeouts = _block(spec, "timeouts")

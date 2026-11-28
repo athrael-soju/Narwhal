@@ -665,6 +665,14 @@ class DeployTests(unittest.TestCase):
         os.environ[ROUTER_TOKEN_ENV] = "A_-" * 15
         self.assertEqual(self.deploy("plan")[0], 0)
 
+    def test_plan_refuses_a_control_token_equal_to_the_engine_key(self):
+        os.environ["NARWHAL_ENGINE_KEY"] = os.environ[ROUTER_TOKEN_ENV]
+        code, result = self.deploy("plan")
+        self.assertEqual(code, 2, result)
+        messages = [error["message"] for error in result["errors"]]
+        self.assertTrue(any("equals the engine API key" in m for m in messages), messages)
+        self.assertFalse(self.run.exists())
+
     def test_no_run_file_or_log_holds_the_control_token(self):
         self.assertEqual(self.deploy("run")[0], 0)
         token = CONTROL_TOKEN.encode()
