@@ -8,7 +8,7 @@ sidecar captures its attestation once the check writes the launch directory, so
 `attest-capture` reads that capture instead of running it.
 
 The stages that have no SSH counterpart, and the Kubernetes versions of access, discovery and
-the chart release, recover from `docs/deploy/Kubernetes.md`. That page renders its stage and
+install, recover from `docs/deploy/Kubernetes.md`. That page renders its stage and
 rerun tables from this graph through `tools/maintenance/stage_graph_doc.py`.
 """
 

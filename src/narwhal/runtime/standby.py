@@ -115,7 +115,7 @@ def _cold(lease: RouterLease, max_age_s: float) -> bool:
     both as standbys, elects a primary. Only a lease whose `cold_start` is true takes it, a
     Kubernetes Lease, whose claims are conditional updates: its expiry is this router's own
     estimate, from when it first saw the Lease unchanged, so a holder still renewing never
-    reads as cold. A lease file never does; its first start applies task 10's rule.
+    reads as cold. A lease file never does; its first start follows `--first-start-primary`.
     """
     if not getattr(lease, "cold_start", False):
         return False

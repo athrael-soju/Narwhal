@@ -29,7 +29,7 @@ from tools.maintenance import crd_schema
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = ROOT / "src" / "narwhal" / "contracts.py"
 # The variables a full fleet gives that today's Kubernetes environment does not hold, with the
-# fact each one belongs to. Step E classifies them so in `inputs()`.
+# fact each one belongs to, as `inputs()` classifies them.
 NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",

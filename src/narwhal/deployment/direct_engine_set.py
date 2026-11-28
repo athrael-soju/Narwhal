@@ -7,7 +7,9 @@ shares one directory with every other engine for the backend's KV handoff files.
 
 The engines take no launch plan and no attestation, so the fleet that routes over them has no
 `engine_contract`. The router admits them as it admits the engines of `narwhal dev`. Every
-production fleet runs attested engines from `chart_values`.
+production fleet runs attested engines, which the fleet controller builds from
+`engine_set.statefulset_values`. `tools/maintenance/chart_e2e.py` runs these direct engines
+because kind has no GPUs.
 """
 
 from __future__ import annotations

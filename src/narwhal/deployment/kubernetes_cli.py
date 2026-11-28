@@ -8,10 +8,10 @@ server-side as the field manager `narwhal-cli`, never forcing a conflict. A flee
 another manager owns, such as Helm, Argo CD or Flux, is followed and never written, so the
 workstation never takes a field from a GitOps tool.
 
-The run directory stays the workstation's, with task 18's owner and mode checks. It names the
-fleet it follows in `kubernetes-fleet.json` and mirrors the controller's run directory: its
-`run.json` and every finished attempt's evidence. The mirror arrives through export Jobs,
-never exec, and the workstation never creates one: it sets the fleet's
+The run directory stays the workstation's, with the owner and mode checks of an SSH run's. It
+names the fleet it follows in `kubernetes-fleet.json` and mirrors the controller's run
+directory: its `run.json` and every finished attempt's evidence. The mirror arrives through
+export Jobs, never exec, and the workstation never creates one: it sets the fleet's
 `<GROUP>/export-request` annotation, the fleet controller makes the Job from its own image and
 names it in `status.exports`, then reads the pod's log and adds the pod and the log's SHA-256
 there; the workstation imports the pod's log only when it has that digest. `kubernetes_export`

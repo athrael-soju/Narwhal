@@ -3167,7 +3167,7 @@ def _pod_ready(pod: Mapping[str, Any]) -> bool:
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
-# The task 18 rig, now over the store.
+# The Kubernetes target's rig, over the store.
 
 NAMESPACE = "fleet"
 NODES = {"engine-1": "gpu-a", "engine-2": "gpu-b"}
@@ -3294,7 +3294,7 @@ def _returns(command: Sequence[str]) -> dict[str, str]:
 
 
 class _Objects(MutableMapping[str, dict]):
-    """One kind's objects in the rig's namespace, by name, as the task 18 tests read them.
+    """One kind's objects in the rig's namespace, by name, as test_kubernetes_target reads them.
 
     Reading gives the stored object itself, so a test's in-place edit is an out-of-band change;
     setting stores an object as it is; deleting removes it at once.
@@ -3793,7 +3793,9 @@ class Rig:
             stack.enter_context(
                 patch.object(target.KubernetesDeployment, "_write_records", _write_records)
             )
-            stack.enter_context(patch.object(target.engine_set, "chart_values", self.chart_values))
+            stack.enter_context(
+                patch.object(target.engine_set, "statefulset_values", self.statefulset_values)
+            )
             stack.enter_context(patch.object(target.cache_groups, "derive", self.derive))
             stack.enter_context(patch.object(target.fabric, "load", self.load_fabric))
             stack.enter_context(patch.object(target.fabric, "budget", self.budget))
@@ -3805,8 +3807,8 @@ class Rig:
             stack.enter_context(patch.object(target, "CacheRegistration", _Registration))
             yield
 
-    def chart_values(self, runs: Sequence[Path]) -> dict:
-        """Engine set values as `engine_set.chart_values` returns them, for one pod template
+    def statefulset_values(self, runs: Sequence[Path]) -> dict:
+        """Engine set values as `engine_set.statefulset_values` returns them, for one pod template
         whose containers read the engine API key from the fleet's Secret."""
         digest = hashlib.sha256(b"".join((Path(r) / "launch.json").read_bytes() for r in runs))
         key = {"secretKeyRef": dict(self.secret)}

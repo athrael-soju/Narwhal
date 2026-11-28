@@ -7,7 +7,7 @@ skips every stage whose inputs, outputs and live facts still hold. A `spec` edit
 `<GROUP>/requested-at` annotation and the 60 s resync each queue a reconcile; a status write
 queues none.
 
-Only the holder of the controller Lease acts. It claims the Lease with task 25's
+Only the holder of the controller Lease acts. It claims the Lease with the routers'
 `KubernetesLease`, on client-go's timings (a 15 s lease, a 10 s renew deadline, a renewal
 every 2 s), and stops acting before another controller can take over: once its renew deadline
 passes, the process ends with `os._exit` and touches no Job. Every write also goes through a

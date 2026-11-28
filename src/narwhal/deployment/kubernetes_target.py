@@ -2,7 +2,8 @@
 a Kubernetes cluster, for one `NarwhalFleet`.
 
 The actions reach the cluster through a `Cluster`: `ApiCluster` over the API client in the
-fleet controller, or `KubectlCluster` from a workstation. Every object they make is built by
+fleet controller, or a `KubectlCluster` for the dry deployment that a workstation's `plan` and
+`status` read. Every object they make is built by
 `kubernetes_objects` with the fleet as its controlling owner and applied server-side, so
 deleting the fleet leaves the cleanup to the garbage collector.
 
@@ -2559,7 +2560,7 @@ class KubernetesDeployment:
     def engine_objects(self) -> list[dict[str, Any]]:
         """The engines' hook ConfigMaps, Service and StatefulSet, from every prepared launch,
         with each pod held at the placement gate."""
-        values = engine_set.chart_values(list(self.launches().values()))
+        values = engine_set.statefulset_values(list(self.launches().values()))
         roles = [f"engine-{n}" for n in range(1, int(values["count"]) + 1)]
         return kubernetes_objects.engines(self.fleet(), values, self.placement(roles))
 

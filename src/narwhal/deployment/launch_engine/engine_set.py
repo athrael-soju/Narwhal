@@ -6,7 +6,7 @@ URLs give it.
 Each plan renders its own pod in `kubernetes.json`. The plans differ only where the role does:
 the commands and environment of the engine's steps, the hook files, and the role in the paths
 of the state volume. Everything else must be equal across the plans, or the fleet cannot share
-one pod template, and `chart_values` refuses it.
+one pod template, and `statefulset_values` refuses it.
 
 The pod template takes each pod's role from its name, in `NARWHAL_ROLE`. The role's hook and
 pod-step ConfigMaps are projected under `<role>/` in one volume each and mounted with
@@ -100,7 +100,7 @@ def _service(role: str, plan: dict) -> tuple[str, str]:
     labels = host.split(".")
     if len(labels) < 4 or labels[0] != role or labels[3] != "svc":
         raise ValueError(
-            f"{role}: the engine URL must name the pod in the chart's headless Service, "
+            f"{role}: the engine URL must name the pod in the engines' headless Service, "
             f"http://{role}.<service>.<namespace>.svc:<port>, not {plan['endpoint']}"
         )
     return labels[1], labels[2]
@@ -108,7 +108,7 @@ def _service(role: str, plan: dict) -> tuple[str, str]:
 
 def _neutral(role: str, spec: dict, configs: dict[str, dict]) -> tuple[dict, dict, dict]:
     """Split one role's pod spec into the role-neutral template, the role's spec files and the
-    values the chart sets, such as the image and resource limits."""
+    values `kubernetes_objects.engine_pod` sets, such as the image and resource limits."""
     spec = copy.deepcopy(spec)
     role_path = f"engines/{role}/"
     files: dict[str, dict] = {}
@@ -126,7 +126,7 @@ def _neutral(role: str, spec: dict, configs: dict[str, dict]) -> tuple[dict, dic
             }
             container["env"] = [*linked, role_env()]
             container["command"] = None
-            # The chart sets the engine image and the resource limits where these stand.
+            # `kubernetes_objects.engine_pod` sets the image and the limits where these stand.
             extracted.setdefault("image", set()).add(container["image"])
             container["image"] = None
             if "resources" in container:
@@ -243,8 +243,8 @@ def check(
                 )
 
 
-def chart_values(runs: Sequence[Path]) -> dict:
-    """Return the chart's `engines` values for the launch directories of every engine role."""
+def statefulset_values(runs: Sequence[Path]) -> dict:
+    """Return the engine StatefulSet's values for the launch directories of every engine role."""
     loaded = sorted((_load(run) for run in runs), key=lambda item: int(item[0].split("-")[1]))
     roles = [role for role, _, _ in loaded]
     if roles != [f"engine-{n}" for n in range(1, len(roles) + 1)]:

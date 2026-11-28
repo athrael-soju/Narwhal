@@ -373,7 +373,7 @@ class RunTests(WorkstationTest):
         self.assertEqual(roots, {"run.json", *local})
         # The workstation never touched a Job: the controller made every export Job.
         self.assertFalse([r for r in self.requests if r[2] == "jobs"], self.requests)
-        # Task 18's checks hold: the directory and every file are this user's alone.
+        # The run directory's checks hold: the directory and every file are this user's alone.
         for path in [self.run_dir, *self.run_dir.rglob("*")]:
             mode = stat.S_IMODE(path.lstat().st_mode)
             self.assertEqual(mode & 0o077, 0, path)
