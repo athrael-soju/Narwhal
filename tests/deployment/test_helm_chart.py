@@ -466,6 +466,7 @@ class ChartTests(Rendering, unittest.TestCase):
                 "image": values["images"]["narwhal"],
                 "runAsUser": 10001,
                 "runAsGroup": 10001,
+                "fleet": "fleet",
             },
         )
         self.assertEqual(Settings.of(settings).key_check_period, 900)
@@ -501,6 +502,33 @@ class ChartTests(Rendering, unittest.TestCase):
             return document["spec"]["template"]["metadata"]["annotations"][annotation]
 
         self.assertNotEqual(digest(deployment), digest(self.find("Deployment", CONTROLLER)))
+
+    def test_the_deployment_status_names_the_fleet_label_of_its_series(self):
+        # The controller names the fleet in the status the routers export by the label the
+        # chart's Prometheus gives every router series, the release name by default.
+        for fleet in ("", "fleet-b"):
+            with self.subTest(fleet=fleet):
+                values = copy.deepcopy(self.values)
+                values["monitoring"]["fleet"] = fleet
+                documents = self.render(values)
+                [config] = [
+                    d
+                    for d in documents
+                    if d["kind"] == "ConfigMap" and d["metadata"]["name"] == CONTROLLER
+                ]
+                settings = Settings.of(json.loads(config["data"]["controller.json"]))
+                [prometheus] = [
+                    d
+                    for d in documents
+                    if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "prometheus"
+                ]
+                scrape = yaml.safe_load(prometheus["data"]["prometheus.yml"])
+                [router] = [
+                    j for j in scrape["scrape_configs"] if j["job_name"] == "narwhal-router"
+                ]
+                [label] = [r for r in router["relabel_configs"] if r.get("target_label") == "fleet"]
+                self.assertEqual(settings.fleet, label["replacement"])
+                self.assertEqual(settings.fleet, fleet or "fleet")
 
     def test_the_controllers_role_holds_only_the_verbs_it_uses(self):
         role = self.find("Role", CONTROLLER)

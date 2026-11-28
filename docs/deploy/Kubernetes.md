@@ -83,14 +83,14 @@ The controller writes the status only when a condition or count changes. `status
 
 | Condition | `True` when | Reasons |
 | --- | --- | --- |
-| `Ready` | A pass for the current generation has passed every stage up to `spec.until` and its live checks hold | `Passed` when true. Otherwise the reason of the condition that is true: `Running`, `Retrying`, `Stopping`, `Stalled` or `Stopped` |
+| `Ready` | A pass for the current generation has passed every stage up to `spec.until` and its live checks hold | `Passed` when true. Otherwise the reason of the condition that is true: `Running`, `Retrying`, `Stopping`, `Stalled` or `Stopped`, or `EnginesStopped` when a failed `discover` stopped the engines |
 | `Reconciling` | A pass runs, or one will | `Running` while a stage runs, `Retrying` after an error the controller retries, such as an unreachable API server or an interrupted attempt, `Stopping` while `spec.stopped` takes effect. `Ready`, `Stalled` or `Stopped` when false |
 | `Stalled` | No pass runs until something changes | `StageFailed`, `InputRefused`, `SchemaStale`, `AdmissionPolicyMissing`, `RouterStorageImmutable`, `NameRefused`, `HelpersSurvived`, as below. `Ready`, `Reconciling` or `Stopped` when false |
 | `Stopped` | `spec.stopped` is true and the fleet's workloads are gone | `Stopped`, `Stopping` while they go, `Running` |
 
 | `Stalled` reason | Cause | What clears it |
 | --- | --- | --- |
-| `StageFailed` | A stage failed or exceeded its time limit. The message names the stage instance and its failure | An edit of the spec, or a new `requested-at` value |
+| `StageFailed` | A stage failed or exceeded its time limit. The message names the stage instance and its failure, and ends `engines stopped for discovery; the fleet is not serving` when `discover` failed after it stopped the engines | An edit of the spec, or a new `requested-at` value |
 | `InputRefused` | An input is missing or malformed, or outside the cluster admin's allow-lists for model volumes and RuntimeClasses. The message names each problem | An edit that fixes it |
 | `SchemaStale` | The installed CRD holds another schema than the one the controller was built with | Upgrading `narwhal-crds` to the narwhal chart's version |
 | `AdmissionPolicyMissing` | The namespace's admission policy or its binding is missing, or the binding does not deny | Installing or upgrading the narwhal chart |
@@ -138,7 +138,9 @@ The next pass resumes at the failed stage, in a new attempt. A fleet that Helm o
 
 An edit takes effect at once when it changes an input whose rerun rule names the stage that runs: the controller cancels that stage, deletes its Jobs, records the attempt `cancelled`, and starts a new pass from the edited spec. Any other edit waits for the running stage instance to end. [Rerunning after a change](#rerunning-after-a-change) lists what each input reruns.
 
-A pass that reruns `discover` takes every GPU of each engine's node for its discovery Jobs, which run pinned to the node. While the engine pods hold those GPUs, the kubelet refuses the Jobs and the stage fails. A new Narwhal release reruns `discover`, and so does each change the [rerun table](#rerunning-after-a-change) lists against it, so stop the fleet first, make the change, then start it again.
+`discover` runs one Job on each engine node, which takes every GPU of the node, so once it has built every Job it deletes the engine StatefulSet and waits for the engine pods to go, as `engine-inspect` stops the engines on SSH hosts. A new Narwhal release reruns `discover` and every stage after it, and so does each change the [rerun table](#rerunning-after-a-change) lists against it, so an in-place `helm upgrade` completes without stopping the fleet. The fleet serves nothing from the moment `discover` stops the engines until `router-start` passes again.
+
+If `discover` fails after it stopped the engines, they stay stopped: the fleet is down until the next edit of its spec or a new `requested-at` value gets a pass past `discover`. `Ready` is then `False` with reason `EnginesStopped`, `status.serving` is false, and the `Stalled` message ends `engines stopped for discovery; the fleet is not serving`. A discovery Job that did not finish in time, as when its image does not pull, or that was deleted under it, starts the stage's Jobs again, up to three times within the stage's `spec.timeouts` limit. A check that rejects the node fails the stage at once.
 
 `spec.stopped: true` stops the fleet. The controller cancels a running stage, deletes the routers, HAProxy, the engines and then the Jobs, in that order, waits for their pods to go, and sets `Stopped`. The state volume, the router volumes and the run directory stay. Setting `spec.stopped` back to `false` starts a pass from the run record: it applies the engines and the routers again and reruns the stages whose live checks no longer hold.
 
@@ -189,7 +191,7 @@ kubectl port-forward --namespace <namespace> svc/haproxy 18000:8000
 
 Then open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` and sign in with the login in the Secret `monitoring.grafana.admin` names, unless `monitoring.grafana.anonymous` is set. Prometheus is at `http://127.0.0.1:19090`, and clients reach the serving routes at `http://127.0.0.1:18000`. HAProxy forwards only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets`. Every series carries the `fleet` label, the release name unless `monitoring.fleet` sets another.
 
-The dashboard's **Supervisor restarts** panel shows the kubelet restart counts of each engine pod's containers, which the sidecars export. The controller writes no deployment status for the routers to export, so the [Deployment row](../observability/05-Dashboard.md#deployment)'s stage, age, fabric and attestation panels stay empty for a Kubernetes fleet: read the stages from the fleet's status.
+The dashboard's **Supervisor restarts** panel shows the kubelet restart counts of each engine pod's containers, which the sidecars export. After each pass, passed or not, the controller writes the run's [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to the ConfigMap `deployment-status`, which both routers mount and export, so the [Deployment row](../observability/05-Dashboard.md#deployment) shows each stage, the fabric margins and the attestation generations of the last pass. The kubelet brings a new status into the router pods within about a minute, without restarting them.
 
 Cluster health stays with the cluster's own monitoring. Narwhal's Prometheus scrapes only the routers, the engines and the sidecars, so it holds no node GPU health, no PersistentVolumeClaim usage and no Job outcomes. Watch those through the cluster's GPU exporter, the kubelet's volume statistics and kube-state-metrics, and alert on them there. Narwhal ships neither kube-state-metrics nor an Alertmanager. Set `monitoring.alertmanagerUrl` to deliver the fleet's alerts to yours.
 
@@ -301,9 +303,11 @@ A Job or pod that cannot run fails its stage at once: a container whose configur
 
 ### Discovering the engine nodes
 
-`discover` runs two Jobs on each engine's node. The discovery Job runs the engine image with every GPU the node offers and the model volume. It reads the GPU inventory, the image's packages and environment, and the model configuration, and hashes the checkpoint. A probe Job on the host network reads the fabric interface's addresses. The controller then builds the fleet, the launch records and the role files as `package` does for SSH hosts.
+`discover` first stops any engines that run, whose pods hold the GPUs it inspects, then runs one discovery Job on each engine node. The Job runs the engine image with every GPU the node offers and the model volume. It reads the GPU inventory, the image's packages and environment, and the model configuration, and hashes the checkpoint, for every engine of the node. A probe Job for each engine, on the host network, reads its fabric interface's addresses. The controller then builds the fleet, the launch records and the role files as `package` does for SSH hosts, which splits a node's GPUs between its engines by `NARWHAL_NODE_<n>_GPU_IDS`.
 
 A Job that ran another image than `spec.engines.image`, or a checkpoint whose tree digest differs from `spec.engines.model.treeSha256`, fails the stage. `inspection/` holds each engine's records and each Job's log.
+
+Engine pods run on the host network and take every GPU the fleet gives them, so each GPU node runs the engines of one fleet only. Pin the fleet's engines with `spec.engines.nodes`, and give no other fleet, in any namespace, those nodes. The controller sees only its own namespace, so `discover` checks the node once the fleet's own engines are gone: it fails the stage when the kubelet refuses the discovery Job for want of GPUs another workload holds, or when the probe Job finds a port of the engine, or of its UCX TCP port range, already listening on the node.
 
 ### Preparing the engine pods
 

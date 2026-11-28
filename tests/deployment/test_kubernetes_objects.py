@@ -907,12 +907,14 @@ def without_release(document: dict) -> dict:
     """An object without what differs by design, as `spec_only`, and without the release in
     the routers' spread constraint.
 
-    The chart at ad38650c ran the routers with no security context and no volume check, and
-    mounted the whole state volume; the builder adds both and mounts only the fleet file's
-    directory, on purpose. This drops the security contexts, the scratch volume, the state
-    mounts and the start script, which `test_each_router_runs_unprivileged_on_a_read_only_root`,
-    `test_only_the_router_container_holds_the_lease_token` and
-    `test_the_router_pair_matches_the_chart` check instead.
+    The chart at ad38650c ran the routers with no security context, no volume check and no
+    deployment status, and mounted the whole state volume; the builder adds the first three and
+    mounts only the fleet file's directory, on purpose. This drops the security contexts, the
+    scratch and deployment status volumes, the state mounts, the start script and
+    `--deployment-status`, which `test_each_router_runs_unprivileged_on_a_read_only_root`,
+    `test_only_the_router_container_holds_the_lease_token`,
+    `test_the_router_pair_matches_the_chart` and `test_the_routers_export_the_runs_status`
+    check instead.
     """
     document = spec_only(document)
     pod = document["spec"].get("template", {}).get("spec", {})
@@ -920,14 +922,18 @@ def without_release(document: dict) -> dict:
         constraint["labelSelector"]["matchLabels"].pop("app.kubernetes.io/instance", None)
     if pod:
         pod.pop("securityContext", None)
-        pod["volumes"] = [v for v in pod["volumes"] if v["name"] != objects.TMP_VOLUME]
+        added = (objects.TMP_VOLUME, objects.DEPLOYMENT_STATUS)
+        pod["volumes"] = [v for v in pod["volumes"] if v["name"] not in added]
         for container in pod["containers"]:
             container.pop("securityContext", None)
             container["command"][3] = "<router start>"
+            if "--deployment-status" in container["command"]:
+                at = container["command"].index("--deployment-status")
+                del container["command"][at : at + 2]
             container["volumeMounts"] = [
                 m
                 for m in container["volumeMounts"]
-                if m["name"] not in (objects.TMP_VOLUME, objects.STATE_VOLUME)
+                if m["name"] not in (*added, objects.STATE_VOLUME)
             ]
     return document
 
@@ -1235,6 +1241,31 @@ class RouterTests(unittest.TestCase):
         )
         [built_container] = template(router_set())["containers"]
         self.assertEqual(built_container["command"][3], objects.ROUTER_START)
+
+    def test_the_routers_export_the_runs_status(self):
+        statefulset = router_set()
+        spec = template(statefulset)
+        [container] = spec["containers"]
+        command = container["command"]
+        path = command[command.index("--deployment-status") + 1]
+        self.assertEqual(path, "/narwhal-deployment/deployment-status.json")
+        [mount] = [m for m in container["volumeMounts"] if m["name"] == objects.DEPLOYMENT_STATUS]
+        self.assertEqual(mount, {**mount, "mountPath": "/narwhal-deployment", "readOnly": True})
+        [volume] = [v for v in spec["volumes"] if v["name"] == objects.DEPLOYMENT_STATUS]
+        # A router that starts before the first status runs, and exports none until it comes.
+        self.assertEqual(
+            volume["configMap"],
+            {"name": objects.DEPLOYMENT_STATUS, "optional": True, "defaultMode": 0o444},
+        )
+        self.assertEqual(policy_refusals(statefulset), [])
+        document = {"schema": "narwhal.deployment-status", "schema_version": 1, "stages": []}
+        built = objects.deployment_status(router_fleet(), document)
+        self.assertEqual(built["metadata"]["name"], volume["configMap"]["name"])
+        self.assertTrue(objects.controlled(OWNER, built))
+        self.assertEqual(json.loads(built["data"][objects.DEPLOYMENT_STATUS_KEY]), document)
+        self.assertEqual(Path(path).name, objects.DEPLOYMENT_STATUS_KEY)
+        with self.assertRaisesRegex(ValueError, "1 MiB"):
+            objects.deployment_status(router_fleet(), {"stages": ["x" * objects.INPUTS_BYTES]})
 
     def test_the_routers_names_agree_with_haproxy_the_target_and_the_chart(self):
         statefulset = router_set()
@@ -1644,6 +1675,7 @@ class RouterTests(unittest.TestCase):
             ("--journal", "--journal"),
             ("--host", "--host"),
             ("--port", "--port"),
+            ("--deployment-status=/other.json", "--deployment-status"),
         ):
             with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, reserved):
                 router_settings(args=(argument, "x"))

@@ -24,6 +24,7 @@ from narwhal.deployment.kubernetes_controller import (
     Controller,
     Settings,
 )
+from narwhal.observability.metrics.deployment import read_status, render_deployment
 from narwhal.runtime.kubernetes_api import ApiClient, Connection
 from narwhal.runtime.kubernetes_lease import KubernetesLease
 from narwhal.serving.control_token import ROUTER_TOKEN_ENV
@@ -288,6 +289,63 @@ class ReconcileTests(ControllerTest):
         self.assertEqual(self.rig.created[created:], [])
         self.assertEqual([w for w in self.writes(since) if w[2] != "leases"], [])
 
+    def test_each_pass_gives_the_routers_the_deployment_status_they_export(self):
+        controller = self.ready()
+        [found] = [
+            obj
+            for obj in self.derived()
+            if obj["kind"] == "ConfigMap" and obj["metadata"]["name"] == objects.DEPLOYMENT_STATUS
+        ]
+        text = found["data"][objects.DEPLOYMENT_STATUS_KEY]
+        document = json.loads(text)
+        # The routers mount the ConfigMap and read the document on every scrape.
+        [router] = [
+            obj
+            for obj in self.derived()
+            if obj["kind"] == "StatefulSet" and obj["metadata"]["name"] == objects.ROUTER_SET
+        ]
+        [container] = router["spec"]["template"]["spec"]["containers"]
+        path = container["command"][container["command"].index("--deployment-status") + 1]
+        mounted = self.root / Path(path).name
+        mounted.write_text(text)
+        series = "\n".join(render_deployment(read_status(mounted)))
+        self.assertEqual((document["target"], document["fleet"]), ("kubernetes", "narwhal"))
+        self.assertEqual(document["run_id"], self.record()["run_id"])
+        self.assertIsNotNone(document["last_passed_at"])
+        for stage in ("discover", "fabric-edge", "router-start"):
+            self.assertRegex(
+                series, rf'narwhal_deployment_stage_state{{stage="{stage}",.*state="passed"}} 1'
+            )
+        for edge in ("gpu-a-to-gpu-b", "gpu-b-to-gpu-a"):
+            self.assertIn(f'narwhal_fabric_edge_measured_gbps{{edge="{edge}"}} 100', series)
+            self.assertIn(f'narwhal_fabric_edge_budget_gbps{{edge="{edge}"}} 12.5', series)
+        for iid in ("n1", "n2"):
+            self.assertIn(
+                f'narwhal_engine_attestation_generation_info{{iid="{iid}",generation="binding"}}',
+                series,
+            )
+        self.assertIn("narwhal_deployment_last_passed_timestamp_seconds", series)
+        # A pass that changes nothing writes no new status.
+        since = len(self.rig.requests)
+        self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+        self.assertTrue(controller.informer.resync())
+        self.work(controller)
+        self.assertEqual([w for w in self.writes(since) if w[2] == "configmaps"], [])
+        # A failed pass still gives the routers its stages, as an SSH run uploads its status.
+        self.rig.fail_kind = "preflight"
+        self.edit({"slo": {"ttftS": "5"}})
+        self.work(controller)
+        live = self.store.get(CONFIG_MAP, NAMESPACE, objects.DEPLOYMENT_STATUS)
+        states = {
+            s["stage"]: s["state"]
+            for s in json.loads(live["data"][objects.DEPLOYMENT_STATUS_KEY])["stages"]
+        }
+        self.assertEqual(states["preflight"], "failed")
+        self.assertEqual(
+            json.loads(live["data"][objects.DEPLOYMENT_STATUS_KEY])["last_passed_at"],
+            document["last_passed_at"],
+        )
+
     def test_a_failed_stage_stalls_the_fleet_until_an_edit_or_a_new_request(self):
         self.rig.fail_kind = "preflight"
         controller = self.leader()
@@ -319,6 +377,39 @@ class ReconcileTests(ControllerTest):
         self.assertEqual(self.condition(fleet_resource.READY)["status"], "True", self.status())
         self.assertEqual(self.condition(fleet_resource.STALLED)["status"], "False")
         self.assertFalse((self.directory() / kubernetes_controller.STALL_FILE).exists())
+
+    def test_a_failed_discover_after_a_new_release_says_the_fleet_is_down(self):
+        controller = self.ready()
+        self.rig.fail_kind = "discovery"
+        # A new release reruns discover, which stops the engines before its Jobs run.
+        with patch.object(kubernetes_target.provenance, "source_digest", return_value="9" * 64):
+            self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+            self.assertTrue(controller.informer.resync())
+            self.work(controller)
+            for _ in range(2):
+                stalled = self.condition(fleet_resource.STALLED)
+                self.assertEqual((stalled["status"], stalled["reason"]), ("True", "StageFailed"))
+                self.assertIn("discover failed", stalled["message"])
+                self.assertTrue(
+                    stalled["message"].endswith(kubernetes_target.ENGINES_STOPPED),
+                    stalled["message"],
+                )
+                ready = self.condition(fleet_resource.READY)
+                self.assertEqual(
+                    (ready["status"], ready["reason"]),
+                    ("False", kubernetes_controller.ENGINES_STOPPED),
+                )
+                self.assertFalse(self.status()["serving"])
+                # A resync reads the stall back, and still reports the engines stopped.
+                self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+                self.assertTrue(controller.informer.resync())
+                self.work(controller)
+            # Another stage's failure keeps the stall's own reason.
+            self.rig.fail_kind = "preflight"
+            self.edit({"slo": {"ttftS": "5"}})
+            self.work(controller)
+        ready = self.condition(fleet_resource.READY)
+        self.assertEqual((ready["status"], ready["reason"]), ("False", "Stalled"))
 
     def test_a_status_write_queues_no_reconcile_and_status_is_written_only_on_change(self):
         controller = self.leader()

@@ -939,7 +939,7 @@
             },
             "ports": {
               "type": "object",
-              "description": "The ports each engine pod serves on",
+              "description": "The ports each engine pod serves on, unless its entry of nodes sets its own",
               "properties": {
                 "engine": {
                   "type": "integer",
@@ -952,11 +952,25 @@
                   "description": "The attestation sidecar's HTTP port",
                   "minimum": 1,
                   "maximum": 65535
+                },
+                "sideChannel": {
+                  "type": "integer",
+                  "description": "The port the engine's KV connector listens on for its peers' handshakes",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "ucxTcpPortRange": {
+                  "type": "string",
+                  "description": "LOW-HIGH, the ports UCX TCP listeners take",
+                  "maxLength": 11,
+                  "pattern": "^[0-9]{1,5}-[0-9]{1,5}$"
                 }
               },
               "required": [
                 "engine",
-                "attestation"
+                "attestation",
+                "sideChannel",
+                "ucxTcpPortRange"
               ],
               "additionalProperties": false
             },
@@ -965,7 +979,7 @@
               "description": "The engines, one entry each",
               "items": {
                 "type": "object",
-                "description": "One engine: the node its pod runs on, in role order, so the first entry is engine-1. Two engines may share a node.",
+                "description": "One engine: the node its pod runs on, in role order, so the first entry is engine-1. Two engines may share a node, each with its own ports.",
                 "properties": {
                   "node": {
                     "type": "string",
@@ -998,6 +1012,37 @@
                           "v1",
                           "infiniband"
                         ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "ports": {
+                    "type": "object",
+                    "description": "This engine's ports in place of engines.ports. Engine pods run on the node's host network, so engines that share a node need ports no other engine there uses, which the controller checks.",
+                    "properties": {
+                      "engine": {
+                        "type": "integer",
+                        "description": "The engine's HTTP port",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "attestation": {
+                        "type": "integer",
+                        "description": "The attestation sidecar's HTTP port",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "sideChannel": {
+                        "type": "integer",
+                        "description": "The port the engine's KV connector listens on for its peers' handshakes",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "ucxTcpPortRange": {
+                        "type": "string",
+                        "description": "LOW-HIGH, the ports UCX TCP listeners take",
+                        "maxLength": 11,
+                        "pattern": "^[0-9]{1,5}-[0-9]{1,5}$"
                       }
                     },
                     "additionalProperties": false
@@ -1159,7 +1204,8 @@
           },
           "required": [
             "prefillLens",
-            "decodeInputLens"
+            "decodeInputLens",
+            "warmupRequests"
           ],
           "additionalProperties": false
         },
@@ -1194,6 +1240,7 @@
           },
           "required": [
             "inputTokens",
+            "samples",
             "observationTimeoutS"
           ],
           "additionalProperties": false

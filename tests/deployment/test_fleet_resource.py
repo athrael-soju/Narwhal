@@ -12,7 +12,8 @@ from pathlib import Path
 
 import yaml
 
-from narwhal.deployment import fleet_resource, stages
+from narwhal.deployment import discovery, fleet_resource, kubernetes_target, stages
+from narwhal.deployment.deploy import InputError
 from narwhal.deployment.fleet_resource import (
     GROUP,
     LAUNCH_REFUSED,
@@ -39,6 +40,12 @@ NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_RUNTIME_CLASS": "discovery",
     "NARWHAL_ENGINE_PORT": "discovery",
     "NARWHAL_ATTEST_PORT": "discovery",
+    "NARWHAL_KV_SIDE_CHANNEL_PORT": "discovery",
+    "NARWHAL_UCX_TCP_PORT_RANGE": "discovery",
+    "NARWHAL_NODE_2_ENGINE_PORT": "discovery",
+    "NARWHAL_NODE_2_ATTEST_PORT": "discovery",
+    "NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT": "discovery",
+    "NARWHAL_NODE_2_UCX_TCP_PORT_RANGE": "discovery",
     "NARWHAL_MODEL_PATH": "discovery",
     "NARWHAL_MODEL_SHA256": "discovery",
     "NARWHAL_ENGINE_BACKEND": "discovery",
@@ -492,6 +499,10 @@ class Variables(unittest.TestCase):
         volume = json.loads(today["NARWHAL_KUBERNETES_MODEL_VOLUME"])
         volume["persistentVolumeClaim"]["readOnly"] = True
         today["NARWHAL_KUBERNETES_MODEL_VOLUME"] = json.dumps(volume, sort_keys=True)
+        # The full fleet gives engine-2 its own ports.
+        host = f"engine-2.engines.{kubernetes_cluster.NAMESPACE}.svc"
+        today["NARWHAL_NODE_2_URL"] = f"http://{host}:8101"
+        today["NARWHAL_NODE_2_ATTESTATION_URL"] = f"http://{host}:8201/v1/attestation"
         for name in sorted(set(today) & set(env)):
             with self.subTest(name):
                 self.assertEqual(env[name], today[name])
@@ -567,6 +578,33 @@ class Variables(unittest.TestCase):
         self.assertEqual(env["NARWHAL_NODE_2_RDMA_GID_INDEX"], "3")
         self.assertEqual(env["NARWHAL_NODE_2_RDMA_ROCE_MODE"], "v2")
         self.assertNotIn("NARWHAL_NODE_1_RDMA_GID_INDEX", env)
+
+    def test_an_engine_with_its_own_ports_takes_them_as_an_ssh_host_override(self):
+        def own(document):
+            document["spec"]["engines"]["nodes"][1]["ports"] = {
+                "engine": 8101,
+                "sideChannel": 5601,
+                "ucxTcpPortRange": "20100-20199",
+            }
+
+        env = spec_env(fleet_fixtures.changed(own), state_claim=CLAIM, policy=POLICY)
+        host = f"engine-2.engines.{kubernetes_cluster.NAMESPACE}.svc"
+        self.assertEqual(env["NARWHAL_NODE_2_URL"], f"http://{host}:8101")
+        # A port the entry leaves out is the fleet's.
+        self.assertEqual(
+            env["NARWHAL_NODE_2_ATTESTATION_URL"], f"http://{host}:8200/v1/attestation"
+        )
+        self.assertEqual(env["NARWHAL_NODE_2_ENGINE_PORT"], "8101")
+        self.assertEqual(env["NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT"], "5601")
+        self.assertEqual(env["NARWHAL_NODE_2_UCX_TCP_PORT_RANGE"], "20100-20199")
+        self.assertNotIn("NARWHAL_NODE_2_ATTEST_PORT", env)
+        self.assertNotIn("NARWHAL_NODE_1_ENGINE_PORT", env)
+        # The role environment resolves each port as on an SSH host: the engine's, else the
+        # fleet's.
+        for n, expected in ((1, "8100"), (2, "8101")):
+            self.assertEqual(discovery.value(env, n, "ENGINE_PORT"), expected)
+        for n, expected in ((1, "20000-20099"), (2, "20100-20199")):
+            self.assertEqual(discovery.value(env, n, "UCX_TCP_PORT_RANGE"), expected)
 
     def test_the_rest_of_the_spec_becomes_its_variables(self):
         def change(d):
@@ -646,6 +684,112 @@ class Variables(unittest.TestCase):
                 "NARWHAL_KUBERNETES_STATE_CLAIM": CLAIM,
             },
         )
+
+
+# The controller's settings, as the narwhal chart writes controller.json.
+SETTINGS = {
+    "stateClaim": CLAIM,
+    "engineServiceAccount": kubernetes_cluster.ENGINE_ACCOUNT,
+    "image": kubernetes_cluster.NARWHAL_IMAGE,
+}
+# Optional fields a rule of the schema sets only together.
+TOGETHER = {
+    "spec.engines.model.file": ("spec.engines.model.fileSha256",),
+    "spec.engines.model.fileSha256": ("spec.engines.model.file",),
+}
+# A rule takes exactly one of this object's fields, so none of them is optional alone.
+ONE_OF = ("spec.engines.modelVolume",)
+
+
+def optional_fields(node, path, document):
+    """Each field `document` sets that the schema does not require, with its schema node."""
+    if isinstance(document, list) and isinstance(node.get("items"), dict):
+        for index, item in enumerate(document):
+            yield from optional_fields(node["items"], f"{path}[{index}]", item)
+        return
+    if not isinstance(document, dict) or "properties" not in node:
+        return
+    required = set(node.get("required", ()))
+    for name, child in node["properties"].items():
+        if name not in document:
+            continue
+        here = f"{path}.{name}"
+        if name not in required and path not in ONE_OF:
+            yield here, child
+        yield from optional_fields(child, here, document[name])
+
+
+def without(document, field):
+    """`document` without `field`, or with the schema's default in its place, as the API
+    server stores a fleet that leaves the field out."""
+    found = copy.deepcopy(document)
+    for each in (field, *TOGETHER.get(field, ())):
+        *parents, last = re.findall(r"[^.\[\]]+|\[[0-9]+\]", each)
+        holder = value_at(found, "".join(p if p.startswith("[") else f".{p}" for p in parents)[1:])
+        default = at(schema_path(each)).get("default")
+        if default is None:
+            del holder[last]
+        else:
+            holder[last] = default
+    return found
+
+
+def refusals(document):
+    """What the controller refuses in a fleet: `spec_env`'s and `inputs()`'s problems."""
+    try:
+        env = kubernetes_target.settings_env(document, SETTINGS)
+        kubernetes_target.inputs(env, policy=POLICY)
+    except InputError as error:
+        return list(error.problems)
+    except ValueError as error:
+        return [str(error)]
+    return []
+
+
+class SchemaAgreesWithController(unittest.TestCase):
+    """The API server and the controller refuse the same fleets: every field the CRD leaves
+    optional, and every default it fills in, passes the controller's input checks."""
+
+    def test_the_full_fleet_passes_the_controller(self):
+        self.assertEqual(refusals(fleet_fixtures.full_fleet()), [])
+
+    def test_every_optional_field_may_be_left_out(self):
+        document = fleet_fixtures.full_fleet()
+        walked = dict(optional_fields(SCHEMA["properties"]["spec"], "spec", document["spec"]))
+        # The walk reaches each level of the spec, the engines' entries included.
+        for field in (
+            "spec.engines.apiKeySecret",
+            "spec.engines.nodes[1].rdma.gidIndex",
+            "spec.engines.nodes[1].ports.engine",
+            "spec.profiling.decodeConcurrency",
+            "spec.timeouts.stages.profile",
+            "spec.haproxy.replicas",
+        ):
+            self.assertIn(field, walked)
+        for field in walked:
+            with self.subTest(field):
+                self.assertEqual(refusals(without(document, field)), [])
+
+    def test_a_field_the_controller_needs_is_required_or_defaulted(self):
+        # Each was optional in the CRD while the controller refused a fleet without it.
+        for field in (
+            "spec.profiling.warmupRequests",
+            "spec.calibration.samples",
+            "spec.engines.ports.sideChannel",
+            "spec.engines.ports.ucxTcpPortRange",
+        ):
+            with self.subTest(field):
+                *parent, name = schema_path(field).split(".")
+                self.assertIn(name, at(".".join(parent)).get("required", []))
+                self.assertNotEqual(refusals(without(fleet_fixtures.fleet(), field)), [])
+
+    def test_the_walk_finds_a_field_the_schema_leaves_optional(self):
+        schema = copy.deepcopy(SCHEMA["properties"]["spec"])
+        schema["properties"]["profiling"]["required"].remove("warmupRequests")
+        document = fleet_fixtures.fleet()
+        walked = dict(optional_fields(schema, "spec", document["spec"]))
+        self.assertIn("spec.profiling.warmupRequests", walked)
+        self.assertNotEqual(refusals(without(document, "spec.profiling.warmupRequests")), [])
 
 
 def volume(source):

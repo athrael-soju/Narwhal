@@ -198,6 +198,8 @@ ROUTER_STORAGE = "RouterStorageImmutable"
 STAGE_FAILED = "StageFailed"
 NAME_REFUSED = "NameRefused"
 HELPERS_SURVIVED = "HelpersSurvived"
+# Ready's reason while a failed `discover` holds the engines it stopped.
+ENGINES_STOPPED = "EnginesStopped"
 
 # A stage reports the most telling status among its instances.
 _PRECEDENCE = (FAILED, TIMEOUT, INTERRUPTED, CANCELLED, RUNNING, INVALIDATED, PASSED)
@@ -229,7 +231,8 @@ _QUANTITY = re.compile(r"([0-9]+(?:\.[0-9]+)?)([kKMGTPE]i?)?")
 class Settings:
     """controller.json, as the narwhal chart writes it: the state claim, the engines'
     ServiceAccount, the sidecars' user, the cluster admin's model volume and RuntimeClass
-    allow-lists, and the admission policy that bounds the fleet's pods."""
+    allow-lists, the admission policy that bounds the fleet's pods, and the `fleet` label its
+    monitoring gives every series, which the deployment status names."""
 
     values: Mapping[str, Any]
     policy: VolumePolicy
@@ -241,6 +244,7 @@ class Settings:
     image: str = ""
     user: int = 0
     group: int = 0
+    fleet: str = ""
 
     @classmethod
     def of(cls, values: Mapping[str, Any]) -> Settings:
@@ -278,6 +282,9 @@ class Settings:
         ids = [values.get(name, 0) for name in ("runAsUser", "runAsGroup")]
         if not all(type(n) is int and 0 <= n < 2**31 for n in ids):
             problems.append("runAsUser and runAsGroup must be user and group IDs")
+        fleet = values.get("fleet", values.get("release", ""))
+        if not isinstance(fleet, str):
+            problems.append("fleet must be a string")
         if problems:
             raise ValueError("controller settings: " + "; ".join(problems))
         return cls(
@@ -289,6 +296,7 @@ class Settings:
             str(image),
             int(ids[0]),
             int(ids[1]),
+            str(fleet),
         )
 
     @classmethod
@@ -652,9 +660,20 @@ class _Outcome:
     """How a reconcile left the fleet: the status reasons it reports."""
 
     stalled: tuple[str, str] | None = None
+    # Ready's reason while stalled: the engines stopped, or the stall's own.
+    not_ready: str = "Stalled"
     retrying: str | None = None
     stopping: bool = False
     stopped: bool = False
+
+
+def _stage_failed(message: str) -> _Outcome:
+    """A failed stage's stall. One whose failure stopped the engines reports it as Ready's
+    reason, since the fleet then serves nothing."""
+    down = kubernetes_target.ENGINES_STOPPED in message
+    return _Outcome(
+        stalled=(STAGE_FAILED, message), not_ready=ENGINES_STOPPED if down else "Stalled"
+    )
 
 
 def _generation(fleet: Mapping[str, Any]) -> int:
@@ -1128,7 +1147,7 @@ class Controller:
             generation,
             _requested(fleet),
         ):
-            return _Outcome(stalled=(STAGE_FAILED, str(stall.get("message") or "")))
+            return _stage_failed(str(stall.get("message") or ""))
         return self._run(fleet, directory, env)
 
     def _deployment(self, directory: Path, env: Mapping[str, str]) -> KubernetesDeployment:
@@ -1204,6 +1223,7 @@ class Controller:
                             "requested_at": _requested(fleet),
                         },
                     )
+                self._deployment_status(deployment)
         except StageFailed as exc:
             entry = exc.record
             if entry["status"] in (FAILED, TIMEOUT):
@@ -1218,7 +1238,7 @@ class Controller:
                         "message": message,
                     },
                 )
-                return _Outcome(stalled=(STAGE_FAILED, message))
+                return _stage_failed(message)
             # An interrupted attempt is adopted by the next pass, and never stalls the fleet.
             return _Outcome(retrying=str(exc))
         except RunLocked as exc:
@@ -1237,6 +1257,14 @@ class Controller:
             (directory / STALL_FILE).unlink()
         self._ready[uid] = generation
         return _Outcome()
+
+    def _deployment_status(self, deployment: KubernetesDeployment) -> None:
+        """Give the routers the pass's deployment status, passed or not. Best effort, as on SSH
+        hosts: a failed write keeps the status before, and the next pass writes it again."""
+        try:
+            deployment.publish_deployment_status(self.settings.fleet)
+        except (KubernetesError, OSError, ValueError, LookupError, TypeError) as exc:
+            log.warning("the deployment status was not written: %s", exc)
 
     # Status.
 
@@ -1290,7 +1318,7 @@ class Controller:
         if outcome.stalled is not None:
             stalled = _condition(STALLED, True, *outcome.stalled)
             reconciling = _condition(RECONCILING, False, "Stalled", "the fleet waits for an edit")
-            ready_condition = _condition(READY, False, "Stalled", outcome.stalled[1])
+            ready_condition = _condition(READY, False, outcome.not_ready, outcome.stalled[1])
         elif outcome.stopped:
             stalled = _condition(STALLED, False, "Stopped", "the fleet is stopped")
             reconciling = _condition(RECONCILING, False, "Stopped", "the fleet is stopped")
@@ -1329,7 +1357,12 @@ class Controller:
         desired: dict[str, Any] = {
             "observedGeneration": observed,
             "conditions": conditions,
-            "serving": found.serving and not stopped and not outcome.stopped,
+            # A discover that stopped the engines and failed leaves the routers' record
+            # passed, with no engine behind them.
+            "serving": found.serving
+            and not stopped
+            and not outcome.stopped
+            and outcome.not_ready != ENGINES_STOPPED,
             "engines": "0/" + found.engines.split("/")[1] if outcome.stopped else found.engines,
             "stages": found.stages,
             "previousRuns": list(self._previous.get(uid, [])),

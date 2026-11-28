@@ -2750,11 +2750,48 @@ class ObjectStore:
             if phase == "Pending" and not node_fits(spec, host):
                 rejected = Reject("NodeAffinity", "Pod was rejected: Predicate NodeAffinity failed")
                 outcome: Outcome = rejected
+            elif phase == "Pending" and (short := self._short(pod, host)):
+                outcome = short
             else:
                 outcome = self.kubelet(copy.deepcopy(pod))
             new = self._pod_status(pod, phase, outcome)
             if new is not None:
                 self._system(POD, pod, new, "kubelet")
+
+    def _short(self, pod: Mapping[str, Any], host: Mapping[str, Any]) -> Reject | None:
+        """The kubelet's admission of a pod's extended resources, such as GPUs: it refuses a
+        pod whose limits, with those of the pods running on its node, exceed what the node
+        offers."""
+        allocatable = (host.get("status") or {}).get("allocatable") or {}
+
+        def limits(of: Mapping[str, Any]) -> Counter[str]:
+            found: Counter[str] = Counter()
+            for container in (of.get("spec") or {}).get("containers") or []:
+                for name, value in ((container.get("resources") or {}).get("limits") or {}).items():
+                    if "/" in name and str(value).isdigit():
+                        found[name] += int(value)
+            return found
+
+        wanted = limits(pod)
+        used: Counter[str] = Counter()
+        for other in self._objects[POD].values():
+            if (
+                other["metadata"]["uid"] != pod["metadata"]["uid"]
+                and (other.get("spec") or {}).get("nodeName") == host["metadata"]["name"]
+                and (other.get("status") or {}).get("phase") == "Running"
+            ):
+                used += limits(other)
+        for name, count in sorted(wanted.items()):
+            capacity = (
+                int(allocatable.get(name, "0")) if str(allocatable.get(name, "0")).isdigit() else 0
+            )
+            if used[name] + count > capacity:
+                return Reject(
+                    f"OutOf{name}",
+                    f"Pod was rejected: Node didn't have enough resource: {name}, requested: "
+                    f"{count}, used: {used[name]}, capacity: {capacity}",
+                )
+        return None
 
     def _terminate(self, pod: dict, phase: str) -> None:
         """Stop a deleted pod's containers: when they exit, or when the grace period ends."""
@@ -3371,7 +3408,7 @@ class Rig:
         for name in CLUSTER_NODES:
             document = self.store.create(node(name))
             if name.startswith("gpu-"):
-                document["status"] = {"allocatable": {GPU: "2", RDMA: "1"}}
+                document["status"] = {"allocatable": {GPU: "2", RDMA: "2"}}
                 self.store.put(document)
         self.store.define_crd(fleet_resource.crd())
         fleet = fleet_fixtures.fleet()
@@ -3453,6 +3490,8 @@ class Rig:
         self.layouts: dict[str, str] = {}
         # Engine pods a scheduler places off their node, once.
         self.misplace: dict[str, str] = {}
+        # The host-network TCP ports another workload listens on, by node.
+        self.listening: dict[str, tuple[int, ...]] = {}
         # Pods another controller adds its own scheduling gate to, ahead of the placement
         # gate, once, between the run's read and its patch.
         self.gate_ahead: set[str] = set()
@@ -3682,7 +3721,13 @@ class Rig:
     def log(self, entry: Mapping[str, Any]) -> str:
         kind = entry["kind"]
         if kind == "fabric-probe":
-            return 'narwhal-interfaces [{"ifname": "fabric0"}]\n'
+            # The TCP ports another workload listens on, on the node's host network.
+            ports = "".join(
+                f"{kubernetes_target.LISTENING} {port:04X}\n"
+                for port in self.listening.get(entry["node"], ())
+            )
+            interfaces = 'narwhal-interfaces [{"ifname": "fabric0"}]\n'
+            return f"{interfaces}{ports}{kubernetes_target.LISTENING_DONE}\n"
         if kind == "fabric-server":
             return "narwhal-listening\nserver done\n"
         if kind == "fabric-client":
@@ -3804,7 +3849,14 @@ class Rig:
     def qualify_edge(self, plan, shell, edge, budgets, directory: Path, retained=None):
         self.calls[f"fabric-edge[{edge.name}]"] += 1
         directory.mkdir(mode=0o700, parents=True)
-        return [{"sample": "a-to-b", "link_sha256": self.routes.setdefault(edge.name, "route-1")}]
+        return [
+            {
+                "sample": "a-to-b",
+                "link_sha256": self.routes.setdefault(edge.name, "route-1"),
+                "measured_gbps": 100.0,
+                "roles": {"engine-1": {"required_gbps": 12.5, "passed": True}},
+            }
+        ]
 
     def observe(self, plan, shell, edge) -> list[_Observation]:
         self.calls[f"observe[{edge.name}]"] += 1
@@ -3859,11 +3911,13 @@ def _write_records(self: kubernetes_target.KubernetesDeployment, context, observ
     config = context.directory / "config"
     config.mkdir(mode=0o700)
     package = context.directory / "package"
-    for role, node in NODES.items():
-        folder = package / node
+    # One folder for each node, holding each of its engines' files, as `package` writes them.
+    for host in self.hosts():
+        folder = package / host.id
         folder.mkdir(mode=0o700, parents=True)
-        write_environment(folder / f".env.{role}", {"NARWHAL_ROLE": role})
-        write_private(folder / f"engine-launch.{role}.json", b'{"runtime": {}}')
+        for role in host.roles:
+            write_environment(folder / f".env.{role}", {"NARWHAL_ROLE": role})
+            write_private(folder / f"engine-launch.{role}.json", b'{"runtime": {}}')
         for helper in helpers(launcher(None)):
             write_private(folder / helper.name, helper.source.read_bytes())
     fleet = {

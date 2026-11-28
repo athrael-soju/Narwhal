@@ -21,6 +21,7 @@ itself; the controller container alone mounts a projected one.
   "image" .Values.images.narwhal
   "runAsUser" .Values.controller.runAsUser
   "runAsGroup" .Values.controller.runAsGroup
+  "fleet" (.Values.monitoring.fleet | default .Release.Name)
 }}
 {{- $config := toPrettyJson $settings }}
 apiVersion: v1
@@ -40,8 +41,8 @@ metadata:
 data:
   # The chart's settings: its state claim, the engines' ServiceAccount, the cluster admin's
   # model volume and RuntimeClass allow-lists, the admission policy that bounds the fleet, how
-  # often the controller checks the engine API key, and the controller's image, user and
-  # group, which its export Jobs run as.
+  # often the controller checks the engine API key, the controller's image, user and
+  # group, which its export Jobs run as, and the fleet label of its monitoring.
   controller.json: {{ $config | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
