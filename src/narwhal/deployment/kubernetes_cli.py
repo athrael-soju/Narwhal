@@ -32,6 +32,7 @@ or `pods/exec`, so it cannot start a pod of its own.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -158,6 +159,10 @@ _CONFLICT = re.compile(
 
 class ExportError(ValueError):
     """An export Job did not return the evidence, or returned it unchecked."""
+
+
+class ExportBusy(ExportError):
+    """The controller ran another export Job of the fleet, so it started none for the request."""
 
 
 class FleetConflict(RuntimeError):
@@ -981,13 +986,27 @@ class Session:
     def _export_round(
         self, request: kubernetes_export.Request
     ) -> tuple[dict[str, bytes], dict[str, Any]]:
-        """Ask the controller for one export Job and read what its pod printed."""
-        try:
-            value = request.value()
-        except ValueError as error:
-            raise ExportError(str(error)) from None
-        self.ws.annotate(FLEET, NAME, {kubernetes_export.EXPORT_REQUEST: value})
-        answer = self._answer(request.nonce)
+        """Ask the controller for one export Job and read what its pod printed. While another
+        export Job of the fleet runs, ask again under a new nonce, for as long as one export
+        Job may run."""
+        deadline = self.clock() + EXPORT_SECONDS + 2 * target.GRACE_SECONDS
+        while True:
+            try:
+                value = request.value()
+            except ValueError as error:
+                raise ExportError(str(error)) from None
+            self.ws.annotate(FLEET, NAME, {kubernetes_export.EXPORT_REQUEST: value})
+            try:
+                answer = self._answer(request.nonce)
+                break
+            except ExportBusy:
+                if self.clock() >= deadline:
+                    raise ExportError(
+                        f"another export Job of the {KIND} ran for longer than "
+                        f"{EXPORT_SECONDS} s; try again later"
+                    ) from None
+            self.sleep(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+            request = dataclasses.replace(request, nonce=uuid.uuid4().hex)
         name = str(answer["job"])
         log = self._job_log(answer)
         output = log.decode(errors="replace")
@@ -1030,6 +1049,8 @@ class Session:
             for entry in (live.get("status") or {}).get("exports") or []:
                 if entry.get("nonce") != nonce:
                     continue
+                if entry.get("error") == kubernetes_export.RUNNING:
+                    raise ExportBusy(entry["error"])
                 if entry.get("error"):
                     raise ExportError(f"the controller exported nothing: {entry['error']}")
                 if all(entry.get(key) for key in ("job", "uid", "pod", "sha256")):

@@ -54,7 +54,10 @@ it in `status.exports` by the request's nonce, so an export never waits for a st
 Job's pod succeeds, the thread reads the pod's log itself, from the pod the Job of that UID
 controls, and adds the pod's name and the log's SHA-256 and size to the answer. The
 workstation imports a log only when it has that digest, so a pod someone else made under the
-Job's name, which the chart's admission policy also refuses, exports nothing.
+Job's name, which the chart's admission policy also refuses, exports nothing. The thread takes
+one request per fleet every `kubernetes_export.EXPORT_INTERVAL_SECONDS`, runs one export Job
+per fleet at a time, answering a request that arrives meanwhile with `kubernetes_export.RUNNING`,
+and deletes the Job of each answer `status.exports` drops.
 
 `spec.stopped` cancels a running stage, deletes the routers, HAProxy, the engines and then the
 Jobs, and keeps the volumes and the run directory, so clearing it starts again from the record.
@@ -724,6 +727,7 @@ class Controller:
         self.state = state
         self._cluster = cluster or (lambda env, logs: FencedCluster(client, self.writer))
         self._clock = clock
+        self._monotonic = monotonic
         self._exit = exit
         self.queue = WorkQueue(clock=monotonic)
         self.informer = Informer(
@@ -748,6 +752,8 @@ class Controller:
         self._export_pending: dict[str, dict[str, Any]] = {}
         self._export_seen: dict[str, str] = {}
         self._export_wake = threading.Event()
+        # When each fleet's last export request was answered, by fleet uid, on `monotonic`.
+        self._export_last: dict[str, float] = {}
         # The answers `status.exports` holds, by fleet uid.
         self._exports: dict[str, list[dict[str, Any]]] = {}
         # One status write at a time: a pass's or an export's.
@@ -797,6 +803,7 @@ class Controller:
             self._ready.pop(old, None)
             self._previous.pop(old, None)
             self._exports.pop(old, None)
+            self._export_last.pop(old, None)
         if running is not None and running.uid in gone:
             # The garbage collector removes what the pass made; it starts nothing more.
             running.stop.cancel(*STAGES)
@@ -892,8 +899,19 @@ class Controller:
             pending, self._export_pending = self._export_pending, {}
             self._export_wake.clear()
         for object_key, fleet in pending.items():
+            uid = _uid(fleet)
+            last = self._export_last.get(uid)
+            if (
+                last is not None
+                and self._monotonic() - last < kubernetes_export.EXPORT_INTERVAL_SECONDS
+            ):
+                # Its turn comes later; a newer value taken meanwhile replaces it.
+                with self._lock:
+                    self._export_pending.setdefault(object_key, fleet)
+                continue
             try:
-                self._export(fleet)
+                if self._export(fleet):
+                    self._export_last[uid] = self._monotonic()
             except Exception:
                 log.exception("export request of %s failed", object_key)
         for fleet in self.informer.items():
@@ -957,7 +975,9 @@ class Controller:
             return {"error": f"export Job {name} failed"}
         return None
 
-    def _export(self, fleet: Mapping[str, Any]) -> None:
+    def _export(self, fleet: Mapping[str, Any]) -> bool:
+        """Answer the fleet's export request, starting its Job unless one runs; return whether
+        it wrote an answer."""
         uid = _uid(fleet)
         value = ((fleet.get("metadata") or {}).get("annotations") or {}).get(EXPORT_REQUEST)
         try:
@@ -969,11 +989,15 @@ class Controller:
                 nonce = json.loads(str(value)).get("nonce")
             if isinstance(nonce, str) and kubernetes_export.NONCE.fullmatch(nonce):
                 self._answer(fleet, {"nonce": nonce, "error": _message(str(exc))[:1024]})
-            return
+                return True
+            return False
         status = fleet.get("status") if isinstance(fleet.get("status"), dict) else {}
         answered = self._exports.get(uid, (status or {}).get("exports") or [])
         if any(entry.get("nonce") == request.nonce for entry in answered):
-            return
+            return False
+        if self._export_running(fleet, answered):
+            self._answer(fleet, {"nonce": request.nonce, "error": kubernetes_export.RUNNING})
+            return True
         directory = run_directory(self.state, self.namespace, uid)
         try:
             if not (directory / run_record.RECORD).is_file():
@@ -993,7 +1017,7 @@ class Controller:
             )
         except ValueError as exc:
             self._answer(fleet, {"nonce": request.nonce, "error": _message(str(exc))[:1024]})
-            return
+            return True
         name = document["metadata"]["name"]
         try:
             created = self.writer.create(kubernetes_target.JOB, document)
@@ -1006,18 +1030,69 @@ class Controller:
         self._answer(
             fleet, {"nonce": request.nonce, "job": name, "uid": created["metadata"]["uid"]}
         )
+        return True
+
+    def _export_running(
+        self, fleet: Mapping[str, Any], answers: Sequence[Mapping[str, Any]]
+    ) -> bool:
+        """Whether one of the fleet's export Jobs still runs, found by the export gate label
+        and the fleet's uid among its owners. Deletes each that will deliver nothing more: an
+        ended one no answer names, and one whose answer is an error."""
+        uid = _uid(fleet)
+        by_uid = {str(entry["uid"]): entry for entry in answers if entry.get("uid")}
+        running = False
+        listed = self.client.list(
+            kubernetes_target.JOB, labels={fleet_resource.GATE_LABEL: kubernetes_export.EXPORT}
+        )
+        for job in listed.items:
+            metadata = job.get("metadata") or {}
+            if not any(
+                reference.get("uid") == uid for reference in metadata.get("ownerReferences") or []
+            ):
+                continue
+            entry = by_uid.get(str(metadata.get("uid")))
+            if metadata.get("deletionTimestamp"):
+                continue
+            if kubernetes_export.finished(job):
+                if entry is None:
+                    self._delete_export_job(metadata)
+            elif entry is not None and entry.get("error"):
+                self._delete_export_job(metadata)
+            elif entry is None or kubernetes_export.in_flight(entry):
+                running = True
+        return running
+
+    def _delete_export_job(self, metadata: Mapping[str, Any]) -> None:
+        """Delete one export Job, and its pod with it, by its uid."""
+        name, uid = str(metadata.get("name") or ""), str(metadata.get("uid") or "")
+        if not name or not uid:
+            return
+        try:
+            self.writer.delete(
+                kubernetes_target.JOB, name, propagation=kubernetes_objects.BACKGROUND, uid=uid
+            )
+        except (NotFound, Conflict):
+            return
+        except KubernetesError as exc:
+            log.warning("export Job %s not deleted: %s", name, exc)
+            return
+        log.info("deleted export Job %s", name)
 
     def _answer(self, fleet: Mapping[str, Any], answer: dict[str, Any]) -> None:
-        """Name the export request's answer in `status.exports`, keeping the latest ones."""
+        """Name the export request's answer in `status.exports`, keeping the latest ones, and
+        delete the Job of each answer it drops."""
         uid = _uid(fleet)
         with self._status_lock:
             status = fleet.get("status") if isinstance(fleet.get("status"), dict) else {}
-            kept = [
+            others = [
                 dict(entry)
                 for entry in self._exports.get(uid, (status or {}).get("exports") or [])
                 if entry.get("nonce") != answer["nonce"]
             ]
-            self._exports[uid] = [*kept, answer][-kubernetes_export.KEPT_ANSWERS :]
+            self._exports[uid], dropped = kubernetes_export.kept([*others, answer])
+            for entry in dropped:
+                if entry.get("job") and entry.get("uid"):
+                    self._delete_export_job({"name": entry["job"], "uid": entry["uid"]})
             # The test keeps the write to this fleet; a pass's next status carries the answers.
             operations: list[dict[str, Any]] = [
                 {"op": "test", "path": "/metadata/uid", "value": uid}
