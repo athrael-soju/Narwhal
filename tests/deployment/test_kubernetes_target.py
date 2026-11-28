@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from narwhal.deployment import cli as deploy_cli
 from narwhal.deployment import fabric, fleet_resource, kubernetes_gate, kubernetes_target
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.fleet_resource import VolumePolicy
@@ -113,6 +114,11 @@ class KubernetesTest(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(self.rig.patched())
         stack.enter_context(patch.dict(os.environ, self.rig.env, clear=True))
+        # These tests run the stage graph in this process, as the fleet controller runs it,
+        # through the commands that run it on SSH hosts; `narwhal deploy --target kubernetes`
+        # itself applies the fleet and follows the controller, as test_kubernetes_cli checks.
+        stack.enter_context(patch.dict(deploy_cli.CLUSTER_COMMANDS, deploy_cli.STAGE_COMMANDS))
+        stack.enter_context(patch.dict(deploy_cli.TARGETS, kubernetes=kubernetes_target))
 
     def deploy(self, action: str, *args: str) -> tuple[int, dict]:
         out = io.StringIO()

@@ -1,4 +1,5 @@
-"""`narwhal deploy`: discover, reach, package and install a fleet on SSH hosts."""
+"""`narwhal deploy`: discover, reach, package and install a fleet on SSH hosts, or apply and
+follow a Kubernetes cluster's `NarwhalFleet`."""
 
 from __future__ import annotations
 
@@ -20,7 +21,9 @@ from . import (
     cache_groups,
     discovery,
     fabric,
+    fleet_resource,
     install,
+    kubernetes_cli,
     kubernetes_target,
     remote,
     run_record,
@@ -31,13 +34,22 @@ from . import trial as capacity
 from .deploy_graph import DEPLOY_GRAPH
 from .hosts import SSH, Host, RemoteError, RemoteTimeout, SignalStop, load_hosts
 from .launch_engine.evidence import CheckFailed
-from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed, stale_notice
+from .runner import (
+    HelpersSurvived,
+    RunCancelled,
+    RunLocked,
+    StageFailed,
+    check_directory,
+    stale_notice,
+)
 
 # The stages `narwhal deploy run --until` can stop after, the capacity trial included. Every
 # Kubernetes stage is named as the SSH stage it corresponds to.
 RUN_STAGES = DEPLOY_GRAPH.order()[: DEPLOY_GRAPH.order().index(stage_run.TRIAL_STAGE) + 1]
 # Each target's inputs, deployment and recovery pages.
-TARGETS: dict[str, Any] = {"ssh": stage_run, "kubernetes": kubernetes_target}
+# The SSH target runs the stage graph in this process; on Kubernetes the fleet controller runs
+# it, and the subcommands drive the NarwhalFleet through `kubernetes_cli`.
+TARGETS: dict[str, Any] = {"ssh": stage_run}
 
 DESCRIPTIONS = {
     "plan": "Check every deployment input and each host's systemd user manager, then print "
@@ -84,6 +96,17 @@ def forward_ports(value: str) -> tuple[int, int]:
     return local, remote
 
 
+def _seconds(value: str) -> float:
+    """Parse a positive number of seconds."""
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Use a number of seconds") from None
+    if not 0 < seconds < 10**7:
+        raise argparse.ArgumentTypeError("Use a positive number of seconds")
+    return seconds
+
+
 def role_file(value: str) -> tuple[str, Path]:
     """Parse ROLE=PATH into an engine role and a file path."""
     role, separator, path = value.partition("=")
@@ -122,11 +145,27 @@ def add_commands(commands: Any) -> None:
             )
             action.add_argument(
                 "--target",
-                choices=tuple(TARGETS),
+                choices=("ssh", "kubernetes"),
                 default="ssh",
-                help="where the fleet runs: SSH hosts, or a Kubernetes cluster through helm "
-                "and kubectl (default: %(default)s)",
+                help="where the fleet runs: SSH hosts, or a Kubernetes cluster, whose "
+                "NarwhalFleet the run applies and whose controller it follows (default: "
+                "%(default)s)",
             )
+            if name in ("run", "down"):
+                action.add_argument(
+                    "--timeout",
+                    type=_seconds,
+                    metavar="SECONDS",
+                    help="with --target kubernetes, how long to follow the fleet until it is "
+                    f"ready, or for down stopped (default: {kubernetes_cli.FOLLOW_SECONDS} for "
+                    f"run, {kubernetes_cli.STOP_SECONDS} for down)",
+                )
+            if name == "down":
+                action.add_argument(
+                    "--delete",
+                    action="store_true",
+                    help="with --target kubernetes, delete the NarwhalFleet once it stopped",
+                )
             if name in ("plan", "run"):
                 action.add_argument(
                     "--until",
@@ -522,7 +561,11 @@ def _until(args: argparse.Namespace) -> str:
     target's last stage."""
     if args.until:
         return str(args.until)
-    return stage_run.TRIAL_STAGE if args.trial else str(TARGETS[args.target].LAST_STAGE)
+    if args.trial:
+        return stage_run.TRIAL_STAGE
+    if args.target == "kubernetes":
+        return kubernetes_target.LAST_STAGE
+    return str(TARGETS[args.target].LAST_STAGE)
 
 
 def _trial_result(directory: Path) -> dict[str, Any] | None:
@@ -607,19 +650,10 @@ def _run(args: argparse.Namespace, env: dict[str, str]) -> int:
     return 0
 
 
-def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
-    directory = args.run.resolve()
-    locked = False
-    target = TARGETS[args.target]
-    try:
-        record, checks = target.Deployment(directory, env).runner().inspect(refresh=True)
-    except RunLocked as error:
-        # Another runner holds the run: read it, and check each process without its
-        # functional check, recording nothing.
-        locked = True
-        print(f"{error}; reporting without recording restarts", file=sys.stderr)
-        deployment = target.Deployment(directory, env, dry=True)
-        record, checks = deployment.runner().inspect(refresh=False)
+def _stage_rows(
+    record: Mapping[str, Any], directory: Path, target: Any
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Print each stage of the run record; return every row and those of stopped stages."""
     rows = []
     stopped = []
     for name, entry in record["stages"].items():
@@ -638,9 +672,49 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
             stopped.append(row)
         print(line)
         rows.append(row)
-    live = [vars(check) for check in checks]
+    return rows, stopped
+
+
+def _live_rows(checks: Any) -> list[dict[str, Any]]:
     for check in checks:
         print(f"{check.key}: {check.state}{': ' + check.detail if check.detail else ''}")
+    return [vars(check) for check in checks]
+
+
+def _stopped_stages(stopped: list[dict[str, Any]]) -> None:
+    """Record each stage the run stopped at, which left the fleet incomplete."""
+    for row in stopped:
+        results.record_error(
+            "failed_gate",
+            ": ".join(filter(None, (f"{row['stage']} {row['status']}", row.get("failure")))),
+            stage=row["stage"],
+            context={"recovery": row["recovery"]} if "recovery" in row else None,
+        )
+    results.set_status("failed_gate")
+
+
+def _degraded(checks: Any, *, unobserved: bool = False) -> bool:
+    """Whether a recorded process or route no longer holds; with `unobserved`, a route the
+    workstation could not observe is not counted."""
+    fine = ("holds", "restarted and checked", *(("not observed",) if unobserved else ()))
+    return any(check.state not in fine for check in checks)
+
+
+def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
+    directory = args.run.resolve()
+    locked = False
+    target = TARGETS[args.target]
+    try:
+        record, checks = target.Deployment(directory, env).runner().inspect(refresh=True)
+    except RunLocked as error:
+        # Another runner holds the run: read it, and check each process without its
+        # functional check, recording nothing.
+        locked = True
+        print(f"{error}; reporting without recording restarts", file=sys.stderr)
+        deployment = target.Deployment(directory, env, dry=True)
+        record, checks = deployment.runner().inspect(refresh=False)
+    rows, stopped = _stage_rows(record, directory, target)
+    live = _live_rows(checks)
     results.set_data(
         {
             "run": str(directory),
@@ -652,16 +726,9 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
     )
     # A run that stopped at a failed stage left the fleet incomplete, whatever still holds.
     if stopped:
-        for row in stopped:
-            results.record_error(
-                "failed_gate",
-                ": ".join(filter(None, (f"{row['stage']} {row['status']}", row.get("failure")))),
-                stage=row["stage"],
-                context={"recovery": row["recovery"]} if "recovery" in row else None,
-            )
-        results.set_status("failed_gate")
+        _stopped_stages(stopped)
         return 1
-    if any(check.state != "holds" and check.state != "restarted and checked" for check in checks):
+    if _degraded(checks):
         results.set_status("degraded")
         return 3
     return 0
@@ -677,9 +744,416 @@ def _down(args: argparse.Namespace, env: dict[str, str]) -> int:
     return 0
 
 
+# `plan`, `run`, `status` and `down` on a Kubernetes cluster: the fleet controller runs the
+# stage graph, and the workstation applies the NarwhalFleet, follows it and copies evidence.
+
+
+def _cluster_fleet(args: argparse.Namespace, env: dict[str, str]) -> Any:
+    """The fleet the workstation's inputs describe, or None after reporting each problem."""
+    try:
+        built = kubernetes_cli.build(env, until=args.until)
+    except stage_run.InputError as error:
+        for problem in error.problems:
+            results.record_error("invalid_input", problem, stage="inputs")
+            print(f"narwhal: deploy: {problem}", file=sys.stderr)
+        results.set_status("invalid_input")
+        return None
+    if built.dropped:
+        print(
+            f"Note: a {fleet_resource.KIND} holds no {', '.join(built.dropped)}; the controller "
+            "runs without them"
+        )
+    return built
+
+
+def _refused(action: str, error: kubernetes_target.ClusterError) -> int | None:
+    """Report an apply the API server refused as invalid; leave any other error to `run`."""
+    if error.code != 422:
+        return None
+    results.record_error("invalid_input", error.message, stage="apply")
+    results.set_status("invalid_input")
+    print(
+        f"narwhal: deploy {action}: the API server refused the fleet: {error.message}",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _conflict(action: str, error: kubernetes_cli.FleetConflict, status: str, code: str) -> None:
+    fields = [{"manager": manager, "field": path} for manager, path in error.fields]
+    results.record_error(code, str(error), stage="apply", context={"fields": fields})
+    results.set_status(status)
+    print(f"narwhal: deploy {action}: {error}", file=sys.stderr)
+
+
+def _fleet_line(fleet: Mapping[str, Any]) -> None:
+    """Print the fleet's identity and its kstatus conditions."""
+    found = kubernetes_cli.summary(fleet)
+    states = ", ".join(f"{c['type']} {c['status']}" for c in found["conditions"])
+    print(
+        f"{fleet_resource.KIND} {found['name']} in {found['namespace']}: "
+        f"{states or 'no status yet'}; stage {found['stage'] or 'none'}, engines "
+        f"{found['engines'] or '0/0'}, {'serving' if found['serving'] else 'not serving'}"
+    )
+    stall = kubernetes_cli.conditions(fleet).get(fleet_resource.STALLED) or {}
+    if stall.get("status") == "True":
+        print(f"  Stalled: {stall.get('reason')}: {stall.get('message')}")
+
+
+def _evidence(session: kubernetes_cli.Session, action: str) -> dict[str, Any]:
+    """Copy the controller's evidence into the run directory; a failed copy is a warning."""
+    try:
+        return session.export().data()
+    except (kubernetes_cli.ExportError, kubernetes_target.ClusterError, OSError) as error:
+        print(f"narwhal: deploy {action}: warning: evidence not copied: {error}", file=sys.stderr)
+        return {"error": str(error)}
+
+
+def _cluster_plan(args: argparse.Namespace, env: dict[str, str]) -> int:
+    built = _cluster_fleet(args, env)
+    if built is None:
+        return 2
+    directory = args.run.resolve()
+    logs = directory if directory.is_dir() else _access_logs()
+    session = kubernetes_cli.Session(directory, env, logs=logs / kubernetes_cli.KUBECTL_LOGS)
+    if directory.is_dir():
+        session.check_target()
+    live = session.live()
+    if directory.is_dir():
+        session.check_bound(live)
+    managers = kubernetes_cli.spec_managers(live)
+    notes: list[str] = []
+    conflict: kubernetes_cli.FleetConflict | None = None
+    fleet = built.fleet
+    if managers:
+        notes.append(
+            f"{', '.join(managers)} own the fleet's spec, so run follows the fleet without "
+            "applying the workstation's inputs"
+        )
+        fleet = live
+    else:
+        try:
+            session.apply(built.fleet, dry_run=True)
+        except kubernetes_cli.FleetConflict as error:
+            conflict = error
+        except kubernetes_target.ClusterError as error:
+            if (refused := _refused("plan", error)) is not None:
+                return refused
+            raise
+    decisions, more = session.plan(fleet, live, until=_until(args))
+    rows = _decisions(decisions)
+    notes += more
+    for note in notes:
+        print(f"Note: {note}")
+    results.set_data(
+        {
+            "run": str(directory),
+            "stages": rows,
+            "hosts": {},
+            "notes": notes,
+            "fleet": kubernetes_cli.summary(live) if live else None,
+            "managers": managers,
+        }
+    )
+    if conflict is not None:
+        _conflict("plan", conflict, "failed_gate", "gate_failed")
+        return 1
+    return 0
+
+
+def _cluster_run(args: argparse.Namespace, env: dict[str, str]) -> int:
+    built = _cluster_fleet(args, env)
+    if built is None:
+        return 2
+    directory = args.run.resolve()
+    directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    check_directory(directory)
+    results.add_artifact("run_record", directory / run_record.RECORD)
+    session = kubernetes_cli.Session(directory, env)
+    session.check_target()
+    timeout = args.timeout or kubernetes_cli.FOLLOW_SECONDS
+    with kubernetes_cli.locked(directory):
+        live = session.live()
+        session.check_bound(live)
+        managers = kubernetes_cli.spec_managers(live)
+        stale = None
+        if managers:
+            print(
+                f"Note: {', '.join(managers)} own the fleet's spec; following the fleet without "
+                "applying the workstation's inputs"
+            )
+        else:
+            before = live
+            try:
+                live = session.apply(built.fleet)
+            except kubernetes_cli.FleetConflict as error:
+                _conflict("run", error, "error", "apply_conflict")
+                return 4
+            except kubernetes_target.ClusterError as error:
+                if (refused := _refused("run", error)) is not None:
+                    return refused
+                raise
+            unchanged = before is not None and (
+                before["metadata"].get("generation") == live["metadata"].get("generation")
+            )
+            if unchanged:
+                stale = session.retry(live)
+        assert live is not None
+        session.bind(live)
+        uid = live["metadata"]["uid"]
+        data: dict[str, Any] = {"run": str(directory), "applied": not managers}
+        data["managers"] = managers
+        try:
+            followed = session.follow(uid=uid, stopped=False, timeout_s=timeout, stale_stall=stale)
+        except KeyboardInterrupt:
+            results.set_data({**data, "fleet": kubernetes_cli.summary(live)})
+            results.record_error("interrupted", "stopped following the fleet", stage="follow")
+            results.set_status("interrupted")
+            print(
+                "narwhal: deploy run: stopped following; the controller keeps running the fleet",
+                file=sys.stderr,
+            )
+            return 130
+        data["evidence"] = _evidence(session, "run")
+    fleet = followed.fleet or live
+    data["fleet"] = kubernetes_cli.summary(fleet)
+    if (directory / run_record.RECORD).is_file():
+        data["run_id"] = run_record.read(directory)["run_id"]
+    return _followed(followed, data, directory, timeout)
+
+
+def _followed(
+    followed: kubernetes_cli.Followed, data: dict[str, Any], directory: Path, timeout: float
+) -> int:
+    """The result of `run` once following the fleet ended."""
+    fleet = data["fleet"]
+    if followed.outcome == "ready":
+        results.set_data(data)
+        print(
+            f"The fleet is ready: every stage up to {fleet['stage']} passed, engines "
+            f"{fleet['engines']}."
+        )
+        return 0
+    if followed.outcome == "stalled":
+        stall = followed.stall or {}
+        failed = kubernetes_cli.failure_of(directory)
+        status, code, exit_code = kubernetes_cli.stall_result(stall, failed)
+        if stall.get("reason") == kubernetes_cli.STAGE_FAILED and failed is not None:
+            name, entry = failed
+            failure = entry["failure"]
+            recovery = kubernetes_target.recovery_url(failure["recovery"])
+            data["failed_stage"] = name
+            results.record_error(
+                code,
+                failure["message"],
+                stage=name,
+                context={**failure["context"], "recovery": recovery, "status": entry["status"]},
+            )
+            print(
+                f"narwhal: deploy run: {name} {entry['status']}: {failure['message']}",
+                file=sys.stderr,
+            )
+            print(f"Recovery: {recovery}", file=sys.stderr)
+            print(f"Evidence: {directory / entry['directory']}", file=sys.stderr)
+        else:
+            message = f"the fleet is stalled: {stall.get('reason')}: {stall.get('message')}"
+            data["failed_stage"] = fleet["stage"]
+            results.record_error(code, message, stage=fleet["stage"] or "fleet")
+            print(f"narwhal: deploy run: {message}", file=sys.stderr)
+        results.set_data(data)
+        results.set_status(status)
+        return exit_code
+    if followed.outcome == "gone":
+        message = "the fleet was deleted, or made again, while the run followed it"
+    else:
+        message = (
+            f"the fleet was neither ready nor stalled after {timeout:g} s; the controller keeps "
+            "running it, and narwhal deploy status reports it"
+        )
+    results.set_data(data)
+    code = "follow_timeout" if followed.outcome == "timeout" else "operation_failed"
+    results.record_error(code, message, stage=fleet["stage"] or "fleet")
+    results.set_status("error")
+    print(f"narwhal: deploy run: {message}", file=sys.stderr)
+    return 4
+
+
+def _bound_session(args: argparse.Namespace, env: dict[str, str]) -> kubernetes_cli.Session:
+    """The session of a run directory that follows a fleet, after task 18's checks."""
+    directory = args.run.resolve()
+    session = kubernetes_cli.Session(directory, env)
+    check_directory(directory)
+    if session.binding() is None:
+        raise ValueError(
+            f"{directory} follows no {fleet_resource.KIND}; run narwhal deploy run --target "
+            "kubernetes first"
+        )
+    return session
+
+
+def _cluster_status(args: argparse.Namespace, env: dict[str, str]) -> int:
+    session = _bound_session(args, env)
+    directory = session.directory
+    live = session.live()
+    session.check_bound(live)
+    assert live is not None
+    locked = False
+    evidence: dict[str, Any] = {}
+    try:
+        with kubernetes_cli.locked(directory):
+            evidence = _evidence(session, "status")
+    except RunLocked as error:
+        locked = True
+        print(f"{error}; reporting the run record as last copied", file=sys.stderr)
+    _fleet_line(live)
+    rows: list[dict[str, Any]] = []
+    stopped: list[dict[str, Any]] = []
+    checks: Any = ()
+    run_id = None
+    if (directory / run_record.RECORD).is_file():
+        record, checks = session.deployment(live).runner().inspect(refresh=False)
+        run_id = record["run_id"]
+        rows, stopped = _stage_rows(record, directory, kubernetes_target)
+    live_rows = _live_rows(checks)
+    results.set_data(
+        {
+            "run": str(directory),
+            "run_id": run_id,
+            "locked": locked,
+            "stages": rows,
+            "live": live_rows,
+            "fleet": kubernetes_cli.summary(live),
+            "evidence": evidence,
+        }
+    )
+    if stopped:
+        _stopped_stages(stopped)
+        return 1
+    stall = kubernetes_cli.conditions(live).get(fleet_resource.STALLED) or {}
+    if stall.get("status") == "True":
+        results.record_error(
+            "failed_gate",
+            f"the fleet is stalled: {stall.get('reason')}: {stall.get('message')}",
+            stage="fleet",
+        )
+        results.set_status("failed_gate")
+        return 1
+    # Observing a route takes a Job on each node; the controller observes it on every pass.
+    if _degraded(checks, unobserved=True):
+        results.set_status("degraded")
+        return 3
+    return 0
+
+
+def _recorded_processes(session: kubernetes_cli.Session) -> list[dict[str, Any]]:
+    """Each process the mirrored record started, and whether its pod runs it until now."""
+    directory = session.directory
+    if not (directory / run_record.RECORD).is_file():
+        return []
+    found = []
+    for entry in run_record.read(directory)["stages"].values():
+        if entry["stage"] not in ("router-start", "sidecar-start", "engine-start"):
+            continue
+        if entry["status"] != run_record.PASSED:
+            continue
+        for process in entry["processes"]:
+            pod = session.ws.get(kubernetes_target.POD, process.get("pod", process["name"]))
+            recorded = process.get("pod_uid")
+            ran = pod is not None and recorded in (None, pod["metadata"].get("uid"))
+            found.append(
+                {"name": process["name"], "host": process.get("host", "cluster"), "stopped": ran}
+            )
+    return found
+
+
+def _cluster_down(args: argparse.Namespace, env: dict[str, str]) -> int:
+    session = _bound_session(args, env)
+    directory = session.directory
+    timeout = args.timeout or kubernetes_cli.STOP_SECONDS
+    data: dict[str, Any] = {"run": str(directory), "stopped": False, "deleted": False}
+    with kubernetes_cli.locked(directory):
+        live = session.live()
+        if live is None:
+            print(
+                f"{env.get(kubernetes_target.NAMESPACE)} holds no {fleet_resource.KIND}; "
+                "nothing to stop"
+            )
+            results.set_data({**data, "fleet": None, "processes": []})
+            return 0
+        session.check_bound(live)
+        managers = kubernetes_cli.spec_managers(live)
+        if managers:
+            raise ValueError(
+                f"down changed nothing: {', '.join(managers)} own the fleet's spec; set "
+                "spec.stopped through them"
+            )
+        processes = _recorded_processes(session)
+        uid = live["metadata"]["uid"]
+        try:
+            session.stop(live)
+        except kubernetes_cli.FleetConflict as error:
+            _conflict("down", error, "error", "apply_conflict")
+            return 4
+        followed = session.follow(uid=uid, stopped=True, timeout_s=timeout)
+        data["stopped"] = followed.outcome == "stopped"
+        if followed.outcome != "gone":
+            data["evidence"] = _evidence(session, "down")
+        if args.delete:
+            data["deleted"] = session.delete(uid)
+    for process in processes:
+        state = "stopped" if process["stopped"] else "not running"
+        print(f"{process['name']} on {process['host']}: {state}")
+    data["fleet"] = kubernetes_cli.summary(followed.fleet or live)
+    data["processes"] = processes
+    results.set_data(data)
+    if data["deleted"]:
+        print(f"Deleted the {fleet_resource.KIND}; the garbage collector removes what it owned.")
+    elif data["stopped"]:
+        print("The fleet is stopped; its volumes stay. narwhal deploy run starts it again.")
+    if not data["stopped"] and not data["deleted"]:
+        message = (
+            f"the controller did not report the fleet stopped within {timeout:g} s"
+            if followed.outcome == "timeout"
+            else "the fleet was deleted while down waited for it to stop"
+        )
+        code = "follow_timeout" if followed.outcome == "timeout" else "operation_failed"
+        results.record_error(code, message, stage="down")
+        results.set_status("error")
+        print(f"narwhal: deploy down: {message}", file=sys.stderr)
+        return 4
+    return 0
+
+
+CLUSTER_COMMANDS: dict[str, Any] = {
+    "plan": _cluster_plan,
+    "run": _cluster_run,
+    "status": _cluster_status,
+    "down": _cluster_down,
+}
+
+
+# `plan`, `run`, `status` and `down` on SSH hosts: the stage graph runs in this process.
+STAGE_COMMANDS: dict[str, Any] = {"plan": _plan, "run": _run, "status": _status, "down": _down}
+
+
+def _check_options(args: argparse.Namespace) -> None:
+    """Refuse the options of another target."""
+    if args.action in ("plan", "run"):
+        _check_trial(args)
+    if args.target != "kubernetes":
+        for option in ("timeout", "delete"):
+            if getattr(args, option, None):
+                raise ValueError(
+                    f"--{option} follows a Kubernetes cluster's {fleet_resource.KIND}; use it "
+                    "with --target kubernetes"
+                )
+
+
 def _dispatch(args: argparse.Namespace, env: dict[str, str]) -> int:
-    commands = {"plan": _plan, "run": _run, "status": _status, "down": _down}
-    if args.action in commands:
+    if args.action in STAGE_COMMANDS:
+        _check_options(args)
+        commands = CLUSTER_COMMANDS if args.target == "kubernetes" else STAGE_COMMANDS
         try:
             return commands[args.action](args, env)
         except (RunLocked, HelpersSurvived) as error:
@@ -722,6 +1196,7 @@ def run(args: argparse.Namespace) -> int:
         RemoteError,
         RemoteTimeout,
         kubernetes_target.ClusterError,
+        kubernetes_cli.FleetConflict,
         fabric.FabricFailure,
         remote.StepFailed,
         supervision.SupervisionError,
