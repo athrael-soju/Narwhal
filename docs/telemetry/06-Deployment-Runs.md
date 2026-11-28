@@ -12,8 +12,13 @@ A run directory holds:
 | --- | --- |
 | `run.json` | The run record, `narwhal.deployment-run` version 2, at mode 0600 |
 | `run.lock` | The lock one runner holds while it uses the directory |
+| `run.salt` | 32 random bytes at mode 0600 that key the record's digests of inputs and files. The first run makes it, and a runner refuses one of another size, owner or mode |
 | `stages/<stage>/attempt-<n>/` | The files attempt `n` of a stage that runs once per run wrote |
 | `stages/<stage>/<instance>/attempt-<n>/` | The files attempt `n` of one stage instance wrote, such as one engine role |
+
+Inputs and the files an attempt writes can hold credentials, such as the engine key in a role environment. The record keeps each of their digests as `hmac-sha256:<hex>`, an HMAC-SHA256 of the value's SHA-256 under `run.salt`. A copy of `run.json` without `run.salt` cannot confirm a guessed credential. Changing a credential still changes its digest and reruns the stages it feeds. Never copy `run.salt` out of the run directory. A diagnostic bundle leaves it out.
+
+A record that an earlier version wrote keeps unkeyed `sha256:` digests and an output `sha256`. The next run makes `run.salt` and keys those digests in place, so they match the keyed digests of the same values and no stage reruns for the change. A Narwhal older than this one cannot read a keyed record.
 
 Each attempt writes into a new directory, so a rerun never meets a file an earlier attempt left. The runner replaces `run.json` by writing a temporary file, flushing it to disk and renaming it over the record, so a crash leaves either the old record or the new one. The next runner removes a temporary file a crash left.
 
@@ -44,7 +49,7 @@ An interrupted stage runs a new attempt, unless its action can take over the wor
 | `created_at`, `updated_at` | Unix seconds |
 | `lock` | `null`, or `owner` and `acquired_at`. `owner` holds `pid`, `boot_id`, `start_ticks`, `hostname`, `user` and `argv` |
 | `stale_locks` | Every stale lock a runner found in this directory: its `owner`, `acquired_at`, and `found_at` |
-| `inputs` | Each run input's `digest` and `source`. Credentials enter only as digests |
+| `inputs` | Each run input's `digest`, keyed under `run.salt`, and `source`. Credentials enter only as keyed digests |
 | `until` | The last stage the last run was asked to reach, or `null` for the whole graph |
 | `stages` | One record per stage instance, keyed by stage name, such as `discover`, or by stage and instance, such as `engine-check[engine-2]` |
 
@@ -57,8 +62,8 @@ Each stage record:
 | `attempt` | Attempt number in this run directory, from 1 |
 | `directory` | The attempt's directory, relative to the run directory |
 | `definition` | Digest of the stage's place in the graph and the rules that rerun it. A changed definition reruns the stage |
-| `input_digests` | Digest of each fact whose change reruns this stage, keyed like `slo` or `engine_identity[engine-2]`. A passed attempt records them as it passes. Any other attempt keeps the digests it started from, without the facts the stage produces itself |
-| `outputs` | Each regular file a passed attempt wrote: `path` relative to the run directory, `sha256`, `size` and `mode` |
+| `input_digests` | Digest of each fact whose change reruns this stage, keyed like `slo` or `engine_identity[engine-2]`. An input's digest is keyed under `run.salt`; a product's is its `sha256:` digest, since the record holds the product itself. A passed attempt records them as it passes. Any other attempt keeps the digests it started from, without the facts the stage produces itself |
+| `outputs` | Each regular file a passed attempt wrote: `path` relative to the run directory, `hmac_sha256`, the keyed digest of its contents, `size` and `mode` |
 | `live_outputs` | Paths, relative to the run directory, of the files and directories in the attempt directory that the stage's processes keep writing, such as their logs. They have no digest, and their changes never rerun the stage |
 | `products` | Each value the stage produces for later stages, such as an engine's binding digest or a process identity. A running, failed, cancelled, timed-out or interrupted attempt keeps the values of the last passed one |
 | `processes` | Identities of the long-lived processes the stage started. A running attempt keeps those of the attempt before it until it returns its own |
@@ -71,7 +76,7 @@ Each stage record:
 | `observed_at` | Unix seconds at which each live product, such as a process identity or a route, was last found to hold. The runner checks a live product again on every run unless the target gives that fact a maximum age and this observation is younger |
 | `failure` | `null` for a running, passed or invalidated stage. Otherwise `message`, `recovery`, the gate section that covers the stage, and `context`, such as the stage timeout and the cleanup of its helper processes |
 
-A stage is skipped when its record shows `passed`, its `definition` and `input_digests` match the current graph and inputs, every file in `outputs` still has its recorded SHA-256, size and mode, and every process or route the stage produced is still there or was observed within its maximum age. When an output changes, the runner marks every passed stage after it `invalidated` before it reruns anything, so those stages rerun even if the run stops first.
+A stage is skipped when its record shows `passed`, its `definition` and `input_digests` match the current graph and inputs, every file in `outputs` still has its recorded digest, size and mode, and every process or route the stage produced is still there or was observed within its maximum age. When an output changes, the runner marks every passed stage after it `invalidated` before it reruns anything, so those stages rerun even if the run stops first.
 
 ## Deployment status
 

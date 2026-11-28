@@ -103,8 +103,8 @@ LAUNCHED_FACTS = (
             INPUT,
             RUN,
             "Engine API key",
-            "The SHA-256 of the key that the fleet's `engine.engine_api_key_env` names, or of "
-            "`NARWHAL_ENGINE_API_KEY`",
+            "The key that the fleet's `engine.engine_api_key_env` names, or "
+            "`NARWHAL_ENGINE_API_KEY`, as an HMAC under the run directory's `run.salt`",
             (Rerun("package", onward=True),),
         ),
     ),

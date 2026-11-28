@@ -9,16 +9,20 @@ import os
 import re
 import socket
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Container, Iterator, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from narwhal.contracts import DEPLOYMENT_RUN, ContractVersionError, read_json, versioned
 
 from . import stages
+from .launch_engine.runtime import KEYED, salt_file
+from .launch_engine.runtime import keyed_digest as keyed_digest
 
 RECORD = "run.json"
 LOCK = "run.lock"
+# The key of the record's digests of inputs and outputs, which can cover credentials.
+SALT = "run.salt"
 TARGETS = ("dev", "ssh", "kubernetes")
 
 RUNNING = "running"
@@ -32,6 +36,9 @@ INTERRUPTED = "interrupted"
 STATUSES = (RUNNING, PASSED, FAILED, CANCELLED, TIMEOUT, INVALIDATED, INTERRUPTED)
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_KEYED = re.compile(re.escape(KEYED) + r"[0-9a-f]{64}")
+# A salt that a crash left before its link.
+SALT_TEMPORARY = re.compile(r"\." + re.escape(SALT) + r"-[0-9a-f]{32}")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _RUN_ID = re.compile(r"[0-9a-f]{32}")
 _MODE = re.compile(r"0[0-7]{3}")
@@ -48,6 +55,50 @@ class RunLocked(RuntimeError):
         self.owner = owner
         holder = describe(owner) if owner else "a runner that has not recorded its owner yet"
         super().__init__(f"{directory}: {detail}: {holder}")
+
+
+def salt(directory: Path) -> bytes:
+    """The run directory's salt in `run.salt`, made once; see `salt_file`."""
+    secret = salt_file(directory / SALT)
+    assert secret is not None
+    return secret
+
+
+def find_salt(directory: Path) -> bytes | None:
+    """The run directory's salt, or None before a run has made one."""
+    return salt_file(directory / SALT, create=False)
+
+
+def keyed(secret: bytes, digest: str) -> str:
+    """The key of a `sha256:` digest of an input or a file under the run's salt."""
+    return keyed_digest(secret, digest)
+
+
+def key_digests(record: dict[str, Any], secret: bytes, inputs: Container[str]) -> None:
+    """Key, in place, the digests of inputs and outputs that an earlier runner kept unkeyed.
+
+    `inputs` names the input facts. A key of an old digest equals the key of the same digest
+    computed now, so the change reruns no stage.
+    """
+    for value in record.get("inputs", {}).values():
+        if _digest(value["digest"]):
+            value["digest"] = keyed(secret, value["digest"])
+    for entry in record.get("stages", {}).values():
+        digests = entry["input_digests"]
+        for name, value in digests.items():
+            if name in inputs and _digest(value):
+                digests[name] = keyed(secret, value)
+        entry["outputs"] = [
+            {
+                "path": output["path"],
+                "hmac_sha256": keyed(secret, "sha256:" + output["sha256"]),
+                "size": output["size"],
+                "mode": output["mode"],
+            }
+            if "sha256" in output
+            else output
+            for output in entry["outputs"]
+        ]
 
 
 def key(stage: str, instance: str) -> str:
@@ -198,7 +249,7 @@ def validate(body: Mapping[str, Any], path: Path) -> None:
         check(
             isinstance(value, dict)
             and set(value) == {"digest", "source"}
-            and _digest(value["digest"])
+            and (_keyed(value["digest"]) or _digest(value["digest"]))
             and _text(value["source"]),
             f"inputs.{name} needs a digest and a source",
         )
@@ -223,22 +274,32 @@ def _validate_stage(name: str, stage: Any, check: Any) -> None:
     check(_digest(stage["definition"]), f"{where}.definition must be a digest")
     digests = stage["input_digests"]
     check(
-        isinstance(digests, dict) and all(_digest(value) for value in digests.values()),
+        isinstance(digests, dict)
+        and all(_keyed(value) or _digest(value) for value in digests.values()),
         f"{where}.input_digests must map names to digests",
     )
     outputs = stage["outputs"]
     check(isinstance(outputs, list), f"{where}.outputs must be a list")
     for output in outputs:
+        # A record of an earlier version keeps the file's unkeyed `sha256`.
         check(
             isinstance(output, dict)
-            and set(output) == {"path", "sha256", "size", "mode"}
+            and (
+                (
+                    set(output) == {"path", "hmac_sha256", "size", "mode"}
+                    and _keyed(output["hmac_sha256"])
+                )
+                or (
+                    set(output) == {"path", "sha256", "size", "mode"}
+                    and isinstance(output["sha256"], str)
+                    and bool(_HEX.fullmatch(output["sha256"]))
+                )
+            )
             and _relative(output["path"])
-            and isinstance(output["sha256"], str)
-            and bool(_HEX.fullmatch(output["sha256"]))
             and _count(output["size"], 0)
             and isinstance(output["mode"], str)
             and bool(_MODE.fullmatch(output["mode"])),
-            f"{where}.outputs needs path, sha256, size and mode",
+            f"{where}.outputs needs path, hmac_sha256, size and mode",
         )
     live = stage["live_outputs"]
     check(
@@ -351,6 +412,10 @@ def _text(value: Any) -> bool:
 
 def _digest(value: Any) -> bool:
     return isinstance(value, str) and bool(_DIGEST.fullmatch(value))
+
+
+def _keyed(value: Any) -> bool:
+    return isinstance(value, str) and bool(_KEYED.fullmatch(value))
 
 
 def _number(value: Any) -> bool:

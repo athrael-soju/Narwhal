@@ -1141,7 +1141,8 @@ class RunRecordTests(unittest.TestCase):
             run_record.write(self.directory, record)
         self.assertEqual(events, ["file", "rename", "directory"])
         self.assertEqual(
-            sorted(p.name for p in self.directory.iterdir()), ["run.json", "run.lock", "stages"]
+            sorted(p.name for p in self.directory.iterdir()),
+            ["run.json", "run.lock", "run.salt", "stages"],
         )
 
 

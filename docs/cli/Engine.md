@@ -61,7 +61,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
 | `inspect-host` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md), before `prepare` | `host-inspection.json`, `inspection.log`, and on a container host the `docker-owner.json` label of the inspection's containers, in `--out` |
-| `prepare` | container, Kubernetes, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, on vLLM and TensorRT-LLM the cache-capture hook, and for Kubernetes `kubernetes.json` |
+| `prepare` | container, Kubernetes, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, on vLLM and TensorRT-LLM the cache-capture hook, and for Kubernetes `kubernetes.json`. A container or native launch also gets `env.salt` |
 | `check` | container, Kubernetes, native | Prepared launch directory, and for Kubernetes the engine pod's records | `checked.json`, and `image-check.log`, `runtime-check.log` or the pod's records under `pods/` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |

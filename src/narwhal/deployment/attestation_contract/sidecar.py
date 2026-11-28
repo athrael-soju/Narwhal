@@ -28,7 +28,7 @@ from ...engines.pod_identity import (
 )
 from ..launch_engine import pod as pod_steps
 from ..launch_engine.backend import engine_backend
-from ..launch_engine.plan import env_file_name, launch_headers, read_env
+from ..launch_engine.plan import env_file_name, env_matches, launch_headers, read_env
 from ..launch_engine.runtime import digest, write_private
 from .capture import PUBLISHED, capture, published_attempt, require_pod_evidence
 from .document import attested
@@ -94,7 +94,7 @@ def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> lis
     its pod was allocated, `engine`'s.
     """
     path = run / env_file_name(plan)
-    if digest(path) != plan.get("env_sha256"):
+    if not env_matches(run, plan):
         raise ValueError(f"{path.name} differs from the serving plan; prepare a fresh launch")
     env = read_env(path)
     if plan.get("backend") == "kubernetes":

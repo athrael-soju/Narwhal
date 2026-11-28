@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -70,6 +70,8 @@ class EngineIdentityReader(ABC):
     contract_fields: ClassVar[frozenset[str] | None] = None
     # The launch flag that carries the sequence limit; None means the backend attests none.
     sequence_flag: ClassVar[str | None] = None
+    # True when the engine serves its version only to a caller holding the engine credential.
+    identity_needs_key: ClassVar[bool] = False
 
     @abstractmethod
     async def version(
@@ -246,6 +248,135 @@ async def fetch_spec_identity(
         reader=load_backend(cfg.backend).identity,
         attestation_url=spec.attestation_url,
     )
+
+
+@dataclass(frozen=True)
+class AttestedIdentity:
+    """A live engine's identity and attestation, and why the attestation does not verify."""
+
+    identity: EngineIdentity
+    payload: Any
+    failures: tuple[str, ...]
+
+
+IdentityRead = Callable[..., Awaitable[EngineIdentity]]
+
+
+async def read_attestation(
+    spec: EngineSpec,
+    *,
+    timeout_s: float,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Any:
+    """The attestation `spec`'s sidecar serves, read with no credential."""
+    if not spec.attestation_url:
+        raise ValueError(f"{spec.iid}: attestation_url is not configured")
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        response = await client.get(spec.attestation_url)
+        response.raise_for_status()
+    return response.json()
+
+
+async def attest_identity(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    payload: Any,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    headers: Mapping[str, str] | None = None,
+    trusted_start: float | None = None,
+    identify: IdentityRead | None = None,
+) -> AttestedIdentity:
+    """Read `spec`'s live identity and verify `payload`, its attestation, against it.
+
+    The engine's version and process start are read with no credential where the engine serves
+    them without one. An engine that serves its version only with the credential gets
+    `headers`, the fleet's engine headers by default, only after `payload` verifies against
+    the contract and the process start its sidecar reads, and, with `trusted_start`, only while
+    that start is the one the caller trusted the engine for. `identify` reads the identity, as
+    `fetch_spec_identity` does by default. Unreadable evidence raises `httpx.HTTPError` or
+    `ValueError`.
+    """
+    contract = cfg.engine_contract
+    if contract is None:
+        raise ValueError("attestation requires an engine contract")
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    read = fetch_spec_identity if identify is None else identify
+    reader = load_backend(cfg.backend).identity
+    keyed = dict(cfg.engine_headers() if headers is None else headers)
+    if not (reader.identity_needs_key and keyed):
+        identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers={})
+        return AttestedIdentity(
+            identity, payload, tuple(verify_attestation(payload, contract, identity))
+        )
+    if reader.reports_process_start or not spec.attestation_url:
+        raise ValueError("an engine that guards its version must have a sidecar process start")
+    start = await read_process_start(spec.attestation_url, timeout_s=timeout, transport=transport)
+    engine = payload.get("engine") if isinstance(payload, dict) else None
+    attested = engine.get("version") if isinstance(engine, dict) else None
+    claimed = EngineIdentity(attested if isinstance(attested, str) else "", start)
+    failures = verify_attestation(payload, contract, claimed)
+    if trusted_start is not None and start != trusted_start:
+        failures.append(
+            f"engine process started at {start}, not at the {trusted_start} it was trusted for"
+        )
+    if failures:
+        return AttestedIdentity(claimed, payload, tuple(failures))
+    identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers=keyed)
+    return AttestedIdentity(
+        identity, payload, tuple(verify_attestation(payload, contract, identity))
+    )
+
+
+async def attest_spec(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    headers: Mapping[str, str] | None = None,
+    trusted_start: float | None = None,
+    identify: IdentityRead | None = None,
+) -> AttestedIdentity:
+    """Read `spec`'s attestation with no credential, then its identity as `attest_identity`."""
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    payload = await read_attestation(spec, timeout_s=timeout, transport=transport)
+    return await attest_identity(
+        cfg,
+        spec,
+        payload,
+        timeout_s=timeout,
+        transport=transport,
+        headers=headers,
+        trusted_start=trusted_start,
+        identify=identify,
+    )
+
+
+async def read_process_start_of(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    identify: IdentityRead | None = None,
+) -> float:
+    """The engine's live process start, read with no credential, from the engine or its sidecar.
+
+    `identify` reads an engine that publishes its process start, as `fetch_spec_identity` does
+    by default.
+    """
+    timeout = cfg.health_timeout_s if timeout_s is None else timeout_s
+    if not load_backend(cfg.backend).identity.reports_process_start:
+        if not spec.attestation_url:
+            raise ValueError(f"{spec.iid}: attestation_url is not configured")
+        return await read_process_start(
+            spec.attestation_url, timeout_s=timeout, transport=transport
+        )
+    read = fetch_spec_identity if identify is None else identify
+    identity = await read(cfg, spec, timeout_s=timeout, transport=transport, headers={})
+    return identity.process_start_time_seconds
 
 
 async def read_process_start(

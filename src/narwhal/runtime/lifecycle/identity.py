@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_spec_identity, verify_attestation
+from ...engines.attestation import (
+    AttestedIdentity,
+    IdentityRead,
+    attest_identity,
+    fetch_spec_identity,
+    read_attestation,
+    read_process_start_of,
+)
 from ...profiling.generation import (
+    AttestationMismatch,
     binding_digest,
     bound_profiles,
     profile_generation_problems,
@@ -17,6 +25,39 @@ from .manager import LifecycleManager
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
+
+
+async def attest_member(
+    router: NarwhalRouter,
+    spec: EngineSpec,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    payload: Any = None,
+    identify: IdentityRead | None = None,
+) -> AttestedIdentity:
+    """Read an engine's attestation, unless `payload` holds it, then its identity in that order.
+
+    A trusted endpoint that now runs another process, or whose attestation fails, loses the
+    router's trust before any request of this check could carry the credential. The caller
+    grants trust again once the attestation verifies.
+    """
+    transport = router.lifecycle_transport if transport is None else transport
+    if payload is None:
+        payload = await read_attestation(
+            spec, timeout_s=router.cfg.health_timeout_s, transport=transport
+        )
+    attested = await attest_identity(
+        router.cfg,
+        spec,
+        payload,
+        transport=transport,
+        trusted_start=router.trust.start(spec.url),
+        identify=fetch_spec_identity if identify is None else identify,
+    )
+    start = attested.identity.process_start_time_seconds
+    if attested.failures or not router.trust.observe(spec.url, start):
+        router.trust.revoke(spec.url)
+    return attested
 
 
 async def check_process_identities(
@@ -49,31 +90,18 @@ async def check_process_identities(
 
         async def inspect(spec: EngineSpec) -> tuple[float | None, str]:
             try:
-                identity = await fetch_spec_identity(
-                    cfg,
-                    spec,
-                    transport=router.lifecycle_transport,
-                    headers=router.engines._auth(None),
-                )
-                if not spec.attestation_url:
-                    return None, "attestation_url is not configured"
-                async with httpx.AsyncClient(
-                    timeout=cfg.health_timeout_s,
-                    transport=router.lifecycle_transport,
-                ) as client:
-                    response = await client.get(spec.attestation_url)
-                    response.raise_for_status()
-                payload = response.json()
-                failures = verify_attestation(payload, contract, identity)
-                if failures:
-                    return None, "attestation: " + "; ".join(failures)
+                attested = await attest_member(router, spec)
+                if attested.failures:
+                    return None, "attestation: " + "; ".join(attested.failures)
+                payload = attested.payload
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload), contract=True
                 )
                 if problems:
                     return None, "; ".join(problems)
+                start = attested.identity.process_start_time_seconds
+                router.trust.grant(spec.url, start)
                 router.attested(spec.iid, payload)
-                start = identity.process_start_time_seconds
                 if manager.process_starts.get(spec.iid) != start:
                     # A new engine process starts in its launch role. A known process keeps
                     # its role, and a switch would hold it out of placement.
@@ -82,6 +110,7 @@ async def check_process_identities(
                         return None, f"role switch failed: {switched}"
                 return start, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                router.trust.revoke(spec.url)
                 return None, f"process identity unavailable: {type(exc).__name__}"
 
         results = await asyncio.gather(*(inspect(spec) for spec in specs))
@@ -92,6 +121,7 @@ async def check_process_identities(
             previous = manager.process_starts.get(spec.iid)
             changed = start is not None and previous is not None and start != previous
             if error or changed:
+                router.trust.revoke(spec.url)
                 router.scheduler.eject(spec.iid, "process_identity")
                 excluded.append(spec.iid)
                 manager._emit(
@@ -116,6 +146,7 @@ async def capture_process_identities(
     specs: dict[str, EngineSpec],
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
+    """Read each engine's process start for its drain record, with no credential."""
     starts: dict[str, float] = {}
     failures: dict[str, str] = {}
     if cfg.engine_contract is None or cfg.contract_missing():
@@ -123,11 +154,13 @@ async def capture_process_identities(
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
         try:
-            identity = await fetch_spec_identity(cfg, specs[iid], transport=transport)
+            start = await read_process_start_of(
+                cfg, specs[iid], transport=transport, identify=fetch_spec_identity
+            )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"
         else:
-            starts[iid] = identity.process_start_time_seconds
+            starts[iid] = start
     return starts, failures
 
 
@@ -149,7 +182,13 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
         spec = router.membership.spec(iid)
         try:
             live = ""
-            if bound_profiles(router.profiles, iid):
+            if bound_profiles(router.profiles, iid) and router.cfg.engine_contract is not None:
+                attested = await attest_member(router, spec)
+                if attested.failures:
+                    raise AttestationMismatch("; ".join(attested.failures))
+                router.trust.grant(spec.url, attested.identity.process_start_time_seconds)
+                live = binding_digest(attested.payload)
+            elif bound_profiles(router.profiles, iid):
                 generation = await read_generation(
                     router.cfg, spec, transport=router.lifecycle_transport
                 )

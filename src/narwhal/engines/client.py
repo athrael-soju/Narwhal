@@ -23,6 +23,7 @@ from .connector import HandoffPhase, HandoffStepError, KvHandoff, PrefillResult
 from .dialect import EngineDialect
 from .handoff import HandoffLegs, prefill_leg
 from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
+from .trust import EngineTrust
 from .wire import Dial, WireClient, WireResponse, dial_tcp
 
 if TYPE_CHECKING:
@@ -160,7 +161,9 @@ class _HandoffCalls:
     async def get(self, url: str, path: str, *, timeout_s: float) -> dict[str, Any]:
         client = self._client
         r = await client._control.get(
-            f"{url}{path}", timeout=client._phase_timeout(timeout_s), headers=client._auth(None)
+            f"{url}{path}",
+            timeout=client._phase_timeout(timeout_s),
+            headers=client._auth(None, url),
         )
         return self._payload(r.status_code, r.text, r.json)
 
@@ -168,7 +171,9 @@ class _HandoffCalls:
         self, url: str, path: str, body: dict[str, Any], *, timeout_s: float
     ) -> dict[str, Any]:
         client = self._client
-        r = await client._wire.post(f"{url}{path}", body, client._auth(None), timeout_s=timeout_s)
+        r = await client._wire.post(
+            f"{url}{path}", body, client._auth(None, url), timeout_s=timeout_s
+        )
         return self._payload(r.status_code, r.text, r.json)
 
 
@@ -190,6 +195,7 @@ class EngineClient:
         model: str = "",
         engine_api_key: str | None = None,
         dial: Dial = dial_tcp,
+        trust: EngineTrust | None = None,
     ) -> None:
         self.kv = kv
         self.dialect = dialect
@@ -226,12 +232,17 @@ class EngineClient:
         self._pool_timeout = pool_timeout_s
         # A caller-supplied authorization header overrides the engine credential.
         self._engine_api_key = engine_api_key
+        # With `trust`, the credential goes only to the engines it trusts.
+        self.trust = trust
         self._calls = _HandoffCalls(self)
 
-    def _auth(self, headers: dict[str, str] | None) -> dict[str, str]:
+    def _auth(self, headers: dict[str, str] | None, url: str) -> dict[str, str]:
+        """Add the engine credential to `headers` for the engine at base URL `url`."""
         out = dict(headers) if headers else {}
-        if self._engine_api_key is not None and "authorization" not in (
-            name.lower() for name in out
+        if (
+            self._engine_api_key is not None
+            and (self.trust is None or self.trust.allows(url))
+            and "authorization" not in (name.lower() for name in out)
         ):
             out["authorization"] = f"Bearer {self._engine_api_key}"
         return out
@@ -257,10 +268,10 @@ class EngineClient:
                 started.append(loop.time())
 
         try:
+            # Health carries no credential, so it can reach an engine not yet attested.
             r = await self._control.get(
                 f"{url}{self.dialect.health_path}",
                 timeout=self._phase_timeout(self._health_timeout),
-                headers=self._auth(None),
                 extensions={"trace": trace},
             )
         except httpx.PoolTimeout:
@@ -268,6 +279,11 @@ class EngineClient:
         except httpx.TimeoutException:
             if loop.time() - started[-1] > self._health_timeout * LATE_TIMEOUT_FACTOR:
                 return None
+            return False
+        except httpx.ConnectError:
+            # Nothing listens: the attested process is gone, and the next one must attest.
+            if self.trust is not None:
+                self.trust.revoke(url)
             return False
         except httpx.HTTPError:
             return False
@@ -331,7 +347,9 @@ class EngineClient:
     async def _tokenize_call(
         self, url: str, path: str, request: dict[str, Any], timeout_s: float
     ) -> Any:
-        r = await self._wire.post(f"{url}{path}", request, self._auth(None), timeout_s=timeout_s)
+        r = await self._wire.post(
+            f"{url}{path}", request, self._auth(None, url), timeout_s=timeout_s
+        )
         if r.status_code != 200:
             raise EngineError("tokenize", url, r.status_code, r.text[:200])
         try:
@@ -533,7 +551,7 @@ class EngineClient:
                 r = await self._wire.post(
                     f"{url}{endpoint}",
                     leg,
-                    self._auth(headers),
+                    self._auth(headers, url),
                     timeout_s=self._prefill_timeout,
                     on_connection=started,
                 )
@@ -602,7 +620,7 @@ class EngineClient:
                     raise EngineError("decode", url, 504, _first_token_detail(budget_s, 0)) from exc
             leg, headers = self._tag(leg, headers, request_id)
             opening = stack.enter_async_context(
-                self._wire.stream(f"{url}{endpoint}", leg, self._auth(headers), gap=gap)
+                self._wire.stream(f"{url}{endpoint}", leg, self._auth(headers, url), gap=gap)
             )
             try:
                 remaining = (
@@ -748,7 +766,7 @@ class EngineClient:
                 f"{url}{_PROBE_ENDPOINT}",
                 json=body,
                 timeout=self._phase_timeout(self._prefill_timeout),
-                headers=self._auth(None),
+                headers=self._auth(None, url),
             )
             if r.status_code != 200:
                 return ProbeLeg(failed=_status_class(r.status_code))
@@ -815,7 +833,7 @@ class EngineClient:
                 "POST",
                 f"{url}{_PROBE_ENDPOINT}",
                 json=body,
-                headers=self._auth(None),
+                headers=self._auth(None, url),
                 timeout=httpx.Timeout(**timeouts),
             ) as r:
                 if r.status_code != 200:

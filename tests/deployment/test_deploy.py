@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.deployment import deploy, discovery, run_record
+from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.dev import cli
 from narwhal.observability.stack.start import cli as stack_cli
 from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
@@ -544,7 +545,9 @@ class DeployTests(unittest.TestCase):
         self.assertEqual({name for name, row in stages.items() if row["runs"]}, SLO_RERUN)
         self.assertEqual(
             run_record.read(self.run)["inputs"]["slo"]["digest"],
-            deploy.inputs({**self.env})["slo"].digest,
+            run_record.keyed(
+                run_record.find_salt(self.run), deploy.inputs({**self.env})["slo"].digest
+            ),
         )
 
     def test_plan_names_a_host_that_cannot_run_supervised_units(self):
@@ -593,6 +596,114 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(stopped["sidecar-1"])
         self.assertTrue(stopped["router"] and stopped["sidecar-2"] and stopped["engine-2"])
         self.assertEqual(list(self.fleet.units), [unit])
+
+    def keyed_run(self, key: str) -> dict:
+        os.environ["NARWHAL_ENGINE_KEY"] = key
+        code, result = self.deploy("run", "--until", "package")
+        self.assertEqual(code, 0, result)
+        return result
+
+    def test_the_run_record_digests_of_the_engine_key_need_the_run_salt(self):
+        key = "stub-key-3"
+        self.keyed_run(key)
+        text = (self.run / "run.json").read_text()
+        record = run_record.read(self.run)
+        # No file an attempt wrote, such as a role environment, appears by its SHA-256.
+        written = [
+            self.run / output["path"]
+            for entry in record["stages"].values()
+            for output in entry["outputs"]
+        ]
+        self.assertTrue(written)
+        for path in written:
+            self.assertNotIn(digest(path), text)
+        env = dict(os.environ)
+        guesses = {
+            guess: deploy.inputs({**env, "NARWHAL_ENGINE_KEY": guess})["discovery"].digest
+            for guess in ("stub-key-1", "stub-key-2", key, "stub-key-4")
+        }
+        # Offline, no guess matches a digest the record holds, the right one included.
+        self.assertEqual([g for g, d in guesses.items() if d.split(":")[1] in text], [])
+        # With the run's salt, only the right guess matches the discovery input.
+        salt = run_record.find_salt(self.run)
+        recorded = record["inputs"]["discovery"]["digest"]
+        self.assertEqual(
+            [g for g, d in guesses.items() if run_record.keyed(salt, d) == recorded], [key]
+        )
+        for value in record["inputs"].values():
+            self.assertRegex(value["digest"], "^hmac-sha256:[0-9a-f]{64}$")
+        for entry in record["stages"].values():
+            for output in entry["outputs"]:
+                self.assertEqual(set(output), {"path", "hmac_sha256", "size", "mode"})
+        info = (self.run / run_record.SALT).stat()
+        self.assertEqual((info.st_mode & 0o777, info.st_size), (0o600, 32))
+
+    def test_a_changed_engine_key_reruns_the_stages_its_input_feeds(self):
+        self.keyed_run("stub-key-1")
+        salt = (self.run / run_record.SALT).read_bytes()
+        self.assertEqual(self.ran(self.keyed_run("stub-key-1")), set())
+        self.assertTrue({"discover", "package"} <= self.ran(self.keyed_run("stub-key-2")))
+        # The salt is made once.
+        self.assertEqual((self.run / run_record.SALT).read_bytes(), salt)
+
+    def test_a_record_with_unkeyed_digests_is_keyed_in_place_without_a_rerun(self):
+        self.keyed_run("stub-key-1")
+        record = run_record.read(self.run)
+        unkeyed = deploy.inputs(dict(os.environ))
+        record["inputs"] = {
+            name: {"digest": value.digest, "source": value.source}
+            for name, value in unkeyed.items()
+        }
+        for entry in record["stages"].values():
+            digests = entry["input_digests"]
+            for name in set(digests) & set(unkeyed):
+                digests[name] = unkeyed[name].digest
+            entry["outputs"] = [
+                {
+                    "path": output["path"],
+                    "sha256": digest(self.run / output["path"]),
+                    "size": output["size"],
+                    "mode": output["mode"],
+                }
+                for output in entry["outputs"]
+            ]
+        run_record.write(self.run, record)
+        (self.run / run_record.SALT).unlink()
+        self.assertEqual(self.ran(self.keyed_run("stub-key-1")), set())
+        text = (self.run / "run.json").read_text()
+        for value in unkeyed.values():
+            self.assertNotIn(value.digest, text)
+        for entry in run_record.read(self.run)["stages"].values():
+            for output in entry["outputs"]:
+                self.assertIn("hmac_sha256", output)
+
+    def test_a_salt_other_users_can_read_is_refused(self):
+        self.keyed_run("stub-key-1")
+        (self.run / run_record.SALT).chmod(0o644)
+        os.environ["NARWHAL_ENGINE_KEY"] = "stub-key-1"
+        code, result = self.deploy("run", "--until", "package")
+        self.assertEqual(code, 2, result)
+        self.assertIn("run.salt must be a regular file", result["errors"][0]["message"])
+
+    def test_status_and_down_refuse_a_run_directory_other_users_may_enter(self):
+        self.deploy("run")
+        units = dict(self.fleet.units)
+        self.run.chmod(0o750)
+        for action in ("status", "down"):
+            code, result = self.deploy(action)
+            self.assertEqual(code, 2, result)
+            self.assertIn("lets other users in", result["errors"][0]["message"])
+        self.assertEqual(self.fleet.units, units)
+        self.run.chmod(0o700)
+        record = self.run / "run.json"
+        moved = self.run / "elsewhere.json"
+        record.rename(moved)
+        record.symlink_to(moved)
+        for action in ("status", "down"):
+            code, result = self.deploy(action)
+            self.assertEqual(code, 2, result)
+            self.assertIn("must be a regular file", result["errors"][0]["message"])
+        self.assertEqual(self.fleet.units, units)
 
 
 SLO_RERUN = {"fleet-limits"} | {

@@ -92,6 +92,7 @@ def _forget_candidate(router: NarwhalRouter, spec: EngineSpec) -> None:
     if all(member.url.rstrip("/") != spec.url.rstrip("/") for member in router.membership):
         router.role_switch.forget(spec.url)
         router.engines.kv.forget(spec.url)
+        router.trust.forget(spec.url)
 
 
 async def _attestation_problem(

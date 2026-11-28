@@ -164,7 +164,7 @@ Each `verify` writes a `verify-*` directory in the run directory with the prefli
 
 ### Resuming an interrupted `up`
 
-When a stage of `up` fails, or SIGINT or SIGTERM interrupts it, that stage stops the processes it started and `up` exits. The stages that passed keep their engines, sidecars and router running, and `lifecycle.json` records the failure with the phase `failed`. The next `up` resumes in the same run directory and prints `resuming <run directory> at <stage>` to stderr before the first stage it runs. It skips a stage whose last attempt passed, whose recorded inputs still match, whose output files still match their SHA-256 and whose processes still run. An `up` that was killed outright resumes the same way.
+When a stage of `up` fails, or SIGINT or SIGTERM interrupts it, that stage stops the processes it started and `up` exits. The stages that passed keep their engines, sidecars and router running, and `lifecycle.json` records the failure with the phase `failed`. The next `up` resumes in the same run directory and prints `resuming <run directory> at <stage>` to stderr before the first stage it runs. It skips a stage whose last attempt passed, whose recorded inputs still match, whose output files still match their recorded digests and whose processes still run. An `up` that was killed outright resumes the same way.
 
 To recover:
 
@@ -194,7 +194,7 @@ A change reruns the stages its row lists, and a changed output file reruns its s
 | --- | --- | --- |
 | Instance settings | The SHA-256 of `instance.json`, `template.json`, `fleet.json` and `engine-launch.json` | `package` and every stage after it |
 | Narwhal source | The SHA-256 of the installed package's Python files | `package` and every stage after it |
-| Engine API key | The SHA-256 of the key that the fleet's `engine.engine_api_key_env` names, or of `NARWHAL_ENGINE_API_KEY` | `package` and every stage after it |
+| Engine API key | The key that the fleet's `engine.engine_api_key_env` names, or `NARWHAL_ENGINE_API_KEY`, as an HMAC under the run directory's `run.salt` | `package` and every stage after it |
 | Launch directory used by a start whose engines no longer all run | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check` for that engine; `engine-start` |
 | An engine process restarted | Each engine's PID, boot ID and start ticks, checked live on every run | `attest-capture`, `sidecar-start`, `finalize-fleet` |
 | Attested binding digest of an engine | The `launch_digest`, or the `attestation_digest` when the attestation has no launch evidence | `profile`, `router-start` |

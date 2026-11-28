@@ -39,6 +39,8 @@ class SglangIdentity(EngineIdentityReader):
     reports_process_start = False
     contract_fields = ATTESTED_FIELDS
     sequence_flag = "--max-running-requests"
+    # /server_info answers only with the engine credential.
+    identity_needs_key = True
 
     async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None

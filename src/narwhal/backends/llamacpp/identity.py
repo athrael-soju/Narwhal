@@ -25,6 +25,8 @@ def slot_count(props: Any) -> int | None:
 class LlamacppIdentity(EngineIdentityReader):
     reports_process_start = False
     contract_fields = frozenset()
+    # /props answers only with the engine credential.
+    identity_needs_key = True
 
     async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
