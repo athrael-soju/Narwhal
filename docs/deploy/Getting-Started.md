@@ -68,11 +68,7 @@ On the primary router's host, Docker Compose v2, the `docker-compose-plugin` pac
 
 For a router pair, on both router hosts:
 
-- The lease directory, the directory of `NARWHAL_LEASE_PATH`, mounted from shared storage at the same path, writable by the SSH user, and mounted again at boot. On NFS, mount it with close-to-open consistency (no `nocto`), `local_lock=none` (no `nolock`) and `actimeo=1` or `noac`, as in [Mount options for the lease](07-Serve-and-Measure.md#mount-options-for-the-lease):
-
-    ```text
-    nfs-server:/export/narwhal  /srv/shared  nfs4  rw,hard,actimeo=1  0  0
-    ```
+- The lease directory, the directory of `NARWHAL_LEASE_PATH`, mounted from shared storage at the same path, writable by the SSH user, and mounted again at boot. On NFS, mount it with the [mount options for the lease](07-Serve-and-Measure.md#mount-options-for-the-lease), which `lease-check` checks.
 
 - Clocks within one second of each other, kept by NTP or chrony. `lease-check` measures the skew.
 - A firewall that lets each router and HAProxy reach both routers' ports, and clients reach the load balancer's.

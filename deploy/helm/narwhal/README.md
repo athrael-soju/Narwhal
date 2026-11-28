@@ -117,16 +117,7 @@ With `monitoring.enabled: true`, the chart runs Prometheus and Grafana from the 
 
 Prometheus scrapes `router-0` and `router-1` by their pod DNS names and reads the engine targets from `/narwhal/targets` through the Service `haproxy`, which reaches the active router. Each engine is scraped once, as `make observe` does for a router pair, and the alert rules and dashboard read the pair as they do there. With `fleet` set, Prometheus also scrapes each engine pod's attestation sidecar at `engine-<n>.engines.<namespace>.svc:<attestation port>`, for the kubelet restart counts of the pod's containers and the `NarwhalHostDown` alert. Every series gets the `fleet` label. The Services `prometheus` (port 9090) and `grafana` (port 3000) serve them in the namespace. Grafana asks everyone to sign in unless `monitoring.grafana.anonymous` is set, which lets anyone who reaches it view the dashboards, as under `make observe`. It runs without the image renderer.
 
-The dashboard needs rendering first, because its queries come from the installed engine backends:
-
-```bash
-python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
-helm upgrade --install narwhal deploy/helm/narwhal --namespace <namespace> \
-  --values config/helm/<fleet>.yaml \
-  --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
-```
-
-`--console-url` adds the fleet control link and markers that `make observe` adds.
+`monitoring.grafana.dashboard` needs rendering first, because its queries come from the installed engine backends: [Monitoring](https://athrael-soju.github.io/Narwhal/deploy/Kubernetes/#monitoring) gives the commands. `chart_dashboard --console-url` adds the fleet control link and markers that `make observe` adds.
 
 | Value | Meaning |
 | --- | --- |
