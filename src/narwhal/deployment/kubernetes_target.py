@@ -186,8 +186,12 @@ STATE = "/narwhal-state"
 INPUT = "/narwhal-input"
 MODEL = "/model"
 ROUTER_HOME = "/narwhal-router"
-ROUTER_URL = f"http://{kubernetes_objects.HAPROXY}:{kubernetes_objects.HAPROXY_PORT}"
 ROUTERS = kubernetes_objects.ROUTER_PODS
+# The first router pod, by its name in the routers' headless Service of the fleet's namespace.
+# HAProxy forwards only the serving routes, so a router's own address stands for the router.
+ROUTER_URL = (
+    f"http://{ROUTERS[0]}.{kubernetes_objects.ROUTER_SERVICE}:{kubernetes_objects.ROUTER_PORT}"
+)
 ROUTER_COMPONENT = "router"
 # Where a host-script Job unpacks its inputs, as an SSH host's deployment directory.
 REMOTE_DIR = "/tmp/narwhal-in"
@@ -809,8 +813,8 @@ def engine_nodes(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def target_env(env: Mapping[str, str]) -> dict[str, str]:
-    """The environment as the cluster's containers see it: the model at /model, the router
-    behind HAProxy unless set."""
+    """The environment as the cluster's containers see it: the model at /model, and the first
+    router pod's address unless the router URL is set."""
     return {
         **env,
         "NARWHAL_MODEL_DIR": MODEL,
@@ -2701,17 +2705,11 @@ fi
         return found
 
     def router_objects(self, fleet_file: str) -> list[dict[str, Any]]:
-        """The router pair's objects on `fleet_file`, a path of the state volume, and HAProxy's.
-
-        `kubernetes_objects.routers(fleet, routers, fleet_file)` builds the pair from the
-        fleet's `routers` block.
-        """
-        build = getattr(kubernetes_objects, "routers", None)
-        if build is None:
-            raise ValueError("this Narwhal builds no router pair; install one that does")
+        """The router pair's objects on `fleet_file`, a path of the state volume, from the
+        fleet's `routers` block, and HAProxy's."""
         fleet = self.fleet()
-        routers = list(build(fleet, _object(self.env, ROUTERS_ENV), fleet_file))
-        return [*routers, *kubernetes_objects.haproxy(fleet)]
+        settings = kubernetes_objects.Routers.of(_object(self.env, ROUTERS_ENV), fleet_file)
+        return [*kubernetes_objects.routers(fleet, settings), *kubernetes_objects.haproxy(fleet)]
 
     def router_start(self, context: StageContext) -> Outcome:
         cluster = self.cluster(context)
@@ -2813,7 +2811,7 @@ fi
         fleet = self.fleet()
         domain = f"{kubernetes_objects.ROUTER_SERVICE}.{self.env[NAMESPACE]}.svc"
         return [
-            f"http://{pod}.{domain}.{fleet.cluster_domain}:{kubernetes_objects.HAPROXY_PORT}"
+            f"http://{pod}.{domain}.{fleet.cluster_domain}:{kubernetes_objects.ROUTER_PORT}"
             for pod in ROUTERS
         ]
 

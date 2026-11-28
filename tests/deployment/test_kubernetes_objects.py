@@ -365,6 +365,20 @@ class EngineTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.folder.cleanup()
 
+    def test_the_launchs_engine_pods_pass_the_charts_admission_policy(self):
+        engines = by_name(self.documents)[("StatefulSet", "engine")]
+        self.assertEqual(policy_refusals(engines), [])
+        spec = template(engines)
+        [checkpoint] = [c for c in spec["initContainers"] if c["name"] == "checkpoint"]
+        self.assertEqual(checkpoint["securityContext"]["capabilities"]["add"], ["CHOWN", "FOWNER"])
+        # CHOWN and FOWNER are the checkpoint step's alone.
+        broken = copy.deepcopy(engines)
+        for container in template(broken)["containers"]:
+            container.setdefault("securityContext", {}).setdefault("capabilities", {})["add"] = [
+                "CHOWN"
+            ]
+        self.assertEqual(policy_refusals(broken), ["capabilities"])
+
     def test_the_engine_statefulset_runs_each_plans_pod(self):
         found = by_name(self.documents)
         engines = found[("StatefulSet", "engine")]
@@ -874,10 +888,12 @@ def policy_refusals(
     document: dict,
     requester: str = CONTROLLER_USER,
     *,
-    sources: tuple[str, ...] = ("persistentVolumeClaim",),
+    volumes: fleet_resource.VolumePolicy | None = None,
     runtime_classes: tuple[str, ...] = (),
 ) -> list[str]:
-    """The validations of the admission policy that refuse a workload `requester` creates."""
+    """The validations of the admission policy that refuse a workload `requester` creates,
+    under the model volume allow-lists `volumes` and the RuntimeClasses `runtime_classes`."""
+    allowed = volumes or fleet_resource.VolumePolicy()
     pod = document["spec"]["template"]
     spec = pod["spec"]
     labels = (pod.get("metadata") or {}).get("labels") or {}
@@ -968,12 +984,24 @@ def policy_refusals(
             v["name"] == model or any(kind in v for kind in VOLUME_TYPES) for v in volumes
         ),
         "model volume source": all(
-            v["name"] != model or any(kind in v for kind in sources) for v in volumes
+            v["name"] != model or any(kind in v for kind in allowed.sources) for v in volumes
         ),
-        # The hostPath, nfs and csi allow-lists apply only to a model volume of those sources.
-        "model hostPath": all(v["name"] != model or "hostPath" not in v for v in volumes),
-        "model nfs": all(v["name"] != model or "nfs" not in v for v in volumes),
-        "model csi": all(v["name"] != model or "csi" not in v for v in volumes),
+        # The hostPath, nfs and csi allow-lists apply only to a model volume of those sources,
+        # as the controller's own check applies them.
+        "model hostPath": all(
+            v["name"] != model
+            or "hostPath" not in v
+            or (v["hostPath"].get("type") == "Directory" and model_volume_allowed(v, allowed))
+            for v in volumes
+        ),
+        "model nfs": all(
+            v["name"] != model or "nfs" not in v or model_volume_allowed(v, allowed)
+            for v in volumes
+        ),
+        "model csi": all(
+            v["name"] != model or "csi" not in v or model_volume_allowed(v, allowed)
+            for v in volumes
+        ),
         "model read-only": all(
             m["name"] != model or m.get("readOnly")
             for c in containers
@@ -981,6 +1009,84 @@ def policy_refusals(
         ),
     }
     return [name for name, holds in rules.items() if not holds]
+
+
+def model_volume_allowed(volume: dict, policy: fleet_resource.VolumePolicy) -> bool:
+    """Whether the controller's check admits a pod's model volume under `policy`, its source
+    aside."""
+    [(kind, settings)] = [(k, v) for k, v in volume.items() if k != "name"]
+    source = fleet_resource.VolumePolicy(
+        (*policy.sources, kind), policy.host_path_prefixes, policy.nfs_servers, policy.csi_drivers
+    )
+    try:
+        fleet_resource.check_model_volume(
+            {"spec": {"engines": {"modelVolume": {kind: settings}}}}, source
+        )
+    except ValueError:
+        return False
+    return True
+
+
+# The golden fleet's model volume and RuntimeClass, as its cluster admin would allow them.
+GOLDEN_VOLUMES = fleet_resource.VolumePolicy(
+    ("persistentVolumeClaim", "hostPath"), host_path_prefixes=("/models",)
+)
+GOLDEN_RUNTIME_CLASSES = ("nvidia",)
+
+
+def workloads(documents: list[dict]) -> list[dict]:
+    """The documents the admission policy checks."""
+    return [d for d in documents if d["kind"] in ("Job", "StatefulSet", "Deployment")]
+
+
+class PolicyTests(unittest.TestCase):
+    """The chart's admission policy admits every workload the controller builds, and refuses
+    each one from another requester."""
+
+    def test_every_workload_the_controller_builds_passes_the_policy(self):
+        documents = workloads(everything())
+        self.assertEqual(
+            {d["kind"] for d in documents}, {"Job", "StatefulSet", "Deployment"}, documents
+        )
+        for document in documents:
+            with self.subTest(document["metadata"]["name"]):
+                self.assertEqual(
+                    policy_refusals(
+                        document,
+                        volumes=GOLDEN_VOLUMES,
+                        runtime_classes=GOLDEN_RUNTIME_CLASSES,
+                    ),
+                    [],
+                )
+                self.assertIn(
+                    "reserved label",
+                    policy_refusals(
+                        document,
+                        f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x",
+                        volumes=GOLDEN_VOLUMES,
+                        runtime_classes=GOLDEN_RUNTIME_CLASSES,
+                    ),
+                )
+
+    def test_the_model_volume_allow_lists_refuse_what_the_controller_refuses(self):
+        [document] = [
+            d for d in workloads(everything()) if d["metadata"]["name"] == "discover-node-b"
+        ]
+        refused = {
+            "model volume source": fleet_resource.VolumePolicy(),
+            "model hostPath": fleet_resource.VolumePolicy(
+                ("persistentVolumeClaim", "hostPath"), host_path_prefixes=("/srv",)
+            ),
+        }
+        for rule, volumes in refused.items():
+            with self.subTest(rule):
+                self.assertIn(
+                    rule,
+                    policy_refusals(
+                        document, volumes=volumes, runtime_classes=GOLDEN_RUNTIME_CLASSES
+                    ),
+                )
+        self.assertEqual(policy_refusals(document, volumes=GOLDEN_VOLUMES), ["RuntimeClass"])
 
 
 class RouterTests(unittest.TestCase):

@@ -43,6 +43,7 @@ from tests.deployment.kubernetes_cluster import (
     instance_of,
     unpack,
 )
+from tests.deployment.test_kubernetes_objects import policy_refusals
 
 ENGINES = tuple(NODES)
 EDGES = ("gpu-a-to-gpu-b", "gpu-b-to-gpu-a")
@@ -174,6 +175,23 @@ class KubernetesTest(unittest.TestCase):
 
 
 class KubernetesDeployTests(KubernetesTest):
+    def test_every_workload_a_run_applies_passes_the_charts_admission_policy(self):
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        workloads = self.rig.workloads
+        gates = {
+            w["spec"]["template"]["metadata"]["labels"].get(fleet_resource.GATE_LABEL)
+            for w in workloads
+            if w["kind"] == "Job"
+        }
+        self.assertEqual(gates, set(JOBS))
+        names = {(w["kind"], w["metadata"]["name"]) for w in workloads if w["kind"] != "Job"}
+        expected = {("StatefulSet", "engine"), ("StatefulSet", "router"), ("Deployment", "haproxy")}
+        self.assertEqual(names, expected)
+        for workload in workloads:
+            with self.subTest(f"{workload['kind']} {workload['metadata']['name']}"):
+                self.assertEqual(policy_refusals(workload), [])
+
     def test_run_reaches_the_router_pair_and_a_rerun_starts_no_job(self):
         code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
@@ -1306,7 +1324,8 @@ class CredentialTests(KubernetesTest):
         self.assertFalse({"access", "discover"} & ran)
         [router] = [obj for obj in self.derived() if obj["metadata"]["name"] == "router"]
         env = router["spec"]["template"]["spec"]["containers"][0]["env"]
-        self.assertEqual(env[0]["valueFrom"]["secretKeyRef"]["name"], "engine-key-v2")
+        [key] = [item for item in env if item["name"] == "NARWHAL_ENGINE_KEY"]
+        self.assertEqual(key["valueFrom"]["secretKeyRef"]["name"], "engine-key-v2")
 
 
 class InputTests(KubernetesTest):

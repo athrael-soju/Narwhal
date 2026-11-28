@@ -1,22 +1,15 @@
-"""Check chart values against a values.schema.json, as helm does before it renders.
+"""Check a value against a JSON schema, as helm and the API server do.
 
-The tests that drive the Kubernetes target upgrade a stubbed release dozens of times per run,
-too often to render each with helm. This checks the keywords the schema uses and refuses one
-it does not know, so a schema change cannot pass here unchecked.
-
-`SCHEMA` is the task 18 chart's schema, kept in `golden/` for the target's Helm release until
-task 26 moves the target onto the controller's objects. The chart itself no longer takes
-engines, gates or placement.
+The tests check many fleets against the CRD's schema, too many to send each to a server. This
+checks the keywords the schema uses and refuses one it does not know, so a schema change cannot
+pass here unchecked.
 """
 
 from __future__ import annotations
 
-import json
 import re
-from pathlib import Path
 from typing import Any
 
-SCHEMA = Path(__file__).resolve().parent / "golden" / "release-values.schema.json"
 _ANNOTATIONS = {"$schema", "$id", "title", "description", "default", "examples"}
 _TYPES = {
     "object": dict,
@@ -29,10 +22,6 @@ _TYPES = {
 
 class SchemaError(ValueError):
     pass
-
-
-def schema() -> dict:
-    return dict(json.loads(SCHEMA.read_text()))
 
 
 def errors(value: Any, node: Any, path: str = "") -> list[str]:
@@ -120,12 +109,6 @@ def errors(value: Any, node: Any, path: str = "") -> list[str]:
         else:
             raise SchemaError(f"{where}: the schema uses {keyword}, which this check does not know")
     return found
-
-
-def check(values: Any) -> None:
-    """Raise SchemaError naming every place `values` breaks the chart's schema."""
-    if found := errors(json.loads(json.dumps(values)), schema()):
-        raise SchemaError("values break values.schema.json: " + "; ".join(found))
 
 
 def _is(value: Any, kind: str) -> bool:

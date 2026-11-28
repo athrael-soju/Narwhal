@@ -19,7 +19,7 @@ A run record belongs to one target. Resuming a run directory with the other targ
 
 The run reads the [Kubernetes launch inputs](../configuration/04-Deployment-Inputs.md#kubernetes-launch-inputs), the engine and fabric inputs, the [deployment run inputs](../configuration/04-Deployment-Inputs.md#deployment-run-inputs) and the cluster inputs that [Kubernetes target inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) lists: the namespace, the chart values file, each engine's node, and optionally the release, the kubeconfig context, the chart directory and the `kubectl` and `helm` executables.
 
-The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/model`. `NARWHAL_ROUTER_URL` defaults to the HAProxy Service, `http://haproxy:8000`.
+The model sits at `/model` in every pod, so `NARWHAL_MODEL_DIR` is always `/model`. `NARWHAL_ROUTER_URL` defaults to the first router pod, `http://router-0.routers:8000`, because HAProxy forwards only the serving routes.
 
 ## How the stages run
 

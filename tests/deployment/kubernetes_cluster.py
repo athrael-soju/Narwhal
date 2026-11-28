@@ -3400,6 +3400,8 @@ class Rig:
         self.jobs: dict[str, dict] = {}
         # Every gate Job creation the API server stored, a Job made again included.
         self.created: list[dict] = []
+        # Every Job, StatefulSet and Deployment as the API server first stores it.
+        self.workloads: list[dict] = []
         self._gates: dict[str, _Gate] = {}
         # Each Job's inputs ConfigMap as the Job found it.
         self.inputs: dict[str, dict] = {}
@@ -3495,9 +3497,10 @@ class Rig:
                 self.store.put(pod)
 
     def _created(self, obj: dict, old: dict | None) -> None:
-        """Record each gate Job as the API server first stores it."""
+        """Record each Job, and each gate Job's entry, as the API server first stores it."""
         if old is not None:
             return
+        self.workloads.append(copy.deepcopy(obj))
         if fleet_resource.GATE_LABEL not in (obj["metadata"].get("labels") or {}):
             return
         entry = entry_of(obj)
@@ -3528,6 +3531,7 @@ class Rig:
 
     def _workload_created(self, obj: dict, old: dict | None) -> None:
         if old is None:
+            self.workloads.append(copy.deepcopy(obj))
             self.timeline.append((obj["kind"], obj["metadata"]["name"]))
 
     def live_jobs(self) -> list[dict]:
@@ -3691,8 +3695,7 @@ class Rig:
                 patch.object(
                     target.kubernetes_objects,
                     "routers",
-                    lambda fleet, block, path: routers(fleet, block, path, self.router_selector),
-                    create=True,
+                    functools.partial(placed_routers, self),
                 )
             )
             stack.enter_context(
@@ -3807,54 +3810,23 @@ def _rbac(request: httpx.Request) -> tuple[str, str, str]:
     return verb, group, resource
 
 
-def routers(
-    fleet: kubernetes_objects.Fleet,
-    block: Mapping[str, Any],
-    fleet_file: str,
-    node_selector: Mapping[str, str] | None = None,
-) -> list:
-    """A router pair in the shape step G builds: a headless Service and a StatefulSet of two
-    router pods on `fleet_file`, on the routers' node or, with `node_selector`, on any node the
-    scheduler finds with those labels."""
-    owner = fleet.owner
-    selector = kubernetes_objects.labels("router")
-    container = {
-        "name": "router",
-        "image": fleet.narwhal_image,
-        "command": ["narwhal-serve", "--fleet", f"/narwhal-state/{fleet_file}"],
-    }
-    if fleet.api_key is not None:
-        container["env"] = [fleet.api_key.variable()]
-    return [
-        {
-            "apiVersion": "v1",
-            "kind": "Service",
-            "metadata": kubernetes_objects.metadata(owner, "routers", "router"),
-            "spec": {"clusterIP": "None", "selector": selector},
-        },
-        {
-            "apiVersion": "apps/v1",
-            "kind": "StatefulSet",
-            "metadata": kubernetes_objects.metadata(owner, "router", "router"),
-            "spec": {
-                "serviceName": "routers",
-                "replicas": 2,
-                "podManagementPolicy": "Parallel",
-                "selector": {"matchLabels": selector},
-                "template": {
-                    "metadata": {"labels": dict(selector)},
-                    "spec": {
-                        **(
-                            {"nodeSelector": dict(node_selector)}
-                            if node_selector
-                            else {"nodeName": "cpu-a"}
-                        ),
-                        "containers": [container],
-                    },
-                },
-            },
-        },
-    ]
+_ROUTERS = kubernetes_objects.routers
+
+
+def placed_routers(
+    rig: Rig, fleet: kubernetes_objects.Fleet, settings: kubernetes_objects.Routers
+) -> list[dict[str, Any]]:
+    """The controller's router pair, on the routers' node or, with `rig.router_selector`, on any
+    node the scheduler finds with those labels."""
+    documents = _ROUTERS(fleet, settings)
+    for document in documents:
+        if document["kind"] == "StatefulSet":
+            spec = document["spec"]["template"]["spec"]
+            if rig.router_selector:
+                spec["nodeSelector"] = dict(rig.router_selector)
+            else:
+                spec["nodeName"] = "cpu-a"
+    return documents
 
 
 def _write_records(self: kubernetes_target.KubernetesDeployment, context, observations) -> None:
