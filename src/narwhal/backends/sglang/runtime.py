@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import importlib.abc
 import importlib.util
 import json
+import logging
 import os
 import runpy
 import sys
@@ -31,7 +33,7 @@ def serve(args: list[str]) -> None:
     list the kernel shows every local user in `ps` and `/proc/<pid>/cmdline`, so the server runs
     here instead: the key enters SGLang's `sys.argv` in memory only, and the process keeps the
     argument list it started with, which holds no key. The key leaves the environment the
-    server's own processes inherit.
+    server's own processes inherit, and `redact_output` keeps it out of what the server logs.
     """
     environ = dict(os.environ)
     key = environ.pop(API_KEY_ENV, "")
@@ -40,8 +42,99 @@ def serve(args: list[str]) -> None:
     # SGLang spawns its scheduler, which imports the site hook; this process installs it here.
     os.environ.update(registration_environment(environ))
     keep_mooncake_registrations()
+    if key:
+        redact_output(key)
     sys.argv = ["sglang.launch_server", *arguments, *(["--api-key", key] if key else [])]
     runpy.run_module("sglang.launch_server", run_name="__main__", alter_sys=True)
+
+
+REDACTED = "[REDACTED]"
+
+
+def redact_output(key: str) -> None:
+    """Replace the engine key with `REDACTED` in everything this process logs or prints.
+
+    SGLang takes its key only as a server argument, from the command line or a `--config` file,
+    and logs every argument at startup, so the key would reach the container's logs.
+    `logging.basicConfig(force=True)` in SGLang replaces the root logger's handlers, and a filter
+    on the root logger misses records from child loggers, so each record is redacted as it is
+    created instead. Handlers SGLang and uvicorn configure later write to `sys.stdout` and
+    `sys.stderr`, which are wrapped as well.
+    """
+    secrets = sorted({key, repr(key)[1:-1], json.dumps(key)[1:-1]}, key=len, reverse=True)
+    make_record = logging.getLogRecordFactory()
+
+    def record(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        made = make_record(*args, **kwargs)
+        try:
+            message = made.getMessage()
+        except Exception:  # The handler reports a malformed record itself.
+            return made
+        if any(secret in message for secret in secrets):
+            made.msg, made.args = redact(message, secrets), ()
+        return made
+
+    logging.setLogRecordFactory(record)
+    for name in ("stdout", "stderr"):
+        stream = RedactingStream(getattr(sys, name), secrets)
+        setattr(sys, name, stream)
+        atexit.register(stream.finish)
+
+
+def redact(text: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        text = text.replace(secret, REDACTED)
+    return text
+
+
+class RedactingStream:
+    """A text stream that replaces each secret before writing to the stream it wraps.
+
+    A write that ends in what could be the start of a secret holds that tail back until the
+    next write, so a secret split across writes is still replaced.
+    """
+
+    def __init__(self, stream: Any, secrets: list[str]) -> None:
+        self._stream = stream
+        self._secrets = secrets
+        self._pending = ""
+        self._lock = threading.RLock()
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            pending = redact(self._pending + text, self._secrets)
+            held = max(
+                (
+                    size
+                    for secret in self._secrets
+                    for size in range(min(len(secret) - 1, len(pending)), 0, -1)
+                    if pending.endswith(secret[:size])
+                ),
+                default=0,
+            )
+            self._pending = pending[len(pending) - held :]
+            if held < len(pending):
+                self._stream.write(pending[: len(pending) - held])
+        return len(text)
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self.write(line)
+
+    def flush(self) -> None:
+        with self._lock:
+            self._stream.flush()
+
+    def finish(self) -> None:
+        """Write the held tail at exit. It holds no whole secret."""
+        with self._lock:
+            if self._pending:
+                self._stream.write(self._pending)
+                self._pending = ""
+            self._stream.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
 
 
 # SGLang starts its scheduler in a spawned process, so the fix is installed by a sitecustomize

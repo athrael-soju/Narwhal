@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import patch
 
 from narwhal.backends.sglang import runtime
@@ -258,12 +259,15 @@ class MooncakeRegistrationTests(unittest.TestCase):
             patch.object(sys, "argv", list(sys.argv)),
             patch.object(runtime.runpy, "run_module", run_module),
             patch.object(runtime, "keep_mooncake_registrations") as kept,
+            patch.object(runtime, "redact_output") as redacted,
             patch.object(runtime.os, "execve", lambda *args: started.append(args[1])),
             patch.object(runtime.os, "execv", lambda *args: started.append(args[1])),
             patch.object(subprocess, "Popen", lambda args, **_: started.append(args)),
         ):
             runtime.serve(["--port", "8000"])
         kept.assert_called_once_with()
+        key = environ.get(runtime.API_KEY_ENV)
+        self.assertEqual(redacted.call_args_list, [mock.call(key)] if key else [])
         site = seen["environ"]["PYTHONPATH"].split(":", 1)[0]
         self.addCleanup(shutil.rmtree, site)
         return seen["argv"], seen["environ"], started
@@ -289,6 +293,113 @@ class MooncakeRegistrationTests(unittest.TestCase):
         self.assertEqual(argv[-2:], ["--api-key", key])
         self.assertNotIn(runtime.API_KEY_ENV, started)
         self.assertNotIn(key, json.dumps(started))
+
+
+# Logs its server arguments the way SGLang does: through logging after basicConfig(force=True),
+# with print, through uvicorn's dictConfig handlers, to the unwrapped stream, and as a key split
+# across two writes.
+LAUNCH_SERVER = """
+import logging
+import logging.config
+import os
+import shutil
+import sys
+
+# Only spawned interpreters read the wrapper's site hook directory.
+shutil.rmtree(os.environ["PYTHONPATH"].split(":", 1)[0])
+key = sys.argv[sys.argv.index("--api-key") + 1]
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", force=True)
+engine = logging.getLogger("sglang.srt.entrypoints.engine")
+engine.info(f"server_args={ {'api_key': key, 'port': 8000} }")
+engine.warning("server_args=%s", {"api_key": key})
+print(f"server_args=ServerArgs(model_path='/model', api_key={key!r}, port=8000)")
+# A handler on the unwrapped stream relies on the redacted record alone.
+direct = logging.getLogger("sglang.direct")
+direct.addHandler(logging.StreamHandler(sys.__stderr__))
+direct.propagate = False
+direct.error("direct %s", key)
+sys.stderr.write("split " + key[:5])
+sys.stderr.flush()
+sys.stderr.write(key[5:] + " joined\\n")
+sys.stdout.write(key[:4])
+sys.stdout.write("-is-no-key\\n")
+logging.config.dictConfig(
+    {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {"default": {"format": "%(levelname)s %(message)s"}},
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stderr",
+            },
+            "access": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+        },
+    }
+)
+logging.getLogger("uvicorn.error").info("rejected Bearer %s", key)
+logging.getLogger("uvicorn.access").info('%s - "GET /?key=%s" 401', "127.0.0.1", key)
+sys.stdout.write("served")
+"""
+
+
+class OutputRedactionTests(unittest.TestCase):
+    def test_the_engine_key_reaches_no_log_line(self):
+        # The container's stdout and stderr reach `docker logs` and `kubectl logs`.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        hook, sglang = root / "hook", root / "sglang"
+        hook.mkdir()
+        sglang.mkdir()
+        shutil.copy(runtime.LAUNCHER, hook / "launch_engine.py")
+        (sglang / "__init__.py").write_text("")
+        (sglang / "launch_server.py").write_text(LAUNCH_SERVER)
+        key = "engine-key-" + "7" * 32
+        result = subprocess.run(
+            [sys.executable, "-m", "launch_engine", "serve", "--port", "8000"],
+            env={
+                **os.environ,
+                "PYTHONPATH": f"{hook}:{root}",
+                runtime.BOOTSTRAP_PORT_ENV: "5600",
+                runtime.API_KEY_ENV: key,
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        self.assertNotIn(key, result.stdout + result.stderr)
+        self.assertIn("server_args={'api_key': '[REDACTED]', 'port': 8000}", result.stderr)
+        self.assertIn("server_args={'api_key': '[REDACTED]'}", result.stderr)
+        self.assertIn("api_key='[REDACTED]', port=8000)", result.stdout)
+        self.assertIn("direct [REDACTED]\n", result.stderr)
+        self.assertIn("split [REDACTED] joined\n", result.stderr)
+        self.assertIn("INFO rejected Bearer [REDACTED]", result.stderr)
+        self.assertIn('"GET /?key=[REDACTED]" 401', result.stdout)
+        # A held tail that turns out not to be the key is written, and so is the last one.
+        self.assertIn("engi-is-no-key\n", result.stdout)
+        self.assertTrue(result.stdout.endswith("served"))
+
+    def test_a_key_split_at_every_point_is_replaced(self):
+        key = "k3y-" + "x" * 12
+        for split in range(1, len(key)):
+            written = []
+            stream = runtime.RedactingStream(
+                SimpleNamespace(write=written.append, flush=lambda: None), [key]
+            )
+            stream.write(f"a {key[:split]}")
+            stream.write(f"{key[split:]} b\n")
+            stream.finish()
+            self.assertEqual("".join(written), f"a {runtime.REDACTED} b\n")
 
 
 if __name__ == "__main__":
