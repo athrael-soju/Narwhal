@@ -266,9 +266,16 @@ class KubernetesLease:
         if seen.holder == self.holder and seen.stamp in self._stamps:
             # This router's own write, whose reply was lost: it keeps the wait it was sent with.
             return self._take(lease, seen.epoch, not_before=self._stamps[seen.stamp])
-        if seen.duration_s > self.ttl_s:
-            # A peer on a longer --lease-ttl would let this router's created Lease serve inside
-            # the peer's deadline after a deletion. Refuse to take part.
+        if (
+            seen.duration_s > self.ttl_s
+            and seen.holder
+            and now - seen.at < seen.duration_s + self.safety_margin_s
+        ):
+            # A live peer on a longer --lease-ttl would let this router's created Lease serve
+            # inside the peer's deadline after a deletion. Refuse to take part while it may
+            # renew. Once the Lease has stood unchanged for its own duration and the margin,
+            # its holder fenced on its own longer deadline, so a router started again with a
+            # shorter --lease-ttl takes it below, and nobody need delete it.
             raise LeaseError(
                 f"Lease {self.name} lasts {seen.duration_s:g}s, longer than this router's "
                 f"--lease-ttl {self.ttl_s:g}; run both routers with the same --lease-ttl"

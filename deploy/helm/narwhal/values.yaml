@@ -12,6 +12,9 @@ controller:
   # state volume.
   runAsUser: 10001
   runAsGroup: 10001
+  # Seconds between checks of the engine API key's HMAC, which each start a Job. An edit of
+  # the fleet or a new requested-at annotation also checks it.
+  keyCheckPeriodSeconds: 900
   resources: {}
   nodeSelector: {}
   tolerations: []

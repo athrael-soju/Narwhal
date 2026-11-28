@@ -31,6 +31,8 @@ The fabric stages run the same checks as on SSH hosts, each host script in a Job
 
 `plan` and a `status` that finds the run held by another runner start no Job. On SSH hosts `plan` observes each fabric route read-only. On a cluster, observing a route takes a Job on each node, so `plan` does not observe it: it prints `fabric-edge[<edge>]: skipped unless run finds a change; link[<edge>] not observed`, and its JSON row lists the fact under `unobserved`. A `status` held off by another runner reports the link `not observed`. `run` and `status` observe each route, and `run` measures an edge whose route changed again.
 
+In the cluster, a stage that fails or times out leaves the `NarwhalFleet` `Stalled` until the next edit of its spec or a new value of its `narwhal.example.com/requested-at` annotation. A live change, such as a replaced engine pod, does not clear the stall. What fails a stage is usually a node's resources, an image or a Secret, which the run record does not track, so a run started by each live change would fail the same way again and again. Fix the cause, then set `requested-at` to run the stage again.
+
 ## Rerunning after a change
 
 <!-- Generated from KUBERNETES_GRAPH in src/narwhal/deployment/kubernetes_graph.py by tools/maintenance/stage_graph_doc.py. Edit the graph, then run the tool. -->

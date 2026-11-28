@@ -242,18 +242,36 @@ class ExpiryTests(LeaseCase):
         self.assertTrue(b.lease.claim())
         self.assertTrue(b.lease.valid())
 
-    def test_a_peer_on_a_longer_ttl_is_refused_rather_than_waited_out(self):
+    def test_a_live_peer_on_a_longer_ttl_is_refused_rather_than_waited_out(self):
         a, b = self.router("a", 0.0), self.router("b", 3.0)
         self.holding(a)
         lease = self.stored()
         lease["spec"]["leaseDurationSeconds"] = 3 * TTL
         self.store.replace(lease)
         b.lease.read()
-        self.step(4 * TTL)
         # Were B to create the Lease after a deletion, it would wait only its own 5 s.
+        self.step(2 * TTL)
         with self.assertRaisesRegex(LeaseError, "same --lease-ttl"):
             b.lease.claim()
         self.assertFalse(b.lease.owned)
+
+    def test_a_dead_holders_longer_ttl_lease_is_taken_once_it_stood_for_its_own_duration(self):
+        # The pair ran on a longer --lease-ttl, then came back with a shorter one, and the
+        # routers' account cannot delete the Lease.
+        a, b = self.router("a", 0.0), self.router("b", 3.0)
+        self.holding(a)
+        lease = self.stored()
+        lease["spec"]["leaseDurationSeconds"] = 3 * TTL
+        self.store.replace(lease)
+        b.lease.read()
+        self.step(3 * TTL)
+        with self.assertRaisesRegex(LeaseError, "same --lease-ttl"):
+            b.lease.claim()
+        self.step(b.lease.safety_margin_s)
+        self.assertTrue(b.lease.claim())
+        self.assertTrue(b.lease.valid())
+        stored = self.stored()["spec"]
+        self.assertEqual((stored["holderIdentity"], stored["leaseDurationSeconds"]), ("b", TTL))
 
 
 class ReleaseTests(LeaseCase):
