@@ -13,7 +13,9 @@ chart is installed, and returns every case the server decided otherwise:
   controller's objects; the policy must refuse them too, and `relabel` checks that the user
   cannot give an existing pod those labels. `workstation_refused()` are Jobs the user
   `WORKSTATION` sends, who holds the workstation's role and may also create Jobs: none may run
-  as the controller's ServiceAccount or mount the state claim.
+  as the controller's ServiceAccount or mount the state claim. `check_ephemeral` adds an
+  ephemeral container to the controller's pod and to a gate Job's pod, which the policy must
+  refuse, and to a plain pod, which it must not.
 - `volume_cases(policy)` pairs each of `MODEL_VOLUMES` with whether
   `fleet_resource.check_model_volume` allows it under that policy, which the admission policy
   must match.
@@ -279,6 +281,20 @@ def _engine_pod(release: str, change: Callable[[dict], object] = lambda spec: No
     return pod
 
 
+def _fleet(state_claim: str = "narwhal-state", account: str = "narwhal-engine") -> objects.Fleet:
+    """The fleet whose objects the cases build."""
+    return objects.Fleet(
+        owner=OWNER,
+        narwhal_image=NARWHAL,
+        state_claim=state_claim,
+        haproxy_image="registry.example/haproxy@sha256:" + "b" * 64,
+        fabric_image="registry.example/perftest@sha256:" + "c" * 64,
+        engine_account=account,
+        rdma_resource="rdma.example.com/hca",
+        model_volume=CLAIM,
+    )
+
+
 def admitted(
     namespace: str,
     release: str,
@@ -289,20 +305,13 @@ def admitted(
     controller, and a pod of each workload, sent as the controller of its owner: every gate
     kind, HAProxy and, with `engines` values, the engine StatefulSet."""
     account = f"{release}-engine"
-    fleet = objects.Fleet(
-        owner=OWNER,
-        narwhal_image=NARWHAL,
-        state_claim=state_claim,
-        haproxy_image="registry.example/haproxy@sha256:" + "b" * 64,
-        fabric_image="registry.example/perftest@sha256:" + "c" * 64,
-        engine_account=account,
-        rdma_resource="rdma.example.com/hca",
-        model_volume=CLAIM,
-    )
+    fleet = _fleet(state_claim, account)
     workloads = [
         objects.job(fleet, _gate(kind, service_account=kind == objects.ACCOUNT_KIND))
         for kind in objects.GATE_KINDS
     ]
+    # A Narwhal gate mounts its own directories of the state volume, each by its subPath.
+    workloads.append(objects.job(fleet, _gate("preflight", name="preflight-dirs", state=WORK)))
     workloads += [d for d in objects.haproxy(fleet) if d["kind"] == "Deployment"]
     if engines is not None:
         values = copy.deepcopy(dict(engines))
@@ -339,24 +348,22 @@ def admitted(
         found["an engine pod with a non-root sidecar"] = made_by(
             hardened(pod_of(statefulset, "engine-2")), "StatefulSet", "engine"
         )
-    # The router pair, as the controller applies it.
-    router = _workload("StatefulSet", "chart-live-router", objects.labels(ROUTER), _plain())
+    # The router pair, as the controller applies it, reading its fleet file's directory.
+    router = _workload(
+        "StatefulSet",
+        "chart-live-router",
+        objects.labels(ROUTER),
+        _plain(
+            volumes=[{"name": "state", "persistentVolumeClaim": {"claimName": state_claim}}],
+            containers=[_container(volumeMounts=[_state_mount(LIMITS, read_only=True)])],
+        ),
+    )
     found["a router StatefulSet"] = Case(router, user=sender)
     found["a router StatefulSet's pod"] = made_by(
         pod_of(router, "chart-live-router-0"), "StatefulSet", "chart-live-router"
     )
     # An export Job, as the controller makes it from its own image, and its pod.
-    request = kubernetes_export.Request("0" * 32, {}, "")
-    export = kubernetes_export.job(
-        OWNER,
-        request,
-        ["stages/access/attempt-1"],
-        image=NARWHAL,
-        user=10001,
-        group=10001,
-        claim=state_claim,
-        runs=f"runs/{namespace}/{OWNER.uid}",
-    )
+    export = _export(namespace, claim=state_claim)
     found["an export Job"] = Case(export, user=sender)
     found["an export Job's pod"] = made_by(pod_of(export, "export-pod"), "Job", "export")
     # The controller's own Deployment makes ReplicaSets and pods that run as its ServiceAccount
@@ -456,10 +463,49 @@ def _workload(kind: str, name: str, labels: Mapping[str, str], spec: Mapping[str
 
 HOST = "use the host network"
 CAPABILITY = "add a capability"
+SUBPATH = "only the controller's own pods mount the state claim's root"
+JOB_POD = "only the Job controller makes a pod"
+EPHEMERAL = "no one adds an ephemeral container"
+# An attempt's work directory and the fleet-limits directory a preflight gate reads.
+WORK_DIR = "deploy/run/stages/preflight/attempt-1"
+LIMITS = "deploy/run/stages/fleet-limits/attempt-1"
+WORK = {WORK_DIR: True, LIMITS: False}
 
 
-def refused(release: str) -> dict[str, Case]:
-    """Objects the policy must refuse whoever sends them."""
+def _state_mount(path: str | None, *, read_only: bool = False) -> dict:
+    """A mount of the state claim's volume `state`: by subPath `path`, or its root."""
+    mount: dict[str, Any] = {"name": "state", "mountPath": f"/narwhal-state/{path or ''}"}
+    if path is not None:
+        mount["subPath"] = path
+    if read_only:
+        mount["readOnly"] = True
+    return mount
+
+
+def _export(
+    namespace: str,
+    change: Callable[[list[dict]], object] = lambda mounts: None,
+    claim: str = "narwhal-state",
+) -> dict:
+    """An export Job as the controller makes it, its mounts changed by `change`."""
+    request = kubernetes_export.Request("0" * 32, {}, "")
+    export = kubernetes_export.job(
+        OWNER,
+        request,
+        ["stages/access/attempt-1"],
+        image=NARWHAL,
+        user=10001,
+        group=10001,
+        claim=claim,
+        runs=f"runs/{namespace}/{OWNER.uid}",
+    )
+    change(export["spec"]["template"]["spec"]["containers"][0]["volumeMounts"])
+    return export
+
+
+def refused(release: str, namespace: str = "example") -> dict[str, Case]:
+    """Objects the policy must refuse whoever sends them, and Jobs it must refuse even from the
+    controller of `release` in `namespace`."""
     gate = objects.labels(objects.GATE, gate="preflight")
     fabric = objects.labels(objects.GATE, gate="fabric-server")
 
@@ -602,6 +648,33 @@ def refused(release: str) -> dict[str, Case]:
         ),
         "a writable model volume": Case(_pod("model", None, _model(CLAIM, False)), "read-only"),
     }
+    # The controller's own Jobs mount only directories of the state claim, by subPath.
+    root = objects.job(_fleet(), _gate("state", name="state-root"))
+    root["spec"]["template"]["spec"]["containers"][0]["volumeMounts"].append(
+        {"name": objects.STATE_VOLUME, "mountPath": objects.STATE_MOUNT}
+    )
+    runs = f"runs/{namespace}/{OWNER.uid}"
+    sender = controller(namespace, release)
+    cases["a gate Job that mounts the state claim's root"] = Case(root, SUBPATH, sender)
+    cases["an export Job that mounts a run's salt"] = Case(
+        _export(
+            namespace,
+            lambda mounts: mounts.append(_state_mount(f"{runs}/run.salt", read_only=True)),
+        ),
+        SUBPATH,
+        sender,
+    )
+    cases["an export Job that mounts a run's credential HMACs"] = Case(
+        _export(
+            namespace,
+            lambda mounts: mounts.append(_state_mount(f"{runs}/credential.json", read_only=True)),
+        ),
+        SUBPATH,
+        sender,
+    )
+    cases["an export Job that writes the run record"] = Case(
+        _export(namespace, lambda mounts: mounts[0].pop("readOnly")), SUBPATH, sender
+    )
     annotated = _pod("apparmor", None, _plain())
     annotated["metadata"]["annotations"] = {
         "container.apparmor.security.beta.kubernetes.io/main": "unconfined"
@@ -660,6 +733,44 @@ def forged(release: str) -> dict[str, Case]:
         ),
         "a Deployment with the HAProxy label": Case(
             _workload("Deployment", "proxy", objects.labels(objects.HAPROXY), _plain()), reserved
+        ),
+        # A pod that would pass for an export Job's pod, whose log the workstation reads.
+        "a pod naming an export Job as its controller": Case(
+            made_by(_pod("export-x", None, _plain()), "Job", "export-x").document, JOB_POD
+        ),
+        "a pod with the Job controller's job-name labels": Case(
+            _pod(
+                "export-y",
+                None,
+                _plain(),
+                **{"job-name": "export-x", "batch.kubernetes.io/job-name": "export-x"},
+            ),
+            JOB_POD,
+        ),
+        # The controller's Deployment is the controller's only from its installer, so the
+        # forger can make none of its name, as after `helm uninstall`, nor change its template.
+        "a Deployment of the controller's name as its ServiceAccount": Case(
+            _workload(
+                "Deployment",
+                f"{release}-controller",
+                objects.labels("controller"),
+                _plain(serviceAccountName=f"{release}-controller"),
+            ),
+            ACCOUNT,
+        ),
+        "a Deployment of the controller's name that mounts the state claim": Case(
+            _workload(
+                "Deployment",
+                f"{release}-controller",
+                objects.labels("controller"),
+                _plain(
+                    volumes=[
+                        {"name": "state", "persistentVolumeClaim": {"claimName": "narwhal-state"}}
+                    ],
+                    containers=[_container(volumeMounts=[_state_mount(None)])],
+                ),
+            ),
+            STATE,
         ),
     }
     return {name: Case(case.document, case.words, FORGER) for name, case in cases.items()}
@@ -845,7 +956,11 @@ def check_admission(
         ok, error = _create(run, namespace, case)
         if not ok:
             found.append(f"refused {name}: {error}")
-    cases = {**refused(release), **forged(release), **workstation_refused(release)}
+    cases = {
+        **refused(release, namespace),
+        **forged(release),
+        **workstation_refused(release),
+    }
     for name, case in cases.items():
         ok, error = _create(run, namespace, case)
         if ok:
@@ -856,33 +971,126 @@ def check_admission(
 
 
 def check_relabel(run: Run, namespace: str) -> list[str]:
-    """A pod the forger may create cannot then take the gate label."""
+    """A pod the forger may create cannot then take the gate label or the Job controller's
+    job-name label."""
     case = Case(_pod("chart-live-relabel", None, _plain()), user=FORGER)
     ok, error = _create(run, namespace, case, dry_run=False)
     if not ok:
         return [f"refused the forger's plain pod: {error}"]
+    found = []
     try:
-        result = run(
-            [
-                "label",
-                "pod",
-                "chart-live-relabel",
-                "--namespace",
-                namespace,
-                "--as",
-                FORGER,
-                f"{objects.NAME_LABEL}=narwhal",
-                f"{objects.COMPONENT_LABEL}={objects.GATE}",
-            ],
-            None,
-        )
-        if result.returncode == 0:
-            return ["the forger gave a pod the gate label"]
-        if "only the fleet controller's workloads carry" not in result.stderr:
-            return [f"refused the relabel for another reason: {result.stderr.strip()}"]
-        return []
+        for labels, words in (
+            ([f"{objects.NAME_LABEL}=narwhal", f"{objects.COMPONENT_LABEL}={objects.GATE}"], ""),
+            (["batch.kubernetes.io/job-name=export-x"], JOB_POD),
+        ):
+            result = run(
+                [
+                    "label",
+                    "pod",
+                    "chart-live-relabel",
+                    "--namespace",
+                    namespace,
+                    "--as",
+                    FORGER,
+                    *labels,
+                ],
+                None,
+            )
+            if result.returncode == 0:
+                found.append(f"the forger gave a pod the labels {labels}")
+            elif (words or "only the fleet controller's workloads carry") not in result.stderr:
+                found.append(f"refused the relabel for another reason: {result.stderr.strip()}")
+        return found
     finally:
         run(["delete", "pod", "chart-live-relabel", "--namespace", namespace, "--wait=false"], None)
+
+
+def _add_ephemeral(run: Run, namespace: str, pod: str) -> tuple[bool, str]:
+    """Add an ephemeral container to `pod` as the cluster admin, with --dry-run=server."""
+    patch = {"spec": {"ephemeralContainers": [_container(name="debug")]}}
+    result = run(
+        [
+            "patch",
+            "pod",
+            pod,
+            "--namespace",
+            namespace,
+            "--subresource=ephemeralcontainers",
+            "--type=strategic",
+            "--dry-run=server",
+            "-p",
+            json.dumps(patch),
+        ],
+        None,
+    )
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _first_pod(run: Run, namespace: str, selector: str, timeout_s: float = 60) -> str:
+    """The name of the first pod `selector` matches, once one exists, or ''."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        result = run(["get", "pods", "-n", namespace, "-l", selector, "-o", "name"], None)
+        names = result.stdout.split()
+        if names:
+            return names[0].removeprefix("pod/")
+        time.sleep(2)
+    return ""
+
+
+def check_ephemeral(run: Run, namespace: str, release: str) -> list[str]:
+    """No one adds an ephemeral container to the controller's pod or to a gate Job's pod, and
+    anyone may add one to a plain pod."""
+    found = []
+    own = _first_pod(
+        run,
+        namespace,
+        f"app.kubernetes.io/instance={release},{objects.COMPONENT_LABEL}=controller",
+    )
+    if not own:
+        found.append("found no controller pod to add an ephemeral container to")
+    else:
+        ok, error = _add_ephemeral(run, namespace, own)
+        if ok:
+            found.append("added an ephemeral container to the controller's pod")
+        elif EPHEMERAL not in error:
+            found.append(
+                f"refused the controller's ephemeral container for another reason: {error}"
+            )
+    # A gate Job the controller makes, without the fleet as its owner, so the garbage
+    # collector leaves it, on a node no cluster has, so its pod never runs.
+    job = objects.job(_fleet(), _gate("state", name="chart-live-ephemeral", node="chart-live-none"))
+    del job["metadata"]["ownerReferences"]
+    plain = Case(_pod("chart-live-ephemeral-plain", None, _plain()))
+    try:
+        ok, error = _create(run, namespace, Case(job, user=controller(namespace, release)), False)
+        name = _first_pod(run, namespace, "job-name=chart-live-ephemeral") if ok else ""
+        if not ok:
+            found.append(f"refused the gate Job for the ephemeral check: {error}")
+        elif not name:
+            found.append("the gate Job made no pod to add an ephemeral container to")
+        else:
+            ok, error = _add_ephemeral(run, namespace, name)
+            if ok:
+                found.append("added an ephemeral container to a gate Job's pod")
+            elif EPHEMERAL not in error:
+                found.append(
+                    f"refused the gate pod's ephemeral container for another reason: {error}"
+                )
+        ok, error = _create(run, namespace, plain, dry_run=False)
+        if not ok:
+            found.append(f"refused the plain pod for the ephemeral check: {error}")
+        else:
+            ok, error = _add_ephemeral(run, namespace, "chart-live-ephemeral-plain")
+            if not ok:
+                found.append(f"refused an ephemeral container on a plain pod: {error}")
+    finally:
+        run(["delete", "job", "chart-live-ephemeral", "-n", namespace, "--ignore-not-found"], None)
+        run(
+            ["delete", "pod", "chart-live-ephemeral-plain", "-n", namespace, "--ignore-not-found"],
+            None,
+        )
+    return found
 
 
 def check_volumes(run: Run, namespace: str, policy: Mapping[str, Sequence[str]]) -> list[str]:
@@ -961,6 +1169,7 @@ def check(
             # The builders' objects mount a claim as the model volume.
             *(check_admission(run, namespace, release, engines) if allows(policy, CLAIM) else []),
             *check_relabel(run, namespace),
+            *check_ephemeral(run, namespace, release),
             *check_volumes(run, namespace, policy),
         ]
 

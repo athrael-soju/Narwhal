@@ -173,12 +173,12 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 
 ### Kubernetes target inputs
 
-On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployment inputs, and the fleet controller turns its fields back into these variables, so validation, digests and rerun rules are the same as for the variables. `narwhal deploy --target kubernetes` reads them from the workstation's environment and builds the fleet from them: a variable with a field of its own becomes that field, and any other input variable becomes an `engines.launch` entry, unless the fleet refuses its name, as it refuses every name that looks like a credential. The workstation refuses `NARWHAL_ENGINE_API_KEY` and `NARWHAL_ROUTER_TOKEN`; the fleet names their Secrets instead.
+On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployment inputs, and the fleet controller turns its fields back into these variables, so validation, digests and rerun rules are the same as for the variables. `narwhal deploy --target kubernetes` reads them from the workstation's environment and builds the fleet from them: a variable with a field of its own becomes that field, and any other input variable becomes an `engines.launch` entry, unless the fleet refuses its name, as it refuses every name that looks like a credential. The workstation refuses `NARWHAL_ENGINE_API_KEY` and `NARWHAL_ROUTER_TOKEN`; the fleet names their Secrets instead. It also refuses `NARWHAL_KUBERNETES_SIDECAR_IMAGE`: on a cluster, the routers, gate Jobs and attestation sidecars run the controller's own image, the narwhal chart's `images.narwhal`.
 
 | Variable | Fleet field |
 | --- | --- |
 | `NARWHAL_KUBERNETES_NAMESPACE` | The fleet's namespace. One fleet per namespace, named `fleet` |
-| `NARWHAL_KUBERNETES_SIDECAR_IMAGE`, `NARWHAL_KUBERNETES_HAPROXY_IMAGE`, `NARWHAL_KUBERNETES_FABRIC_IMAGE` | `images.narwhal`, `images.haproxy`, `images.fabric` |
+| `NARWHAL_KUBERNETES_HAPROXY_IMAGE`, `NARWHAL_KUBERNETES_FABRIC_IMAGE` | `images.haproxy`, `images.fabric` |
 | `NARWHAL_ENGINE_IMAGE` | `engines.image` |
 | `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_TREE_SHA256` | `engines.model.name`, `engines.model.treeSha256` |
 | `NARWHAL_MODEL_PATH`, `NARWHAL_MODEL_SHA256` | `engines.model.file`, the path below `/model`, and `engines.model.fileSha256` |

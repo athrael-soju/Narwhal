@@ -35,7 +35,6 @@ from .launch_engine.kubernetes import (
     MODEL_VOLUME_SOURCES,
     RDMA_RESOURCE_ENV,
     RUNTIME_CLASS_ENV,
-    SIDECAR_IMAGE_ENV,
     STATE_CLAIM_ENV,
 )
 
@@ -507,17 +506,14 @@ _ENGINES = _object(
 )
 
 _IMAGES = _object(
-    "The images the fleet runs besides the engine's, each by registry digest",
+    "The third-party images the fleet runs besides the engine's, each by registry digest. The "
+    "routers, gate Jobs and attestation sidecars run the controller's own image, which the "
+    "narwhal chart's images.narwhal pins",
     {
-        "narwhal": _string(
-            "The Narwhal image: the controller, routers, gate Jobs and attestation sidecars",
-            512,
-            pattern=_DIGEST,
-        ),
         "haproxy": _string("The HAProxy image", 512, pattern=_DIGEST),
         "fabric": _string("The image the fabric Jobs run ib_write_bw from", 512, pattern=_DIGEST),
     },
-    required=["narwhal", "haproxy", "fabric"],
+    required=["haproxy", "fabric"],
 )
 
 _SLO = _object(
@@ -736,12 +732,19 @@ _STATUS = _object(
         "exports": _array(
             f"The export Jobs the controller made for the latest {EXPORT_REQUEST} values",
             _object(
-                "One export request's answer: its Job, or why it has none",
+                "One export request's answer: its Job and, once the Job's pod succeeds, the "
+                "pod and the SHA-256 and size of the log the controller read from it; or why "
+                "the export failed",
                 {
                     "nonce": _string("The request's nonce", 32, pattern=r"^[0-9a-f]{32}$"),
                     "job": _string("The export Job's name", 63),
                     "uid": _string("The export Job's UID", 36, pattern=_UID),
-                    "error": _string("Why the controller made no export Job", 1024),
+                    "pod": _string("The export Job's pod the controller read", 253),
+                    "sha256": _string(
+                        "The SHA-256 of the pod's log", 64, pattern=r"^[0-9a-f]{64}$"
+                    ),
+                    "size": _integer("The size of the pod's log in bytes", 0, 2**31 - 1),
+                    "error": _string("Why the export failed", 1024),
                 },
                 required=["nonce"],
             ),
@@ -1020,7 +1023,6 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
     env[STATE_CLAIM_ENV] = state_claim
 
     images = _block(spec, "images")
-    _set(env, SIDECAR_IMAGE_ENV, images, "narwhal")
     _set(env, HAPROXY_IMAGE_ENV, images, "haproxy")
     _set(env, FABRIC_IMAGE_ENV, images, "fabric")
 

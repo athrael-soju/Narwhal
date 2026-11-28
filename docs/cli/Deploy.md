@@ -108,7 +108,7 @@ A fleet whose `spec` another field manager owns, such as Helm, Argo CD or Flux, 
 
 The run directory belongs to the workstation and keeps the owner and mode checks above. `kubernetes-fleet.json` names the fleet it follows by uid, and the subcommands refuse a fleet with another uid, such as one deleted and made again: start a new run directory for it. Beside it, the directory mirrors the controller's run directory: `run.json` and the evidence of every stage attempt that has ended. An attempt still running arrives once it ends, and `kubernetes-export.json` keeps which attempts the directory holds whole.
 
-The mirror arrives through export Jobs, never `exec`, and the workstation never creates one. It sets the fleet's `narwhal.example.com/export-request` annotation to a nonce and the attempts it holds; the controller creates the export Job from its own image, user and group, and names the Job under that nonce in `status.exports`. The Job has no ServiceAccount token and mounts, read-only, only `run.json` and the attempt directories asked for, so the salt that keys the run record's digests and the key check's salt and HMACs never reach it. The workstation reads the Job's pod log and checks each file against the manifest at its end, so a truncated or altered log writes nothing, and a copied file never replaces evidence the directory already holds. A log stays under 8 MiB, below the kubelet's 10 MiB log rotation, and the next Job carries the rest. A file too large for one log stays in the cluster, and the command result names it.
+The mirror arrives through export Jobs, never `exec`, and the workstation never creates one. It sets the fleet's `narwhal.example.com/export-request` annotation to a nonce and the attempts it holds; the controller creates the export Job from its own image, user and group, and names the Job under that nonce in `status.exports`. The Job has no ServiceAccount token and mounts, read-only, only `run.json` and the attempt directories asked for, so the salt that keys the run record's digests and the key check's salt and HMACs never reach it. Once the Job's pod succeeds, the controller reads the pod's log itself and adds the pod's name and the log's SHA-256 and size to the answer. The workstation reads that pod's log, imports nothing unless its digest matches, and checks each file against the manifest at its end, so a truncated or altered log writes nothing, and a copied file never replaces evidence the directory already holds. A log stays under 8 MiB, below the kubelet's 10 MiB log rotation, and the next Job carries the rest. A file too large for one log stays in the cluster, and the command result names it.
 
 The workstation's identity needs the chart's `<release>-fleet-editor` Role and this Role:
 
@@ -116,13 +116,13 @@ The workstation's identity needs the chart's `<release>-fleet-editor` Role and t
 rules:
   - apiGroups: [""]
     resources: [pods]
-    verbs: [get, list]
+    verbs: [get]
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
 ```
 
-Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. The Role above lets it find an export Job's pod and read its log, and read the engine, sidecar and router pods for the live checks of `plan` and `status`. Together they grant no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, so the identity cannot start a pod of its own or read a credential; it can only edit the fleet, which the controller and the namespace's admission policy bound.
+Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. The Role above lets it read the export Job's pod the controller names and its log, and the engine, sidecar and router pods for the live checks of `plan` and `status`. Together they grant no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, so the identity cannot start a pod of its own. Editing the fleet is still a lot of power: the fleet chooses the engine image, which receives the engine API key, and names the Secrets the engines and routers read, so whoever can edit it can read any Secret of the namespace. The controller and the namespace's admission policy bound the rest, as [Security and access](../deploy/Kubernetes.md#security-and-access) describes.
 
 ## Host keys and time limits
 

@@ -35,6 +35,7 @@ from tests.deployment.kubernetes_cluster import (
     DEPLOYMENT,
     JOB,
     NAMESPACE,
+    NARWHAL_IMAGE,
     NODES,
     POD,
     SECRET,
@@ -1395,6 +1396,61 @@ class CredentialTests(KubernetesTest):
             self.assertIn(b"NARWHAL_KUBERNETES_API_KEY_SECRET=engine-key-v1/api-key", role)
             self.assertNotIn(b"NARWHAL_ENGINE_API_KEY", role)
             self.assertNotIn(b"NARWHAL_ENGINE_KEY", role)
+
+    def test_every_job_mounts_only_the_state_directories_its_command_names(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        outside = set()
+        for name, job in self.rig.jobs.items():
+            spec = job["job"]["spec"]["template"]["spec"]
+            [container] = spec["containers"]
+            # Every Job that runs Narwhal code runs the controller's own image.
+            if job["entry"]["kind"] != "discovery" and not job["entry"]["kind"].startswith(
+                "fabric"
+            ):
+                self.assertEqual(container["image"], NARWHAL_IMAGE, name)
+            mounts = {
+                m["mountPath"]: m for m in container["volumeMounts"] if m["name"] == "narwhal-state"
+            }
+            keep = mounts.pop("/narwhal-keep")["subPath"]
+            work = keep.rpartition("/jobs/")[0]
+            named = set(
+                re.findall(r"/narwhal-state/[A-Za-z0-9._/-]+", " ".join(container["command"]))
+            )
+            with self.subTest(name, kind=job["entry"]["kind"]):
+                for path, mount in mounts.items():
+                    # Each by its own subPath, at the same path: never the volume's root.
+                    self.assertEqual(path, f"/narwhal-state/{mount['subPath']}")
+                    self.assertRegex(mount["subPath"], r"^(deploy|engines)/[^/]")
+                    if not mount.get("readOnly") and mount["subPath"] != work:
+                        outside.add(job["entry"]["kind"])
+                for path in named:
+                    self.assertTrue(
+                        any(path == m or path.startswith(m + "/") for m in mounts), path
+                    )
+        # An engine check stages its launch beside the launch's directory, and a sidecar check
+        # keeps its captures in the pod's; every other Job writes only its own work directory.
+        self.assertEqual(outside, {"engine-check", "sidecar-verify"})
+        [router] = [w for w in self.rig.workloads if w["metadata"]["name"] == "router"]
+        [container] = router["spec"]["template"]["spec"]["containers"]
+        [state] = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
+        fleet = container["command"][container["command"].index("--fleet") + 1]
+        self.assertEqual(state["mountPath"], fleet.rpartition("/")[0])
+        self.assertIs(state["readOnly"], True)
+        self.assertEqual(container["image"], NARWHAL_IMAGE)
+
+    def test_no_fleet_chooses_the_image_that_runs_narwhal_code(self):
+        other = "registry.example/narwhal@sha256:" + "9" * 64
+        fleet = copy.deepcopy(self.rig.fleet)
+        fleet["spec"]["images"]["narwhal"] = other
+        fleet["spec"]["engines"]["launch"] = [
+            *fleet["spec"]["engines"].get("launch", []),
+            {"name": kubernetes_target.SIDECAR_IMAGE_ENV, "value": other},
+        ]
+        with self.assertRaisesRegex(ValueError, kubernetes_target.SIDECAR_IMAGE_ENV):
+            kubernetes_target.settings_env(fleet, self.rig.settings)
+        del fleet["spec"]["engines"]["launch"][-1]
+        env = kubernetes_target.settings_env(fleet, self.rig.settings)
+        self.assertEqual(env[kubernetes_target.SIDECAR_IMAGE_ENV], NARWHAL_IMAGE)
 
     def test_an_environment_that_holds_the_key_is_refused(self):
         with patch.dict(os.environ, {"NARWHAL_ENGINE_KEY": SECRET}):

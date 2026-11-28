@@ -197,6 +197,20 @@ def spec_only(document: dict) -> dict:
     return document
 
 
+# The chart's Narwhal gates mounted the whole state volume writable. The builders mount only
+# the directories a gate names, by their own subPaths, which `GateTests` checks.
+STATE_ROOT = {"name": "narwhal-state", "mountPath": "/narwhal-state"}
+
+
+def without_state_root(document: dict) -> dict:
+    """A Job without the chart's mount of the whole state volume."""
+    document = copy.deepcopy(document)
+    if document["kind"] == "Job":
+        for container in template(document)["containers"]:
+            container["volumeMounts"] = [m for m in container["volumeMounts"] if m != STATE_ROOT]
+    return document
+
+
 def by_name(documents: list[dict]) -> dict[tuple[str, str], dict]:
     return {(d["kind"], d["metadata"]["name"]): d for d in documents}
 
@@ -227,7 +241,8 @@ class GoldenTests(unittest.TestCase):
         self.assertEqual(sorted(built), sorted(rendered))
         for key, document in rendered.items():
             with self.subTest(kind=key[0], name=key[1]):
-                ours, chart = spec_only(built[key]), spec_only(document)
+                ours, chart = spec_only(built[key]), spec_only(without_state_root(document))
+                self.assertEqual(ours, without_state_root(ours))
                 if key[1] in MOVED_KEY:
                     # The chart gave the key to prepare, whose launch checks read it; the
                     # builders give it to sidecar-verify, which calls the engine, instead.
@@ -260,7 +275,7 @@ class GoldenTests(unittest.TestCase):
         self.assertEqual(sorted(built), sorted(rendered))
         for key, document in rendered.items():
             with self.subTest(name=key[1]):
-                self.assertEqual(spec_only(built[key]), spec_only(document))
+                self.assertEqual(spec_only(built[key]), spec_only(without_state_root(document)))
 
     def test_selectors_keep_the_charts_labels_except_the_release(self):
         rendered = by_name(GOLDEN["rendered"])
@@ -617,12 +632,54 @@ class GateTests(unittest.TestCase):
             },
         )
         preflight = {m["mountPath"]: m for m in jobs["preflight"]["containers"][0]["volumeMounts"]}
-        self.assertEqual(set(preflight), {"/narwhal-keep", "/narwhal-state"})
+        self.assertEqual(set(preflight), {"/narwhal-keep"})
         self.assertNotIn("securityContext", jobs["preflight"]["containers"][0])
         unkeyed = {
             e["name"] for e in self.jobs(fleet(api_key=None))["preflight"]["containers"][0]["env"]
         }
         self.assertEqual(unkeyed, {"NARWHAL_GATE_KEEP"})
+
+    def test_a_gate_mounts_only_the_directories_it_names_each_by_its_own_subpath(self):
+        work = "deploy/run-1/stages/preflight/attempt-1"
+        limits = "deploy/run-1/stages/fleet-limits/attempt-1"
+        preflight = gate(entry("preflight"), state={work: True, limits: False})
+        [container] = template(objects.job(fleet(), preflight))["containers"]
+        state = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
+        self.assertEqual(
+            state,
+            [
+                {"name": "narwhal-state", "mountPath": "/narwhal-keep", "subPath": preflight.keep},
+                {
+                    "name": "narwhal-state",
+                    "mountPath": f"/narwhal-state/{limits}",
+                    "subPath": limits,
+                    "readOnly": True,
+                },
+                {"name": "narwhal-state", "mountPath": f"/narwhal-state/{work}", "subPath": work},
+            ],
+        )
+        # No Job mounts the volume's root, so none reaches the run directories under runs/,
+        # with their salts and credential HMACs.
+        for name, spec in self.jobs().items():
+            for mount in spec["containers"][0]["volumeMounts"]:
+                if mount["name"] == "narwhal-state":
+                    with self.subTest(name, mount=mount["mountPath"]):
+                        self.assertRegex(mount["subPath"], r"^(deploy|engines)/")
+        refused = {
+            "deploy/ or engines/": [
+                {"state": {path: False}}
+                for path in ("", "runs/example/uid", "deploy", "deploy/../runs", "engines/.x")
+            ],
+            "whether the gate writes": [{"state": {work: "yes"}}],
+        }
+        for message, cases in refused.items():
+            for overrides in cases:
+                with self.subTest(overrides), self.assertRaisesRegex(ValueError, message):
+                    gate(entry("preflight"), **overrides)
+        # The fabric image and the engine image mount no directory of the state volume.
+        for name in ("fabric-node-a-node-b-server", "discover-node-b"):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "controller's own image"):
+                gate(entry(name), state={work: True})
 
     def test_a_gate_that_cannot_run_is_refused(self):
         preflight = entry("preflight")
@@ -850,9 +907,11 @@ def without_release(document: dict) -> dict:
     """An object without what differs by design, as `spec_only`, and without the release in
     the routers' spread constraint.
 
-    The chart at ad38650c ran the routers with no security context and no volume check; the
-    builder adds both on purpose. This drops the security contexts, the scratch volume and the
-    start script, which `test_each_router_runs_unprivileged_on_a_read_only_root` and
+    The chart at ad38650c ran the routers with no security context and no volume check, and
+    mounted the whole state volume; the builder adds both and mounts only the fleet file's
+    directory, on purpose. This drops the security contexts, the scratch volume, the state
+    mounts and the start script, which `test_each_router_runs_unprivileged_on_a_read_only_root`,
+    `test_only_the_router_container_holds_the_lease_token` and
     `test_the_router_pair_matches_the_chart` check instead.
     """
     document = spec_only(document)
@@ -866,7 +925,9 @@ def without_release(document: dict) -> dict:
             container.pop("securityContext", None)
             container["command"][3] = "<router start>"
             container["volumeMounts"] = [
-                m for m in container["volumeMounts"] if m["name"] != objects.TMP_VOLUME
+                m
+                for m in container["volumeMounts"]
+                if m["name"] not in (objects.TMP_VOLUME, objects.STATE_VOLUME)
             ]
     return document
 
@@ -876,6 +937,11 @@ def without_release(document: dict) -> dict:
 POLICY = ROOT / "deploy" / "helm" / "narwhal" / "templates" / "admission-policy.yaml"
 CONTROLLER_NAME = "fleet-controller"
 CONTROLLER_USER = f"system:serviceaccount:{chart_fixtures.NAMESPACE}:{CONTROLLER_NAME}"
+# A requester who may update the admission policy, as the chart's installer may.
+INSTALLER = "user:installer"
+# The state claim's paths a container other than the controller's may mount by subPath.
+STATE_SUBPATH = re.compile(r"(deploy|engines)/.*")
+RUN_SUBPATH = re.compile(r"runs/[^/]+/[^/]+/(run[.]json|stages/.+)")
 POLICY_KINDS = {
     "engine": ["StatefulSet"],
     "router": ["StatefulSet"],
@@ -959,8 +1025,24 @@ def policy_refusals(
     annotations = (pod.get("metadata") or {}).get("annotations") or {}
     # A workload's requester makes it; only the installer's controller Deployment is its own.
     controller_path = (
-        document["kind"] == "Deployment" and document["metadata"]["name"] == CONTROLLER_NAME
+        document["kind"] == "Deployment"
+        and document["metadata"]["name"] == CONTROLLER_NAME
+        and requester == INSTALLER
     )
+    state_volumes = {
+        v["name"]
+        for v in volumes
+        if (v.get("persistentVolumeClaim") or {}).get("claimName") == state_claim
+    }
+
+    def state_mount(m: dict) -> bool:
+        if "subPathExpr" in m:
+            return m["subPathExpr"].startswith("engines/")
+        path = m.get("subPath", "")
+        return bool(
+            STATE_SUBPATH.fullmatch(path) or (m.get("readOnly") and RUN_SUBPATH.fullmatch(path))
+        )
+
     account = spec.get("serviceAccountName", spec.get("serviceAccount", ""))
     rules = {
         "host network": not spec.get("hostNetwork") or host_network_allowed,
@@ -1040,6 +1122,16 @@ def policy_refusals(
         )
         or bool(trusted)
         or controller_path,
+        "state subPath": controller_path
+        or all(
+            m["name"] not in state_volumes or state_mount(m)
+            for c in containers
+            for m in c.get("volumeMounts", [])
+        ),
+        # A workload's create adds no ephemeral container and makes no pod; `chart_live`
+        # sends both rules their cases.
+        "ephemeral containers": True,
+        "Job pods": True,
     }
     return [name for name, holds in rules.items() if not holds]
 
@@ -1239,9 +1331,20 @@ class RouterTests(unittest.TestCase):
             [v["persistentVolumeClaim"] for v in claims],
             [{"claimName": "narwhal-state", "readOnly": True}],
         )
+        # The routers read only the directory that holds their fleet file, its profiles and
+        # its calibration.
         state = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
+        folder = router_settings().fleet_file.rpartition("/")[0]
         self.assertEqual(
-            state, [{"name": "narwhal-state", "mountPath": "/narwhal-state", "readOnly": True}]
+            state,
+            [
+                {
+                    "name": "narwhal-state",
+                    "mountPath": f"/narwhal-state/{folder}",
+                    "subPath": folder,
+                    "readOnly": True,
+                }
+            ],
         )
         # No other derived object runs as the routers' ServiceAccount.
         for document in everything():
@@ -1342,12 +1445,53 @@ class RouterTests(unittest.TestCase):
                 volumes=[{"name": "s", "persistentVolumeClaim": {"claimName": "narwhal-state"}}],
             ),
         )
-        self.assertEqual(policy_refusals(deployment, "user:installer"), [])
+        self.assertEqual(policy_refusals(deployment, INSTALLER), [])
+        # A user who may not change the policy, as one with the namespace's edit role may not,
+        # neither changes the controller's Deployment nor makes one of its name.
+        self.assertEqual(
+            policy_refusals(deployment, "user:editor"), ["controller ServiceAccount", "state claim"]
+        )
+        # The controller's own Jobs mount the state claim only by subPath: never its root, a
+        # run directory's salt or credential HMACs, nor a run directory writable.
+        runs = f"runs/{chart_fixtures.NAMESPACE}/{OWNER.uid}"
+        for name, mount in {
+            "the root": {"mountPath": "/narwhal-state"},
+            "the salt": {"mountPath": "/s", "subPath": f"{runs}/run.salt", "readOnly": True},
+            "the HMACs": {
+                "mountPath": "/s",
+                "subPath": f"{runs}/credential.json",
+                "readOnly": True,
+            },
+            "a run directory": {"mountPath": "/s", "subPath": runs, "readOnly": True},
+            "a writable record": {"mountPath": "/s", "subPath": f"{runs}/run.json"},
+            "another tree": {"mountPath": "/s", "subPath": "other/x"},
+        }.items():
+            with self.subTest(name):
+                forged = copy.deepcopy(export)
+                [container] = template(forged)["containers"]
+                container["volumeMounts"].append({"name": "state", **mount})
+                self.assertEqual(policy_refusals(forged), ["state subPath"])
+
+    def test_the_controllers_jobs_mount_the_state_claim_only_by_subpath(self):
+        from tests.deployment import chart_live
+
+        namespace = chart_fixtures.NAMESPACE
+        for name, case in chart_live.admitted(namespace, "fleet").items():
+            if case.document["kind"] != "Pod" and case.user == CONTROLLER_USER:
+                with self.subTest(name):
+                    self.assertEqual(policy_refusals(case.document), [])
+        cases = chart_live.refused("fleet", namespace).items()
+        subpath = {name: case for name, case in cases if case.words == chart_live.SUBPATH}
+        self.assertEqual(len(subpath), 4)
+        for name, case in subpath.items():
+            with self.subTest(name):
+                self.assertEqual(case.user, CONTROLLER_USER)
+                self.assertEqual(policy_refusals(case.document), ["state subPath"])
 
     def test_the_router_pair_passes_the_charts_admission_policy(self):
         validations = POLICY.read_text().split("  validations:\n", 1)[1].split("\n---", 1)[0]
         # The mirror holds every validation of the policy.
-        self.assertEqual(validations.count("\n    - expression:") + 1, 22)
+        self.assertEqual(validations.count("\n    - expression:") + 1, 25)
         statefulset = router_set()
         self.assertEqual(policy_refusals(statefulset), [])
         # The router labels are reserved: only the controller may apply them.
@@ -1452,7 +1596,9 @@ class RouterTests(unittest.TestCase):
             Routers.of(spec, "deploy/run-1/fleet.json"),
             Routers("deploy/run-1/fleet.json", "local-path", "2Gi", ("--lease-ttl", "6")),
         )
-        self.assertEqual(Routers.of({"storageClassName": "a", "size": "1Gi"}, "f.json").args, ())
+        self.assertEqual(
+            Routers.of({"storageClassName": "a", "size": "1Gi"}, "deploy/r/f.json").args, ()
+        )
 
     def test_router_settings_that_cannot_run_the_pair_are_refused(self):
         for fleet_file in (
@@ -1463,6 +1609,10 @@ class RouterTests(unittest.TestCase):
             ".hidden/fleet.json",
             "fleet.yaml",
             "a//fleet.json",
+            # Outside an attempt's work directory: the volume's root, or a run directory.
+            "fleet.json",
+            "runs/example/uid/fleet.json",
+            "deploy/fleet.json",
         ):
             with (
                 self.subTest(fleet_file=fleet_file),

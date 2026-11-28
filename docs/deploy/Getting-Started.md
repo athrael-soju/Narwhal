@@ -271,7 +271,6 @@ monitoring:
 
 fleet:
   images:
-    narwhal: <registry>/narwhal@sha256:<digest>
     haproxy: <registry>/haproxy@sha256:<digest>
     fabric: <registry>/perftest@sha256:<digest>
   engines:
@@ -330,7 +329,7 @@ fleet:
     key: token
 ```
 
-Use the same Narwhal image in `images.narwhal`, which the controller runs, and in `fleet.images.narwhal`, which the routers, gate Jobs and sidecars run. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
+`images.narwhal` is the Narwhal image the controller runs, and the routers, gate Jobs and sidecars it makes run it too; the fleet names only the engine, HAProxy and fabric images. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
 
 ### Installing and following the fleet
 

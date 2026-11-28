@@ -13,7 +13,8 @@ fleet it follows in `kubernetes-fleet.json` and mirrors the controller's run dir
 `run.json` and every finished attempt's evidence. The mirror arrives through export Jobs,
 never exec, and the workstation never creates one: it sets the fleet's
 `<GROUP>/export-request` annotation, the fleet controller makes the Job from its own image and
-names it in `status.exports`, and the workstation reads the Job's pod log. `kubernetes_export`
+names it in `status.exports`, then reads the pod's log and adds the pod and the log's SHA-256
+there; the workstation imports the pod's log only when it has that digest. `kubernetes_export`
 describes the Job, which mounts only the run record and the attempt directories asked for,
 read-only, so the salt that keys the record's digests and the key check's salt and HMACs
 never reach an export pod. `kubernetes_target.gate_files` checks the files against the log's
@@ -22,15 +23,16 @@ evidence the run directory already holds. `kubernetes-export.json` keeps which a
 run directory holds whole.
 
 The workstation's identity needs the chart's fleet-editor Role, of which it uses get, create,
-patch and delete on `narwhalfleets` (`FLEET_RULES`), and `WORKSTATION_RULES`: get and list on
-pods, to find an export Job's pod and for the live checks of `plan` and `status`, and get on
-`pods/log`, to read the export. It needs no verb on Jobs, Secrets, RBAC or `pods/exec`, so it
-cannot start a pod of its own.
+patch and delete on `narwhalfleets` (`FLEET_RULES`), and `WORKSTATION_RULES`: get on pods, to
+check the export Job's pod the controller names and for the live checks of `plan` and
+`status`, and get on `pods/log`, to read the export. It needs no verb on Jobs, Secrets, RBAC
+or `pods/exec`, so it cannot start a pod of its own.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -49,6 +51,7 @@ from narwhal.runtime.kubernetes_api import (
     Conflict,
     Kind,
     KubernetesError,
+    LogTooLarge,
 )
 
 from ..serving.control_token import ROUTER_TOKEN_ENV
@@ -107,6 +110,8 @@ DEFAULT_STATE_CLAIM = "narwhal-state"
 # The engines' ServiceAccount the chart names `<release>-engine`; inputs() checks only its
 # form, and no fleet holds it.
 _ENGINE_ACCOUNT = "narwhal-engine"
+# The controller's own image, which the chart pins; inputs() checks only its form.
+_NARWHAL_IMAGE = "narwhal@sha256:" + "0" * 64
 _PLACEHOLDER_UID = "00000000-0000-4000-8000-000000000000"
 
 # The export Jobs, which the controller makes on request.
@@ -138,7 +143,7 @@ FLEET_RULES: tuple[dict[str, Any], ...] = (
     },
 )
 WORKSTATION_RULES: tuple[dict[str, Any], ...] = (
-    {"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+    {"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]},
     {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
 )
 
@@ -178,7 +183,10 @@ class KubectlWorkstation(KubectlCluster):
     """`KubectlCluster` as the workstation's field manager: its fleet applies never force a
     conflict, and every fleet it reads keeps its `managedFields`."""
 
-    def _run(self, argv: list[str], data: str | None, timeout: float, *, write: bool) -> str:
+    def _call(
+        self, argv: list[str], data: bytes | None, timeout: float, *, write: bool
+    ) -> tuple[subprocess.CompletedProcess[bytes], Path]:
+        """Run kubectl, keeping the command and its standard error in a log of its own."""
         self.log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._count += 1
         log = self.log_dir / f"{self._count:03d}-kubectl-{argv[1]}.log"
@@ -188,7 +196,6 @@ class KubectlWorkstation(KubectlCluster):
                 input=data,
                 stdin=None if data is not None else subprocess.DEVNULL,
                 capture_output=True,
-                text=True,
                 timeout=timeout,
                 check=False,
             )
@@ -196,16 +203,38 @@ class KubectlWorkstation(KubectlCluster):
             target.write_private(log, f"$ {shlex.join(argv)}\ntimed out\n".encode())
             raise target._kubectl_error(argv, 124, "timed out", log, write=write) from None
         target.write_private(
-            log, f"$ {shlex.join(argv)}\nexit {result.returncode}\n{result.stderr}".encode()
+            log, f"$ {shlex.join(argv)}\nexit {result.returncode}\n".encode() + result.stderr
         )
+        return result, log
+
+    def _run(self, argv: list[str], data: str | None, timeout: float, *, write: bool) -> str:
+        result, log = self._call(
+            argv, None if data is None else data.encode(), timeout, write=write
+        )
+        stdout = result.stdout.decode(errors="replace")
         if not result.returncode:
-            return result.stdout
-        cause = result.stderr or result.stdout
+            return stdout
+        cause = result.stderr.decode(errors="replace") or stdout
         if "Apply failed with" in cause:
             raise Conflict(409, "Conflict", " ".join(cause.split("Please review")[0].split()))
         if " is invalid" in cause:
             raise KubernetesError(422, "Invalid", cause.strip().removeprefix("Error from server"))
         raise target._kubectl_error(argv, result.returncode, cause, log, write=write)
+
+    def log(self, pod: str, container: str) -> bytes:
+        """The container's log byte for byte, as the export's digest needs it."""
+        context = ["--context", self.context] if self.context else []
+        argv = [self.kubectl_path, "logs", *context, "--namespace", self.namespace]
+        argv += [f"pod/{pod}", "--container", container, f"--limit-bytes={target.LOG_BYTES + 1}"]
+        result, log = self._call(argv, None, 120, write=False)
+        if result.returncode:
+            cause = result.stderr.decode(errors="replace")
+            raise target._kubectl_error(argv, result.returncode, cause, log, write=False)
+        if len(result.stdout) > target.LOG_BYTES:
+            raise LogTooLarge(
+                0, "LogTooLarge", f"pod {pod} logged more than {target.LOG_BYTES} bytes"
+            )
+        return result.stdout
 
     def get(self, kind: Kind, name: str) -> dict[str, Any] | None:
         if kind != FLEET:
@@ -312,7 +341,6 @@ def _object(env: Mapping[str, str], name: str, problems: list[str]) -> dict | No
 
 # The variables `build` reads as fields of the fleet, by exact name, and per engine.
 _FIELDS = (
-    SIDECAR_IMAGE_ENV,
     HAPROXY_IMAGE_ENV,
     FABRIC_IMAGE_ENV,
     "NARWHAL_ENGINE_IMAGE",
@@ -377,12 +405,16 @@ def build(env: Mapping[str, str], *, until: str | None = None) -> Built:
             problems.append(str(error))
     if not target.DNS_LABEL.fullmatch(env.get(target.NAMESPACE, "")):
         problems.append(f"set {target.NAMESPACE} to the namespace the fleet runs in")
+    if SIDECAR_IMAGE_ENV in env:
+        problems.append(
+            f"unset {SIDECAR_IMAGE_ENV}; the routers, gate Jobs and sidecars run the "
+            "controller's own image, the narwhal chart's images.narwhal"
+        )
     if until is not None and until not in STAGES:
         problems.append(f"--until {until}: the Kubernetes stage graph has no stage {until}")
 
     images: dict[str, Any] = {}
     for key, name in (
-        ("narwhal", SIDECAR_IMAGE_ENV),
         ("haproxy", HAPROXY_IMAGE_ENV),
         ("fabric", FABRIC_IMAGE_ENV),
     ):
@@ -551,6 +583,7 @@ def fleet_env(
     claim = env.get(target.STATE_CLAIM) or DEFAULT_STATE_CLAIM
     found = fleet_resource.spec_env(stored, state_claim=claim, policy=policy)
     found[target.ENGINE_ACCOUNT] = _ENGINE_ACCOUNT
+    found[SIDECAR_IMAGE_ENV] = _NARWHAL_IMAGE
     return found
 
 
@@ -946,9 +979,7 @@ class Session:
         self.ws.annotate(FLEET, NAME, {kubernetes_export.EXPORT_REQUEST: value})
         answer = self._answer(request.nonce)
         name = str(answer["job"])
-        log = self._job_log(name, str(answer["uid"]))
-        if len(log) > EXPORT_LOG_BYTES:
-            raise ExportError(f"export Job {name} logged more than {EXPORT_LOG_BYTES} bytes")
+        log = self._job_log(answer)
         output = log.decode(errors="replace")
         try:
             files = target.gate_files(output)
@@ -979,8 +1010,9 @@ class Session:
         return files, report
 
     def _answer(self, nonce: str) -> dict[str, Any]:
-        """The controller's answer to the export request `nonce`, from the fleet's status."""
-        deadline = self.clock() + target.GRACE_SECONDS
+        """The controller's answer to the export request `nonce`, from the fleet's status,
+        once it names the pod that ran the Job and its log's digest."""
+        deadline = self.clock() + EXPORT_SECONDS + 2 * target.GRACE_SECONDS
         while True:
             live = self.live()
             if live is None:
@@ -989,39 +1021,41 @@ class Session:
                 if entry.get("nonce") != nonce:
                     continue
                 if entry.get("error"):
-                    raise ExportError(f"the controller made no export Job: {entry['error']}")
-                if entry.get("job") and entry.get("uid"):
+                    raise ExportError(f"the controller exported nothing: {entry['error']}")
+                if all(entry.get(key) for key in ("job", "uid", "pod", "sha256")):
                     return dict(entry)
             if self.clock() >= deadline:
                 raise ExportError(
-                    f"the controller answered no export request in {target.GRACE_SECONDS} s"
+                    f"the controller finished no export in {EXPORT_SECONDS} s; see its log"
                 )
             self.sleep(JOB_POLL_SECONDS)
 
-    def _job_log(self, name: str, uid: str) -> bytes:
-        """The log of the export Job's pod once it succeeds. Only a pod the Job of `uid`
-        controls is read, and the workstation reads no Job: the pod's phase says it all."""
-        deadline = self.clock() + EXPORT_SECONDS + target.GRACE_SECONDS
-        while True:
-            pods = [
-                pod
-                for pod in self.ws.list(POD, {target.JOB_NAME_LABEL: name})
-                if any(
-                    reference.get("uid") == uid and reference.get("controller") is True
-                    for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
-                )
-            ]
-            for pod in pods:
-                phase = (pod.get("status") or {}).get("phase")
-                if phase == "Succeeded":
-                    return self.ws.log(pod["metadata"]["name"], kubernetes_export.EXPORT)
-                if phase == "Failed":
-                    raise ExportError(f"export Job {name}'s pod failed")
-                if cause := target.never_runs(pod, scheduled=False):
-                    raise ExportError(f"export Job {name}: {cause}")
-            if self.clock() >= deadline:
-                raise ExportError(f"export Job {name} did not finish in {EXPORT_SECONDS} s")
-            self.sleep(JOB_POLL_SECONDS)
+    def _job_log(self, answer: Mapping[str, Any]) -> bytes:
+        """The log of the pod the controller read, when it is the log the controller read:
+        a pod the Job of the answer's UID controls, whose log has the answer's SHA-256 and
+        size. The workstation reads no Job."""
+        name, pod_name = str(answer["job"]), str(answer["pod"])
+        pod = self.ws.get(POD, pod_name) or {}
+        metadata = pod.get("metadata") or {}
+        if (
+            not any(
+                reference.get("kind") == "Job"
+                and reference.get("uid") == answer["uid"]
+                and reference.get("controller") is True
+                for reference in metadata.get("ownerReferences") or []
+            )
+            or (metadata.get("labels") or {}).get(target.JOB_NAME_LABEL) != name
+        ):
+            raise ExportError(f"pod {pod_name} is not the pod of export Job {name}")
+        log = self.ws.log(pod_name, kubernetes_export.EXPORT)
+        if len(log) > EXPORT_LOG_BYTES:
+            raise ExportError(f"export Job {name} logged more than {EXPORT_LOG_BYTES} bytes")
+        if len(log) != answer.get("size") or hashlib.sha256(log).hexdigest() != answer["sha256"]:
+            raise ExportError(
+                f"pod {pod_name}'s log differs from the one the controller read; nothing of "
+                "it is imported"
+            )
+        return log
 
     def _write(self, files: Mapping[str, bytes]) -> None:
         """Write the exported files into the run directory, each private and whole, the run

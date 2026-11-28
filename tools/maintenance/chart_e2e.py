@@ -127,7 +127,10 @@ STORAGE_CLASS = "narwhal-e2e"
 MODEL_CLAIM = "narwhal-models"
 FLEET_MODEL_CLAIM = "fleet-model"
 FLEET_MODEL_DIR = f"{NODE_VOLUMES}/fleet-model"
-FLEET_FILE = "fleet.json"
+# The routers' fleet file and its profiles, in a directory of the state volume that the
+# profile Job and the routers mount by its own subPath, as the controller's Jobs mount theirs.
+SERVING_DIR = "deploy/chart-e2e"
+FLEET_FILE = f"{SERVING_DIR}/fleet.json"
 # The routers' control token, which the routes that change membership or lifecycle require.
 CONTROL_SECRET = {"name": "router-token-v1", "key": "token"}
 GATE_SELECTOR = f"{objects.COMPONENT_LABEL}={objects.GATE}"
@@ -624,7 +627,8 @@ def fleet_document(narwhal_image: str, cluster: Cluster, **changes: Any) -> dict
     document = fleet_fixtures.fleet()
     document["metadata"] = {"name": fleet_resource.NAME, "namespace": NAMESPACE}
     spec = document["spec"]
-    spec["images"] = {"narwhal": narwhal_image, "haproxy": HAPROXY_IMAGE, "fabric": narwhal_image}
+    # The controller runs its own image, the chart's images.narwhal, in every Narwhal Job.
+    spec["images"] = {"haproxy": HAPROXY_IMAGE, "fabric": narwhal_image}
     engines = spec["engines"]
     # The engine image only has to run the discovery Job's Python.
     engines["image"] = narwhal_image
@@ -1251,7 +1255,7 @@ def fleet_file(spec: dict, engines: dict) -> dict:
         "slo": spec["slo"],
         "controller": spec["controller"],
         **({"serving": spec["serving"]} if "serving" in spec else {}),
-        "profiles": {"path": "/narwhal-state/profiles.json"},
+        "profiles": {"path": f"/narwhal-state/{SERVING_DIR}/profiles.json"},
         # Relative to the router's working directory on its own volume.
         "recovery": {"state_path": "router-state.json"},
         "engine": {"backend": spec["runtime"]["backend"], "first_token_timeout_s": 10.0},
@@ -1263,7 +1267,16 @@ def fleet_file(spec: dict, engines: dict) -> dict:
     return document
 
 
-def pod_job(name: str, image: str, command: list[str], mounts: dict[str, str]) -> dict:
+def pod_job(
+    name: str,
+    image: str,
+    command: list[str],
+    mounts: dict[str, str],
+    sub_paths: dict[str, str] | None = None,
+) -> dict:
+    """A Job of one container that mounts each claim of `mounts` at its path, by the subPath
+    `sub_paths` names for it."""
+    paths = sub_paths or {}
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -1286,7 +1299,12 @@ def pod_job(name: str, image: str, command: list[str], mounts: dict[str, str]) -
                                 "capabilities": {"drop": ["ALL"]},
                             },
                             "volumeMounts": [
-                                {"name": claim, "mountPath": path} for claim, path in mounts.items()
+                                {
+                                    "name": claim,
+                                    "mountPath": path,
+                                    **({"subPath": paths[claim]} if claim in paths else {}),
+                                }
+                                for claim, path in mounts.items()
                             ],
                         }
                     ],
@@ -1390,7 +1408,7 @@ def serving_objects(cluster: Cluster, fleet: Fleet) -> list[dict]:
     spec = fleet.get()["spec"]
     built = objects.Fleet(
         objects.Owner(fleet_resource.NAME, fleet.uid, NAMESPACE),
-        narwhal_image=spec["images"]["narwhal"],
+        narwhal_image=fleet.image,
         state_claim="narwhal-state",
         haproxy_image=spec["images"]["haproxy"],
         fabric_image=spec["images"]["fabric"],
@@ -1449,7 +1467,8 @@ def serve(
                     json.dumps(template["runtime"]),
                     f"/narwhal-state/{FLEET_FILE}",
                 ],
-                {"narwhal-state": "/narwhal-state"},
+                {"narwhal-state": f"/narwhal-state/{SERVING_DIR}"},
+                {"narwhal-state": SERVING_DIR},
             )
         ),
     )

@@ -50,7 +50,11 @@ same way, and one started on every change would turn the stall into a loop of fa
 A new `<GROUP>/export-request` value asks for an export Job, which copies finished evidence
 out of the run directory for a workstation; see `kubernetes_export`. A thread apart from the
 passes makes it, from the controller's own image, user and group in controller.json, and names
-it in `status.exports` by the request's nonce, so an export never waits for a stage.
+it in `status.exports` by the request's nonce, so an export never waits for a stage. Once the
+Job's pod succeeds, the thread reads the pod's log itself, from the pod the Job of that UID
+controls, and adds the pod's name and the log's SHA-256 and size to the answer. The
+workstation imports a log only when it has that digest, so a pod someone else made under the
+Job's name, which the chart's admission policy also refuses, exports nothing.
 
 `spec.stopped` cancels a running stage, deletes the routers, HAProxy, the engines and then the
 Jobs, and keeps the volumes and the run directory, so clearing it starts again from the record.
@@ -64,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -86,12 +91,14 @@ import httpx
 from narwhal.runtime import kubernetes_api, kubernetes_lease
 from narwhal.runtime.kubernetes_api import (
     CUSTOM_RESOURCE_DEFINITION,
+    POD,
     STATEFUL_SET,
     ApiClient,
     Conflict,
     Informer,
     Kind,
     KubernetesError,
+    LogTooLarge,
     NotFound,
     WatchEvent,
     WorkQueue,
@@ -229,7 +236,8 @@ class Settings:
     runtime_classes: tuple[str, ...]
     admission_policy: str
     key_check_period: float = KEY_CHECK_SECONDS
-    # The controller's own image, user and group, which export Jobs run as.
+    # The controller's own image, which every Job and sidecar that runs Narwhal code runs, and
+    # the user and group export Jobs run as.
     image: str = ""
     user: int = 0
     group: int = 0
@@ -265,7 +273,7 @@ class Settings:
         ):
             problems.append("keyCheckPeriodSeconds must be a positive number of seconds")
         image = values.get("image", "")
-        if image and not (isinstance(image, str) and kubernetes_objects.DIGEST.fullmatch(image)):
+        if not (isinstance(image, str) and kubernetes_objects.DIGEST.fullmatch(image)):
             problems.append("image must name the controller's image by registry digest")
         ids = [values.get(name, 0) for name in ("runAsUser", "runAsGroup")]
         if not all(type(n) is int and 0 <= n < 2**31 for n in ids):
@@ -869,7 +877,66 @@ class Controller:
                 self._export(fleet)
             except Exception:
                 log.exception("export request of %s failed", object_key)
+        for fleet in self.informer.items():
+            try:
+                self._follow_exports(fleet)
+            except Exception:
+                log.exception("export Jobs of %s not followed", kubernetes_api.key(fleet))
         return len(pending)
+
+    def _follow_exports(self, fleet: Mapping[str, Any]) -> None:
+        """Finish each answer whose export Job runs, once its pod has ended."""
+        for entry in list(self._exports.get(_uid(fleet)) or []):
+            if not entry.get("job") or "sha256" in entry or entry.get("error"):
+                continue
+            ended = self._export_ended(str(entry["job"]), str(entry["uid"]))
+            if ended is not None:
+                answer = {k: entry[k] for k in ("nonce", "job", "uid")}
+                self._answer(fleet, {**answer, **ended})
+
+    def _export_ended(self, name: str, uid: str) -> dict[str, Any] | None:
+        """The pod and the digest and size of its log once the export Job's pod succeeds, an
+        error once it cannot, or None while it runs. Only a pod the Job of `uid` controls
+        counts, and the Job runs one pod at most: a second is no pod of the Job's own."""
+        pods = [
+            pod
+            for pod in self.client.list(POD, labels={kubernetes_target.JOB_NAME_LABEL: name}).items
+            if any(
+                reference.get("kind") == "Job"
+                and reference.get("uid") == uid
+                and reference.get("controller") is True
+                for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
+            )
+        ]
+        if len(pods) > 1:
+            names = ", ".join(sorted(pod["metadata"]["name"] for pod in pods))
+            return {"error": f"more than one pod claims export Job {name}: {names}"[:1024]}
+        for pod in pods:
+            pod_name = pod["metadata"]["name"]
+            phase = (pod.get("status") or {}).get("phase")
+            if phase == "Succeeded":
+                try:
+                    data = self.client.log(
+                        pod_name,
+                        container=kubernetes_export.EXPORT,
+                        limit_bytes=kubernetes_export.EXPORT_LOG_BYTES,
+                    )
+                except LogTooLarge:
+                    limit = kubernetes_export.EXPORT_LOG_BYTES
+                    return {"error": f"export Job {name} logged more than {limit} bytes"}
+                digest = hashlib.sha256(data).hexdigest()
+                return {"pod": pod_name, "sha256": digest, "size": len(data)}
+            if phase == "Failed":
+                return {"error": f"export Job {name}'s pod {pod_name} failed"}
+            if cause := kubernetes_target.never_runs(pod, scheduled=False):
+                return {"error": f"export Job {name}: {cause}"[:1024]}
+        job = self.client.get(kubernetes_target.JOB, name)
+        if job is None or job["metadata"].get("uid") != uid:
+            return {"error": f"export Job {name} is gone"}
+        conditions = (job.get("status") or {}).get("conditions") or []
+        if any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions):
+            return {"error": f"export Job {name} failed"}
+        return None
 
     def _export(self, fleet: Mapping[str, Any]) -> None:
         uid = _uid(fleet)
@@ -892,8 +959,6 @@ class Controller:
         try:
             if not (directory / run_record.RECORD).is_file():
                 raise ValueError("the controller has written no run record for the fleet yet")
-            if not self.settings.image:
-                raise ValueError("the controller's settings name no image to export with")
             check_directory(directory)
             record = run_record.read(directory)
             attempts = kubernetes_export.wanted(record, request, directory)

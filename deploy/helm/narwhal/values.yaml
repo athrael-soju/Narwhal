@@ -2,7 +2,8 @@
 # that leaves one out. Keep a filled values file in the ignored config/helm/ directory.
 
 images:
-  # The Narwhal image by registry digest, <repository>@sha256:<hex>, which the controller runs.
+  # The Narwhal image by registry digest, <repository>@sha256:<hex>. The controller runs it,
+  # and so do the routers, gate Jobs, export Jobs and attestation sidecars it makes.
   narwhal: ""
 
 # The fleet controller, which runs the stage graph for the namespace's NarwhalFleet and owns

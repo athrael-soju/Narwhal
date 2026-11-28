@@ -3135,7 +3135,6 @@ def _pod_ready(pod: Mapping[str, Any]) -> bool:
 # The task 18 rig, now over the store.
 
 NAMESPACE = "fleet"
-CONTROLLER_IMAGE = "registry.example/narwhal-controller@sha256:" + "c0" * 32
 NODES = {"engine-1": "gpu-a", "engine-2": "gpu-b"}
 IMAGE = "registry.example/engine@sha256:" + "e" * 64
 NARWHAL_IMAGE = "registry.example/narwhal@sha256:" + "a" * 64
@@ -3398,8 +3397,8 @@ class Rig:
             "stateClaim": STATE_CLAIM,
             "engineServiceAccount": ENGINE_ACCOUNT,
             "sidecarUser": SIDECAR_USER,
-            # The controller's own image, which the chart pins apart from the fleet's.
-            "image": CONTROLLER_IMAGE,
+            # The controller's own image, which the chart pins and every Narwhal Job runs.
+            "image": NARWHAL_IMAGE,
             "runAsUser": 10001,
             "runAsGroup": 10001,
         }

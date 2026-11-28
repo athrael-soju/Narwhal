@@ -1157,6 +1157,9 @@ class ReplayTests(ControllerTest):
                 self.assertEqual(len(self.store.live(LEASE, NAMESPACE)), 1)
 
 
+IMAGE = "registry.example/narwhal@sha256:" + "a" * 64
+
+
 class SettingsTests(unittest.TestCase):
     def test_settings_need_the_charts_names_and_lists(self):
         good = {
@@ -1164,6 +1167,7 @@ class SettingsTests(unittest.TestCase):
             "engineServiceAccount": "narwhal-engine",
             "admissionPolicy": "example-narwhal",
             "runtimeClassNames": ["nvidia"],
+            "image": IMAGE,
         }
         settings = Settings.of(good)
         self.assertEqual(settings.runtime_classes, ("nvidia",))
@@ -1174,6 +1178,8 @@ class SettingsTests(unittest.TestCase):
             ("runtimeClassNames", "nvidia"),
             ("modelHostPathPrefixes", [1]),
             ("image", "registry.example/narwhal:latest"),
+            # Every Job that runs Narwhal code runs this image, so the controller needs it.
+            ("image", None),
             ("runAsUser", "10001"),
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
@@ -1186,7 +1192,14 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "one JSON object"):
                 Settings.load(path)
             path.write_text(
-                json.dumps({"stateClaim": "s", "engineServiceAccount": "e", "admissionPolicy": "p"})
+                json.dumps(
+                    {
+                        "stateClaim": "s",
+                        "engineServiceAccount": "e",
+                        "admissionPolicy": "p",
+                        "image": IMAGE,
+                    }
+                )
             )
             self.assertEqual(Settings.load(path).admission_policy, "p")
 
@@ -1194,7 +1207,14 @@ class SettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "controller.json"
             path.write_text(
-                json.dumps({"stateClaim": "s", "engineServiceAccount": "e", "admissionPolicy": "p"})
+                json.dumps(
+                    {
+                        "stateClaim": "s",
+                        "engineServiceAccount": "e",
+                        "admissionPolicy": "p",
+                        "image": IMAGE,
+                    }
+                )
             )
             with (
                 patch.dict(os.environ, {}, clear=True),

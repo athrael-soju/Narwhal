@@ -35,12 +35,12 @@ from narwhal.deployment.deploy import InputError
 from narwhal.deployment.fleet_resource import CLI_MANAGER, VolumePolicy
 from narwhal.deployment.kubernetes_target import FLEET, ApiCluster
 from narwhal.dev import cli
-from narwhal.runtime.kubernetes_api import ApiClient, Connection, Kind
+from narwhal.runtime.kubernetes_api import ApiClient, Connection, Kind, Listing
 from tests.deployment import chart_fixtures, fleet_fixtures
 from tests.deployment.kubernetes_cluster import (
-    CONTROLLER_IMAGE,
     JOB,
     NAMESPACE,
+    NARWHAL_IMAGE,
     POD,
     SERVER,
     STATE_CLAIM,
@@ -213,6 +213,8 @@ class WorkstationTest(ControllerTest):
         self.tamper = None
         # Called on each wait of the workstation instead of the controller, when set.
         self.on_wait = None
+        # Changes a test makes to a pod log only the workstation reads.
+        self.ws_tamper = None
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(kubernetes_cli, "connect", lambda env, logs: self.ws))
@@ -222,7 +224,11 @@ class WorkstationTest(ControllerTest):
 
     def _workstation(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(_rbac(request))
-        return self.rig._handle(request)
+        response = self.rig._handle(request)
+        if self.ws_tamper is not None and request.url.path.endswith("/log"):
+            response.read()
+            return httpx.Response(response.status_code, content=self.ws_tamper(response.content))
+        return response
 
     def wait(self, seconds: float) -> None:
         self.store.clock.advance(seconds)
@@ -598,9 +604,8 @@ class ExportTests(WorkstationTest):
                 volume["persistentVolumeClaim"], {"claimName": STATE_CLAIM, "readOnly": True}
             )
             [container] = pod["containers"]
-            # The controller's image, never the one the fleet names.
-            self.assertEqual(container["image"], CONTROLLER_IMAGE)
-            self.assertNotEqual(container["image"], live["spec"]["images"]["narwhal"])
+            # The controller's own image.
+            self.assertEqual(container["image"], NARWHAL_IMAGE)
             for mount in container["volumeMounts"]:
                 self.assertIs(mount["readOnly"], True)
                 relative = mount["subPath"].removeprefix(runs + "/")
@@ -718,6 +723,77 @@ class ExportTests(WorkstationTest):
         )
         entry["status"] = run_record.FAILED
         self.assertIn(entry["directory"], kubernetes_export.wanted(record, held, self.directory()))
+
+    def late_attempt(self) -> str:
+        """A file the controller's run directory holds and the workstation's does not."""
+        attempt = "stages/access/attempt-1"
+        (self.directory() / attempt / "late.json").write_text('{"a": 1}')
+        self.forget(attempt)
+        return f"{attempt}/late.json"
+
+    def test_the_controller_names_the_pod_it_read_and_its_logs_digest(self):
+        self.late_attempt()
+        self.exports.clear()
+        self.session().export()
+        [run] = self.exports
+        log = run["log"].encode()
+        [entry] = [e for e in self.live()["status"]["exports"] if e.get("pod")][-1:]
+        self.assertEqual(entry["pod"], run["pod"]["metadata"]["name"])
+        self.assertEqual(entry["sha256"], hashlib.sha256(log).hexdigest())
+        self.assertEqual(entry["size"], len(log))
+
+    def test_a_log_other_than_the_one_the_controller_read_writes_nothing(self):
+        name = self.late_attempt()
+        before = self.mirrored()
+
+        def forged(log: bytes) -> bytes:
+            files = {**kubernetes_target.gate_files(log.decode()), name: b'{"a": 2}'}
+            lines = [
+                r for r in log.decode().splitlines() if r.startswith(kubernetes_export.SUMMARY)
+            ]
+            body = "".join(
+                f"{kubernetes_gate.FILE}{n} {base64.b64encode(d).decode()}\n"
+                for n, d in files.items()
+            )
+            manifest = {
+                n: {"sha256": hashlib.sha256(d).hexdigest(), "size": len(d)}
+                for n, d in files.items()
+            }
+            text = body + lines[-1] + "\n" + kubernetes_gate.MANIFEST + json.dumps(manifest)
+            return (text + "\n").encode()
+
+        # The log the workstation reads holds a whole, consistent manifest; only its digest
+        # tells it from the log the controller read.
+        self.ws_tamper = forged
+        with self.assertRaisesRegex(kubernetes_cli.ExportError, "differs from the one the"):
+            self.session().export()
+        self.assertEqual(self.mirrored(), before)
+        self.assertFalse((self.run_dir / name).exists())
+
+    def test_a_second_pod_that_claims_the_export_job_writes_nothing(self):
+        name = self.late_attempt()
+        before = self.mirrored()
+        controller = self.controllers[0]
+        listed = controller.client.list
+
+        def with_forgery(kind: Kind, **options: Any) -> Listing:
+            # A pod made under the Job's name and labels, with its controller reference, as
+            # the chart's admission policy refuses; this store has no admission policy.
+            found = listed(kind, **options)
+            if kind.kind != "Pod" or not found.items:
+                return found
+            forged = copy.deepcopy(found.items[0])
+            forged["metadata"]["name"] += "-forged"
+            forged["metadata"]["uid"] = "00000000-0000-4000-8000-0000000000f0"
+            return Listing([forged, *found.items], found.resource_version)
+
+        with (
+            patch.object(controller.client, "list", with_forgery),
+            self.assertRaisesRegex(kubernetes_cli.ExportError, "more than one pod claims"),
+        ):
+            self.session().export()
+        self.assertEqual(self.mirrored(), before)
+        self.assertFalse((self.run_dir / name).exists())
 
     def test_a_tampered_log_writes_nothing(self):
         attempt = "stages/access/attempt-1"
