@@ -73,6 +73,8 @@ Configure the load balancer from the shipped [HAProxy configuration](https://git
 
 HAProxy takes a router out of rotation at the first check that fails, and returns it at the first check that passes. A check also fails when the router does not accept its connection within 200 milliseconds or does not answer within one second.
 
+`narwhal deploy` and the chart forward only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets` through HAProxy, matched by method and exact path. Every other request answers HTTP 404 there, so a client of the load balancer cannot reach `/narwhal/state`, `/metrics`, membership or lifecycle routes. Stages, the other router and monitoring read those at a router's own address. The shipped file itself forwards every path; `narwhal deploy` adds the filter when it binds the file to the pair.
+
 A standby, a fenced router, a router that is shutting down and a stopped router are therefore out of rotation. While no router is in rotation, HAProxy holds each new request and tries again every second, up to 10 times, then answers HTTP 503 itself. It retries a request whose connection to a router fails in the same way. A new request therefore waits for the standby when the standby takes over within 10 seconds of the request, as it does at the default `--lease-ttl`. The held requests reach the new router together, and admission can refuse some of them with HTTP 429. A request in flight on a crashed router fails.
 
 When the supervisor restarts a stopped router at once, HAProxy has already taken the stopped router out of rotation. The restarted process is a standby, so HAProxy sends it no requests, and new requests wait for the new holder.

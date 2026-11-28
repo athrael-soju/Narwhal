@@ -1889,11 +1889,17 @@ class Deployment:
         remote_dir: str,
         url: str,
         completion: bool,
+        *,
+        serving: bool = False,
     ) -> None:
-        """Retain the router's health, readiness, state and metrics, and one completion."""
+        """Retain the router's health, readiness, state and metrics, and one completion.
+
+        With `serving`, `url` is the load balancer, which forwards only the serving routes.
+        """
         fleet = _json(context.outputs("fleet-limits") / "fleet.json")
         body = json.dumps({"model": fleet["model"], "prompt": _COMPLETION_PROMPT, "max_tokens": 32})
         args = ["responses", url] + (["--completion", body] if completion else [])
+        args += ["--serving"] if serving else []
         script = _host_http(remote_dir, *args)
         output = SSH(env, context.directory / "logs").run(
             host, context.stage, "check the router", script
@@ -1953,7 +1959,7 @@ class Deployment:
         except RemoteError:
             ssh.run(host, context.stage, "remove HAProxy", f"docker rm --force {name} > /dev/null")
             raise
-        self._router_responses(context, host, env, root, routers.balancer_url, True)
+        self._router_responses(context, host, env, root, routers.balancer_url, True, serving=True)
         return Outcome(
             {"load_balancer_identity": identity}, ({"name": "load-balancer", **identity},)
         )

@@ -30,6 +30,8 @@ ROUTES = (
     ("metrics.txt", "/metrics"),
     ("lifecycle.json", "/narwhal/lifecycle"),
 )
+# What the load balancer forwards of `ROUTES`; it answers 404 on every other route.
+SERVING = ("/health", "/ready")
 
 
 def _fail(message: str) -> int:
@@ -205,8 +207,12 @@ def overhead(base: str, completion: str, requests: int, concurrency: int, limit:
     return 0
 
 
-def responses(base: str, completion: str | None) -> int:
-    routes: list[tuple[str, str, bytes | None]] = [(n, p, None) for n, p in ROUTES]
+def responses(base: str, completion: str | None, *, serving: bool = False) -> int:
+    """Keep the router's answers at `base`; with `serving`, only the routes a load balancer
+    forwards."""
+    routes: list[tuple[str, str, bytes | None]] = [
+        (n, p, None) for n, p in ROUTES if not serving or p in SERVING
+    ]
     if completion:
         routes.append(("completion.json", "/v1/completions", completion.encode()))
     failed = []
@@ -322,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     kept = commands.add_parser("responses")
     kept.add_argument("base")
     kept.add_argument("--completion")
+    kept.add_argument("--serving", action="store_true")
     answered = commands.add_parser("status")
     answered.add_argument("url")
     measured = commands.add_parser("overhead")
@@ -345,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.base.rstrip("/"), args.completion, args.requests, args.concurrency, args.limit
             )
         if args.command == "responses":
-            return responses(args.base.rstrip("/"), args.completion)
+            return responses(args.base.rstrip("/"), args.completion, serving=args.serving)
         return readmit(args.base.rstrip("/"), args.engines, args.seconds)
     except (OSError, ValueError) as error:
         return _fail(str(error))

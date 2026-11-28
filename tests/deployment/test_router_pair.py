@@ -132,6 +132,43 @@ class BalancerTests(unittest.TestCase):
         shipped = (Path(__file__).resolve().parents[2] / "deploy/ha/haproxy.cfg").read_text()
         self.assertEqual(balancer.shipped(), shipped)
 
+    def test_the_ssh_balancer_forwards_only_the_serving_routes(self):
+        text = balancer.render(
+            balancer.shipped(), "10.0.0.1:8080", ("10.0.0.1:8000", "10.0.0.2:8000")
+        )
+        frontend = text.split("frontend narwhal", 1)[1].split("backend ", 1)[0]
+        acls = {}
+        for line in frontend.splitlines():
+            words = line.split()
+            if words[:1] == ["acl"]:
+                acls[words[1]] = (words[2], set(words[3:]))
+        deny = next(line for line in frontend.splitlines() if "http-request deny" in line)
+        self.assertIn("deny_status 404 unless", deny)
+        clauses = [clause.split() for clause in deny.split(" unless ", 1)[1].split(" || ")]
+
+        def forwarded(method, path):
+            def holds(name):
+                kind, values = acls[name]
+                return (method if kind == "method" else path) in values
+
+            return any(all(holds(name) for name in clause) for clause in clauses)
+
+        for method, path in balancer.SERVING_ROUTES:
+            self.assertTrue(forwarded(method, path), (method, path))
+        for method, path in (
+            ("POST", "/narwhal/engines"),
+            ("GET", "/narwhal/engines"),
+            ("DELETE", "/narwhal/engines/e0"),
+            ("POST", "/narwhal/lifecycle/drain"),
+            ("POST", "/narwhal/lifecycle/readmit"),
+            ("GET", "/narwhal/state"),
+            ("GET", "/narwhal/handoff"),
+            ("GET", "/metrics"),
+            ("POST", "/narwhal/targets"),
+            ("GET", "//narwhal/targets"),
+        ):
+            self.assertFalse(forwarded(method, path), (method, path))
+
     def test_a_configuration_without_its_placeholders_is_refused(self):
         with self.assertRaisesRegex(ValueError, "ROUTER_B_ADDRESS"):
             balancer.render("bind :8000\nROUTER_A_ADDRESS:8000\n", "h:1", ("a:1", "b:1"))

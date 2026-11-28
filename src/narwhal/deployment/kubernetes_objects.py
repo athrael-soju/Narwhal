@@ -33,6 +33,8 @@ from typing import Any
 
 from narwhal import __version__
 
+from .balancer import SERVING_ROUTES as SERVING_ROUTES
+from .balancer import route_rules
 from .fleet_resource import (
     API_VERSION,
     CONFIG_SHA256,
@@ -74,19 +76,6 @@ HAPROXY = "haproxy"
 ROUTER_SERVICE = "routers"
 ROUTER_PODS = ("router-0", "router-1")
 HAPROXY_PORT = 8000
-# The routes HAProxy forwards to the active router: the completion routes, what a client or an
-# external load balancer reads about the fleet, and the engine targets Prometheus reads. Every
-# other route, such as /narwhal/state, /metrics or a lifecycle action, answers 404 there, and
-# the gate Jobs, the other router and monitoring reach it at a router's own address.
-SERVING_ROUTES = (
-    ("POST", "/v1/completions"),
-    ("POST", "/v1/chat/completions"),
-    ("GET", "/v1/models"),
-    ("GET", "/health"),
-    ("GET", "/ready"),
-    ("GET", "/narwhal/targets"),
-)
-
 # Gate Jobs, as `kubernetes_target` runs them.
 GATE_KINDS = (
     "discovery",
@@ -738,20 +727,6 @@ def inputs(fleet: Fleet, gate: GateJob, files: Mapping[str, bytes]) -> dict[str,
 
 
 # HAProxy.
-
-
-def route_rules() -> str:
-    """The frontend lines that refuse every request but those `SERVING_ROUTES` names, matched
-    by method and by the exact path, so no encoding or extra slash reaches another route."""
-    lines = []
-    methods = sorted({method for method, _ in SERVING_ROUTES})
-    for method in methods:
-        paths = " ".join(path for verb, path in SERVING_ROUTES if verb == method)
-        lines.append(f"    acl narwhal_{method.lower()} method {method}")
-        lines.append(f"    acl narwhal_{method.lower()}_routes path {paths}")
-    allowed = " || ".join(f"narwhal_{m.lower()} narwhal_{m.lower()}_routes" for m in methods)
-    lines.append(f"    http-request deny deny_status 404 unless {allowed}")
-    return "\n".join(lines) + "\n"
 
 
 def haproxy_config(namespace: str, cluster_domain: str) -> str:
