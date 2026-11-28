@@ -418,6 +418,17 @@ PORT_FIELDS = (
 _PORT_RANGE = r"^[0-9]{1,5}-[0-9]{1,5}$"
 
 
+_SINGLE_PORTS = ("engine", "attestation", "sideChannel")
+# Each port in a list lies outside `self.ucxTcpPortRange`, LOW-HIGH.
+_OUTSIDE = (
+    "all(p, p < int(self.ucxTcpPortRange.split('-')[0]) "
+    "|| p > int(self.ucxTcpPortRange.split('-')[1]))"
+)
+PORTS_IN_RANGE = (
+    "the engine, attestation and side channel ports must lie outside the UCX TCP port range"
+)
+
+
 def _ports(description: str, *, required: bool) -> dict:
     fields = {
         "engine": _integer("The engine's HTTP port", 1, 65535),
@@ -432,7 +443,15 @@ def _ports(description: str, *, required: bool) -> dict:
         ),
     }
     if not required:
-        return _object(description, fields)
+        # An engine's own ports may override some of engines.ports, so the controller checks
+        # the ports it resolves; the rule checks those this entry sets.
+        held = ", ".join(f"has(self.{name}) ? self.{name} : -1" for name in _SINGLE_PORTS)
+        return _object(
+            description,
+            fields,
+            rules=[_rule(f"!has(self.ucxTcpPortRange) || [{held}].{_OUTSIDE}", PORTS_IN_RANGE)],
+        )
+    ports = ", ".join(f"self.{name}" for name in _SINGLE_PORTS)
     return _object(
         description,
         fields,
@@ -442,7 +461,8 @@ def _ports(description: str, *, required: bool) -> dict:
                 "self.engine != self.attestation && self.engine != self.sideChannel "
                 "&& self.attestation != self.sideChannel",
                 "the engine, attestation and side channel ports must differ",
-            )
+            ),
+            _rule(f"[{ports}].{_OUTSIDE}", PORTS_IN_RANGE),
         ],
     )
 

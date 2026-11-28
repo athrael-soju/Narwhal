@@ -3490,6 +3490,8 @@ class Rig:
         self.layouts: dict[str, str] = {}
         # Engine pods a scheduler places off their node, once.
         self.misplace: dict[str, str] = {}
+        # The host-network TCP ports another workload listens on, by node.
+        self.listening: dict[str, tuple[int, ...]] = {}
         # Pods another controller adds its own scheduling gate to, ahead of the placement
         # gate, once, between the run's read and its patch.
         self.gate_ahead: set[str] = set()
@@ -3719,7 +3721,13 @@ class Rig:
     def log(self, entry: Mapping[str, Any]) -> str:
         kind = entry["kind"]
         if kind == "fabric-probe":
-            return 'narwhal-interfaces [{"ifname": "fabric0"}]\n'
+            # The TCP ports another workload listens on, on the node's host network.
+            ports = "".join(
+                f"{kubernetes_target.LISTENING} {port:04X}\n"
+                for port in self.listening.get(entry["node"], ())
+            )
+            interfaces = 'narwhal-interfaces [{"ifname": "fabric0"}]\n'
+            return f"{interfaces}{ports}{kubernetes_target.LISTENING_DONE}\n"
         if kind == "fabric-server":
             return "narwhal-listening\nserver done\n"
         if kind == "fabric-client":

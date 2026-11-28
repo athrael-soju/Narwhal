@@ -275,6 +275,18 @@ REFUSED: dict[str, Refusal] = {
         "spec.engines.ports.ucxTcpPortRange",
         "pattern",
     ),
+    "an engine port in its own UCX port range": _rule(
+        lambda d: _engines(d)["ports"].update(ucxTcpPortRange="8000-8200"),
+        "spec.engines.ports",
+        fleet_resource.PORTS_IN_RANGE,
+    ),
+    "an engine's own side channel in its own UCX port range": _rule(
+        lambda d: _engines(d)["nodes"][1].update(
+            ports={"sideChannel": 20050, "ucxTcpPortRange": "20000-20099"}
+        ),
+        "spec.engines.nodes[1].ports",
+        fleet_resource.PORTS_IN_RANGE,
+    ),
     "a side channel port in the launch inputs": _rule(
         _launch("NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT", "5602"),
         "spec.engines.launch[1].name",

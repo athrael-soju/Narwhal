@@ -306,6 +306,57 @@ class GateOutputError(ValueError):
     """A gate Job's log holds no complete set of returned files."""
 
 
+# What a failed `discover` adds once it stopped the engines.
+ENGINES_STOPPED = "engines stopped for discovery; the fleet is not serving"
+ENGINES_STOPPED_FILE = "engines-stopped.json"
+
+
+class EnginesStopped(remote.StepFailed):
+    """`discover` failed after it stopped the fleet's engines, which stay stopped until a
+    pass gets past it. It keeps the failure's host and exit status, so a rejected check is
+    still a failed gate."""
+
+    def __init__(self, error: BaseException) -> None:
+        if isinstance(error, remote.StepFailed):
+            self.host, self.context = error.host, dict(error.context)
+        else:
+            self.host, self.context = "cluster", {"host": "cluster", "exit_status": 4}
+        RuntimeError.__init__(self, f"{error}; {ENGINES_STOPPED}")
+
+
+# How often discovery starts its Jobs, while each failure passes by itself.
+DISCOVERY_TRIES = 3
+# Each TCP port the interface probe finds listening on its node's host network, in hex, as
+# /proc/net/tcp and tcp6 show it, then a line that ends the list.
+LISTENING = "narwhal-port-in-use"
+LISTENING_DONE = "narwhal-ports-read"
+LISTENING_SCRIPT = (
+    "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | while read -r _ local _ state _; do\n"
+    f'  if [ "$state" = 0A ]; then echo "{LISTENING} ${{local##*:}}"; fi\n'
+    "done\n"
+    f"echo {LISTENING_DONE}\n"
+)
+
+
+def transient(error: GateFailed) -> bool:
+    """Whether a gate Job failed for a cause that passes by itself: it did not finish in
+    time, as when its image did not pull, or it was deleted under it."""
+    status = getattr(error, "context", {}).get("exit_status")
+    return status == 124 or "the Job is gone before it finished" in str(error)
+
+
+def stage_seconds(env: Mapping[str, str], stage: str) -> float | None:
+    """The fleet's time limit for `stage`, from spec.timeouts, or None when it sets none."""
+    for name in (
+        "NARWHAL_STAGE_" + re.sub(r"[^A-Z0-9]", "_", stage.upper()) + "_TIMEOUT_SECONDS",
+        fleet_resource.TIMEOUT_ENV,
+    ):
+        value = env.get(name, "")
+        if value.isdecimal():
+            return float(value)
+    return None
+
+
 # What the runner may do in the fleet's namespace, and in the cluster: each verb a `Cluster`
 # call below sends, as a Role's rules name them. The narwhal chart grants the controller these.
 RULES: tuple[dict[str, Any], ...] = (
@@ -937,7 +988,8 @@ def _overlaps(first: range, second: range) -> bool:
 def port_problems(env: Mapping[str, str], nodes: Mapping[str, str]) -> list[str]:
     """What keeps the engines' pods from binding their ports. Engine pods and fabric Jobs run on
     the node's host network, so on one node no two engines may share a port or overlap their
-    UCX TCP port ranges, and none may take the fabric test port."""
+    UCX TCP port ranges, no engine's port may lie in its own UCX TCP port range, and none may
+    take the fabric test port."""
     problems: list[str] = []
     taken: dict[str, list[tuple[str, str, range]]] = {}
     test = env.get(fabric.TEST_PORT, "")
@@ -963,7 +1015,14 @@ def port_problems(env: Mapping[str, str], nodes: Mapping[str, str]) -> list[str]
                 "to a port range LOW-HIGH"
             )
         else:
-            spans.append(("UCX TCP port range", range(int(bounds[1]), int(bounds[2]) + 1)))
+            ucx = range(int(bounds[1]), int(bounds[2]) + 1)
+            for what, span in spans:
+                if _overlaps(span, ucx):
+                    problems.append(
+                        f"{role}: its {what} {span.start} lies in its UCX TCP port range "
+                        f"{value}, where UCX listeners take ports"
+                    )
+            spans.append(("UCX TCP port range", ucx))
         for what, span in spans:
             if test.isdecimal() and int(test) in span:
                 problems.append(
@@ -1751,28 +1810,40 @@ class KubernetesDeployment:
             state=dict(gate.state),
         )
 
-    def start_gates(self, context: StageContext, gates: Sequence[Gate]) -> list[str]:
+    def start_gates(
+        self,
+        context: StageContext,
+        gates: Sequence[Gate],
+        before: Callable[[], None] | None = None,
+    ) -> list[str]:
         """Start each gate's Job, with its inputs ConfigMap, and return their names.
 
+        Every Job and ConfigMap is built before any is written, so a gate whose objects cannot
+        be built changes nothing; `before` runs once all are built, before the first write.
         The run record names every Job before the first is created, so a runner that restarts
         finds them. A Job that already exists under its name is adopted.
         """
         cluster = self.cluster(context)
         fleet = self.fleet()
         names = [self._job_name(context, gate.kind) for gate in gates]
-        record = getattr(context, "record_jobs", None)
-        if record is not None:
-            record(names)
+        built = []
         for gate, name in zip(gates, names, strict=True):
             job = self._gate_job(context, gate, name)
             inputs = kubernetes_objects.inputs(fleet, job, gate.files) if gate.files else None
+            built.append((name, inputs, stamp(kubernetes_objects.job(fleet, job), inputs)))
+        if before is not None:
+            before()
+        record = getattr(context, "record_jobs", None)
+        if record is not None:
+            record(names)
+        for name, inputs, document in built:
             if isinstance(context, _LiveContext):
                 # A live check never adopts a Job: one under its name is an earlier check's.
                 self.remove(cluster, JOB, name)
                 self._gone(cluster, name)
             if inputs is not None:
                 self.apply(cluster, inputs)
-            self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
+            self.create_job(cluster, document)
         return names
 
     def job_pods(self, cluster: Cluster, job: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1889,9 +1960,19 @@ class KubernetesDeployment:
                     context.directory / "logs",
                 )
             self.sleep(POLL_SECONDS)
+        failed = conditions.get("Failed", {}).get("status") == "True"
+        if failed and conditions["Failed"].get("reason") == "DeadlineExceeded":
+            # The Job controller ended its pods at the Job's deadline: it ran out of time, as
+            # one whose image never pulled does, and left no log to read.
+            raise GateFailed(
+                here,
+                f"Job {name}",
+                124,
+                "did not finish within its time limit",
+                context.directory / "logs",
+            )
         pods = self._patient(name, limit, lambda: self.job_pods(cluster, job))
         pod = pods[-1] if pods else {}
-        failed = conditions.get("Failed", {}).get("status") == "True"
         if failed and pod and never_runs(pod, scheduled=False):
             # A pod the kubelet refused ran nothing, so it has no log to read.
             output = ""
@@ -2078,7 +2159,7 @@ class KubernetesDeployment:
             f"{role}-interfaces",
             _shell(
                 "printf 'narwhal-interfaces %s\\n' "
-                f"\"$(ip -json address show dev {interface} | tr -d '\\n')\""
+                f"\"$(ip -json address show dev {interface} | tr -d '\\n')\"\n" + LISTENING_SCRIPT
             ),
             node=node,
             host_network=True,
@@ -2086,11 +2167,11 @@ class KubernetesDeployment:
         )
         return inspect_gate, interfaces, selected
 
-    def stop_engines(self, cluster: Cluster) -> None:
-        """Delete the engine StatefulSet and wait for its pods to go. Discovery's Jobs take
-        every GPU of their nodes, which running engine pods hold, so `discover` stops the
-        engines first, as `engine-inspect` does on SSH hosts. Every later stage reruns after
-        `discover`, and `install` and `engine-start` start them again."""
+    def stop_engines(self, cluster: Cluster) -> bool:
+        """Delete the engine StatefulSet and wait for its pods to go; return whether any ran.
+        Discovery's Jobs take every GPU of their nodes, which running engine pods hold, so
+        `discover` stops the engines first, as `engine-inspect` does on SSH hosts. Every later
+        stage reruns after `discover`, and `install` and `engine-start` start them again."""
         component = {kubernetes_objects.COMPONENT_LABEL: kubernetes_objects.ENGINE}
         pods = {
             pod["metadata"]["uid"]
@@ -2103,7 +2184,7 @@ class KubernetesDeployment:
             if controlled(self.owner(), item)
         ]
         if not pods and not sets:
-            return
+            return False
         self.announce("discover: stopping the engines, whose pods hold the GPUs it inspects")
         # The garbage collector deletes the pods with their StatefulSet.
         for name in sets:
@@ -2112,11 +2193,35 @@ class KubernetesDeployment:
             "the engine pods",
             lambda: any(pod["metadata"].get("uid") in pods for pod in cluster.list(POD, component)),
         )
+        return True
+
+    def _engines_down(self, context: StageContext, cluster: Cluster) -> bool:
+        """Whether this or an earlier attempt of `discover` stopped the fleet's engines, and
+        none runs again."""
+        attempts = context.directory.parent.glob(f"attempt-*/{ENGINES_STOPPED_FILE}")
+        if not any(path.is_file() for path in attempts):
+            return False
+        component = {kubernetes_objects.COMPONENT_LABEL: kubernetes_objects.ENGINE}
+        return not any(self.controls(cluster, pod) for pod in cluster.list(POD, component))
 
     def discover(self, context: StageContext) -> None:
+        cluster = self.cluster(context)
+        try:
+            self._discover(context, cluster)
+        except (Interrupted, Cancelled):
+            raise
+        except Exception as error:
+            try:
+                down = self._engines_down(context, cluster)
+            except KubernetesError:
+                down = (context.directory / ENGINES_STOPPED_FILE).is_file()
+            if not down:
+                raise
+            raise EnginesStopped(error) from error
+
+    def _discover(self, context: StageContext, cluster: Cluster) -> None:
         env = self.env
         roles = self.engines()
-        self.stop_engines(self.cluster(context))
         # One inspection Job for each node, which its engines share, and one interface probe
         # for each engine: two Jobs that each take every GPU of one node could not both run.
         by_node: dict[str, list[str]] = {}
@@ -2127,10 +2232,14 @@ class KubernetesDeployment:
         for node_roles in by_node.values():
             gates.append(pending[node_roles[0]][0])
             gates.extend(pending[role][1] for role in node_roles)
-        names = self.start_gates(context, gates)
-        finished = [
-            self.finish_gate(context, gate, name) for gate, name in zip(gates, names, strict=True)
-        ]
+
+        def stop() -> None:
+            # Only once every Job is built: a fleet whose Jobs cannot be built keeps serving.
+            marker = context.directory / ENGINES_STOPPED_FILE
+            if self.stop_engines(cluster) and not marker.exists():
+                _private(marker, {"at": self.clock()})
+
+        finished = self._discovery_jobs(context, cluster, gates, stop)
         results: dict[str, tuple[GateResult, GateResult]] = {}
         at = 0
         for node_roles in by_node.values():
@@ -2162,6 +2271,7 @@ class KubernetesDeployment:
                 for line in interfaces.output.splitlines()
                 if line.startswith("narwhal-interfaces ")
             )
+            self._ports_free(role, interfaces)
             observed.update(
                 hostname=self.node(role),
                 image_id=image,
@@ -2191,6 +2301,97 @@ class KubernetesDeployment:
             _private(context.directory / "inspection" / f"{role}.json", observed)
             _private(context.directory / "inspection" / f"{role}-checkpoint.json", checkpoint)
         self._write_records(context, observations)
+
+    def _discovery_jobs(
+        self,
+        context: StageContext,
+        cluster: Cluster,
+        gates: Sequence[Gate],
+        before: Callable[[], None],
+    ) -> list[GateResult]:
+        """Run discovery's Jobs and return their results. A Job that failed for a cause that
+        passes by itself, such as an image pull or a node that did not run it in time, starts
+        the stage's Jobs again, up to DISCOVERY_TRIES times within the stage's time limit."""
+        budget = stage_seconds(self.env, "discover")
+        started = self.clock()
+        for attempt in range(1, DISCOVERY_TRIES + 1):
+            names = self.start_gates(context, gates, before if attempt == 1 else None)
+            try:
+                return [
+                    self._discovery_result(context, gate, name)
+                    for gate, name in zip(gates, names, strict=True)
+                ]
+            except GateFailed as error:
+                if not transient(error) or attempt == DISCOVERY_TRIES:
+                    raise
+                if budget is not None and self.clock() - started >= budget:
+                    raise
+                for name in names:
+                    self.remove(cluster, JOB, name)
+                    self.remove(cluster, CONFIG_MAP, name)
+                for name in names:
+                    self._gone(cluster, name)
+                self.announce(f"discover: {error}; starting its Jobs again ({attempt + 1})")
+        raise AssertionError("unreachable")
+
+    def _discovery_result(self, context: StageContext, gate: Gate, name: str) -> GateResult:
+        try:
+            return self.finish_gate(context, gate, name)
+        except GateFailed as error:
+            resource = self.env[GPU_RESOURCE]
+            if gate.kind != "discovery" or f"OutOf{resource}" not in str(error):
+                raise
+            # The fleet's own engines are gone, so another workload holds the node's GPUs.
+            raise GateFailed(
+                gate.node or "cluster",
+                f"Job {name}",
+                4,
+                f"the kubelet on {gate.node} refused the pod: OutOf{resource}: the node has "
+                f"fewer {resource} free than it offers, so another workload holds some, such "
+                "as another fleet's engines. Run one fleet on each GPU node",
+                context.directory / "logs",
+            ) from error
+
+    def _ports_free(self, role: str, probe: GateResult) -> None:
+        """Fail when a port `role`'s engine binds is already in use on its node's host
+        network. The fleet's own engines are stopped, so another workload holds it, such as
+        another fleet's engines."""
+        lines = probe.output.splitlines()
+        if LISTENING_DONE not in lines:
+            raise GateFailed(
+                self.node(role),
+                f"{role} interface probe",
+                4,
+                "the probe did not report the node's listening ports",
+                probe.log,
+            )
+        listening = {
+            int(match[1], 16)
+            for line in lines
+            if (match := re.fullmatch(rf"{LISTENING} ([0-9A-Fa-f]{{1,4}})", line))
+        }
+        n = _node(role)
+        wanted: dict[str, range] = {}
+        for name, what in _ENGINE_PORTS:
+            bound = int(discovery.value(self.env, n, name))
+            wanted[what] = range(bound, bound + 1)
+        low, high = discovery.value(self.env, n, "UCX_TCP_PORT_RANGE").split("-")
+        wanted["UCX TCP port range"] = range(int(low), int(high) + 1)
+        busy = [
+            f"its {what} {', '.join(str(port) for port in sorted(listening & set(span)))}"
+            for what, span in wanted.items()
+            if listening & set(span)
+        ]
+        if busy:
+            raise GateFailed(
+                self.node(role),
+                f"{role} interface probe",
+                1,
+                f"{role}: {'; '.join(busy)} already in use on node {self.node(role)}, by "
+                "another workload such as another fleet's engines. Run one fleet on each GPU "
+                "node, or give this engine other ports",
+                probe.log,
+            )
 
     def hosts(self) -> list[Host]:
         """One host for each engine node, holding its engine roles, as the fabric reads them."""

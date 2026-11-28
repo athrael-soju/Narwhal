@@ -378,6 +378,39 @@ class ReconcileTests(ControllerTest):
         self.assertEqual(self.condition(fleet_resource.STALLED)["status"], "False")
         self.assertFalse((self.directory() / kubernetes_controller.STALL_FILE).exists())
 
+    def test_a_failed_discover_after_a_new_release_says_the_fleet_is_down(self):
+        controller = self.ready()
+        self.rig.fail_kind = "discovery"
+        # A new release reruns discover, which stops the engines before its Jobs run.
+        with patch.object(kubernetes_target.provenance, "source_digest", return_value="9" * 64):
+            self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+            self.assertTrue(controller.informer.resync())
+            self.work(controller)
+            for _ in range(2):
+                stalled = self.condition(fleet_resource.STALLED)
+                self.assertEqual((stalled["status"], stalled["reason"]), ("True", "StageFailed"))
+                self.assertIn("discover failed", stalled["message"])
+                self.assertTrue(
+                    stalled["message"].endswith(kubernetes_target.ENGINES_STOPPED),
+                    stalled["message"],
+                )
+                ready = self.condition(fleet_resource.READY)
+                self.assertEqual(
+                    (ready["status"], ready["reason"]),
+                    ("False", kubernetes_controller.ENGINES_STOPPED),
+                )
+                self.assertFalse(self.status()["serving"])
+                # A resync reads the stall back, and still reports the engines stopped.
+                self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+                self.assertTrue(controller.informer.resync())
+                self.work(controller)
+            # Another stage's failure keeps the stall's own reason.
+            self.rig.fail_kind = "preflight"
+            self.edit({"slo": {"ttftS": "5"}})
+            self.work(controller)
+        ready = self.condition(fleet_resource.READY)
+        self.assertEqual((ready["status"], ready["reason"]), ("False", "Stalled"))
+
     def test_a_status_write_queues_no_reconcile_and_status_is_written_only_on_change(self):
         controller = self.leader()
         # The pass writes status as it goes; those writes come back as watch events, and none

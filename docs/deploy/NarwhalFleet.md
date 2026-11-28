@@ -103,7 +103,9 @@ Every engine of a fleet transfers KV over `ucx_rdma`, which `engines.launch` set
         value: "1"
 ```
 
-The controller refuses, with reason `InputRefused`, a fleet whose engines on one node share a port or overlapping UCX TCP port ranges, or whose engine port is `fabric.testPort`.
+The API server refuses an engine's port inside its own UCX TCP port range. The controller refuses, with reason `InputRefused`, a fleet whose engines on one node share a port or overlapping UCX TCP port ranges, or whose engine port is `fabric.testPort`.
+
+Each GPU node runs the engines of one fleet only. The engine pods use the host network, and the controller sees only its own namespace, so two fleets on one node would take each other's ports and GPUs. Give each fleet its own nodes in `engines.nodes`. `discover` fails, rather than starting an engine, when another workload holds the node's GPUs or listens on the engine's ports, as [Discovering the engine nodes](Kubernetes.md#discovering-the-engine-nodes) describes.
 
 ## Fields
 
@@ -149,7 +151,7 @@ A field marked Yes is required whenever the field that holds it is set.
 | `spec.engines.resources.gpu` | string | Yes | The GPU device plugin's extended resource name, <domain>/<name>. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
 | `spec.engines.resources.rdma` | string | Yes | The RDMA device plugin's extended resource name, which hands each engine pod one HCA. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
 | `spec.engines.resources.runtimeClassName` | string |  | The RuntimeClass of nodes whose default container runtime exposes no GPUs. At most 253 characters. |
-| `spec.engines.ports` | object | Yes | The ports each engine pod serves on, unless its entry of nodes sets its own. API server rule: the engine, attestation and side channel ports must differ. |
+| `spec.engines.ports` | object | Yes | The ports each engine pod serves on, unless its entry of nodes sets its own. API server rule: the engine, attestation and side channel ports must differ. API server rule: the engine, attestation and side channel ports must lie outside the UCX TCP port range. |
 | `spec.engines.ports.engine` | integer | Yes | The engine's HTTP port. From 1 to 65535. |
 | `spec.engines.ports.attestation` | integer | Yes | The attestation sidecar's HTTP port. From 1 to 65535. |
 | `spec.engines.ports.sideChannel` | integer | Yes | The port the engine's KV connector listens on for its peers' handshakes. From 1 to 65535. |
@@ -160,7 +162,7 @@ A field marked Yes is required whenever the field that holds it is set.
 | `spec.engines.nodes[].rdma` | object |  | The RDMA port settings of a ucx_rdma engine. |
 | `spec.engines.nodes[].rdma.gidIndex` | integer |  | The GID index of the HCA port. From 0 to 255. |
 | `spec.engines.nodes[].rdma.roceMode` | string |  | v2 or v1 for RoCE, or infiniband for a native InfiniBand port. One of `v2`, `v1`, `infiniband`. |
-| `spec.engines.nodes[].ports` | object |  | This engine's ports in place of engines.ports. Engine pods run on the node's host network, so engines that share a node need ports no other engine there uses, which the controller checks. |
+| `spec.engines.nodes[].ports` | object |  | This engine's ports in place of engines.ports. Engine pods run on the node's host network, so engines that share a node need ports no other engine there uses, which the controller checks. API server rule: the engine, attestation and side channel ports must lie outside the UCX TCP port range. |
 | `spec.engines.nodes[].ports.engine` | integer |  | The engine's HTTP port. From 1 to 65535. |
 | `spec.engines.nodes[].ports.attestation` | integer |  | The attestation sidecar's HTTP port. From 1 to 65535. |
 | `spec.engines.nodes[].ports.sideChannel` | integer |  | The port the engine's KV connector listens on for its peers' handshakes. From 1 to 65535. |

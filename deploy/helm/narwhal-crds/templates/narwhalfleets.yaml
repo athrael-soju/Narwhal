@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "52f2fe7bf7e67b30a840e30382d5f59ffd8b4c7e5e5bf44a43b896e7bc08a238"
+    "narwhal.example.com/schema-sha256": "705ea728c7785abc56431bd67da16c933dd45e95bb3a0f98229fa9974e148ee5"
 spec:
   group: "narwhal.example.com"
   names:
@@ -272,6 +272,8 @@ spec:
                       x-kubernetes-validations:
                         - rule: "self.engine != self.attestation && self.engine != self.sideChannel && self.attestation != self.sideChannel"
                           message: "the engine, attestation and side channel ports must differ"
+                        - rule: "[self.engine, self.attestation, self.sideChannel].all(p, p < int(self.ucxTcpPortRange.split('-')[0]) || p > int(self.ucxTcpPortRange.split('-')[1]))"
+                          message: "the engine, attestation and side channel ports must lie outside the UCX TCP port range"
                     nodes:
                       type: "array"
                       description: "The engines, one entry each"
@@ -330,6 +332,9 @@ spec:
                                 description: "LOW-HIGH, the ports UCX TCP listeners take"
                                 maxLength: 11
                                 pattern: "^[0-9]{1,5}-[0-9]{1,5}$"
+                            x-kubernetes-validations:
+                              - rule: "!has(self.ucxTcpPortRange) || [has(self.engine) ? self.engine : -1, has(self.attestation) ? self.attestation : -1, has(self.sideChannel) ? self.sideChannel : -1].all(p, p < int(self.ucxTcpPortRange.split('-')[0]) || p > int(self.ucxTcpPortRange.split('-')[1]))"
+                                message: "the engine, attestation and side channel ports must lie outside the UCX TCP port range"
                         required:
                           - "node"
                           - "fabricInterface"

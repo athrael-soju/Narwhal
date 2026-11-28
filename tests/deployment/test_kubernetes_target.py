@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1752,6 +1753,26 @@ class ColocatedTests(KubernetesTest):
                 with self.assertRaisesRegex(kubernetes_target.InputError, overlap):
                     kubernetes_target.inputs(self.rig.env)
 
+    def test_a_port_in_the_engines_own_ucx_port_range_is_refused(self):
+        # UCX listeners take any port of the range, so one the engine binds would collide.
+        for ports, what in (
+            ({**OWN_PORTS, "ucxTcpPortRange": "8000-8200"}, "engine port 8101"),
+            ({**OWN_PORTS, "sideChannel": 20150}, "side channel port 20150"),
+            ({"ucxTcpPortRange": "8000-8099"}, "engine port 8000"),
+        ):
+            with self.subTest(ports=ports):
+                self.colocate(ports)
+                fleet = copy.deepcopy(self.rig.fleet)
+                fleet["spec"]["engines"]["nodes"][1]["node"] = NODES["engine-2"]
+                if "engine" not in ports:
+                    fleet["spec"]["engines"]["ports"]["engine"] = 8000
+                env = kubernetes_target.settings_env(fleet, self.rig.settings)
+                with self.assertRaisesRegex(
+                    kubernetes_target.InputError,
+                    f"engine-2: its {what} lies in its UCX TCP port range",
+                ):
+                    kubernetes_target.inputs(env)
+
     def test_a_port_the_fabric_jobs_listen_on_is_refused(self):
         self.colocate({**OWN_PORTS, "engine": 5201})
         with self.assertRaisesRegex(
@@ -1791,6 +1812,181 @@ class ReleaseTests(KubernetesTest):
             code, result = self.deploy("run")
         self.assertNotEqual(code, 0)
         self.assertIn("OutOfgpu.example.com/gpu", json.dumps(result))
+
+
+class DiscoveryFailureTests(KubernetesTest):
+    """A `discover` after a new release: it stops the engines only once its Jobs are built,
+    tries again on a cause that passes, and says when its failure left the fleet down."""
+
+    def upgrade(self, then: Callable[[], object] = lambda: None) -> tuple[int, dict]:
+        """Serve, call `then`, and run a new release, which reruns discover."""
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.served = {role: self.rig.pods[role]["metadata"]["uid"] for role in ENGINES}
+        then()
+        with patch.object(kubernetes_target.provenance, "source_digest", return_value="9" * 64):
+            return self.deploy("run")
+
+    def pull_fails(self) -> None:
+        self.rig.outcomes["discovery"] = Wait("ImagePullBackOff", "Back-off pulling image")
+
+    def serving(self) -> bool:
+        return all(
+            role in self.rig.pods
+            and self.rig.pods[role]["metadata"]["uid"] == self.served[role]
+            and _ready(self.rig.pods[role])
+            for role in ENGINES
+        )
+
+    def discovery_jobs(self) -> list[str]:
+        return [name for name in self.rig.jobs if name.startswith("discovery-")]
+
+    def test_jobs_that_cannot_be_built_leave_the_engines_serving(self):
+        build = objects.job
+
+        def refused(fleet, job):
+            if job.kind == "discovery":
+                raise ValueError("the discovery Job cannot be built")
+            return build(fleet, job)
+
+        patched = patch.object(objects, "job", refused)
+        self.addCleanup(patched.stop)
+        code, result = self.upgrade(patched.start)
+        self.assertEqual(code, 4, result)
+        self.assertIn("the discovery Job cannot be built", result["errors"][0]["message"])
+        self.assertNotIn(kubernetes_target.ENGINES_STOPPED, result["errors"][0]["message"])
+        self.assertNotIn("StatefulSet", {d.kind for d in self.rig.store.deletes})
+        self.assertTrue(self.serving())
+
+    def test_a_job_whose_image_did_not_pull_in_time_runs_again(self):
+        def pulled() -> None:
+            # The registry answers again once the first Jobs are deleted.
+            if any(
+                d.kind == "Job" and d.name.startswith("discovery-") for d in self.rig.store.deletes
+            ):
+                self.rig.outcomes.pop("discovery", None)
+
+        def then() -> None:
+            self.pull_fails()
+            self.rig.on_tick = pulled
+
+        code, result = self.upgrade(then)
+        self.assertEqual(code, 0, result)
+        # Each node's discovery Job ran twice; the first ones are gone.
+        tried = self.discovery_jobs()[2:]
+        self.assertEqual(len(tried), 4)
+        live = {job["metadata"]["name"] for job in self.rig.live_jobs()}
+        self.assertFalse(set(tried[:2]) & live)
+
+    def test_a_cause_that_lasts_stops_after_its_tries_and_says_the_fleet_is_down(self):
+        code, result = self.upgrade(self.pull_fails)
+        self.assertEqual(code, 4, result)
+        message = result["errors"][0]["message"]
+        self.assertIn("did not finish within its time limit", message)
+        self.assertTrue(message.endswith(kubernetes_target.ENGINES_STOPPED), message)
+        self.assertEqual(len(self.discovery_jobs()), 2 + 2 * kubernetes_target.DISCOVERY_TRIES)
+        self.assertFalse(self.serving())
+
+    def test_the_stage_time_limit_bounds_the_tries(self):
+        limit = kubernetes_target.JOB_SECONDS["discovery"]
+        with patch.dict(os.environ, {"NARWHAL_STAGE_DISCOVER_TIMEOUT_SECONDS": str(limit)}):
+            code, result = self.upgrade(self.pull_fails)
+        self.assertEqual(code, 4, result)
+        self.assertEqual(len(self.discovery_jobs()), 2 + 2)
+
+    def test_a_rejection_is_not_tried_again(self):
+        code, result = self.upgrade(lambda: setattr(self.rig, "fail_kind", "discovery"))
+        self.assertEqual(code, 1, result)
+        self.assertEqual(len(self.discovery_jobs()), 2 + 2)
+        self.assertIn(kubernetes_target.ENGINES_STOPPED, result["errors"][0]["message"])
+
+    def test_a_first_discovery_that_fails_stopped_no_engines(self):
+        self.rig.fail_kind = "discovery"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        self.assertNotIn(kubernetes_target.ENGINES_STOPPED, result["errors"][0]["message"])
+
+
+class ForeignWorkloadTests(KubernetesTest):
+    """Engine pods run on the host network, so a fleet must have its GPU nodes to itself.
+    Discovery runs once the fleet's own engines are stopped, so what it finds is another's."""
+
+    def test_gpus_another_workload_holds_fail_discovery(self):
+        self.rig.store.put(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "engine-0", "namespace": "other-fleet"},
+                "spec": {
+                    "nodeName": NODES["engine-1"],
+                    "containers": [
+                        {"name": "engine", "resources": {"limits": {"gpu.example.com/gpu": "1"}}}
+                    ],
+                },
+                "status": {"phase": "Running"},
+            }
+        )
+        code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertEqual(result["data"]["failed_stage"], "discover")
+        self.assertIn(
+            "node has fewer gpu.example.com/gpu free than it offers, so another workload holds "
+            "some, such as another fleet's engines. Run one fleet on each GPU node",
+            result["errors"][0]["message"],
+        )
+
+    def test_a_port_another_workload_listens_on_fails_discovery(self):
+        self.rig.listening = {NODES["engine-2"]: (22, 8100, 20050)}
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["data"]["failed_stage"], "discover")
+        self.assertIn(
+            f"engine-2: its engine port 8100; its UCX TCP port range 20050 already in use on "
+            f"node {NODES['engine-2']}",
+            result["errors"][0]["message"],
+        )
+
+    def test_a_probe_that_reports_no_ports_fails_discovery(self):
+        log = self.rig.log
+
+        def unread(entry):
+            return log(entry).replace(kubernetes_target.LISTENING_DONE + "\n", "")
+
+        with patch.object(self.rig, "log", unread):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 4, result)
+        self.assertIn("did not report the node's listening ports", result["errors"][0]["message"])
+
+    def test_the_probe_reads_the_listening_sockets_of_its_node(self):
+        script = kubernetes_target.LISTENING_SCRIPT.replace("/proc/net/tcp6", "tcp6").replace(
+            "/proc/net/tcp", "tcp"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            header = "  sl  local_address rem_address   st\n"
+            (root / "tcp").write_text(
+                header
+                + "   0: 00000000:1FA4 00000000:0000 0A 0\n"
+                + "   1: 0100007F:1FA5 0100007F:9C40 01 0\n"
+            )
+            (root / "tcp6").write_text(
+                header + "   0: " + "0" * 32 + ":4E34 " + "0" * 32 + ":0000 0A 0\n"
+            )
+            out = subprocess.run(
+                ["sh", "-c", "set -eu\n" + script],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        self.assertEqual(
+            out.splitlines(),
+            [
+                f"{kubernetes_target.LISTENING} 1FA4",
+                f"{kubernetes_target.LISTENING} 4E34",
+                kubernetes_target.LISTENING_DONE,
+            ],
+        )
 
 
 def _ready(pod: dict) -> bool:
