@@ -5,6 +5,7 @@ import importlib.abc
 import importlib.util
 import json
 import os
+import runpy
 import sys
 import tempfile
 import threading
@@ -18,19 +19,29 @@ API_KEY_ENV = "NARWHAL_SGLANG_API_KEY"
 SETTINGS_TAG = "NARWHAL_IMAGE_RUNTIME="
 
 
-def server_command(args: list[str], environ: dict[str, str]) -> list[str]:
-    command = [sys.executable, "-m", "sglang.launch_server", *args]
-    command += ["--disaggregation-bootstrap-port", environ[BOOTSTRAP_PORT_ENV]]
-    # The key stays out of the recorded launch arguments.
-    if key := environ.get(API_KEY_ENV):
-        command += ["--api-key", key]
-    return command
+def server_args(args: list[str], environ: dict[str, str]) -> list[str]:
+    """SGLang's server arguments, without the engine key."""
+    return [*args, "--disaggregation-bootstrap-port", environ[BOOTSTRAP_PORT_ENV]]
 
 
 def serve(args: list[str]) -> None:
+    """Run SGLang's server in this process.
+
+    SGLang reads its key from `--api-key`. A new process would carry it in the argument
+    list the kernel shows every local user in `ps` and `/proc/<pid>/cmdline`, so the server runs
+    here instead: the key enters SGLang's `sys.argv` in memory only, and the process keeps the
+    argument list it started with, which holds no key. The key leaves the environment the
+    server's own processes inherit.
+    """
     environ = dict(os.environ)
-    command = server_command(args, environ)
-    os.execve(command[0], command, registration_environment(environ))
+    key = environ.pop(API_KEY_ENV, "")
+    arguments = server_args(args, environ)
+    os.environ.clear()
+    # SGLang spawns its scheduler, which imports the site hook; this process installs it here.
+    os.environ.update(registration_environment(environ))
+    keep_mooncake_registrations()
+    sys.argv = ["sglang.launch_server", *arguments, *(["--api-key", key] if key else [])]
+    runpy.run_module("sglang.launch_server", run_name="__main__", alter_sys=True)
 
 
 # SGLang starts its scheduler in a spawned process, so the fix is installed by a sitecustomize
