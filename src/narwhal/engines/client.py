@@ -257,10 +257,10 @@ class EngineClient:
                 started.append(loop.time())
 
         try:
+            # Health carries no credential, so it can reach an engine not yet attested.
             r = await self._control.get(
                 f"{url}{self.dialect.health_path}",
                 timeout=self._phase_timeout(self._health_timeout),
-                headers=self._auth(None),
                 extensions={"trace": trace},
             )
         except httpx.PoolTimeout:

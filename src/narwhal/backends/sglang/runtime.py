@@ -4,7 +4,9 @@ import argparse
 import importlib.abc
 import importlib.util
 import json
+import logging
 import os
+import runpy
 import sys
 import tempfile
 import threading
@@ -18,19 +20,95 @@ API_KEY_ENV = "NARWHAL_SGLANG_API_KEY"
 SETTINGS_TAG = "NARWHAL_IMAGE_RUNTIME="
 
 
-def server_command(args: list[str], environ: dict[str, str]) -> list[str]:
-    command = [sys.executable, "-m", "sglang.launch_server", *args]
-    command += ["--disaggregation-bootstrap-port", environ[BOOTSTRAP_PORT_ENV]]
-    # The key stays out of the recorded launch arguments.
-    if key := environ.get(API_KEY_ENV):
-        command += ["--api-key", key]
-    return command
+REDACTED = "[REDACTED]"
+
+
+def server_args(args: list[str], environ: dict[str, str]) -> list[str]:
+    """SGLang's server arguments, without the engine key."""
+    return [*args, "--disaggregation-bootstrap-port", environ[BOOTSTRAP_PORT_ENV]]
 
 
 def serve(args: list[str]) -> None:
+    """Run SGLang's server in this process.
+
+    SGLang reads its key from `--api-key`. A new process would carry it in the argument
+    list the kernel shows every local user in `ps` and `/proc/<pid>/cmdline`, so the server runs
+    here instead: the key enters SGLang's `sys.argv` in memory only, and the process keeps the
+    argument list it started with, which holds no key. The key leaves the environment the
+    server's own processes inherit. SGLang logs its server arguments, key included, so this
+    process redacts the key from its output and its log records before SGLang starts.
+    """
     environ = dict(os.environ)
-    command = server_command(args, environ)
-    os.execve(command[0], command, registration_environment(environ))
+    key = environ.pop(API_KEY_ENV, "")
+    arguments = server_args(args, environ)
+    os.environ.clear()
+    # SGLang spawns its scheduler, which imports the site hook; this process installs it here.
+    os.environ.update(registration_environment(environ))
+    keep_mooncake_registrations()
+    redact(key)
+    sys.argv = ["sglang.launch_server", *arguments, *(["--api-key", key] if key else [])]
+    runpy.run_module("sglang.launch_server", run_name="__main__", alter_sys=True)
+
+
+class RedactingStream:
+    """A text stream that writes to `stream` with `secret` replaced by `[REDACTED]`."""
+
+    def __init__(self, stream: Any, secret: str) -> None:
+        self._stream = stream
+        self._secret = secret
+
+    def write(self, text: str) -> int:
+        self._stream.write(text.replace(self._secret, REDACTED))
+        return len(text)
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self.write(line)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+class RedactingFilter(logging.Filter):
+    """Replace `secret` in a log record's message with `[REDACTED]`."""
+
+    def __init__(self, secret: str) -> None:
+        super().__init__()
+        self.secret = secret
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # A malformed record is left to logging to report.
+            return True
+        if self.secret in message:
+            record.msg, record.args = message.replace(self.secret, REDACTED), ()
+        return True
+
+
+def redact(secret: str) -> None:
+    """Keep `secret` out of this process's output and log records, before SGLang configures
+    logging.
+
+    A filter on the root logger sees only records logged to the root logger itself, and
+    SGLang replaces the root handlers when it configures logging, so the filter also runs on
+    every record as it is made. Handlers that SGLang creates later write to the wrapped
+    `sys.stdout` and `sys.stderr`.
+    """
+    if not secret:
+        return
+    sys.stdout = RedactingStream(sys.stdout, secret)
+    sys.stderr = RedactingStream(sys.stderr, secret)
+    redacting = RedactingFilter(secret)
+    logging.getLogger().addFilter(redacting)
+    make = logging.getLogRecordFactory()
+
+    def record(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        made = make(*args, **kwargs)
+        redacting.filter(made)
+        return made
+
+    logging.setLogRecordFactory(record)
 
 
 # SGLang starts its scheduler in a spawned process, so the fix is installed by a sitecustomize

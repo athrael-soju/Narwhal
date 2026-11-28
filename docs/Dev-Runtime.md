@@ -245,6 +245,12 @@ The router refuses a removal that would leave fewer than `controller.min_prefill
 
 The engines of an instance are `n1` to `n<count>`, and the router listens at `http://127.0.0.1:18000` with the installed ports.
 
+Removal and rejoin need the router's [control token](HTTP-API.md#control-token). The router reads it from `NARWHAL_ROUTER_TOKEN` in the environment of `narwhal dev up`, so export a token before `up` and keep it exported in the shell that sends the requests below:
+
+```bash
+export NARWHAL_ROUTER_TOKEN=$(python -c 'import secrets; print(secrets.token_hex(32))')
+```
+
 1. Read the run directory from `status`, and choose the engine:
 
     ```bash
@@ -271,6 +277,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
     ```
 
@@ -280,6 +287,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -H 'content-type: application/json' -d @"$RUN_DIR/$IID.json" \
       -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
     ```

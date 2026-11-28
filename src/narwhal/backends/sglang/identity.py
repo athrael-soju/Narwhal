@@ -37,6 +37,8 @@ def server_version(payload: Any) -> str:
 
 class SglangIdentity(EngineIdentityReader):
     reports_process_start = False
+    # The engine serves its version only with its API key.
+    identity_needs_key = True
     contract_fields = ATTESTED_FIELDS
     sequence_flag = "--max-running-requests"
 

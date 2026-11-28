@@ -108,7 +108,7 @@ Ingress authenticates clients and removes their credentials before a request rea
 }
 ```
 
-Every engine request carries that credential and a router-generated `x-request-id`, unique to every attempt and phase. Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL. Attestation requests go to the attestation sidecar URL on the trusted control network.
+Every engine request carries that credential and a router-generated `x-request-id`, unique to every attempt and phase, with these exceptions. Health checks carry no credential. On a fleet with an `engine_contract`, the router sends an engine no credential before its attestation verifies: it reads the attestation first, then the engine's version and process start without the key. SGLang and llama.cpp serve their version only with the key, so for them the router checks the attestation against the sidecar's process start and the version the attestation names, and reads the version with the key only after that passes. Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL. Attestation requests go to the attestation sidecar URL on the trusted control network.
 
 `/narwhal/state` reports the authentication mode in `admission.engine_auth`: `engine-credential` when `engine.engine_api_key_env` is set, and `boundary` when it is empty. Use the same mode for workload measurement and production serving.
 
@@ -120,7 +120,7 @@ When `engine.engine_api_key_env` names a variable at deployment export, the cred
 | Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
 | Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
 
-The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`. `trtllm-serve` does not check `NARWHAL_TRTLLM_API_KEY` and serves every caller that reaches its port, so keep a TensorRT-LLM engine port on a private network.
+The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`. The launch wrapper runs SGLang in its own process, so the key appears in no process's argument list or inherited environment, and it replaces the key with `[REDACTED]` in the wrapper's output and log records, including the server arguments SGLang logs at startup. `trtllm-serve` does not check `NARWHAL_TRTLLM_API_KEY` and serves every caller that reaches its port, so keep a TensorRT-LLM engine port on a private network.
 
 `engine.backend` is `"vllm"`, the default, `"sglang"`, `"trtllm"` for TensorRT-LLM, or `"llamacpp"` for a [development fleet of llama.cpp engines](../dev/Llama-Cpp-Engines.md). `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults:
 

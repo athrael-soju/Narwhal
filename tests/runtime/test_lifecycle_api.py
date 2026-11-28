@@ -9,6 +9,7 @@ import httpx
 
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.serving import app as serving_app
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet
 
 
@@ -25,7 +26,9 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
         self.router = app.state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://router"
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(self.client.aclose)
 

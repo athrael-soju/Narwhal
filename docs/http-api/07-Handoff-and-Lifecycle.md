@@ -12,6 +12,8 @@ Returns the `narwhal.handoff` schema version `1` document.
 
 The high-availability (HA) standby router polls this route before takeover. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
+The read needs no token. The router signs each document it returns in the `X-Narwhal-Handoff-Signature` header: `sha256=` and the hex HMAC-SHA256, under the router's [control token](../HTTP-API.md#control-token), of the JSON array `["narwhal.handoff", epoch, holder, at]`, a newline and the response body. The standby shadows only a document whose signature matches its own control token, so both routers of a pair need the same token. It also refuses a document older than the newest one it accepted, or whose `at` is more than the handoff age (`--standby-max-handoff-age`, 30 s by default) from its own clock. A refused document counts as a missed probe, and the standby logs the reason once each time it changes. A router without a control token answers this route with HTTP `403`.
+
 ### Handoff fields
 
 The handoff document carries these fields:
@@ -154,6 +156,9 @@ The drain route returns these error statuses:
 
 |  HTTP | Meaning                                                                  |
 | :---: | ------------------------------------------------------------------------ |
+| `401` | No [control token](../HTTP-API.md#control-token), or another one         |
+| `403` | The router has no control token configured                               |
+| `413` | The body holds more than 64 KiB                                          |
 | `409` | Named engine set violates a drain rule                                   |
 | `409` | Unknown engine ID, or a `deadline_s` that is zero, negative, or infinite |
 | `409` | Another lifecycle action is active                                       |
@@ -195,7 +200,7 @@ Readmission checks:
 8. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
 9. `final health`: the engine health endpoint answers after KV transfer validation.
 
-Checks 1 to 4 cover the candidate and its role-permitted peers. On an SGLang fleet, the router pairs the candidate with the first live engine in the other role for check 8. With the `mooncake` connector, the router switches the candidate to the role the router assigns it before check 8. After check 9, the router confirms that the identity, attestation, and profile bindings of every participant still match checks 1 to 4.
+The health check carries no engine API key. The router reads each engine's attestation before any request that carries the key, and sends the key only to an engine whose attestation passed check 2; an engine that fails it gets no `model` check. Checks 1 to 4 cover the candidate and its role-permitted peers. On an SGLang fleet, the router pairs the candidate with the first live engine in the other role for check 8. With the `mooncake` connector, the router switches the candidate to the role the router assigns it before check 8. After check 9, the router confirms that the identity, attestation, and profile bindings of every participant still match checks 1 to 4.
 
 `checks` lists the checks that passed, in this order. The failed checks appear in the engine's `error`, or in `join.failures` for a [join](08-Engine-Membership.md#post-narwhalengines). A `model identity` failure does not stop checks 6 and 7, so a refused engine can list `process identity` or `new process identity`, and `generation`, in `checks`. Checks 8 and 9 run only after checks 1 to 7 pass for every engine.
 
@@ -205,6 +210,9 @@ A failed readmission returns one of these statuses:
 
 |  HTTP | Meaning                                                                      |
 | :---: | ---------------------------------------------------------------------------- |
+| `401` | No [control token](../HTTP-API.md#control-token), or another one             |
+| `403` | The router has no control token configured                                   |
+| `413` | The body holds more than 64 KiB                                              |
 | `409` | Named engine set violates a readmission rule                                 |
 | `409` | A named engine is `active`, `draining`, `deadline_exceeded`, or `validating` |
 | `409` | A named engine with `restart_required: true` has a null `old_process_start`  |

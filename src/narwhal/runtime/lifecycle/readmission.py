@@ -7,11 +7,12 @@ import httpx
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import (
     EngineIdentity,
+    attested_identity,
     attested_launch,
     fetch_spec_identity,
     model_disagreement,
     model_identity,
-    verify_attestation,
+    read_attestation,
 )
 from ...engines.client import EngineError
 from ...engines.stream import sse_token_count
@@ -124,18 +125,31 @@ async def validate_readmission(
     loaded: dict[str, dict[str, Any]] = {}
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         for spec in participants:
+            # Health carries no credential, so it can reach an engine not yet attested.
             if not await router.engines.healthy(spec.url):
                 outcome.fail(spec.iid, "health did not answer 200")
                 continue
             outcome.ok(spec.iid, "health")
+            if not spec.attestation_url:
+                outcome.fail(spec.iid, "attestation_url is not configured")
+                continue
             try:
-                identity = await fetch_spec_identity(
-                    cfg, spec, transport=transport, headers=router.engines._auth(None)
+                payload = await read_attestation(spec, timeout_s=timeout, transport=transport)
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                outcome.fail(spec.iid, f"attestation unreadable: {type(exc).__name__}")
+                continue
+            try:
+                identity, failures = await attested_identity(
+                    cfg,
+                    spec,
+                    payload,
+                    timeout_s=timeout,
+                    transport=transport,
+                    identify=fetch_spec_identity,
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"process identity unreadable: {type(exc).__name__}")
                 continue
-            identities[spec.iid] = identity
             previous = router.lifecycle.process_starts.get(spec.iid)
             if (
                 spec.iid not in engines
@@ -144,41 +158,33 @@ async def validate_readmission(
             ):
                 router.scheduler.eject(spec.iid, "process_identity")
                 outcome.fail(spec.iid, "peer process changed before readmission")
-            if not spec.attestation_url:
-                outcome.fail(spec.iid, "attestation_url is not configured")
-                continue
-            try:
-                response = await client.get(spec.attestation_url)
-                response.raise_for_status()
-                payload = response.json()
-                failures = verify_attestation(payload, contract, identity)
-            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                outcome.fail(spec.iid, f"attestation unreadable: {type(exc).__name__}")
-                continue
             if failures:
+                # No request with the engine credential goes to an engine whose attestation
+                # failed.
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
+                continue
+            identities[spec.iid] = identity
+            outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
+            if spec.iid in engines:
+                loaded[spec.iid] = model_identity(attested_launch(payload))
+            router.attested(spec.iid, payload, candidate=spec is candidate)
+            # A replacement process starts in its launch role; the fabric check runs in the
+            # router's role for it. A joining engine runs in its spec's role.
+            if spec is candidate:
+                switched = await router.switch_spec_role(spec, spec.role)
+            elif spec.iid in engines:
+                switched = await router.resume_role(spec.iid)
             else:
-                outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
-                if spec.iid in engines:
-                    loaded[spec.iid] = model_identity(attested_launch(payload))
-                router.attested(spec.iid, payload, candidate=spec is candidate)
-                # A replacement process starts in its launch role; the fabric check runs in the
-                # router's role for it. A joining engine runs in its spec's role.
-                if spec is candidate:
-                    switched = await router.switch_spec_role(spec, spec.role)
-                elif spec.iid in engines:
-                    switched = await router.resume_role(spec.iid)
-                else:
-                    switched = None
-                if switched:
-                    outcome.fail(spec.iid, f"role switch failed: {switched}")
-                problems = profile_generation_problems(
-                    store, spec.iid, binding_digest(payload), contract=True
-                )
-                for problem in problems:
-                    outcome.fail(spec.iid, problem)
-                if not problems:
-                    outcome.ok(spec.iid, "profile generation")
+                switched = None
+            if switched:
+                outcome.fail(spec.iid, f"role switch failed: {switched}")
+            problems = profile_generation_problems(
+                store, spec.iid, binding_digest(payload), contract=True
+            )
+            for problem in problems:
+                outcome.fail(spec.iid, problem)
+            if not problems:
+                outcome.ok(spec.iid, "profile generation")
             try:
                 models = await client.get(
                     f"{spec.url}/v1/models", headers=router.engines._auth(None)
@@ -262,16 +268,18 @@ async def validate_readmission(
         identity_failed = False
         for spec in participants:
             try:
-                live = await fetch_spec_identity(
-                    cfg, spec, transport=transport, headers=router.engines._auth(None)
+                payload = await read_attestation(spec, timeout_s=timeout, transport=transport)
+                live, failures = await attested_identity(
+                    cfg,
+                    spec,
+                    payload,
+                    timeout_s=timeout,
+                    transport=transport,
+                    identify=fetch_spec_identity,
                 )
                 if live != identities[spec.iid]:
                     raise _Changed("process changed during validation")
-                async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-                    response = await client.get(spec.attestation_url)
-                    response.raise_for_status()
-                payload = response.json()
-                if verify_attestation(payload, contract, live):
+                if failures:
                     raise _Changed("attestation changed during validation")
                 problems = profile_generation_problems(
                     store, spec.iid, binding_digest(payload), contract=True

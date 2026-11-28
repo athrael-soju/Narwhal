@@ -55,7 +55,7 @@ A router that does not control the fleet, such as a standby, a fenced router or 
 
 ## `POST /narwhal/engines`
 
-Validates one engine and adds it to the fleet. The body is one engine entry as the fleet file holds it:
+Validates one engine and adds it to the fleet. The request needs the router's [control token](../HTTP-API.md#control-token). The body is one engine entry as the fleet file holds it:
 
 | Field             | Type    | Default    | Meaning                                                                                         |
 | ----------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------- |
@@ -96,7 +96,7 @@ The router refuses a valid entry before it contacts any engine when:
 
 Otherwise the router runs these checks with the engine out of placement:
 
-1. It reads the new engine's attestation and checks it against `engine_contract`.
+1. It reads the new engine's attestation and checks it against `engine_contract`. No request to the new engine carries the engine API key until its attestation passes.
 2. It reads `profiles.path` again. The store must hold a profile for each member and the new engine, and each of these profiles must match the process generation of its live engine. Rows for other engines, such as an engine that left, are not checked.
 3. When `engine.first_token_calibration_path` is set, it reads that artifact again. The artifact must cover every directed pair of the members and the new engine, and match the process generation of each live engine.
 4. It runs the [readmission checks](07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) on the new engine in its requested role, with `process identity` in place of `new process identity`. The `model identity` check requires the new engine to attest the model file digests of every member that is not ejected or draining.
@@ -106,6 +106,8 @@ When every check passes, the router loads the store and the calibration it read,
 |  HTTP | Meaning                                                                                                   |
 | :---: | --------------------------------------------------------------------------------------------------------- |
 | `200` | The engine joined, and `generation` increased by one                                                      |
+| `401` | The request carries no [control token](../HTTP-API.md#control-token), or another one                     |
+| `403` | The router has no control token configured                                                                |
 | `409` | A precondition refused the join, named in `error`, with `join.failures` empty                             |
 | `409` | A check failed, with `join.failures` listing the failures and `join.checks` the checks that passed        |
 | `422` | The body is not a valid engine entry, named in `error`, with `join` `null`                                |
@@ -114,7 +116,7 @@ When every check passes, the router loads the store and the calibration it read,
 
 ## `DELETE /narwhal/engines/{iid}`
 
-Drains the engine and removes it from the fleet. The query parameter `deadline_s` sets the drain deadline in seconds. It defaults to `300` and must be positive and finite.
+Drains the engine and removes it from the fleet. The request needs the router's [control token](../HTTP-API.md#control-token). The query parameter `deadline_s` sets the drain deadline in seconds. It defaults to `300` and must be positive and finite.
 
 The drain holds the engine out of placement and records its process identity, as [`POST /narwhal/lifecycle/drain`](07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain) does. On each monitoring pass, the router removes a drained engine after its requests finish and every decode leg reading KV from it is done, including legs still queued for a decode seat. At the deadline, the engine's lifecycle `state` becomes `deadline_exceeded`, and the removal still waits for its resident requests to finish. The router does not stop the engine process.
 
@@ -131,6 +133,8 @@ The router refuses the removal when:
 | :---: | --------------------------------------------------------------------------------------------- |
 | `200` | The engine left at once, and `generation` increased by one                                    |
 | `202` | The engine is draining, and `leaving` lists it                                                |
+| `401` | The request carries no [control token](../HTTP-API.md#control-token), or another one          |
+| `403` | The router has no control token configured                                                    |
 | `404` | `iid` names no member                                                                         |
 | `409` | A rule above refused the removal, or `deadline_s` is zero, negative, or infinite              |
 | `422` | `deadline_s` is not a number                                                                  |

@@ -25,6 +25,7 @@ from narwhal.runtime.lifecycle import leave
 from narwhal.runtime.lifecycle.join import join_refusal
 from narwhal.runtime.lifecycle.leave import begin_leave, leave_refusal
 from narwhal.serving.app import create_app
+from tests import CONTROL_HEADERS
 from tests.runtime import test_join
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -415,8 +416,11 @@ class DevFleetRejoinTests(test_join.JoinHarness):
         saved = json.dumps(next(e for e in fleet["engines"] if e["iid"] == "n3"))
         departed = next(spec for spec in self.cfg.engines if spec.iid == "n3")
         self.assertEqual(read_engine_spec(json.loads(saved)), departed)
+        # Dev-Runtime sends the control token in each removal and join.
         client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(client.aclose)
         capture = AsyncMock(return_value=({"n3": 100.0}, {}))

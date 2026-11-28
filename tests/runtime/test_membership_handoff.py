@@ -18,6 +18,7 @@ from narwhal.runtime.lease import FileLease
 from narwhal.runtime.standby import standby_loop
 from narwhal.serving.app import create_app
 from narwhal.types import Role
+from tests import CONTROL_TOKEN
 from tests.fixtures import calibration_document
 from tests.runtime.test_standby_shutdown import FleetCase
 
@@ -171,6 +172,7 @@ class MembershipHandoffTests(FleetCase):
                 probe_interval_s=0.001,
                 takeover_after=1,
                 transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+                token=CONTROL_TOKEN,
             )
         return router
 
@@ -276,6 +278,7 @@ class MembershipHandoffTests(FleetCase):
             probe_interval_s=0.001,
             takeover_after=1,
             transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+            token=CONTROL_TOKEN,
         )
         self.assertFalse(router.standby, router.failover_blocked)
         self.assert_restored(router)

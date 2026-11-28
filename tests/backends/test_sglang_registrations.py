@@ -241,19 +241,132 @@ class MooncakeRegistrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(runs), 2)
         self.assertEqual(set(runs), {"ran"})
 
-    def test_serve_starts_sglang_with_the_site_hook_first_on_the_path(self):
-        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", "PYTHONPATH": "/narwhal-hooks"}
+    def serve(self, environ):
+        """`serve` with `environ`; return SGLang's argv, the environment it ran with, and the
+        argument lists of any process it started."""
+        seen = {}
+
+        def run_module(name, run_name, alter_sys):
+            self.assertEqual(
+                (name, run_name, alter_sys), ("sglang.launch_server", "__main__", True)
+            )
+            seen.update(argv=list(sys.argv), environ=dict(os.environ))
+
+        started = []
         with (
             patch.dict(os.environ, environ, clear=True),
-            patch.object(runtime.os, "execve") as execve,
+            patch.object(sys, "argv", list(sys.argv)),
+            patch.object(runtime.runpy, "run_module", run_module),
+            patch.object(runtime, "keep_mooncake_registrations") as kept,
+            # The redaction replaces this process's streams; KeyRedactionTests runs it.
+            patch.object(runtime, "redact") as redacted,
+            patch.object(runtime.os, "execve", lambda *args: started.append(args[1])),
+            patch.object(runtime.os, "execv", lambda *args: started.append(args[1])),
+            patch.object(subprocess, "Popen", lambda args, **_: started.append(args)),
         ):
             runtime.serve(["--port", "8000"])
-        command, started = execve.call_args.args[1:]
-        self.assertEqual(command[1:3], ["-m", "sglang.launch_server"])
-        site, rest = started["PYTHONPATH"].split(":", 1)
+        kept.assert_called_once_with()
+        redacted.assert_called_once_with(environ.get(runtime.API_KEY_ENV, ""))
+        site = seen["environ"]["PYTHONPATH"].split(":", 1)[0]
         self.addCleanup(shutil.rmtree, site)
+        return seen["argv"], seen["environ"], started
+
+    def test_serve_runs_sglang_with_the_site_hook_first_on_the_path(self):
+        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", "PYTHONPATH": "/narwhal-hooks"}
+        argv, started, _ = self.serve(environ)
+        self.assertEqual(argv[1:], ["--port", "8000", "--disaggregation-bootstrap-port", "5600"])
+        site, rest = started["PYTHONPATH"].split(":", 1)
         self.assertEqual(rest, "/narwhal-hooks")
         self.assertEqual((Path(site) / "sitecustomize.py").read_text(), runtime.SITE_HOOK)
+
+    def test_the_engine_key_reaches_no_process_argument_list(self):
+        # Any local user reads a process's arguments in ps or /proc/<pid>/cmdline, so the key
+        # goes only into SGLang's argv in this process, and leaves the inherited environment.
+        key = "engine-key-" + "9" * 32
+        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", runtime.API_KEY_ENV: key}
+        before = list(sys.orig_argv)
+        argv, started, processes = self.serve(environ)
+        self.assertEqual(processes, [])
+        self.assertEqual(sys.orig_argv, before)
+        self.assertNotIn(key, " ".join(sys.orig_argv))
+        self.assertEqual(argv[-2:], ["--api-key", key])
+        self.assertNotIn(runtime.API_KEY_ENV, started)
+        self.assertNotIn(key, json.dumps(started))
+
+
+# A stand-in for SGLang's launcher: it configures logging as SGLang does, replacing the root
+# handlers, logs its server arguments with the key from a module logger, prints them, and records
+# what the kernel shows of its process.
+FAKE_LAUNCH_SERVER = r"""
+import json
+import logging
+import os
+import sys
+
+logging.basicConfig(level=logging.INFO, force=True, format="%(name)s %(message)s")
+logger = logging.getLogger("sglang.srt.entrypoints.http_server")
+key = sys.argv[sys.argv.index("--api-key") + 1] if "--api-key" in sys.argv else ""
+logger.info("server_args=ServerArgs(model_path='m', api_key=%r, port=8000)", key)
+logger.warning(f"server_args=ServerArgs(api_key={key!r})")
+print(f"api_key={key}")
+sys.stderr.write(f"stderr api_key={key}\n")
+with open(f"/proc/{os.getpid()}/cmdline", "rb") as cmdline:
+    shown = cmdline.read().replace(b"\0", b" ").decode()
+with open(os.environ["FAKE_SGLANG_RECORD"], "w") as out:
+    json.dump(
+        {
+            "got_key": bool(key),
+            "cmdline_has_key": bool(key) and key in shown,
+            "environ_has_key": any(key in value for value in os.environ.values()) if key else False,
+        },
+        out,
+    )
+"""
+
+
+@unittest.skipUnless(Path("/proc/self/cmdline").exists(), "reads /proc/<pid>/cmdline")
+class KeyRedactionTests(unittest.TestCase):
+    """The launcher, run as the engine image runs it, starts SGLang with the key in no argument
+    list or environment, and keeps the key out of SGLang's output and logs."""
+
+    def test_the_engine_key_stays_off_the_command_line_and_out_of_the_logs(self):
+        key = "engine-key-" + "3c" * 24
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            package = root / "fake" / "sglang"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("")
+            (package / "launch_server.py").write_text(FAKE_LAUNCH_SERVER)
+            hook = root / "hook"
+            hook.mkdir()
+            # The launch hook holds the launcher as launch_engine.py.
+            shutil.copy(runtime.LAUNCHER, hook / "launch_engine.py")
+            record = root / "record.json"
+            environ = {
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": f"{root / 'fake'}:{hook}",
+                runtime.BOOTSTRAP_PORT_ENV: "5600",
+                runtime.API_KEY_ENV: key,
+                "FAKE_SGLANG_RECORD": str(record),
+            }
+            result = subprocess.run(
+                [sys.executable, str(hook / "launch_engine.py"), "serve", "--port", "8000"],
+                env=environ,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
+            seen = json.loads(record.read_text())
+        self.assertTrue(seen["got_key"])
+        self.assertFalse(seen["cmdline_has_key"])
+        self.assertFalse(seen["environ_has_key"])
+        self.assertNotIn(key, output)
+        self.assertIn("api_key='[REDACTED]'", output)
+        self.assertIn("api_key=[REDACTED]", result.stdout)
+        self.assertIn("stderr api_key=[REDACTED]", result.stderr)
 
 
 if __name__ == "__main__":
