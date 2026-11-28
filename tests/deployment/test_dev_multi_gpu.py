@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -25,6 +26,8 @@ from narwhal.runtime.lifecycle import leave
 from narwhal.runtime.lifecycle.join import join_refusal
 from narwhal.runtime.lifecycle.leave import begin_leave, leave_refusal
 from narwhal.serving.app import create_app
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV, token_problem
+from tests import CONTROL_HEADERS, CONTROL_TOKEN
 from tests.runtime import test_join
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -410,7 +413,9 @@ class DevFleetRejoinTests(test_join.JoinHarness):
         departed = next(spec for spec in self.cfg.engines if spec.iid == "n3")
         self.assertEqual(read_engine_spec(json.loads(saved)), departed)
         client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(client.aclose)
         capture = AsyncMock(return_value=({"n3": 100.0}, {}))
@@ -447,3 +452,24 @@ class DevFleetRejoinTests(test_join.JoinHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouterTokenTests(unittest.TestCase):
+    """The instance's router takes the exported control token, or else one of its own."""
+
+    def test_an_instance_draws_its_token_once_and_keeps_it_private(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.dict(os.environ, {ROUTER_TOKEN_ENV: ""}):
+                token = launch.router_token(root)
+                self.assertIsNone(token_problem(token))
+                path = root / launch.ROUTER_TOKEN_FILE
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(launch.router_token(root), token)
+            self.assertEqual(launch.router_token(root), CONTROL_TOKEN)
+            path.write_text("short\n")
+            with (
+                patch.dict(os.environ, {ROUTER_TOKEN_ENV: ""}),
+                self.assertRaisesRegex(ValueError, "32 random bytes"),
+            ):
+                launch.router_token(root)

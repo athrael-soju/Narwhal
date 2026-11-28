@@ -66,6 +66,7 @@ In the cluster, a stage that fails or times out leaves the `NarwhalFleet` `Stall
 | Engine node, model volume, image, checkpoint, launch policy or transport | The discovery fields of `.env`, the Kubernetes inputs of the engine pods and the images | `discover` and every stage after it |
 | Narwhal release | The SHA-256 of the installed package's Python files, which build every object | `discover` and every stage after it |
 | Engine API key Secret, or the key in it | The Secret name and key in `NARWHAL_KUBERNETES_API_KEY_SECRET`, and an HMAC of the key under the fleet's salt from a key-check Job, never the key itself | `engine-prepare`, `router-start` |
+| Router control token Secret, or the token in it | The Secret name and key in `NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET`, and an HMAC of the token under the fleet's salt from a key-check Job, never the token itself | `router-start` |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start` |
 | Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start` |
@@ -86,6 +87,22 @@ In the cluster, a stage that fails or times out leaves the `NarwhalFleet` `Stall
 <!-- End of the generated stage tables. -->
 
 Keep the engine API key in an immutable Secret whose name carries a version, such as `engine-key-v2`, and rotate it by creating the next Secret and pointing `apiKeySecret` at it. Each `run` also starts a key-check Job that holds the key and reports only its HMAC under a salt kept in the run directory, so a key edited in place still restarts the engines and the routers.
+
+The fleet's `spec.controlTokenSecret` names the Secret and key of the routers' [control token](../HTTP-API.md#control-token), and the fleet requires it. Create it the same way, with a version in its name:
+
+```bash
+kubectl create secret generic router-token-v1 --namespace <namespace> \
+  --from-literal=token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
+```yaml
+spec:
+  controlTokenSecret:
+    name: router-token-v1
+    key: token
+```
+
+Only the router containers and the gate Jobs that hold the token read it, through a `secretKeyRef`: the router-check Jobs of `router-start`, which readmit engines, and the key-check Job, which reports its HMAC beside the engine key's. The controller copies the reference and never reads the Secret. A new Secret, or a token edited in place, restarts only the routers. A `controlTokenSecret` with the name and key of `engines.apiKeySecret` is refused, by the CRD and as `InputRefused`. The controller cannot see two Secrets that hold the same value, so the routers compare the token with the engine key when they start and refuse to start when they match. An environment that holds `NARWHAL_ROUTER_TOKEN` is refused.
 
 ## Checking cluster access
 

@@ -33,6 +33,8 @@ from typing import Any
 
 from narwhal import __version__
 
+from .balancer import SERVING_ROUTES as SERVING_ROUTES
+from .balancer import route_rules
 from .fleet_resource import (
     API_VERSION,
     CONFIG_SHA256,
@@ -74,19 +76,6 @@ HAPROXY = "haproxy"
 ROUTER_SERVICE = "routers"
 ROUTER_PODS = ("router-0", "router-1")
 HAPROXY_PORT = 8000
-# The routes HAProxy forwards to the active router: the completion routes, what a client or an
-# external load balancer reads about the fleet, and the engine targets Prometheus reads. Every
-# other route, such as /narwhal/state, /metrics or a lifecycle action, answers 404 there, and
-# the gate Jobs, the other router and monitoring reach it at a router's own address.
-SERVING_ROUTES = (
-    ("POST", "/v1/completions"),
-    ("POST", "/v1/chat/completions"),
-    ("GET", "/v1/models"),
-    ("GET", "/health"),
-    ("GET", "/ready"),
-    ("GET", "/narwhal/targets"),
-)
-
 # Gate Jobs, as `kubernetes_target` runs them.
 GATE_KINDS = (
     "discovery",
@@ -117,6 +106,9 @@ CREDENTIAL_KINDS = (
     "calibrate",
     "preflight",
 )
+# The gates that call the routers' control routes get the control token: a router check
+# readmits engines. A key check holds it to report its HMAC, which shows an edit in place.
+CONTROL_KINDS = ("key-check", "router-check")
 # The gates that inspect or measure one node run there.
 NODE_KINDS = ("discovery", "fabric-probe", "fabric-server", "fabric-client", "transfer-measure")
 # The gates that run on the host's network: a fabric Job measures the interface KV uses, as
@@ -327,7 +319,8 @@ def _finished(document: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class ApiKey:
-    """The engines' API credential: a key in a Secret, set in the variable `env`."""
+    """A credential in a Secret, set in the variable `env`: the engines' API key, or the
+    routers' control token."""
 
     env: str
     secret: str
@@ -335,10 +328,10 @@ class ApiKey:
 
     def __post_init__(self) -> None:
         if not ENV_NAME.fullmatch(self.env):
-            raise ValueError(f"the API key variable {self.env!r} is not a variable name")
-        _name(self.secret, "the API key Secret")
+            raise ValueError(f"the credential variable {self.env!r} is not a variable name")
+        _name(self.secret, f"the {self.env} Secret")
         if not FILE_NAME.fullmatch(self.key):
-            raise ValueError(f"the API key's Secret key {self.key!r} is not a key name")
+            raise ValueError(f"the {self.env} Secret key {self.key!r} is not a key name")
 
     def reference(self) -> dict[str, str]:
         return {"name": self.secret, "key": self.key}
@@ -363,6 +356,7 @@ class Fleet:
     haproxy_image: str | None = None
     fabric_image: str | None = None
     api_key: ApiKey | None = None
+    control_token: ApiKey | None = None
     engine_account: str | None = None
     rdma_resource: str | None = None
     model_volume: Mapping[str, Any] | None = None
@@ -640,6 +634,8 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
     env += [{"name": name, "value": gate.env[name]} for name in sorted(gate.env)]
     if fleet.api_key and gate.kind in CREDENTIAL_KINDS:
         env.append(fleet.api_key.variable())
+    if fleet.control_token and gate.kind in CONTROL_KINDS:
+        env.append(fleet.control_token.variable())
     container: dict[str, Any] = {
         "name": GATE,
         "image": gate.image or (fleet.fabric_image if fabric else fleet.narwhal_image),
@@ -738,20 +734,6 @@ def inputs(fleet: Fleet, gate: GateJob, files: Mapping[str, bytes]) -> dict[str,
 
 
 # HAProxy.
-
-
-def route_rules() -> str:
-    """The frontend lines that refuse every request but those `SERVING_ROUTES` names, matched
-    by method and by the exact path, so no encoding or extra slash reaches another route."""
-    lines = []
-    methods = sorted({method for method, _ in SERVING_ROUTES})
-    for method in methods:
-        paths = " ".join(path for verb, path in SERVING_ROUTES if verb == method)
-        lines.append(f"    acl narwhal_{method.lower()} method {method}")
-        lines.append(f"    acl narwhal_{method.lower()}_routes path {paths}")
-    allowed = " || ".join(f"narwhal_{m.lower()} narwhal_{m.lower()}_routes" for m in methods)
-    lines.append(f"    http-request deny deny_status 404 unless {allowed}")
-    return "\n".join(lines) + "\n"
 
 
 def haproxy_config(namespace: str, cluster_domain: str) -> str:
@@ -1036,6 +1018,10 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
     ]
     if fleet.api_key:
         env.append(fleet.api_key.variable())
+    # The router refuses to start without its control token.
+    if fleet.control_token is None:
+        raise ValueError("the routers need the control token's Secret, spec.controlTokenSecret")
+    env.append(fleet.control_token.variable())
     container = {
         "name": ROUTER,
         "image": fleet.narwhal_image,

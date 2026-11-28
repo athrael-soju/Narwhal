@@ -31,6 +31,7 @@ from narwhal.deployment.kubernetes_objects import (
 )
 from narwhal.deployment.kubernetes_target import ROUTER_HOME, ROUTERS
 from narwhal.deployment.launch_engine import engine_set
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
 from tests.deployment import chart_fixtures
 from tests.deployment.pod_fixtures import POD_IP, SECRET_VALUE, expand
 from tests.deployment.test_helm_chart import Comparison
@@ -45,6 +46,8 @@ ROUTER_GOLDEN = json.loads(
 OWNER = Owner("fleet", "0b6f4c1e-5d1a-4c55-9f7e-3a1f0f5e9a11", chart_fixtures.NAMESPACE)
 OTHER = Owner("fleet", "6a3c2b9d-1e8f-4f70-8b2a-5c4d3e2f1a00", chart_fixtures.NAMESPACE)
 CHART_PLACEMENT = "narwhal.io/placement"
+# The routers' control token, which the routers and the gates that call them read.
+CONTROL = ApiKey(ROUTER_TOKEN_ENV, "router-token", "token")
 
 
 def fleet(owner: Owner = OWNER, **overrides: Any) -> Fleet:
@@ -58,6 +61,7 @@ def fleet(owner: Owner = OWNER, **overrides: Any) -> Fleet:
         "fabric_image": INPUTS["images"]["fabric"],
         "state_claim": engines["stateClaim"],
         "api_key": ApiKey(key["env"], key["secretName"], key["key"]),
+        "control_token": CONTROL,
         "engine_account": engines["podTemplate"]["serviceAccountName"],
         "rdma_resource": engines["rdmaResource"],
         "model_volume": engines["modelVolume"],
@@ -88,6 +92,20 @@ def gate(entry: dict, **overrides: Any) -> GateJob:
     }
     settings.update(overrides)
     return GateJob(**settings)
+
+
+def gate_of(kind: str) -> GateJob:
+    """A gate of `kind` with the settings that kind needs."""
+    return GateJob(
+        name=f"{kind}-job",
+        kind=kind,
+        command=["true"],
+        deadline_seconds=60,
+        keep=f"deploy/run/jobs/{kind}",
+        node="node-a" if kind in objects.NODE_KINDS else None,
+        host_network=kind in objects.HOST_NETWORK_KINDS,
+        service_account=kind == objects.ACCOUNT_KIND,
+    )
 
 
 def entry(name: str) -> dict:
@@ -125,10 +143,12 @@ def router_fleet(**overrides: Any) -> Fleet:
     """The fleet the router golden's values describe."""
     inputs = ROUTER_GOLDEN["inputs"]
     key = inputs["credentials"]["engineApiKey"]
+    token = inputs["credentials"]["routerControlToken"]
     settings: dict[str, Any] = {
         "narwhal_image": inputs["images"]["narwhal"],
         "state_claim": inputs["stateClaim"],
         "api_key": ApiKey(key["env"], key["secretName"], key["key"]),
+        "control_token": ApiKey(token["env"], token["secretName"], token["key"]),
         "cluster_domain": inputs["haproxy"]["clusterDomain"],
     }
     settings.update(overrides)
@@ -1345,17 +1365,34 @@ class RouterTests(unittest.TestCase):
     def test_only_the_router_container_gets_the_engine_key(self):
         [container] = template(router_set())["containers"]
         self.assertEqual(
-            container["env"][-1],
+            container["env"][-2],
             {
                 "name": "NARWHAL_ENGINE_API_KEY",
                 "valueFrom": {"secretKeyRef": {"name": "engine-credential", "key": "api-key"}},
             },
         )
         [bare] = template(router_set(router_fleet(api_key=None)))["containers"]
-        self.assertNotIn("secretKeyRef", json.dumps(bare))
+        self.assertNotIn("NARWHAL_ENGINE_API_KEY", json.dumps(bare))
         self.assertNotIn(
             SECRET_VALUE, json.dumps(objects.routers(router_fleet(), router_settings()))
         )
+
+    def test_the_routers_and_only_the_control_gates_get_the_control_token(self):
+        [container] = template(router_set())["containers"]
+        token = {
+            "name": ROUTER_TOKEN_ENV,
+            "valueFrom": {"secretKeyRef": {"name": "router-token", "key": "token"}},
+        }
+        self.assertEqual(container["env"][-1], token)
+        held = {
+            kind
+            for kind in objects.GATE_KINDS
+            if ROUTER_TOKEN_ENV in json.dumps(template(objects.job(fleet(), gate_of(kind))))
+        }
+        self.assertEqual(held, {"key-check", "router-check"})
+        # The router refuses to start without the token, so no router pair is built without it.
+        with self.assertRaisesRegex(ValueError, "spec.controlTokenSecret"):
+            objects.routers(router_fleet(control_token=None), router_settings())
 
     def test_a_fleets_router_option_reaches_narwhal_serve_as_written(self):
         written = ("--log-level", "$(NARWHAL_ENGINE_API_KEY)", "$$x")

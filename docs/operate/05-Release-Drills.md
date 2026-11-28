@@ -86,6 +86,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     ```bash
     curl -sS -o "$RUN_DIR/wave-failed.json" -w '%{http_code}\n' \
       -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -H 'content-type: application/json' -d '{"wave":true}' \
       > "$RUN_DIR/wave-failed-status.txt"
     curl -sS -o /dev/null -w '%{http_code}\n' "$ROUTER_URL/ready" \

@@ -12,18 +12,26 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .config import scrape_token
 from .records import Action
 from .service import ActionError, ControlService
 
 API = "/api"
+# The one route the scrape token reaches.
+METRICS_PATH = "/metrics"
 
 
 class BearerAuth:
-    """Refuse HTTP requests without the control token, except GETs for `public` paths."""
+    """Refuse HTTP requests without the control token, except GETs for `public` paths.
+
+    `GET /metrics` also takes the read-only `scrape_token` of the control token, which every
+    other route refuses.
+    """
 
     def __init__(self, app: ASGIApp, token: str, public: Iterable[str] = ()) -> None:
         self.app = app
         self._token = token.encode()
+        self._scrape = scrape_token(token).encode()
         self._public = frozenset(public)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -59,7 +67,13 @@ class BearerAuth:
         if len(values) != 1:
             return False
         scheme, _, credential = values[0].partition(b" ")
-        return scheme.lower() == b"bearer" and hmac.compare_digest(credential.strip(), self._token)
+        if scheme.lower() != b"bearer":
+            return False
+        credential = credential.strip()
+        if hmac.compare_digest(credential, self._token):
+            return True
+        scrape = scope["method"] == "GET" and scope["path"] == METRICS_PATH
+        return scrape and hmac.compare_digest(credential, self._scrape)
 
 
 def action_reply(action: Action, status: int = 200) -> JSONResponse:

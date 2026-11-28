@@ -31,6 +31,8 @@ from narwhal.deployment.hosts import load_hosts
 from narwhal.deployment.install import package
 from narwhal.deployment.launch_engine.plan import build, conv_state_layers
 from narwhal.deployment.role_env import select_values
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
 from tests.deployment.fixtures import package_inputs
 
 KNOWN_HOSTS = "host1.invalid ssh-ed25519 synthetic-public-key\n"
@@ -87,6 +89,7 @@ def environment(root):
         "NARWHAL_LAUNCH_CONFIG": str(root / "config/engine-launch.local.json"),
         "NARWHAL_FLEET": str(root / "config/fleet.json"),
         "NARWHAL_SSH_KNOWN_HOSTS": str(root / "known_hosts"),
+        ROUTER_TOKEN_ENV: CONTROL_TOKEN,
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
         "NARWHAL_ENGINE_MODEL_NAME": "synthetic-model",
         "NARWHAL_MODEL_DIR": "/models/synthetic-model",

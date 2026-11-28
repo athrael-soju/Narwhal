@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..serving.control_token import ROUTER_TOKEN_ENV
 from .launch_engine.backend import EngineLauncher, cache_capture, launcher, transfer_measurement
 from .launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 
@@ -108,6 +109,16 @@ def select_values(
             values["NARWHAL_ENGINE_API_KEY"] = values[key_name]
 
     if role == "router":
+        # The router serves the control routes, and its host's readmission calls them. On
+        # Kubernetes the routers and the gates that call them read the token from its Secret.
+        if by_reference:
+            if env.get(ROUTER_TOKEN_ENV):
+                raise ValueError(
+                    f"{ROUTER_TOKEN_ENV} holds the router control token; the routers read it "
+                    "from their Secret, so unset it"
+                )
+        else:
+            include(ROUTER_TOKEN_ENV)
         values["NARWHAL_FLEET"] = "runs/deployment/fleet.json"
         for field in ROUTER_OPTIONAL:
             include(f"NARWHAL_{field}", required=False)

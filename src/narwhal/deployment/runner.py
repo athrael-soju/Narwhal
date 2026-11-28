@@ -22,6 +22,7 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import threading
@@ -39,7 +40,7 @@ from narwhal.contracts import canonical_digest
 from . import run_record, stages
 from .graph import INPUT, LIVE, PRODUCT, Fact, Rerun, Stage, StageGraph
 from .hosts import RemoteTimeout
-from .launch_engine.runtime import regular_file_digest
+from .launch_engine.runtime import SALT_BYTES, regular_file_digest
 from .run_record import (
     CANCELLED,
     FAILED,
@@ -636,6 +637,9 @@ class _Run:
         self.passed: set[str] = set()
         self.record: dict[str, Any] = {}
         self.opened = False
+        # The run directory's salt, which keys the record's digests of inputs and outputs.
+        self.salt = b""
+        self.keyed: dict[str, str] = {}
 
     def execute(self) -> RunResult:
         if self.dry:
@@ -679,11 +683,17 @@ class _Run:
         )
 
     def _plan(self) -> RunResult:
+        # A plan writes nothing: a directory without a salt yet decides with a passing one.
+        found = None
+        if self.directory.is_dir():
+            found = run_record.find_salt(self.directory)
         if (self.directory / run_record.RECORD).exists():
             self.record = run_record.read(self.directory)
+            self._key(self.record, found or secrets.token_bytes(SALT_BYTES))
             if self.record["target"] != self.runner.target:
                 raise ValueError(f"{self.directory} holds a {self.record['target']} run")
         else:
+            self._key(None, found or secrets.token_bytes(SALT_BYTES))
             self.record = {"run_id": "0" * 32, "stages": {}}
         # Stage instances whose changed outputs invalidate the stages after them.
         changed: list[tuple[Stage, str]] = []
@@ -739,6 +749,19 @@ class _Run:
                             self.values[key(fact, instance)] = previous["products"][fact]
         return RunResult(self.record["run_id"], tuple(self.decisions), None, tuple(self.notes))
 
+    def _key(self, record: dict[str, Any] | None, salt: bytes) -> None:
+        """Take the run's salt, and key any unkeyed digest an earlier runner left in `record`."""
+        self.salt = salt
+        self.keyed = {}
+        if record is not None:
+            inputs = {name for name, fact in self.graph.facts.items() if fact.kind == INPUT}
+            run_record.key_digests(record, salt, inputs)
+
+    def _keyed(self, digest: str) -> str:
+        if digest not in self.keyed:
+            self.keyed[digest] = run_record.keyed(self.salt, digest)
+        return self.keyed[digest]
+
     def _after(self, fact_key: str) -> str:
         """Why a stage runs after the stage that would produce `fact_key` again."""
         name, _, rest = fact_key.partition("[")
@@ -750,7 +773,7 @@ class _Run:
         stale = None
         # Under the lock no other writer exists, so a temporary record is a crash's leftover.
         for path in self.directory.iterdir():
-            if _TEMPORARY.fullmatch(path.name):
+            if _TEMPORARY.fullmatch(path.name) or run_record.SALT_TEMPORARY.fullmatch(path.name):
                 path.unlink()
         if (self.directory / run_record.RECORD).exists():
             record = run_record.read(self.directory)
@@ -765,7 +788,8 @@ class _Run:
                 record["stale_locks"].append({**record["lock"], "found_at": now})
         else:
             names = (path.name for path in self.directory.iterdir())
-            if others := sorted(name for name in names if name != run_record.LOCK):
+            kept = (run_record.LOCK, run_record.SALT)
+            if others := sorted(name for name in names if name not in kept):
                 raise ValueError(f"{self.directory} holds {', '.join(others)} but no run record")
             record = {
                 "run_id": uuid.uuid4().hex,
@@ -773,6 +797,7 @@ class _Run:
                 "stale_locks": [],
                 "stages": {},
             }
+        self._key(record, run_record.salt(self.directory))
         record.update(
             target=self.runner.target,
             narwhal_version=__version__,
@@ -781,7 +806,7 @@ class _Run:
             updated_at=now,
             lock={"owner": run_record.owner(), "acquired_at": now},
             inputs={
-                name: {"digest": value.digest, "source": value.source}
+                name: {"digest": self._keyed(value.digest), "source": value.source}
                 for name, value in sorted(self.inputs.items())
             },
             until=self.until,
@@ -1070,7 +1095,7 @@ class _Run:
                     self.unknown.append(fact_key)
                     continue
                 digests[fact_key] = (
-                    self.inputs[fact.name].digest
+                    self._keyed(self.inputs[fact.name].digest)
                     if fact.kind == INPUT
                     else canonical_digest(self.values[fact_key])
                 )
@@ -1108,7 +1133,7 @@ class _Run:
             stat.S_ISREG(info.st_mode)
             and info.st_size == output["size"]
             and f"{stat.S_IMODE(info.st_mode):04o}" == output["mode"]
-            and regular_file_digest(path) == output["sha256"]
+            and self._keyed("sha256:" + regular_file_digest(path)) == output["hmac_sha256"]
         )
 
     def _attempt(
@@ -1315,7 +1340,8 @@ class _Run:
                 outputs.append(
                     {
                         "path": str(path.relative_to(self.directory)),
-                        "sha256": regular_file_digest(path),
+                        # Keyed, since a file such as a role environment holds credentials.
+                        "hmac_sha256": self._keyed("sha256:" + regular_file_digest(path)),
                         "size": info.st_size,
                         "mode": f"{stat.S_IMODE(info.st_mode):04o}",
                     }

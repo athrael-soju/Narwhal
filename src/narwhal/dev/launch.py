@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
 import signal
 import sys
 import threading
@@ -53,6 +54,7 @@ from narwhal.deployment.supervision import ProcessGroup, ProcessGroups, ProcessS
 from narwhal.engines.attestation import AttestationDocument, launch_digest
 from narwhal.profiling.model import nominal_profile
 from narwhal.profiling.store import ProfileStore
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV, token_problem
 
 from . import direct, lifecycle
 from .template import _check_free_ports, starts_directly
@@ -95,6 +97,29 @@ def _started(launch: Path) -> bool:
 def _engine_running(launch: Path) -> bool:
     path = launch / "native-process.json"
     return path.is_file() and _running(lifecycle._read_identity(path))
+
+
+# The instance's router control token, which `narwhal dev` draws when the environment holds none.
+ROUTER_TOKEN_FILE = "router-token"  # noqa: S105 - a file name
+
+
+def router_token(root: Path) -> str:
+    """The router's control token: `NARWHAL_ROUTER_TOKEN`, or else the instance's own.
+
+    The instance's token is drawn once and kept at mode 0600 in `root/router-token`, so a
+    restarted router takes the token the operator already exported from it.
+    """
+    if not token_problem(os.environ.get(ROUTER_TOKEN_ENV, "")):
+        return os.environ[ROUTER_TOKEN_ENV]
+    path = root / ROUTER_TOKEN_FILE
+    if not path.is_file():
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(secrets.token_hex(32) + "\n")
+    token = path.read_text().strip()
+    if problem := token_problem(token, str(path)):
+        raise ValueError(problem)
+    return token
 
 
 def _key_variable(fleet: dict) -> str | None:
@@ -413,6 +438,7 @@ class _Launch:
         lifecycle.write(context.directory / "fleet.json", fleet)
 
     def start_router(self, context: StageContext) -> Outcome:
+        """Start the router with the control token `router_token` gives."""
         source = "package" if self.direct else "finalize-fleet"
         fleet = lifecycle.read(context.outputs(source) / "fleet.json")
         fleet["profiles"]["path"] = str(context.outputs("profile") / "profiles.json")
@@ -438,7 +464,7 @@ class _Launch:
                 "--journal",
                 str(self.run / "journal.jsonl"),
             ],
-            {},
+            {ROUTER_TOKEN_ENV: router_token(self.root)},
             url,
             checks,
         )

@@ -161,6 +161,18 @@ FACTS = (
         "under the fleet's salt from a key-check Job, never the key itself",
         _reruns("engine-prepare", "router-start"),
     ),
+    # The Secret holding the routers' control token, which the routers and the router-check
+    # Jobs that readmit engines read. A new Secret, or a key-check Job's HMAC of an edit in
+    # place, restarts the routers on the new token.
+    Fact(
+        "control_credential",
+        INPUT,
+        WORKSTATION,
+        "Router control token Secret, or the token in it",
+        "The Secret name and key in `NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET`, and an HMAC of "
+        "the token under the fleet's salt from a key-check Job, never the token itself",
+        _reruns("router-start"),
+    ),
     *(
         _shared_fact(name)
         for name in (

@@ -1300,6 +1300,29 @@
           ],
           "additionalProperties": false
         },
+        "controlTokenSecret": {
+          "type": "object",
+          "description": "The Secret that holds the routers' control token, which the routes that change membership, trust or lifecycle require: at least 32 random bytes, as 64 hex digits or 43 base64url characters. Name a new Secret to rotate the token.",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The Secret's name",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+            },
+            "key": {
+              "type": "string",
+              "description": "The key in the Secret",
+              "maxLength": 253,
+              "pattern": "^[-._A-Za-z0-9]+$"
+            }
+          },
+          "required": [
+            "name",
+            "key"
+          ],
+          "additionalProperties": false
+        },
         "haproxy": {
           "type": "object",
           "description": "The HAProxy load balancer in front of the routers",
@@ -1509,7 +1532,8 @@
         "profiling",
         "calibration",
         "fabric",
-        "routers"
+        "routers",
+        "controlTokenSecret"
       ],
       "additionalProperties": false
     },

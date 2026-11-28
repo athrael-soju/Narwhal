@@ -329,7 +329,8 @@ class CapacityTrialTests(unittest.TestCase):
         self.assertEqual((self.attempt() / "trial.json").read_bytes(), original)
         self.assertEqual({run["--requests"] for run in self.client_runs()}, {"4"})
         recorded = run_record.read(self.run)["inputs"]["trial"]
-        self.assertEqual(recorded["digest"], "sha256:" + hashlib.sha256(original).hexdigest())
+        unkeyed = "sha256:" + hashlib.sha256(original).hexdigest()
+        self.assertEqual(recorded["digest"], run_record.keyed(run_record.salt(self.run), unkeyed))
 
     def test_a_failover_during_a_rate_fails_it_with_the_move(self):
         for move, cause in (

@@ -39,6 +39,7 @@ from tools.measurement.router_benchmark.processes import (
     child_env,
     free_port,
     ready_line,
+    router_env,
 )
 
 SHIPPED_CONFIG = ROOT / "deploy" / "ha" / "haproxy.cfg"
@@ -126,7 +127,7 @@ class Routers:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 cwd=self.out,
-                env=child_env(str(ROOT / "src")),
+                env=router_env(str(ROOT / "src")),
             )
         self.processes[name] = process
         return process

@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 
 from narwhal.deployment.role_env import ENGINE_FIELDS, select_values, write_environment
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
 
 
 class HostEnvironmentTests(unittest.TestCase):
@@ -22,6 +24,7 @@ class HostEnvironmentTests(unittest.TestCase):
             "NARWHAL_NODE_1_SSH_PASSWORD": "synthetic-management-secret",
             "NARWHAL_ROUTER_SSH_PASSWORD": "synthetic-router-secret",
             "NARWHAL_SSH_KNOWN_HOSTS": "config/ssh.known_hosts",
+            ROUTER_TOKEN_ENV: CONTROL_TOKEN,
             "SSH_AUTH_SOCK": "/synthetic/agent",
             "UNRELATED_TOKEN": "synthetic-unrelated-secret",
             "ENGINE_TOKEN": "synthetic-api-token",
@@ -53,14 +56,31 @@ class HostEnvironmentTests(unittest.TestCase):
         self.assertEqual(engine["NARWHAL_NODE_2_IP"], "192.0.2.2")
 
     def test_a_kubernetes_role_file_names_no_engine_api_key(self):
-        env = {name: value for name, value in self.env.items() if name != "ENGINE_TOKEN"}
+        env = {
+            name: value
+            for name, value in self.env.items()
+            if name not in ("ENGINE_TOKEN", ROUTER_TOKEN_ENV)
+        }
         for role, node in (("engine", 1), ("router", None)):
             values = select_values(role, node, self.fleet, env, by_reference=True)
             self.assertNotIn("ENGINE_TOKEN", values)
             self.assertNotIn("NARWHAL_ENGINE_API_KEY", values)
+            self.assertNotIn(ROUTER_TOKEN_ENV, values)
         for held in ({"ENGINE_TOKEN": "k"}, {"NARWHAL_ENGINE_API_KEY": "k"}):
             with self.subTest(held), self.assertRaisesRegex(ValueError, "holds the engine API key"):
                 select_values("engine", 1, self.fleet, {**env, **held}, by_reference=True)
+        held = {**env, ROUTER_TOKEN_ENV: CONTROL_TOKEN}
+        with self.assertRaisesRegex(ValueError, "holds the router control token"):
+            select_values("router", None, self.fleet, held, by_reference=True)
+
+    def test_only_the_router_role_file_holds_the_control_token(self):
+        router = select_values("router", None, self.fleet, self.env)
+        self.assertEqual(router[ROUTER_TOKEN_ENV], CONTROL_TOKEN)
+        engine = select_values("engine", 1, self.fleet, self.env)
+        self.assertNotIn(CONTROL_TOKEN, engine.values())
+        env = {name: value for name, value in self.env.items() if name != ROUTER_TOKEN_ENV}
+        with self.assertRaisesRegex(ValueError, f"{ROUTER_TOKEN_ENV} is unset"):
+            select_values("router", None, self.fleet, env)
 
     def test_router_export_carries_the_monitored_router_pair(self):
         pair = {

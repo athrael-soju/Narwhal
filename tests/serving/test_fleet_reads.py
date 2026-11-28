@@ -11,6 +11,7 @@ from narwhal.runtime.lease import FileLease
 from narwhal.serving import app as serving_app
 from narwhal.serving import engines_api
 from narwhal.serving.app import create_app
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet
 
 FLEET_READS = {
@@ -41,7 +42,9 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
         self.router = self.app.state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(self.client.aclose)
 
@@ -122,7 +125,9 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(self.cfg, lease=lease)
         self.addAsyncCleanup(app.state.router.engines.aclose)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://router"
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         ) as client:
             self.assertEqual((await client.get("/narwhal/engines")).status_code, 200)
             await app.state.yield_control()

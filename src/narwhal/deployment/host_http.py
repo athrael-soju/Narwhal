@@ -3,7 +3,8 @@
 `wait` waits for a route to answer HTTP 200, and `status` prints the HTTP status a route
 answers. `responses` retains the router's health, readiness, state, metrics and lifecycle,
 and optionally one completion. `readmit` waits until a running router serves each restarted
-engine's new process, readmitting a held engine. `overhead` measures the time the router adds
+engine's new process, readmitting a held engine with the router's control token from
+`NARWHAL_ROUTER_TOKEN`. `overhead` measures the time the router adds
 before the first token while it serves concurrent completions.
 Each prints the files it returns as `narwhal-file <name> <base64>` lines, and a failure's
 cause on standard error after `narwhal-host: `.
@@ -22,6 +23,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from narwhal.serving.control_token import headers, read_token
+
 CAUSE = "narwhal-host: "
 ROUTES = (
     ("health.json", "/health"),
@@ -30,6 +33,8 @@ ROUTES = (
     ("metrics.txt", "/metrics"),
     ("lifecycle.json", "/narwhal/lifecycle"),
 )
+# What the load balancer forwards of `ROUTES`; it answers 404 on every other route.
+SERVING = ("/health", "/ready")
 
 
 def _fail(message: str) -> int:
@@ -41,8 +46,11 @@ def _emit(name: str, content: bytes) -> None:
     print(f"narwhal-file {name} {base64.b64encode(content).decode()}")
 
 
-def _request(url: str, data: bytes | None = None, timeout: float = 30) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+def _request(
+    url: str, data: bytes | None = None, timeout: float = 30, token: str | None = None
+) -> tuple[int, bytes]:
+    sent = {"content-type": "application/json", **(headers(token) if token else {})}
+    request = urllib.request.Request(url, data=data, headers=sent)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
@@ -205,8 +213,12 @@ def overhead(base: str, completion: str, requests: int, concurrency: int, limit:
     return 0
 
 
-def responses(base: str, completion: str | None) -> int:
-    routes: list[tuple[str, str, bytes | None]] = [(n, p, None) for n, p in ROUTES]
+def responses(base: str, completion: str | None, *, serving: bool = False) -> int:
+    """Keep the router's answers at `base`; with `serving`, only the routes a load balancer
+    forwards."""
+    routes: list[tuple[str, str, bytes | None]] = [
+        (n, p, None) for n, p in ROUTES if not serving or p in SERVING
+    ]
     if completion:
         routes.append(("completion.json", "/v1/completions", completion.encode()))
     failed = []
@@ -248,7 +260,9 @@ def readmit(base: str, engines: list[str], seconds: float) -> int:
     engine the router holds `blocked` or `drained` is readmitted with one request of its own,
     and a refused readmission fails with the router's reason. An engine is back once it is
     `active`, accepts new requests and the router's accepted process start differs from START.
+    A readmission carries the router's control token from `NARWHAL_ROUTER_TOKEN`.
     """
+    token = read_token()
     baseline: dict[str, float | None] = {}
     for item in engines:
         iid, _, start = item.partition("=")
@@ -276,7 +290,9 @@ def readmit(base: str, engines: list[str], seconds: float) -> int:
             state = engine.get("state")
             if state in ("blocked", "drained"):
                 status, content = _request(
-                    base + "/narwhal/lifecycle/readmit", json.dumps({"engines": [iid]}).encode()
+                    base + "/narwhal/lifecycle/readmit",
+                    json.dumps({"engines": [iid]}).encode(),
+                    token=token,
                 )
                 body = json.loads(content or b"null")
                 result["requests"].append({"engine": iid, "status": status, "body": body})
@@ -322,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     kept = commands.add_parser("responses")
     kept.add_argument("base")
     kept.add_argument("--completion")
+    kept.add_argument("--serving", action="store_true")
     answered = commands.add_parser("status")
     answered.add_argument("url")
     measured = commands.add_parser("overhead")
@@ -345,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.base.rstrip("/"), args.completion, args.requests, args.concurrency, args.limit
             )
         if args.command == "responses":
-            return responses(args.base.rstrip("/"), args.completion)
+            return responses(args.base.rstrip("/"), args.completion, serving=args.serving)
         return readmit(args.base.rstrip("/"), args.engines, args.seconds)
     except (OSError, ValueError) as error:
         return _fail(str(error))

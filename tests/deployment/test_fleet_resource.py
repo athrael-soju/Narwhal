@@ -30,6 +30,7 @@ SOURCE = Path(fleet_resource.__file__)
 NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",
+    "NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET": "control_credential",
     "NARWHAL_KUBERNETES_ROUTERS": "router",
     "NARWHAL_KUBERNETES_HAPROXY": "router",
     "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "discovery",
@@ -71,6 +72,8 @@ CREDENTIALS = (
     "NARWHAL_CREDS",
     "NARWHAL_DB_PASSWORD_FILE",
     "NARWHAL_PASSWD",
+    "NARWHAL_ROUTER_TOKEN",
+    "NARWHAL_CONTROL_TOKEN",
 )
 CLAIM = "narwhal-state"
 # The narwhal chart's default: a claim and nothing else.
@@ -507,6 +510,20 @@ class Variables(unittest.TestCase):
             self.assertEqual(
                 env[f"NARWHAL_NODE_{n}_FABRIC_INTERFACE"], today["NARWHAL_FABRIC_INTERFACE"]
             )
+
+    def test_a_control_token_in_the_engine_keys_secret_key_is_refused(self):
+        def shared(document):
+            spec = document["spec"]
+            spec["engines"]["apiKeySecret"] = dict(spec["controlTokenSecret"])
+
+        with self.assertRaisesRegex(ValueError, "keep the control token in its own Secret"):
+            spec_env(fleet_fixtures.changed(shared), state_claim=CLAIM, policy=POLICY)
+
+        def other_key(document):
+            spec = document["spec"]
+            spec["engines"]["apiKeySecret"] = {**spec["controlTokenSecret"], "key": "api-key"}
+
+        spec_env(fleet_fixtures.changed(other_key), state_claim=CLAIM, policy=POLICY)
 
     def test_each_variable_has_the_fact_the_design_gives_it(self):
         env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, policy=POLICY)

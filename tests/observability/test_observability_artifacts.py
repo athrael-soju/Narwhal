@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -9,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from narwhal.fleet_control.config import scrape_token
 from narwhal.observability.stack import artifacts
 from narwhal.observability.stack.make_targets import TargetContract
 
@@ -172,7 +175,7 @@ class OrchestratorDashboardTests(unittest.TestCase):
                 artifacts.CONTROL_TOKEN_ENV: "t" * 32,
             }
         )
-        self.assertEqual(target, artifacts.ControlTarget("127.0.0.1:8020", "t" * 32))
+        self.assertEqual(target, artifacts.ControlTarget("127.0.0.1:8020", scrape_token("t" * 32)))
         for env in (
             {artifacts.CONTROL_METRICS_URL_ENV: "http://127.0.0.1:8020"},
             {
@@ -201,6 +204,29 @@ class OrchestratorDashboardTests(unittest.TestCase):
                 [{"targets": ["127.0.0.1:8020"]}],
             )
             self.assertEqual((root / artifacts.CONTROL_TOKEN_FILE).read_text(), "t" * 32)
+
+    def test_monitoring_holds_only_the_scrape_token_of_the_control_token(self):
+        console = "c0" * 32
+        env = {
+            artifacts.CONTROL_METRICS_URL_ENV: "http://127.0.0.1:8020",
+            artifacts.CONTROL_TOKEN_ENV: console,
+        }
+        control = artifacts.control_target(env)
+        assert control is not None
+        self.assertEqual(control.token, scrape_token(console))
+        self.assertEqual(
+            control.token,
+            hmac.new(console.encode(), b"narwhal-metrics-scrape", hashlib.sha256).hexdigest(),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "mounts"
+            contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
+            artifacts.stage_artifacts(contract, control=control, root=root)
+            self.assertEqual((root / artifacts.CONTROL_TOKEN_FILE).read_text(), control.token)
+            for path in root.rglob("*"):
+                if path.is_file():
+                    with self.subTest(path=str(path.relative_to(root))):
+                        self.assertNotIn(console.encode(), path.read_bytes())
 
     def test_tool_target_needs_an_http_origin(self):
         self.assertIsNone(artifacts.tool_target({}))

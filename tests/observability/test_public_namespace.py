@@ -25,6 +25,7 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tests import CONTROL_HEADERS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -138,7 +139,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.router = self.app.state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(self.client.aclose)
 

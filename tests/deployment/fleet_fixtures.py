@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from narwhal.deployment import fleet_resource
 from tests.deployment.kubernetes_cluster import (
+    CONTROL_SECRET_KEY,
+    CONTROL_SECRET_NAME,
     FABRIC_IMAGE,
     IMAGE,
     NAMESPACE,
@@ -68,6 +70,7 @@ def fleet() -> dict:
                 "testPort": 5201,
             },
             "routers": {"storageClassName": "local", "size": "1Gi"},
+            "controlTokenSecret": {"name": CONTROL_SECRET_NAME, "key": CONTROL_SECRET_KEY},
             "haproxy": {"replicas": 1, "clusterDomain": "cluster.local"},
             "stopped": False,
             "retainRuns": 3,
@@ -145,13 +148,18 @@ def _rule(change: Callable[[dict], object], field: str, message: str) -> Refusal
 
 _LAUNCH_SET = (
     "another field of the fleet sets this variable, or it names a credential, which belongs in "
-    "engines.apiKeySecret"
+    "engines.apiKeySecret or controlTokenSecret"
 )
 _SYSTEM = "must not be or lie in a node's system, kubelet or container runtime directory"
 _DOTS = "must not hold a . or .. segment"
 _HOST_PATH = "spec.engines.modelVolume.hostPath.path"
 
 REFUSED: dict[str, Refusal] = {
+    "the control token in the engine key's Secret key": _rule(
+        lambda d: _engines(d).update(apiKeySecret=dict(d["spec"]["controlTokenSecret"])),
+        "spec",
+        fleet_resource.SHARED_SECRET,
+    ),
     "another fleet name": _rule(
         lambda d: d["metadata"].update(name="second"),
         "",

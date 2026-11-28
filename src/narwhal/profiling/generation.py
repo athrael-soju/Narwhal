@@ -7,7 +7,7 @@ import httpx
 
 from ..config.model import EngineSpec, FleetConfig
 from ..contracts import canonical_digest
-from ..engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
+from ..engines.attestation import EngineIdentity, attest_spec, fetch_spec_identity
 
 if TYPE_CHECKING:
     from .model import Profile
@@ -49,25 +49,28 @@ async def read_generation(
     timeout_s: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> GenerationEvidence:
+    """Read the engine's process generation; under a contract, its verified attestation.
+
+    Under a contract the attestation verifies before any request carries the engine credential.
+    """
     contract = cfg.engine_contract
     if timeout_s is None:
         timeout_s = cfg.health_timeout_s
-    identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
     if contract is None:
+        identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
         return identity_generation(identity)
     if not spec.attestation_url:
         raise ValueError(f"{spec.iid}: attestation_url is required for profile generation")
-    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
-        response = await client.get(spec.attestation_url)
-        response.raise_for_status()
-        payload = response.json()
-    failures = verify_attestation(payload, contract, identity)
-    if failures:
-        raise AttestationMismatch(f"{spec.iid}: attestation: {'; '.join(failures)}")
+    attested = await attest_spec(
+        cfg, spec, timeout_s=timeout_s, transport=transport, identify=fetch_spec_identity
+    )
+    if attested.failures:
+        raise AttestationMismatch(f"{spec.iid}: attestation: {'; '.join(attested.failures)}")
+    payload = attested.payload
     return GenerationEvidence(
         binding_digest(payload),
         payload,
-        identity.process_start_time_seconds,
+        attested.identity.process_start_time_seconds,
         payload["attestation_digest"],
     )
 

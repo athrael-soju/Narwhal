@@ -174,6 +174,16 @@ To recover, fix the failing engine and run again. The run repeats the engine's s
 
 Leave every engine and sidecar running through profiling, preflight, and the trial.
 
+## What the router trusts
+
+The router sends the engine credential to an engine only while that engine is a member of the fleet or a join candidate under validation, and only after the engine serves an attestation that verifies against the fleet's `engine_contract` for the process it runs now. Members come from the fleet file the deployment writes, or from a join that passed validation.
+
+Only a caller that holds the router's [control token](../HTTP-API.md#control-token) can make a candidate: a join, removal, drain or readmission without it gets HTTP `401` before the router contacts any engine. A join with the token may name any HTTP address, so the address alone gives no trust; the token decides who may ask, and the attestation decides which process gets the credential.
+
+Attestations are not signed. A host that sits at a member's address, or at the address a token holder joins, and serves a copy of a member's attestation with its version and process start passes the same checks and receives the credential. Keep the network between the routers, the engines and their sidecars private.
+
+Signed attestations, which would close this gap, are not implemented yet.
+
 ## Attesting an engine pod
 
 A [Kubernetes engine pod](../cli/Engine.md#kubernetes-plans) runs its attestation sidecar as its `attestation` container. You do not run `capture` or `serve`. Once `narwhal-engine check` has passed on the pod's records, copy that launch directory to the state volume at `engines/<role>/launches/<pod UID>/`, where the sidecar mounts it read-only. Until it is there, the sidecar logs `waiting for /narwhal-launch, the launch directory that checks this pod's records`.

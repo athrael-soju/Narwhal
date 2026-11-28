@@ -99,6 +99,14 @@ HAPROXY_IMAGE_ENV = "NARWHAL_KUBERNETES_HAPROXY_IMAGE"
 FABRIC_IMAGE_ENV = "NARWHAL_KUBERNETES_FABRIC_IMAGE"
 # The `routers` and `haproxy` blocks, as canonical JSON.
 ROUTERS_ENV = "NARWHAL_KUBERNETES_ROUTERS"
+# The Secret and key of the routers' control token, as <secret name>/<key>.
+CONTROL_TOKEN_SECRET_ENV = "NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET"
+# The engines hold their key, so the control token in the same Secret key would let an engine
+# change the fleet.
+SHARED_SECRET = (
+    "controlTokenSecret names the Secret and key of engines.apiKeySecret; keep the control "
+    "token in its own Secret"
+)
 HAPROXY_ENV = "NARWHAL_KUBERNETES_HAPROXY"
 TIMEOUT_ENV = "NARWHAL_STAGE_TIMEOUT_SECONDS"
 
@@ -385,7 +393,7 @@ _LAUNCH = _array(
                     _rule(
                         "!" + _matches(LAUNCH_REFUSED),
                         "another field of the fleet sets this variable, or it names a "
-                        "credential, which belongs in engines.apiKeySecret",
+                        "credential, which belongs in engines.apiKeySecret or controlTokenSecret",
                     )
                 ],
             ),
@@ -615,6 +623,16 @@ _SPEC = _object(
         "calibration": _CALIBRATION,
         "fabric": _FABRIC,
         "routers": _ROUTERS,
+        "controlTokenSecret": _object(
+            "The Secret that holds the routers' control token, which the routes that change "
+            "membership, trust or lifecycle require: at least 32 random bytes, as 64 hex digits "
+            "or 43 base64url characters. Name a new Secret to rotate the token.",
+            {
+                "name": _string("The Secret's name", 253, pattern=_DNS_SUBDOMAIN),
+                "key": _string("The key in the Secret", 253, pattern=r"^[-._A-Za-z0-9]+$"),
+            },
+            required=["name", "key"],
+        ),
         "haproxy": _HAPROXY,
         "timeouts": _TIMEOUTS,
         "until": _string("The last stage to run; every stage by default", 63, enum=STAGES),
@@ -634,6 +652,15 @@ _SPEC = _object(
         "calibration",
         "fabric",
         "routers",
+        "controlTokenSecret",
+    ],
+    rules=[
+        _rule(
+            "!has(self.engines.apiKeySecret) || "
+            "self.engines.apiKeySecret.name != self.controlTokenSecret.name || "
+            "self.engines.apiKeySecret.key != self.controlTokenSecret.key",
+            SHARED_SECRET,
+        )
     ],
 )
 
@@ -953,7 +980,8 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
     `NARWHAL_KUBERNETES_CHART` comes from a fleet.
 
     Raises `ValueError` for a fleet with another name, a launch input the fleet refuses, a
-    model volume `check_model_volume` refuses, or a control character in any value.
+    model volume `check_model_volume` refuses, a control token in the engine key's Secret key,
+    or a control character in any value.
     """
     metadata = _block(fleet, "metadata")
     if metadata.get("name") != NAME:
@@ -1041,6 +1069,11 @@ def spec_env(fleet: Mapping[str, Any], *, state_claim: str, policy: VolumePolicy
 
     if "routers" in spec:
         env[ROUTERS_ENV] = canonical(spec["routers"]).decode()
+    token = _block(spec, "controlTokenSecret")
+    if token:
+        env[CONTROL_TOKEN_SECRET_ENV] = f"{token.get('name', '')}/{token.get('key', '')}"
+        if env[CONTROL_TOKEN_SECRET_ENV] == env.get(API_KEY_SECRET_ENV):
+            raise ValueError(SHARED_SECRET)
     if "haproxy" in spec:
         env[HAPROXY_ENV] = canonical(spec["haproxy"]).decode()
     timeouts = _block(spec, "timeouts")
@@ -1060,6 +1093,7 @@ VARIABLE_FACTS: tuple[tuple[str, str | None], ...] = (
     (NAMESPACE_ENV, "cluster"),
     (FLEET_UID_ENV, "cluster"),
     (API_KEY_SECRET_ENV, "credential"),
+    (CONTROL_TOKEN_SECRET_ENV, "control_credential"),
     (ROUTERS_ENV, "router"),
     (HAPROXY_ENV, "router"),
     (fabric.TEST_PORT, "fabric_test"),

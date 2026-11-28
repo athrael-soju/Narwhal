@@ -24,6 +24,7 @@ from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError
 from narwhal.deployment.role_env import write_environment
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.serving import app as serving_app
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet
 
 HOST = Host("node-1", "NARWHAL_NODE_1_SSH", None, ("engine-1",))
@@ -268,7 +269,10 @@ class RealRouter:
             new=AsyncMock(return_value=(dict.fromkeys(engines, 100.0), {})),
         ):
             response = httpx.post(
-                self.base + "/narwhal/lifecycle/drain", json={"engines": engines}, timeout=10
+                self.base + "/narwhal/lifecycle/drain",
+                json={"engines": engines},
+                headers=CONTROL_HEADERS,
+                timeout=10,
             )
         assert response.status_code == 200, response.text
 

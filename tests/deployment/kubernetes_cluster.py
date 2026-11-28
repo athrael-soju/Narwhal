@@ -58,6 +58,7 @@ from narwhal.deployment.hosts import Host, write_private
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import helpers, write_environment
 from narwhal.runtime.kubernetes_api import ApiClient, Connection
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
 
 # The API server's refusals.
 
@@ -3145,6 +3146,10 @@ SECRET = "engine-key-value"
 CHART = Path(__file__).resolve().parents[2] / "deploy/helm/narwhal"
 SECRET_NAME = "engine-key-v1"
 SECRET_KEY = "api-key"
+# The routers' control token, which only its Secret holds.
+CONTROL_SECRET = "c7" * 32
+CONTROL_SECRET_NAME = "router-token-v1"
+CONTROL_SECRET_KEY = "token"
 GPU = "gpu.example.com/gpu"
 RDMA = "rdma.example.com/hca"
 STATE_CLAIM = "narwhal-state"
@@ -3374,14 +3379,18 @@ class Rig:
         fleet["spec"]["engines"].pop("launch")
         fleet["spec"]["engines"]["apiKeySecret"] = {"name": SECRET_NAME, "key": SECRET_KEY}
         self.fleet = self.store.create(fleet, field_manager="helm")
-        self.store.create(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": SECRET_NAME, "namespace": NAMESPACE},
-                "data": {SECRET_KEY: base64.b64encode(SECRET.encode()).decode()},
-            }
-        )
+        for name, key, value in (
+            (SECRET_NAME, SECRET_KEY, SECRET),
+            (CONTROL_SECRET_NAME, CONTROL_SECRET_KEY, CONTROL_SECRET),
+        ):
+            self.store.create(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {"name": name, "namespace": NAMESPACE},
+                    "data": {key: base64.b64encode(value.encode()).decode()},
+                }
+            )
         # The controller's settings, as the narwhal chart writes controller.json.
         self.settings = {
             "release": "narwhal",
@@ -3428,6 +3437,8 @@ class Rig:
         self.hold: set[str] = set()
         # The Secret and key the engines read their API key from.
         self.secret = {"name": SECRET_NAME, "key": SECRET_KEY}
+        # The Secret and key the routers read their control token from.
+        self.control_secret = {"name": CONTROL_SECRET_NAME, "key": CONTROL_SECRET_KEY}
         # Jobs by name a test let finish although their kind is held.
         self.released: set[str] = set()
         # Gate kinds whose pods meet an outcome of the test's.
@@ -3622,7 +3633,7 @@ class Rig:
                     {"schema_version": 1, "ranks": [{"rank": 0, "kv_cache_layout": layout}]}
                 ).encode()
             elif kind == "key-check":
-                files[name] = json.dumps({"hmac_sha256": self.key_hmac(entry)}).encode()
+                files[name] = json.dumps(self.key_hmacs(entry)).encode()
             elif name == "verify/":
                 files["verify/identity.json"] = b"{}"
             elif name == "host/":
@@ -3639,18 +3650,27 @@ class Rig:
                 files[name] = b"{}"
         return files
 
-    def key_hmac(self, entry: Mapping[str, Any]) -> str:
-        """What a key check reports: the HMAC of the key in the engines' Secret now, under the
-        salt its inputs gave it."""
+    def key_hmacs(self, entry: Mapping[str, Any]) -> dict[str, str]:
+        """What a key check reports: the HMAC of the key in the engines' Secret now, and of the
+        token in the routers' Secret when its Job holds that, under the salt its inputs gave
+        it."""
         salt = bytes.fromhex(self.files(entry)["salt"].decode())
-        secret = self.store.get(SECRET_KIND, NAMESPACE, self.secret["name"])
-        key = base64.b64decode(secret["data"][self.secret["key"]])
-        return hmac.new(salt, key, hashlib.sha256).hexdigest()
+        reported = {"hmac_sha256": self.secret_hmac(self.secret, salt)}
+        reference = (entry["env"].get(ROUTER_TOKEN_ENV) or {}).get("valueFrom", {})
+        if reference.get("secretKeyRef") == self.control_secret:
+            reported["control_hmac_sha256"] = self.secret_hmac(self.control_secret, salt)
+        return reported
 
-    def set_key(self, value: str) -> None:
-        """Edit the key in the engines' Secret in place."""
-        secret = copy.deepcopy(self.store.get(SECRET_KIND, NAMESPACE, self.secret["name"]))
-        secret["data"][self.secret["key"]] = base64.b64encode(value.encode()).decode()
+    def secret_hmac(self, reference: Mapping[str, str], salt: bytes) -> str:
+        secret = self.store.get(SECRET_KIND, NAMESPACE, reference["name"])
+        value = base64.b64decode(secret["data"][reference["key"]])
+        return hmac.new(salt, value, hashlib.sha256).hexdigest()
+
+    def set_key(self, value: str, reference: Mapping[str, str] | None = None) -> None:
+        """Edit the key in the engines' Secret, or in the Secret `reference` names, in place."""
+        reference = reference or self.secret
+        secret = copy.deepcopy(self.store.get(SECRET_KIND, NAMESPACE, reference["name"]))
+        secret["data"][reference["key"]] = base64.b64encode(value.encode()).decode()
         self.store.put(secret)
 
     def log(self, entry: Mapping[str, Any]) -> str:

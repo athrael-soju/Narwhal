@@ -40,7 +40,7 @@ Prometheus reads these events from the control service's `GET /metrics`. To add 
     export NARWHAL_CONTROL_METRICS_URL=http://127.0.0.1:8020
     ```
 
-3. Run `make observe`. It writes the `fleet-control` scrape target and passes the token to Prometheus.
+3. Run `make observe`. It writes the `fleet-control` scrape target and gives Prometheus the scrape token derived from the control token.
 4. Query the scrape status:
 
     ```bash
@@ -51,7 +51,7 @@ Prometheus reads these events from the control service's `GET /metrics`. To add 
 
     A value of `1` marks a successful scrape.
 
-`make observe` reads the token from `NARWHAL_CONTROL_TOKEN`, even when the service's `token_env` names another variable. After the service restarts with a new token, run `make observe` again.
+`make observe` reads the token from `NARWHAL_CONTROL_TOKEN`, even when the service's `token_env` names another variable, and writes only its scrape token, `HMAC-SHA256(<control token>, "narwhal-metrics-scrape")` in hex, to `prometheus/fleet-control-token`. The service accepts the scrape token on `GET /metrics` alone and refuses it on every other route, so Prometheus can read the events but cannot run an action. After the service restarts with a new token, run `make observe` again.
 
 ## Framing boundary
 

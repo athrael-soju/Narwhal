@@ -150,6 +150,51 @@ class EngineLauncherTests(unittest.TestCase):
                 launch_digest(contract, planned_launch(second, image)),
             )
 
+    def test_a_launch_plan_keys_its_digest_of_the_credential_environment(self):
+        for backend in ("container", "native"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                if backend == "native":
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend=backend)
+                plan = load(run)
+                environment = run / launch_plan.env_file_name(plan)
+                text = environment.read_text()
+                self.assertIn("=engine-only-secret\n", text)
+                salt = run / launch_plan.ENV_SALT
+                self.assertEqual(salt.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(len(salt.read_bytes()), 32)
+                self.assertRegex(plan["env_sha256"], "^hmac-sha256:[0-9a-f]{64}$")
+                # Rebuilding the environment from a guessed key matches no digest in either
+                # copy of the plan, the right guess included.
+                for copy in (run / "launch.json", run / "hook/launch.json"):
+                    for guess in ("engine-secret", "engine-only-secret", "changeme"):
+                        guessed = text.replace("engine-only-secret", guess).encode()
+                        self.assertNotIn(hashlib.sha256(guessed).hexdigest(), copy.read_text())
+                environment.write_text(text.replace("engine-only-secret", "rotated"))
+                with self.assertRaisesRegex(ValueError, "engine environment changed"):
+                    load(run)
+
+    def test_a_plan_from_an_earlier_version_keeps_its_unkeyed_environment_digest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = json.loads((run / "launch.json").read_text())
+            plan["env_sha256"] = digest(run / "container.env")
+            (run / "launch.json").write_text(json.dumps(plan))
+            (run / launch_plan.ENV_SALT).unlink()
+            self.assertEqual(load(run)["env_sha256"], plan["env_sha256"])
+            (run / "container.env").write_text("CHANGED=1\n")
+            with self.assertRaisesRegex(ValueError, "engine environment changed"):
+                load(run)
+
     def test_check_refuses_a_status_change_that_keeps_the_content(self):
         for change in ("chmod", "hard link"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:

@@ -49,7 +49,7 @@ When `NARWHAL_UCX_TCP_PORT_RANGE` lies inside the host's `net.ipv4.ip_local_port
 narwhal-engine prepare --out <attempt>/launch
 ```
 
-The launch directory stays on the engine host, as `runs/deploy/<run-id>/stages/engine-prepare/engine-<n>/attempt-<k>/launch/` in the deployment directory, and `launch.json` comes back to the attempt on the workstation. Every later stage of the engine uses that directory. `container.env` in it holds the engine's environment, credentials included, at mode 0600; the run does not copy it back.
+The launch directory stays on the engine host, as `runs/deploy/<run-id>/stages/engine-prepare/engine-<n>/attempt-<k>/launch/` in the deployment directory, and `launch.json` comes back to the attempt on the workstation. Every later stage of the engine uses that directory. `container.env` in it holds the engine's environment, credentials included, at mode 0600; the run does not copy it back. `launch.json` records the file's `env_sha256` as an HMAC-SHA256 under `env.salt`, 32 random bytes at mode 0600 that also stay on the host, so the copy of `launch.json` on the workstation cannot confirm a guessed credential. A launch directory an earlier version prepared keeps the file's plain SHA-256.
 
 The launcher builds one launch plan per engine with these properties:
 

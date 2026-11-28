@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hmac
 import json
 import os
 import re
@@ -21,7 +22,15 @@ from .backend import (
     plan_launcher,
 )
 from .checkpoint import checkpoint_status, file_status, inspect_checkpoint, json_digest
-from .runtime import code_digest, digest, regular_file_digest, write_private
+from .runtime import (
+    KEYED,
+    code_digest,
+    digest,
+    keyed_digest,
+    regular_file_digest,
+    salt_file,
+    write_private,
+)
 from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
 # Launch backends: Docker on the host, a Kubernetes engine pod, or the host's Python runtime.
@@ -314,6 +323,38 @@ def env_file_name(plan: dict) -> str:
 
 def read_env(path: Path) -> dict[str, str]:
     return dict(line.split("=", 1) for line in path.read_text().splitlines())
+
+
+# The launch directory's salt, which keys the plan's digest of its engine environment.
+ENV_SALT = "env.salt"
+
+
+def env_digest(run: Path, plan: dict, *, create: bool = False) -> str:
+    """The digest a plan keeps of its engine environment file, which holds the credential.
+
+    A container or native plan keys it under the launch directory's `env.salt`, so a copy of
+    `launch.json` cannot check a guessed credential. A Kubernetes plan keeps its SHA-256.
+    """
+    plain = digest(run / env_file_name(plan))
+    if plan.get("backend") == "kubernetes":
+        return plain
+    secret = salt_file(run / ENV_SALT, create=create)
+    if secret is None:
+        raise ValueError(f"{run / ENV_SALT} is missing; prepare a fresh launch directory")
+    return keyed_digest(secret, "sha256:" + plain)
+
+
+def env_matches(run: Path, plan: dict) -> bool:
+    """Whether the engine environment file still has the digest the plan recorded.
+
+    A plan an earlier version prepared keeps the file's unkeyed SHA-256.
+    """
+    recorded = plan.get("env_sha256")
+    if not isinstance(recorded, str):
+        return False
+    if not recorded.startswith(KEYED):
+        return digest(run / env_file_name(plan)) == recorded
+    return hmac.compare_digest(env_digest(run, plan), recorded)
 
 
 def launch_headers(run: Path, plan: dict) -> dict[str, str] | None:
@@ -637,7 +678,7 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     env_file = env_file_name(plan)
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
     plan.update(
-        env_sha256=digest(output / env_file),
+        env_sha256=env_digest(output, plan, create=True),
         launch_sha256=digest(source),
         launcher_sha256=digest(script),
         launcher_code_sha256=code_digest(script),
@@ -797,6 +838,6 @@ def load(run: Path) -> dict:
     plan = json.loads((run / "launch.json").read_text())
     if not isinstance(plan, dict):
         raise ValueError(f"{run / 'launch.json'}: expected a JSON object")
-    if digest(run / env_file_name(plan)) != plan.get("env_sha256"):
+    if not env_matches(run, plan):
         raise ValueError("engine environment changed; prepare a fresh launch directory")
     return plan

@@ -71,6 +71,7 @@ from narwhal.runtime.kubernetes_api import (
     Unavailable,
 )
 
+from ..serving.control_token import ROUTER_TOKEN_ENV
 from . import (
     cache_groups,
     discovery,
@@ -87,6 +88,7 @@ from .deploy import recovery_url as recovery_url
 from .deploy_graph import CACHE_CAPTURE, EDGE, ENGINE, GROUP, TRANSFER_MEASUREMENT
 from .engine_launch import load_launches
 from .fleet_resource import (
+    CONTROL_TOKEN_SECRET_ENV,
     FABRIC_IMAGE_ENV,
     FLEET_UID_ENV,
     HAPROXY_ENV,
@@ -173,6 +175,7 @@ POD_INPUTS = (
 NODE_NAME = re.compile(r"NARWHAL_NODE_([1-9][0-9]*)_KUBERNETES_NODE")
 DNS_NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
 DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
+FILE_KEY = re.compile(r"[-._A-Za-z0-9]{1,253}")
 DIGEST = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -264,13 +267,23 @@ RETIRED = (
 KEY_CHECK = "key-check"
 CREDENTIAL_FILE = "credential.json"
 HEX64 = re.compile(r"[0-9a-f]{64}")
+# The key check reports the HMAC of each credential its Job holds: the engine API key and the
+# routers' control token, by the field each HMAC goes in.
 _KEY_HMAC = f"""import hashlib, hmac, json, os
 salt = bytes.fromhex(open('/tmp/narwhal-in/salt').read().strip())
-key = os.environ[{API_KEY_ENV!r}].encode()
-digest = hmac.new(salt, key, hashlib.sha256).hexdigest()
+names = {{"hmac_sha256": {API_KEY_ENV!r}, "control_hmac_sha256": {ROUTER_TOKEN_ENV!r}}}
+digests = {{
+    field: hmac.new(salt, os.environ[name].encode(), hashlib.sha256).hexdigest()
+    for field, name in names.items()
+    if name in os.environ
+}}
 with open('/tmp/narwhal-key.json', 'w') as out:
-    json.dump({{"hmac_sha256": digest}}, out)
+    json.dump(digests, out)
 """
+# The input fact of each credential the key check reports an HMAC of, by the HMAC's field.
+KEYED_FACTS = {"hmac_sha256": "credential", "control_hmac_sha256": "control_credential"}
+# The field of `CREDENTIAL_FILE` that keeps each HMAC.
+_RECORDED = {"hmac_sha256": "hmac", "control_hmac_sha256": "control_hmac"}
 
 # The digest of a gate Job's spec and inputs, which adoption matches exactly.
 SPEC_ANNOTATION = fleet_resource.qualified("spec-sha256")
@@ -839,6 +852,28 @@ def _object(env: Mapping[str, str], name: str) -> dict[str, Any]:
     return value
 
 
+def control_token_secret(env: Mapping[str, str]) -> dict[str, str]:
+    """The Secret and key that hold the routers' control token.
+
+    The routers and the gates that call their control routes read the token by this reference
+    only: an environment that holds the token itself is refused.
+    """
+    if env.get(ROUTER_TOKEN_ENV):
+        raise ValueError(
+            f"{ROUTER_TOKEN_ENV} holds the router control token; the routers read it from the "
+            f"Secret {CONTROL_TOKEN_SECRET_ENV} names, so unset it"
+        )
+    name, _, key = env.get(CONTROL_TOKEN_SECRET_ENV, "").partition("/")
+    if not DNS_NAME.fullmatch(name) or len(name) > 253 or not FILE_KEY.fullmatch(key):
+        raise ValueError(
+            f"set {CONTROL_TOKEN_SECRET_ENV} to <secret name>/<key>, the Secret that holds the "
+            "router control token: spec.controlTokenSecret"
+        )
+    if f"{name}/{key}" == env.get(API_KEY_SECRET_ENV):
+        raise ValueError(fleet_resource.SHARED_SECRET)
+    return {"name": name, "key": key}
+
+
 def fact_of(name: str) -> str | None:
     """The input fact a variable belongs to, or None for a variable that is no input."""
     if not name.startswith("NARWHAL_") or _NOT_INPUTS.fullmatch(name):
@@ -915,7 +950,7 @@ def inputs(env: Mapping[str, str], *, policy: VolumePolicy | None = None) -> dic
             continue
         if name == ROUTERS_ENV and not {"storageClassName", "size"} <= set(block):
             problems.append(f"set {ROUTERS_ENV} to the routers block, with its storage")
-    for check in (api_key_secret, sidecar_user):
+    for check in (api_key_secret, sidecar_user, control_token_secret):
         try:
             check(env)
         except ValueError as error:
@@ -1097,10 +1132,11 @@ class _Action:
 
 class KeyedRunner(Runner):
     """The deployment's runner, whose `credential` input also holds the HMAC of the engine API
-    key itself, so an edit of the Secret in place reruns the engines and the routers.
+    key itself, and whose `control_credential` input holds the HMAC of the routers' control
+    token, so an edit of either Secret in place reruns the stages that hold it.
 
-    `run` reads the key's HMAC through a key-check Job first. `plan` takes the HMAC the last
-    run recorded, and starts no Job.
+    `run` reads the HMACs through a key-check Job first. `plan` takes the HMACs the last run
+    recorded, and starts no Job.
     """
 
     def __init__(self, deployment: KubernetesDeployment, *args: Any, **options: Any) -> None:
@@ -1111,7 +1147,11 @@ class KeyedRunner(Runner):
         self, inputs: Mapping[str, Input], *, until: str | None = None, stop: Stop | None = None
     ) -> RunResult:
         deployment = self.deployment
-        observe = deployment.key_check or deployment.recorded_credential() is None
+        # A record without the HMAC of a credential the fleet now names, such as one from
+        # before the control token, needs a key check as a missing record does.
+        recorded = deployment.recorded_credential() or {}
+        held = {"control_hmac", *(["hmac"] if api_key_secret(deployment.env) else [])}
+        observe = deployment.key_check or not held <= set(recorded)
         keyed = deployment.keyed(inputs, observe=observe)
         return super().run(keyed, until=until, stop=stop)
 
@@ -1233,23 +1273,26 @@ class KubernetesDeployment:
 
     # The fleet.
 
-    # The engine API key, seen only through its HMAC.
+    # The engine API key and the control token, seen only through their HMACs.
 
     def keyed(self, inputs: Mapping[str, Input], *, observe: bool) -> dict[str, Input]:
-        """`inputs` with the key's HMAC added to the `credential` fact. With `observe`, a
-        key-check Job reads it; otherwise it is the one the last run recorded."""
+        """`inputs` with each credential's HMAC added to its fact: the engine API key's to
+        `credential` and the control token's to `control_credential`. With `observe`, a
+        key-check Job reads them; otherwise they are the ones the last run recorded."""
         found = dict(inputs)
-        if "credential" not in found or api_key_secret(self.env) is None:
+        if not any(fact in found for fact in KEYED_FACTS.values()):
             return found
         if observe and not self._fleet_holds():
             # Its Job would go with the fleet it names; `access` says why the run stops.
             return found
-        digest = self.key_hmac(observe=observe)
-        if digest is not None:
-            reference = found["credential"]
-            found["credential"] = Input.value(
-                {"reference": reference.digest, "key_hmac_sha256": digest}, reference.source
-            )
+        digests = self.key_hmacs(observe=observe)
+        for reported, fact in KEYED_FACTS.items():
+            if fact in found and digests.get(reported) is not None:
+                reference = found[fact]
+                found[fact] = Input.value(
+                    {"reference": reference.digest, "key_hmac_sha256": digests[reported]},
+                    reference.source,
+                )
         return found
 
     def _fleet_holds(self) -> bool:
@@ -1258,33 +1301,49 @@ class KubernetesDeployment:
         return live is not None and live["metadata"].get("uid") == self.env[FLEET_UID]
 
     def recorded_credential(self) -> dict[str, str] | None:
-        """The salt and the HMAC the last key check left in the run directory, or None."""
+        """The salt and the HMACs the last key check left in the run directory, or None.
+
+        `hmac` is the engine API key's, and `control_hmac` the control token's; a run before
+        the control token recorded only the first.
+        """
         path = self.directory / CREDENTIAL_FILE
         if not path.is_file():
             return None
         found = _json(path)
+        fields = (
+            [field for field in _RECORDED.values() if field in found]
+            if isinstance(found, dict)
+            else []
+        )
         if not isinstance(found, dict) or not all(
             isinstance(found.get(field), str) and HEX64.fullmatch(found[field])
-            for field in ("salt", "hmac")
+            for field in ("salt", *fields)
         ):
             raise ValueError(f"{path} holds no salt and HMAC; remove it and run again")
-        return {"salt": found["salt"], "hmac": found["hmac"]}
+        return {field: found[field] for field in ("salt", *fields)}
 
-    def key_hmac(self, *, observe: bool) -> str | None:
-        """The HMAC-SHA256 of the engine API key under the fleet's salt.
+    def key_hmacs(self, *, observe: bool) -> dict[str, str]:
+        """The HMAC-SHA256 of each credential under the fleet's salt, by `KEYED_FACTS` field.
 
-        The salt is drawn once per run directory and kept there, so the digest shows a change
-        of the key and nothing about it: never the key, and no plain hash of it.
+        The salt is drawn once per run directory and kept there, so a digest shows a change
+        of the credential and nothing about it: never the credential, and no plain hash of it.
         """
         recorded = self.recorded_credential()
         if not observe:
-            return recorded["hmac"] if recorded else None
+            return {
+                field: recorded[name]
+                for field, name in _RECORDED.items()
+                if recorded and name in recorded
+            }
         salt = recorded["salt"] if recorded else secrets.token_hex(32)
-        digest = self._key_check(salt)
-        self._credential = {"salt": salt, "hmac": digest}
+        digests = self._key_check(salt)
+        self._credential = {
+            "salt": salt,
+            **{_RECORDED[field]: digest for field, digest in digests.items()},
+        }
         self.save_credential()
         self.key_checked_at = time.time()
-        return digest
+        return digests
 
     def save_credential(self) -> None:
         """Keep the key check's salt and HMAC once the run directory holds its record."""
@@ -1297,8 +1356,9 @@ class KubernetesDeployment:
         write_private(pending, (json.dumps(self._credential) + "\n").encode())
         os.replace(pending, path)
 
-    def _key_check(self, salt: str) -> str:
-        """Run a key-check Job, which holds the key from its Secret, and return its HMAC."""
+    def _key_check(self, salt: str) -> dict[str, str]:
+        """Run a key-check Job, which holds each credential from its Secret, and return their
+        HMACs by `KEYED_FACTS` field."""
         cluster = self.cluster()
         # One name per fleet: a key check a stopped process left is deleted, never adopted,
         # since its HMAC may be of an earlier key.
@@ -1329,16 +1389,22 @@ class KubernetesDeployment:
                 self.remove(cluster, JOB, name)
                 self.remove(cluster, CONFIG_MAP, name)
         reported = json.loads(result.files["key.json"])
-        digest = reported.get("hmac_sha256") if isinstance(reported, dict) else None
-        if not isinstance(digest, str) or not HEX64.fullmatch(digest):
-            raise GateOutputError(f"Job {name} reported no HMAC of the engine API key")
+        held = {"control_hmac_sha256": "the router control token"}
+        if api_key_secret(self.env) is not None:
+            held["hmac_sha256"] = "the engine API key"
+        digests = {}
+        for name_of, what in held.items():
+            digest = reported.get(name_of) if isinstance(reported, dict) else None
+            if not isinstance(digest, str) or not HEX64.fullmatch(digest):
+                raise GateOutputError(f"Job {name} reported no HMAC of {what}")
+            digests[name_of] = digest
         # Read: its log and what the Job kept are not needed again.
         result.log.unlink(missing_ok=True)
         if self.state_root is not None:
             kept = self.state_root / keep
             if kept.is_dir() and not kept.is_symlink():
                 shutil.rmtree(kept, ignore_errors=True)
-        return digest
+        return digests
 
     def owner(self) -> Owner:
         return Owner(fleet_resource.NAME, self.env[FLEET_UID], self.env[NAMESPACE])
@@ -1348,6 +1414,7 @@ class KubernetesDeployment:
         if self._fleet is None:
             env = self.env
             secret = api_key_secret(env)
+            control = control_token_secret(env)
             haproxy = _object(env, HAPROXY_ENV)
             self._fleet = kubernetes_objects.Fleet(
                 self.owner(),
@@ -1359,6 +1426,9 @@ class KubernetesDeployment:
                     kubernetes_objects.ApiKey(API_KEY_ENV, secret["name"], secret["key"])
                     if secret
                     else None
+                ),
+                control_token=kubernetes_objects.ApiKey(
+                    ROUTER_TOKEN_ENV, control["name"], control["key"]
                 ),
                 engine_account=env.get(ENGINE_ACCOUNT) or None,
                 rdma_resource=env.get(RDMA_RESOURCE) or None,

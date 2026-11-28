@@ -11,6 +11,7 @@ from pathlib import Path
 import uvicorn
 
 from narwhal.runtime.listeners import check_http_bind
+from narwhal.serving.control_token import read_token as read_router_token
 
 from .aiperf import runner_for, workload_routes
 from .app import create_app
@@ -42,12 +43,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_config(args.config, os.environ)
         token = read_token(config, os.environ)
+        router_token = read_router_token(os.environ)
+        if router_token == token:
+            raise ConfigError(
+                f"{config.token_env} and NARWHAL_ROUTER_TOKEN must hold different tokens: "
+                "the service's token reaches browsers and Prometheus"
+            )
         check_http_bind(config.host, config.port)
-    except (ConfigError, OSError) as exc:
+    except (ConfigError, OSError, ValueError) as exc:
         print(f"fleet control failed: {exc}", file=sys.stderr)
         return 2
     service = ControlService(config, runner=runner_for(config, os.environ))
-    engines = EngineActions(service)
+    engines = EngineActions(service, router_token=router_token)
     routers = [
         console_routes(config, token),
         engine_routes(engines),

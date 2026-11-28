@@ -91,6 +91,6 @@ validate_document(result, COMMAND_RESULT)
 
 ## Schema versions
 
-`narwhal-check --print-contract-versions` lists the result schema with the persisted interfaces.
+`narwhal-check --print-contract-versions` lists the result schema with the persisted interfaces, each with the version it writes and the versions it reads, as [Interface versions and compatibility](telemetry/05-Compatibility.md) describes. The deployment run record is written as version 3 and read as version 2 or 3.
 
 A new `data` field or error code keeps the current schema version. An incompatible envelope change gets a new version.

@@ -55,7 +55,7 @@ A router that does not control the fleet, such as a standby, a fenced router or 
 
 ## `POST /narwhal/engines`
 
-Validates one engine and adds it to the fleet. The body is one engine entry as the fleet file holds it:
+Validates one engine and adds it to the fleet. The request needs the router's [control token](../HTTP-API.md#control-token). The body is one engine entry as the fleet file holds it:
 
 | Field             | Type    | Default    | Meaning                                                                                         |
 | ----------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------- |
@@ -106,6 +106,7 @@ When every check passes, the router loads the store and the calibration it read,
 |  HTTP | Meaning                                                                                                   |
 | :---: | --------------------------------------------------------------------------------------------------------- |
 | `200` | The engine joined, and `generation` increased by one                                                      |
+| `401` | The request carries no [control token](../HTTP-API.md#control-token), or another one                     |
 | `409` | A precondition refused the join, named in `error`, with `join.failures` empty                             |
 | `409` | A check failed, with `join.failures` listing the failures and `join.checks` the checks that passed        |
 | `422` | The body is not a valid engine entry, named in `error`, with `join` `null`                                |
@@ -131,6 +132,7 @@ The router refuses the removal when:
 | :---: | --------------------------------------------------------------------------------------------- |
 | `200` | The engine left at once, and `generation` increased by one                                    |
 | `202` | The engine is draining, and `leaving` lists it                                                |
+| `401` | The request carries no [control token](../HTTP-API.md#control-token), or another one          |
 | `404` | `iid` names no member                                                                         |
 | `409` | A rule above refused the removal, or `deadline_s` is zero, negative, or infinite              |
 | `422` | `deadline_s` is not a number                                                                  |

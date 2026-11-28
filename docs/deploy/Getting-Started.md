@@ -133,9 +133,16 @@ NARWHAL_CALIBRATION_INPUT_TOKENS=256,8192,16382
 NARWHAL_CALIBRATION_SAMPLES=100
 NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S=20
 
-# The router and the monitoring stack
+# The router, its control token and the monitoring stack
 NARWHAL_ROUTER_URL=http://<host address>:8000
+NARWHAL_ROUTER_TOKEN=<64 hex digits>
 NARWHAL_FLEET_NAME=first-fleet
+```
+
+Generate the router's [control token](../HTTP-API.md#control-token) once per fleet, and keep it only in `.env`:
+
+```bash
+python -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
 The profiling and calibration lengths above suit engines whose live context is 16,384 tokens; [Profile engines and run preflight](06-Profile-and-Preflight.md) explains how to choose them, and [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) the SLO targets. If `profile` fails with a prefill fit error, change the lengths as [Profiling idle engines](06-Profile-and-Preflight.md#profiling-idle-engines) describes. Engines on one host share its fabric interface, so they need distinct engine, attestation and side-channel ports and port ranges. A fleet on one host has no fabric edges to measure, and preflight checks the transfers between its engines. [Needs verification: task 13 follows this layout on one live host]

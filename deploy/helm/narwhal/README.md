@@ -28,13 +28,13 @@ Its Role in the namespace grants:
 | `leases` | create; get and update on `controller.narwhal.example.com` only |
 | `events.k8s.io` events | create, patch |
 
-The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` reference into the pods that need the key and never reads the Secret.
+The ClusterRole `<namespace>-<release>-narwhal-nodes` grants get and list on nodes, and get by name on the CRD `narwhalfleets.narwhal.example.com` and on the namespace's admission policy and its binding. The controller has no verb on Secrets, RBAC objects or `pods/exec`: it copies the fleet's `apiKeySecret` and `controlTokenSecret` references into the pods that need the key or the routers' control token, and never reads either Secret.
 
 The engines' ServiceAccount `<release>-engine` may get the namespace's pods and nothing else. The attestation sidecars and the sidecar-verify Jobs run as it.
 
 ## Who may write the fleet
 
-Writing the `NarwhalFleet` lets the controller start hostNetwork engine and fabric pods on the nodes the fleet names and give them the Secret that `apiKeySecret` names, so it amounts to read access to every Secret in the namespace. Grant it with the Role `<release>-fleet-editor`, which the chart creates without binding it. Kubernetes' `edit` and `admin` roles do not include it.
+Writing the `NarwhalFleet` lets the controller start hostNetwork engine and fabric pods on the nodes the fleet names and give them the Secrets that `apiKeySecret` and `controlTokenSecret` name, so it amounts to read access to every Secret in the namespace. Grant it with the Role `<release>-fleet-editor`, which the chart creates without binding it. Kubernetes' `edit` and `admin` roles do not include it.
 
 The admission policy `<namespace>-narwhal` and its binding apply to every pod, Job, StatefulSet, Deployment and ReplicaSet the namespace creates or changes, and to ephemeral containers. They hold the rules of the Pod Security baseline level:
 

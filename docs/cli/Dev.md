@@ -60,6 +60,8 @@ Running `init` on an existing instance changes nothing. When the settings you su
 
 To authenticate engine requests, export `NARWHAL_ENGINE_API_KEY` before `up` and keep it set for later commands. `up` passes it to the engines, and sets `engine.engine_api_key_env` in the fleet configuration so that the profiler, preflight and router send it.
 
+The router needs a [control token](../HTTP-API.md#control-token) for its join, removal, drain and readmission routes. `up` passes it `NARWHAL_ROUTER_TOKEN` when that holds a valid token, and otherwise the instance's own, which it draws once and keeps at mode 0600 in `router-token` in the instance directory. Send it with a control request as `Authorization: Bearer $(cat <instance>/router-token)`.
+
 A failed `verify` writes its reason, evidence directory and failure time to `verification_failure` in `lifecycle.json` and to `failure.json` in its evidence directory. `status` reports `degraded` with that `verification_failure` until a later `verify` succeeds or `down` stops every process.
 
 ## Output and exit codes
@@ -164,7 +166,7 @@ Each `verify` writes a `verify-*` directory in the run directory with the prefli
 
 ### Resuming an interrupted `up`
 
-When a stage of `up` fails, or SIGINT or SIGTERM interrupts it, that stage stops the processes it started and `up` exits. The stages that passed keep their engines, sidecars and router running, and `lifecycle.json` records the failure with the phase `failed`. The next `up` resumes in the same run directory and prints `resuming <run directory> at <stage>` to stderr before the first stage it runs. It skips a stage whose last attempt passed, whose recorded inputs still match, whose output files still match their SHA-256 and whose processes still run. An `up` that was killed outright resumes the same way.
+When a stage of `up` fails, or SIGINT or SIGTERM interrupts it, that stage stops the processes it started and `up` exits. The stages that passed keep their engines, sidecars and router running, and `lifecycle.json` records the failure with the phase `failed`. The next `up` resumes in the same run directory and prints `resuming <run directory> at <stage>` to stderr before the first stage it runs. It skips a stage whose last attempt passed, whose recorded inputs still match, whose output files still match their recorded digests and whose processes still run. An `up` that was killed outright resumes the same way.
 
 To recover:
 
@@ -194,7 +196,7 @@ A change reruns the stages its row lists, and a changed output file reruns its s
 | --- | --- | --- |
 | Instance settings | The SHA-256 of `instance.json`, `template.json`, `fleet.json` and `engine-launch.json` | `package` and every stage after it |
 | Narwhal source | The SHA-256 of the installed package's Python files | `package` and every stage after it |
-| Engine API key | The SHA-256 of the key that the fleet's `engine.engine_api_key_env` names, or of `NARWHAL_ENGINE_API_KEY` | `package` and every stage after it |
+| Engine API key | The key that the fleet's `engine.engine_api_key_env` names, or `NARWHAL_ENGINE_API_KEY`, as an HMAC under the run directory's `run.salt` | `package` and every stage after it |
 | Launch directory used by a start whose engines no longer all run | The launch directory and the SHA-256 of its `launch.json`, checked live on every run | `engine-check` for that engine; `engine-start` |
 | An engine process restarted | Each engine's PID, boot ID and start ticks, checked live on every run | `attest-capture`, `sidecar-start`, `finalize-fleet` |
 | Attested binding digest of an engine | The `launch_digest`, or the `attestation_digest` when the attestation has no launch evidence | `profile`, `router-start` |

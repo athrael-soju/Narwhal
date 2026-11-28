@@ -15,6 +15,7 @@ from narwhal.observability.stack.artifacts import render_dashboard
 from narwhal.runtime.lifecycle import leave
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.types import Request
+from tests import CONTROL_HEADERS
 from tests.runtime.test_join import NEW, JoinHarness
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,7 +65,9 @@ class MembershipCase(JoinHarness):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+            transport=httpx.ASGITransport(app=self.app),
+            base_url="http://router",
+            headers=CONTROL_HEADERS,
         )
         self.addAsyncCleanup(self.client.aclose)
 

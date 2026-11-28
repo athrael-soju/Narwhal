@@ -1,6 +1,7 @@
 """The fleet controller against the stub object store: its Lease, its status, edits during a
 pass, stop and delete, adoption after a restart, and every write replayed after a lost reply."""
 
+import base64
 import contextlib
 import copy
 import io
@@ -25,6 +26,7 @@ from narwhal.deployment.kubernetes_controller import (
 )
 from narwhal.runtime.kubernetes_api import ApiClient, Connection
 from narwhal.runtime.kubernetes_lease import KubernetesLease
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
 from tests.deployment import chart_live
 from tests.deployment.kubernetes_cluster import (
     CONFIG_MAP,
@@ -612,6 +614,44 @@ class StallTests(ControllerTest):
         self.assertEqual(self.rig.workloads, [])
         writes = {resource for _, _, resource in self.writes(since)}
         self.assertEqual(writes, {"leases", f"{fleet_resource.PLURAL}/status"})
+
+    def test_a_fleet_without_the_control_token_secret_is_refused(self):
+        self.edit({"controlTokenSecret": None})
+        self.work(self.leader())
+        stalled = self.condition(fleet_resource.STALLED)
+        self.assertEqual((stalled["status"], stalled["reason"]), ("True", "InputRefused"))
+        self.assertIn("spec.controlTokenSecret", stalled["message"])
+        self.assertEqual(self.rig.workloads, [])
+
+    def test_a_control_token_in_the_engine_keys_secret_key_is_refused(self):
+        token = self.fleet()["spec"]["controlTokenSecret"]
+        self.edit({"engines": {"apiKeySecret": dict(token)}})
+        self.work(self.leader())
+        stalled = self.condition(fleet_resource.STALLED)
+        self.assertEqual((stalled["status"], stalled["reason"]), ("True", "InputRefused"))
+        self.assertIn("keep the control token in its own Secret", stalled["message"])
+        self.assertEqual(self.rig.workloads, [])
+
+    def test_a_new_control_token_secret_restarts_only_the_routers(self):
+        controller = self.ready()
+        before = {key: entry["directory"] for key, entry in self.record()["stages"].items()}
+        self.store.create(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": "router-token-v2", "namespace": NAMESPACE},
+                "data": {"token": base64.b64encode(b"e5" * 32).decode()},
+            }
+        )
+        self.rig.control_secret = {"name": "router-token-v2", "key": "token"}
+        self.edit({"controlTokenSecret": {"name": "router-token-v2"}})
+        self.ready(controller)
+        after = {key: entry["directory"] for key, entry in self.record()["stages"].items()}
+        self.assertEqual({key for key in after if after[key] != before.get(key)}, {"router-start"})
+        [router] = [obj for obj in self.derived() if obj["metadata"]["name"] == "router"]
+        env = router["spec"]["template"]["spec"]["containers"][0]["env"]
+        [token] = [item for item in env if item["name"] == ROUTER_TOKEN_ENV]
+        self.assertEqual(token["valueFrom"]["secretKeyRef"]["name"], "router-token-v2")
 
     def test_a_runtime_class_the_admin_does_not_list_is_refused(self):
         self.edit({"engines": {"resources": {"runtimeClassName": "unlisted"}}})

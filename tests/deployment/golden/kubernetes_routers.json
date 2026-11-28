@@ -6,6 +6,11 @@
     "env": "NARWHAL_ENGINE_API_KEY",
     "key": "api-key",
     "secretName": "engine-credential"
+   },
+   "routerControlToken": {
+    "env": "NARWHAL_ROUTER_TOKEN",
+    "key": "token",
+    "secretName": "router-token"
    }
   },
   "haproxy": {
@@ -144,6 +149,15 @@
            "secretKeyRef": {
             "key": "api-key",
             "name": "engine-credential"
+           }
+          }
+         },
+         {
+          "name": "NARWHAL_ROUTER_TOKEN",
+          "valueFrom": {
+           "secretKeyRef": {
+            "key": "token",
+            "name": "router-token"
            }
           }
          }

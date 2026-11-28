@@ -19,6 +19,7 @@ from narwhal.profiling.probe import drain as drain_probe
 from narwhal.profiling.probe import fleet as fleet_probe
 from narwhal.serving import app as serving_app
 from narwhal.types import Role
+from tests import CONTROL_HEADERS
 from tests.fixtures import fleet, profile
 from tests.profiling.test_colocated_pairs import WORKLOAD, SglangGroup, sglang_engines, split_fleet
 from tests.wire import routed
@@ -480,7 +481,7 @@ class LiveRouterTests(unittest.IsolatedAsyncioTestCase):
                 "capture_process_identities",
                 new=AsyncMock(return_value=({peer.iid: 100}, {})),
             ):
-                async with Routed(base_url="http://router") as client:
+                async with Routed(base_url="http://router", headers=CONTROL_HEADERS) as client:
                     response = await client.post(
                         "/narwhal/lifecycle/drain", json={"engines": [peer.iid]}
                     )

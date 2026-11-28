@@ -20,7 +20,9 @@ from narwhal.fleet_control.config import (
     Hook,
     RouterEndpoint,
     load_config,
+    scrape_token,
 )
+from narwhal.fleet_control.engines import EngineActions, engine_routes
 from narwhal.fleet_control.jobs import Job
 from narwhal.fleet_control.service import ControlService
 from narwhal.fleet_control.signals import ALERTS_QUERY, FleetSignals, metrics, signal_routes
@@ -114,6 +116,46 @@ class FleetSignalTests(SignalCase):
         for path in ("/api/fleet", "/metrics"):
             with self.subTest(path=path):
                 self.assertEqual((await self.client.get(path)).status_code, 401)
+
+
+class ScrapeTokenTests(SignalCase):
+    """Prometheus scrapes with a token derived from the control token, which reads `/metrics`
+    and changes nothing."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.engines = EngineActions(self.service, transport=httpx.MockTransport(self.unexpected))
+        signals = FleetSignals(self.service, transport=httpx.MockTransport(self.backends.handle))
+        app = create_app(
+            self.service, TOKEN, routers=[signal_routes(signals), engine_routes(self.engines)]
+        )
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://c")
+        self.addAsyncCleanup(self.client.aclose)
+        self.scrape = {"authorization": f"Bearer {scrape_token(TOKEN)}"}
+
+    def unexpected(self, request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"a refused request reached {request.url}")
+
+    async def test_the_scrape_token_reads_metrics_and_nothing_else(self) -> None:
+        self.assertEqual((await self.client.get("/metrics", headers=self.scrape)).status_code, 200)
+        refused = [
+            ("POST", "/api/engines/join", {"iid": "e9", "url": "http://attacker.invalid:8000"}),
+            ("POST", "/api/engines/e0/join", None),
+            ("POST", "/api/engines/e0/leave", {}),
+            ("POST", "/api/engines/e0/drain", {}),
+            ("POST", "/api/engines/e0/readmit", {}),
+            ("GET", "/api/engines", None),
+            ("GET", "/api/fleet", None),
+            ("POST", "/metrics", None),
+        ]
+        for method, path, body in refused:
+            with self.subTest(method=method, path=path):
+                response = await self.client.request(method, path, json=body, headers=self.scrape)
+                self.assertEqual(response.status_code, 401, response.text)
+        self.assertIsNone(self.service.session)
+
+    async def test_the_control_token_still_reads_metrics(self) -> None:
+        self.assertEqual((await self.client.get("/metrics", headers=self.auth)).status_code, 200)
 
 
 class AlertSignalTests(SignalCase):
