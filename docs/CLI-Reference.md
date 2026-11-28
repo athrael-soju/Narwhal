@@ -85,6 +85,7 @@ These commands add exit codes for specific cases:
 | `narwhal dev` | `1` | The instance reports `degraded`. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
 | `narwhal dev setup`, `narwhal dev init` | `2` | A download or an initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
 | `narwhal deploy` | `2` | An output directory already exists. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
+| `narwhal deploy status` | `1` | The last run stopped at a failed or timed-out stage. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal deploy status` | `3` | A recorded process is gone or changed, or a fabric route changed. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal deploy run`, `down` | `4` | A stage fails without a verdict or exceeds its time limit, or another runner holds the run. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal deploy run`, `tunnel` | `130` | Ctrl+C stops the run or closes the tunnel. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |

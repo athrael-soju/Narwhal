@@ -241,6 +241,23 @@ class DeployTests(unittest.TestCase):
         )
         self.assertEqual(self.fleet.calls["start sidecar-2"], 1)
 
+    def test_status_fails_while_the_last_run_stopped_at_a_failed_stage(self):
+        self.fleet.fail_stage = "monitoring"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        code, result = self.deploy("status")
+        self.assertEqual((code, result["status"]), (1, "failed_gate"), result)
+        [error] = result["errors"]
+        self.assertEqual(error["stage"], "monitoring")
+        self.assertIn("stubbed failure", error["message"])
+        self.assertIn("recovery", error["context"])
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(set(live.values()), {"holds"})
+        self.fleet.fail_stage = None
+        self.assertEqual(self.deploy("run")[0], 0)
+        code, result = self.deploy("status")
+        self.assertEqual((code, result["status"]), (0, "success"), result)
+
     def test_a_checked_restart_moves_the_process_record_down_stops(self):
         self.deploy("run")
         self.fleet.restart_unit("sidecar-2")
