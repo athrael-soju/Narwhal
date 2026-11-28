@@ -626,6 +626,8 @@ class Gate:
     service_account: bool = False
     # A gate whose command prints only plain output, such as a fabric probe, returns its log.
     plain: bool = False
+    # The directories of the state volume the gate mounts, by path, and whether it writes each.
+    state: Mapping[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -675,6 +677,13 @@ _KEEP = f"""[ -d "${KEEP_ENV}" ] || exit 4
 {{ "$@"; echo "$?" > "${KEEP_ENV}/status"; }} 2>&1 | tee "${KEEP_ENV}/output.log"
 exit "$(cat "${KEEP_ENV}/status")"
 """
+
+
+def _on_state(path: str) -> str:
+    """A path in the containers' view of the state volume, as the volume's own path."""
+    if not path.startswith(f"{STATE}/"):
+        raise ValueError(f"{path} is not on the state volume")
+    return path.removeprefix(f"{STATE}/")
 
 
 def _shell(script: str) -> list[str]:
@@ -892,11 +901,15 @@ def settings_env(fleet: Mapping[str, Any], settings: Mapping[str, Any]) -> dict[
 
     The narwhal chart writes the settings to controller.json: `stateClaim`, the engines'
     ServiceAccount in `engineServiceAccount`, the sidecars' user in `sidecarUser` (the launch's
-    default when unset) and the cluster admin's model volume allow-lists.
+    default when unset), the controller's own image in `image` and the cluster admin's model
+    volume allow-lists. Every Job and sidecar that runs Narwhal code runs that image, so a
+    fleet's editor never chooses the code that writes the state volume.
     """
     policy = VolumePolicy.from_values(settings)
     env = spec_env(fleet, state_claim=str(settings["stateClaim"]), policy=policy)
     env[ENGINE_ACCOUNT] = str(settings["engineServiceAccount"])
+    if settings.get("image"):
+        env[SIDECAR_IMAGE_ENV] = str(settings["image"])
     if "sidecarUser" in settings:
         env[SIDECAR_USER] = str(settings["sidecarUser"])
     return env
@@ -1673,6 +1686,7 @@ class KubernetesDeployment:
             model_volume=gate.model_volume,
             service_account=gate.service_account,
             run=run,
+            state=dict(gate.state),
         )
 
     def start_gates(self, context: StageContext, gates: Sequence[Gate]) -> list[str]:
@@ -1947,7 +1961,8 @@ class KubernetesDeployment:
         selected = {
             "image": discovery.value(env, n, "ENGINE_IMAGE"),
             "model_dir": MODEL,
-            "run_dir": STATE,
+            # The engine image mounts only the Job's keep directory of the state volume.
+            "run_dir": kubernetes_objects.KEEP_MOUNT,
             "interface": discovery.value(env, n, "FABRIC_INTERFACE"),
             "environment_prefixes": engine.environment_prefixes,
             "managed_environment": sorted(engine.managed_environment),
@@ -2421,6 +2436,11 @@ fi
             script,
             {"checked.json": f"{self._launch_dir(role, uid)}/checked.json"},
             files,
+            # It stages the launch beside its directory, and reads the pod's records.
+            state={
+                _on_state(self._launch_dir(role, uid).rpartition("/")[0]): True,
+                _on_state(self._pod_dir(role, uid)): False,
+            },
         )
 
     # cache-capture, cache-groups, fabric-budget and fabric-edge
@@ -2433,7 +2453,13 @@ fi
             f"python -c {shlex.quote(_PUBLISHED)} {shlex.quote(home)} /tmp/narwhal-published "
             f"{PUBLISH_SECONDS}\n"
         )
-        self.narwhal_gate(context, "state", script, {f"{into}/": "/tmp/narwhal-published"})
+        self.narwhal_gate(
+            context,
+            "state",
+            script,
+            {f"{into}/": "/tmp/narwhal-published"},
+            state={_on_state(self._pod_dir(role, identity["pod_uid"])): False},
+        )
 
     def cache_capture(self, context: StageContext) -> Outcome:
         role = context.instance
@@ -2662,6 +2688,11 @@ fi
             script,
             {"verify/": "/tmp/narwhal-verify"},
             service_account=True,
+            # The check keeps its captures in the pod's directory.
+            state={
+                _on_state(self._launch_dir(role, identity["pod_uid"])): False,
+                _on_state(self._pod_dir(role, identity["pod_uid"])): True,
+            },
         )
 
     # The fleet: finalize, profile, calibrate, limits, preflight.
@@ -2677,6 +2708,7 @@ fi
             f"--fleet {work}/fleet.json\n",
             {"host/": work},
             {"fleet.json": fleet},
+            state={_on_state(work): True},
         )
 
     def profile(self, context: StageContext) -> None:
@@ -2712,6 +2744,7 @@ fi
                 "fleet.json": (json.dumps(fleet, indent=2) + "\n").encode(),
                 "profiling-limits.json": (self.package() / "profiling-limits.json").read_bytes(),
             },
+            state={_on_state(work): True},
         )
 
     def calibrate(self, context: StageContext) -> None:
@@ -2738,6 +2771,7 @@ fi
             f"mkdir -p {work}\ncp /tmp/narwhal-in/fleet.json {work}/\n{shlex.join(args)}\n",
             {"host/": work},
             {"fleet.json": source.read_bytes()},
+            state={_on_state(work): True},
         )
 
     def fleet_limits(self, context: StageContext) -> None:
@@ -2778,6 +2812,7 @@ fi
             f"mkdir -p {work}\ncp /tmp/narwhal-in/* {work}/\nchmod 644 {work}/*\n",
             {"state/fleet.json": f"{work}/fleet.json"},
             files,
+            state={_on_state(work): True},
         )
         self.announce(
             f"fleet-limits: first-token deadline {engine['first_token_timeout_s']}s from the "
@@ -2806,6 +2841,8 @@ fi
             )
             + "\n",
             {"host/": work},
+            # The fleet file names the profiles and calibration beside it.
+            state={_on_state(work): True, self._limits(context).rpartition("/")[0]: False},
         )
 
     # router-start

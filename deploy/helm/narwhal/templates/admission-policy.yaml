@@ -15,6 +15,26 @@ IPC_LOCK:
   capability.
 - Only the controller's workloads carry the engine, router, gate and HAProxy labels; the
   routers' NetworkPolicy admits the last three.
+- Only the controller's Deployment, the ReplicaSets the Deployment controller makes for it and
+  the pods the ReplicaSet controller makes for those run as the controller's ServiceAccount,
+  so no other pod gets the controller's token. The policy takes a Deployment of the
+  controller's name as the controller's only from a requester who may update this policy,
+  as the chart's installer may, so a user with the namespace's edit role can neither change the
+  controller's pod template nor, after `helm uninstall`, make a Deployment of its name. A pod
+  names its ReplicaSet only by name, so the policy takes a ReplicaSet named after the
+  controller's Deployment as one of its own; only the Deployment controller makes such a
+  ReplicaSet with the controller's ServiceAccount.
+- Only the controller's workloads, the controller's own Deployment, and the pods and
+  ReplicaSets the Kubernetes controllers make for them mount the state claim, which holds the
+  run directories, their salts and the key check's HMACs. Of those, only the controller's own
+  pods mount its root: every other container mounts it by subPath, a directory under deploy/
+  or engines/ or, read-only, a run record or a stage's attempts under runs/.
+- No one adds an ephemeral container to the controller's pod, or to a pod the controller made:
+  one that carries a component label the controller's workloads alone carry, runs as the
+  controller's ServiceAccount or mounts the state claim.
+- Only the Job controller makes a pod that names a Job as its controller or carries the Job
+  controller's job-name labels, and no update gives a pod either, so a pod someone else makes
+  cannot pass for an export Job's pod.
 - No pod is privileged, shares the host's process or IPC namespace, binds a host port, or sets
   an unsafe SELinux type, an unconfined AppArmor profile, an unmasked /proc, an unsafe sysctl, a
   Windows host process or a RuntimeClass outside runtimeClassNames. Every pod but an engine pod
@@ -32,7 +52,8 @@ it outlives the controller and the workloads the fleet leaves behind.
 */ -}}
 {{- $name := printf "%s-narwhal" .Release.Namespace }}
 {{- $model := include "narwhal.fleet.modelVolume" . }}
-{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "narwhal.controller" .) }}
+{{- $controllerName := include "narwhal.controller" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace $controllerName }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -95,6 +116,12 @@ spec:
           && object.metadata.ownerReferences.exists(r, has(r.controller) && r.controller)
           ? object.metadata.ownerReferences.filter(r, has(r.controller) && r.controller)[0].kind
           : ''
+    - name: ownerName
+      expression: |-
+        has(object.metadata.ownerReferences)
+          && object.metadata.ownerReferences.exists(r, has(r.controller) && r.controller)
+          ? object.metadata.ownerReferences.filter(r, has(r.controller) && r.controller)[0].name
+          : ''
     - name: requester
       expression: request.userInfo.username
     # The Kubernetes controller that makes an object of each owner kind, by its ServiceAccount
@@ -120,6 +147,30 @@ spec:
               || (request.operation == 'UPDATE' && object.spec.template == oldObject.spec.template)
               || (object.kind == 'ReplicaSet' && variables.madeByOwner && variables.owner == 'Deployment')
             ? object.kind : ''
+    # The controller's own Deployment, as its installer applies it, the ReplicaSets the
+    # Deployment controller makes for it, and their pods.
+    # Who may update this policy, as the chart's installer may: such a requester could lift
+    # every rule anyway.
+    - name: installer
+      expression: |-
+        authorizer.group('admissionregistration.k8s.io').resource('validatingadmissionpolicies')
+          .name('{{ $name }}').check('update').allowed()
+    - name: controllerPath
+      expression: |-
+        (object.kind == 'Deployment' && object.metadata.name == '{{ $controllerName }}'
+            && variables.installer)
+          || (object.kind == 'ReplicaSet' && variables.madeByOwner
+              && variables.owner == 'Deployment' && variables.ownerName == '{{ $controllerName }}')
+          || (object.kind == 'Pod' && variables.madeByOwner && variables.owner == 'ReplicaSet'
+              && variables.ownerName.startsWith('{{ $controllerName }}-'))
+    - name: serviceAccount
+      expression: |-
+        has(variables.spec.serviceAccountName) ? variables.spec.serviceAccountName
+          : (has(variables.spec.serviceAccount) ? variables.spec.serviceAccount : '')
+    - name: templateKept
+      expression: |-
+        request.operation == 'UPDATE'
+          && (object.kind == 'Pod' || object.spec.template == oldObject.spec.template)
     # The workload kinds each controller-owned component comes from.
     - name: kinds
       expression: |-
@@ -172,6 +223,35 @@ spec:
     - name: volumes
       expression: |-
         !variables.podUpdate && has(variables.spec.volumes) ? variables.spec.volumes : []
+    # The names of the pod's volumes of the state claim, which an ephemeral container may mount.
+    - name: stateVolumes
+      expression: |-
+        has(variables.spec.volumes)
+          ? variables.spec.volumes.filter(v, has(v.persistentVolumeClaim)
+              && v.persistentVolumeClaim.claimName == '{{ include "narwhal.stateClaim" . }}')
+              .map(v, v.name)
+          : []
+    - name: ephemeralChanged
+      expression: |-
+        variables.podUpdate
+          && (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+            != (has(oldObject.spec.ephemeralContainers) ? oldObject.spec.ephemeralContainers : [])
+    # What makes a pod a Job's to its readers: a controlling Job owner, or the Job controller's
+    # job-name labels.
+    - name: jobLabels
+      expression: "['job-name', 'batch.kubernetes.io/job-name']"
+    - name: jobOwners
+      expression: |-
+        has(object.metadata.ownerReferences)
+          ? object.metadata.ownerReferences.filter(r, r.kind == 'Job'
+              && has(r.controller) && r.controller)
+          : []
+    - name: oldJobOwners
+      expression: |-
+        request.operation == 'UPDATE' && has(oldObject.metadata.ownerReferences)
+          ? oldObject.metadata.ownerReferences.filter(r, r.kind == 'Job'
+              && has(r.controller) && r.controller)
+          : []
     # The cluster admin's allow-lists, from the chart's values.
     - name: sources
       expression: {{ .Values.modelVolumeSources | toJson | toJson }}
@@ -316,6 +396,45 @@ spec:
         variables.containers.all(c, !has(c.volumeMounts)
           || c.volumeMounts.all(m, m.name != '{{ $model }}' || (has(m.readOnly) && m.readOnly)))
       message: every container mounts the model volume read-only
+      reason: Forbidden
+    - expression: |-
+        variables.templateKept || variables.serviceAccount != '{{ $controllerName }}'
+          || variables.controllerPath
+      message: only the controller's Deployment and its pods run as the controller's ServiceAccount
+      reason: Forbidden
+    - expression: |-
+        !variables.volumes.exists(v, has(v.persistentVolumeClaim)
+            && v.persistentVolumeClaim.claimName == '{{ include "narwhal.stateClaim" . }}')
+          || variables.trusted != '' || variables.controllerPath
+      message: only the fleet controller's workloads and its own Deployment mount the state claim
+      reason: Forbidden
+    - expression: |-
+        variables.controllerPath || variables.containers.all(c, !has(c.volumeMounts)
+          || c.volumeMounts.all(m, !(m.name in variables.stateVolumes)
+            || (has(m.subPath) && (m.subPath.startsWith('deploy/')
+                || m.subPath.startsWith('engines/')
+                || (has(m.readOnly) && m.readOnly
+                    && m.subPath.matches('^runs/[^/]+/[^/]+/(run[.]json|stages/.+)$'))))
+            || (has(m.subPathExpr) && m.subPathExpr.startsWith('engines/'))))
+      message: only the controller's own pods mount the state claim's root; every other container mounts a directory under deploy/ or engines/, or a run record or attempts under runs/ read-only
+      reason: Forbidden
+    - expression: |-
+        !variables.ephemeralChanged
+          || !(variables.oldComponent in variables.kinds
+               || variables.serviceAccount == '{{ $controllerName }}'
+               || size(variables.stateVolumes) > 0)
+      message: no one adds an ephemeral container to the controller's pod or to a pod the controller made
+      reason: Forbidden
+    - expression: |-
+        object.kind != 'Pod'
+          || (request.operation == 'UPDATE'
+              ? variables.jobOwners.all(r, r in variables.oldJobOwners)
+                && variables.jobLabels.all(k, !(k in variables.labels)
+                     || (k in variables.oldLabels && variables.labels[k] == variables.oldLabels[k]))
+              : (size(variables.jobOwners) == 0
+                 && !variables.jobLabels.exists(k, k in variables.labels))
+                || (variables.madeByOwner && variables.owner == 'Job'))
+      message: only the Job controller makes a pod that names a Job as its controller or carries its job-name labels
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

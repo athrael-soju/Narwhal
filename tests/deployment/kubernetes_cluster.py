@@ -3397,6 +3397,10 @@ class Rig:
             "stateClaim": STATE_CLAIM,
             "engineServiceAccount": ENGINE_ACCOUNT,
             "sidecarUser": SIDECAR_USER,
+            # The controller's own image, which the chart pins and every Narwhal Job runs.
+            "image": NARWHAL_IMAGE,
+            "runAsUser": 10001,
+            "runAsGroup": 10001,
         }
         self.env = kubernetes_target.settings_env(self.fleet, self.settings)
         self.store.kubelet = self.kubelet
@@ -3512,7 +3516,9 @@ class Rig:
         if old is not None:
             return
         self.workloads.append(copy.deepcopy(obj))
-        if fleet_resource.GATE_LABEL not in (obj["metadata"].get("labels") or {}):
+        gate = (obj["metadata"].get("labels") or {}).get(fleet_resource.GATE_LABEL)
+        # An export Job is no stage's gate; the workstation tests run its pods.
+        if gate is None or gate == "export":
             return
         entry = entry_of(obj)
         self.created.append(entry)

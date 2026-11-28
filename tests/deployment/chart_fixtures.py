@@ -24,7 +24,7 @@ from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.observability.stack.chart_dashboard import chart_dashboard
 from tests.backends.contract import MODEL_CONFIG, fixtures, launch_record
-from tests.deployment import fleet_fixtures
+from tests.deployment import fleet_fixtures, kubernetes_cluster
 from tests.deployment.fixtures import launcher_inputs
 from tests.deployment.pod_fixtures import INPUTS, RDMA_TRANSFER, kubernetes_env
 
@@ -101,7 +101,7 @@ def values(**overrides: object) -> dict:
     """Complete chart values: a release that installs `fleet_fixtures.fleet()`, with monitoring."""
     spec = fleet_fixtures.fleet()["spec"]
     document = {
-        "images": {"narwhal": spec["images"]["narwhal"]},
+        "images": {"narwhal": kubernetes_cluster.NARWHAL_IMAGE},
         "fleet": spec,
         "state": {"claimName": "narwhal-state", "storageClassName": "shared", "size": "10Gi"},
         "monitoring": {

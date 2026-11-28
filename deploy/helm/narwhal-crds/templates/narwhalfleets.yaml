@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "ddaae8401a63cb59f6e994f663a165eba21c0329d7fc5eb7f4ae5db8bb2fff74"
+    "narwhal.example.com/schema-sha256": "c9c1c0b616f7591c3d686be7ff2bc2d8e85d6167433b092bfee389285cda5c9f"
 spec:
   group: "narwhal.example.com"
   names:
@@ -47,13 +47,8 @@ spec:
               properties:
                 images:
                   type: "object"
-                  description: "The images the fleet runs besides the engine's, each by registry digest"
+                  description: "The third-party images the fleet runs besides the engine's, each by registry digest. The routers, gate Jobs and attestation sidecars run the controller's own image, which the narwhal chart's images.narwhal pins"
                   properties:
-                    narwhal:
-                      type: "string"
-                      description: "The Narwhal image: the controller, routers, gate Jobs and attestation sidecars"
-                      maxLength: 512
-                      pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                     haproxy:
                       type: "string"
                       description: "The HAProxy image"
@@ -65,7 +60,6 @@ spec:
                       maxLength: 512
                       pattern: "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
                   required:
-                    - "narwhal"
                     - "haproxy"
                     - "fabric"
                 engines:
@@ -1212,6 +1206,51 @@ spec:
                     pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                   maxItems: 16
                   x-kubernetes-list-type: "atomic"
+                exports:
+                  type: "array"
+                  description: "The export Jobs the controller made for the latest narwhal.example.com/export-request values"
+                  items:
+                    type: "object"
+                    description: "One export request's answer: its Job and, once the Job's pod succeeds, the pod and the SHA-256 and size of the log the controller read from it; or why the export failed"
+                    properties:
+                      nonce:
+                        type: "string"
+                        description: "The request's nonce"
+                        maxLength: 32
+                        pattern: "^[0-9a-f]{32}$"
+                      job:
+                        type: "string"
+                        description: "The export Job's name"
+                        maxLength: 63
+                      uid:
+                        type: "string"
+                        description: "The export Job's UID"
+                        maxLength: 36
+                        pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                      pod:
+                        type: "string"
+                        description: "The export Job's pod the controller read"
+                        maxLength: 253
+                      sha256:
+                        type: "string"
+                        description: "The SHA-256 of the pod's log"
+                        maxLength: 64
+                        pattern: "^[0-9a-f]{64}$"
+                      size:
+                        type: "integer"
+                        description: "The size of the pod's log in bytes"
+                        minimum: 0
+                        maximum: 2147483647
+                      error:
+                        type: "string"
+                        description: "Why the export failed"
+                        maxLength: 1024
+                    required:
+                      - "nonce"
+                  maxItems: 4
+                  x-kubernetes-list-type: "map"
+                  x-kubernetes-list-map-keys:
+                    - "nonce"
           required:
             - "spec"
           x-kubernetes-validations:

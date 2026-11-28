@@ -139,6 +139,10 @@ QUANTITY = re.compile(r"[0-9]+(\.[0-9]+)?([KMGTPE]i?)?")
 LABEL_VALUE = re.compile(r"(([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9])?")
 # A gate's keep directory on the state volume: under deploy/, with no hidden or parent part.
 KEEP = re.compile(r"deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+")
+# A directory a gate mounts by its own subPath: an attempt's work directory under deploy/, or an
+# engine pod's or launch's directory under engines/. The run directories under runs/, with the
+# run salt and the credential HMACs, are the controller's alone.
+STATE_PATH = re.compile(r"(deploy|engines)(/[A-Za-z0-9][A-Za-z0-9._-]*)+")
 FILE_NAME = re.compile(r"[-._A-Za-z0-9]+")
 
 BACKGROUND = "Background"
@@ -537,9 +541,12 @@ class GateJob:
     """One gate Job: its kind, command and time limit, its keep directory on the state volume,
     where it runs and what it mounts.
 
-    `inputs` names the ConfigMap mounted read-only at /narwhal-input. A Narwhal gate mounts the
-    whole state volume writable at /narwhal-state; a fabric gate runs the third-party fabric
-    image, so it mounts only its keep directory and keeps no capability but IPC_LOCK.
+    `inputs` names the ConfigMap mounted read-only at /narwhal-input. `state` maps each
+    directory of the state volume the gate reads or writes, a `STATE_PATH`, to whether it
+    writes it; each is mounted by its own subPath at the same path under /narwhal-state, so the
+    gate sees no other part of the volume. Only a gate in the controller's own image mounts
+    one: a fabric gate runs the third-party fabric image and a discovery gate the engine image,
+    so each mounts only its keep directory, and a fabric gate keeps no capability but IPC_LOCK.
     """
 
     name: str
@@ -557,6 +564,7 @@ class GateJob:
     model_volume: Mapping[str, Any] | None = None
     service_account: bool = False
     run: str | None = None
+    state: Mapping[str, bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _name(self.name, "a Job's name", DNS_LABEL)
@@ -602,6 +610,18 @@ class GateJob:
             )
         if self.run is not None and not LABEL_VALUE.fullmatch(self.run):
             raise ValueError(f"{self.name}: the run id {self.run!r} is no label value")
+        for path, writes in self.state.items():
+            if not isinstance(path, str) or not STATE_PATH.fullmatch(path):
+                raise ValueError(
+                    f"{self.name}: a gate mounts directories under deploy/ or engines/ of the "
+                    f"state volume, not {path!r}"
+                )
+            if not isinstance(writes, bool):
+                raise ValueError(f"{self.name}: say whether the gate writes {path}")
+        if self.state and (self.image is not None or self.kind.startswith("fabric-")):
+            raise ValueError(
+                f"{self.name}: only a gate in the controller's own image mounts the state volume"
+            )
 
 
 def _gate_labels(gate: GateJob) -> dict[str, str]:
@@ -615,7 +635,7 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
     """The Job of one gate, which runs once within its time limit.
 
     Only the gates that call engines get the engine API key, and only a sidecar-verify Job
-    gets a ServiceAccount token.
+    gets a ServiceAccount token. A gate in no image of its own runs the controller's.
     """
     fabric = gate.kind.startswith("fabric-")
     # A probe reads the host's interfaces and routes; a sample opens the RDMA device.
@@ -661,8 +681,9 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
     mounts: list[dict[str, Any]] = [
         {"name": STATE_VOLUME, "mountPath": KEEP_MOUNT, "subPath": gate.keep}
     ]
-    if not fabric:
-        mounts.append({"name": STATE_VOLUME, "mountPath": STATE_MOUNT})
+    for path in sorted(gate.state):
+        mount = {"name": STATE_VOLUME, "mountPath": f"{STATE_MOUNT}/{path}", "subPath": path}
+        mounts.append(mount if gate.state[path] else {**mount, "readOnly": True})
     if gate.inputs:
         mounts.append({"name": INPUT_VOLUME, "mountPath": INPUT_MOUNT, "readOnly": True})
     if model:
@@ -839,8 +860,11 @@ TOKEN_SECONDS = 3600
 TMP_VOLUME = "tmp"
 TMP_MOUNT = "/tmp"
 TMP_LIMIT = "64Mi"
-# A fleet file on the state volume: relative, with no hidden or parent part.
-ROUTER_FLEET = re.compile(r"([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.json")
+# A fleet file on the state volume: in an attempt's work directory under deploy/, which the
+# routers mount by itself, with no hidden or parent part.
+ROUTER_FLEET = re.compile(
+    r"deploy(/[A-Za-z0-9][A-Za-z0-9._-]*)+/[A-Za-z0-9_-][A-Za-z0-9._-]*\.json"
+)
 ROUTER_ARG_LENGTH = 256
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # The narwhal-serve options `routers` and ROUTER_START set, and the file lease's, which more
@@ -946,8 +970,8 @@ class Routers:
     def __post_init__(self) -> None:
         if not isinstance(self.fleet_file, str) or not ROUTER_FLEET.fullmatch(self.fleet_file):
             raise ValueError(
-                "the routers' fleet file must be a .json path on the state volume, with no "
-                f"hidden or parent part, not {self.fleet_file!r}"
+                "the routers' fleet file must be a .json path under deploy/ of the state volume, "
+                f"with no hidden or parent part, not {self.fleet_file!r}"
             )
         _name(self.storage_class, "the routers' storage class")
         if not isinstance(self.size, str) or not QUANTITY.fullmatch(self.size):
@@ -992,6 +1016,8 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
     """
     owner = fleet.owner
     domain = f"{ROUTER_SERVICE}.{owner.namespace}.svc.{fleet.cluster_domain}"
+    # The fleet file names its profiles and calibration beside it, in the same directory.
+    folder = settings.fleet_file.rpartition("/")[0]
     selector = labels(ROUTER)
     command = [
         "python3",
@@ -1037,7 +1063,12 @@ def routers(fleet: Fleet, settings: Routers) -> list[dict[str, Any]]:
             "capabilities": {"drop": ["ALL"]},
         },
         "volumeMounts": [
-            {"name": STATE_VOLUME, "mountPath": STATE_MOUNT, "readOnly": True},
+            {
+                "name": STATE_VOLUME,
+                "mountPath": f"{STATE_MOUNT}/{folder}",
+                "subPath": folder,
+                "readOnly": True,
+            },
             {"name": API_VOLUME, "mountPath": TOKEN_MOUNT, "readOnly": True},
             {"name": ROUTER_VOLUME, "mountPath": ROUTER_HOME},
             {"name": TMP_VOLUME, "mountPath": TMP_MOUNT},

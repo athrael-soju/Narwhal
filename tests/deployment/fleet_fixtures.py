@@ -21,7 +21,6 @@ from tests.deployment.kubernetes_cluster import (
     FABRIC_IMAGE,
     IMAGE,
     NAMESPACE,
-    NARWHAL_IMAGE,
     NODES,
     TREE,
 )
@@ -37,7 +36,7 @@ def fleet() -> dict:
         "kind": fleet_resource.KIND,
         "metadata": {"name": fleet_resource.NAME, "namespace": NAMESPACE, "uid": UID},
         "spec": {
-            "images": {"narwhal": NARWHAL_IMAGE, "haproxy": HAPROXY_IMAGE, "fabric": FABRIC_IMAGE},
+            "images": {"haproxy": HAPROXY_IMAGE, "fabric": FABRIC_IMAGE},
             "engines": {
                 "image": IMAGE,
                 "model": {"name": "served-model", "treeSha256": TREE},

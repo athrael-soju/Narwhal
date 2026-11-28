@@ -14,7 +14,7 @@ narwhal deploy status --run runs/deploy/first-deploy
 narwhal deploy down --run runs/deploy/first-deploy
 ```
 
-With `--target kubernetes`, `plan`, `run`, `status` and `down` work on the namespace's `NarwhalFleet` instead: the fleet controller in the cluster runs the graph, and the workstation applies the fleet, follows its status and copies the evidence back, as [Applying the fleet](../deploy/Kubernetes.md#applying-the-fleet) describes. [Needs verification: step I] The other subcommands work on SSH hosts only.
+With `--target kubernetes`, `plan`, `run`, `status` and `down` work on the namespace's `NarwhalFleet` instead: the fleet controller in the cluster runs the graph, and the workstation applies the fleet, follows its status and copies the evidence back, as [On a Kubernetes cluster](#on-a-kubernetes-cluster) describes and [Applying the fleet](../deploy/Kubernetes.md#applying-the-fleet) walks through. The other subcommands work on SSH hosts only.
 
 The other subcommands run one stage, or one gate's stages, alone: discovery, the access check, packaging, installation, SGLang handoff measurement, the cache-equivalence groups and fabric qualification. They also open role shells and port tunnels:
 
@@ -95,6 +95,35 @@ Only container engines run on SSH hosts. `down` keeps the monitoring volumes, th
 
 `run --trial` takes the stages to `trial`, and `plan --trial` decides them. Without `--trial`, `run` stops at `monitoring` and leaves a recorded trial as it is. `--trial` needs the default SSH target, and `--until trial` needs `--trial`; both refusals exit with code `2`.
 
+## On a Kubernetes cluster
+
+With `--target kubernetes`, the subcommands read the same variables as the [Kubernetes target inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) and turn them into the namespace's `NarwhalFleet`, named `fleet`. A variable with a field of its own becomes that field. Any other input variable becomes an `engines.launch` entry, unless the fleet refuses its name, as it refuses every name that looks like a credential. Those are left out, and a `Note:` line names them. A missing or malformed input exits with code `2` before the cluster is touched.
+
+- `run` applies the fleet server-side as the field manager `narwhal-cli`, without forcing a conflict, then follows its status until it is `Ready`, `Stalled` or `--timeout` passes. It prints each stage's progress as it changes, such as `engine-check: running (1/2 passed)`, and copies the evidence each time a stage instance passes. When the fleet was stalled on a failed stage and the inputs did not change, `run` sets a new `narwhal.example.com/requested-at` annotation so the controller runs the stage again.
+- `plan` checks the inputs and dry-runs the apply on the API server. Each input that differs from the live fleet's reruns the stages the [stage table](../deploy/Kubernetes.md#rerunning-after-a-change) names for it, and each stage instance of the run record the run directory last copied that has not passed runs again. It starts no Job, and leaves the live pods and routes to the controller, which checks them on each pass.
+- `status` copies the evidence again, then prints the fleet's conditions, each stage of the run record and the live checks of the engine, sidecar and router pods. A route needs a Job on each node to observe, so `status` reports each fabric route `not observed`; the controller observes them on every pass. A stalled fleet exits as `run` would: `2` for a refused input, `1` for a failed check.
+- `down` sets `spec.stopped` and waits for the fleet's `Stopped` condition, within `--timeout`. With `--delete` it then deletes the fleet, in the background, and the garbage collector removes what the controller made. A fleet that has not stopped within `--timeout` is not deleted, and `down` exits with code `4`. The volumes stay either way, and `run` starts a stopped fleet again.
+
+A fleet whose `spec` another field manager owns, such as Helm, Argo CD or Flux, is followed and never written: `run` prints a note and follows it, and `down` refuses it with code `2`. Set `spec.stopped` through that tool instead. An apply, or `plan`'s dry run of it, that meets a field another manager took in the meantime exits with code `4` and error code `apply_conflict`, and its `context.fields` lists each field and manager.
+
+The run directory belongs to the workstation and keeps the owner and mode checks above. `kubernetes-fleet.json` names the fleet it follows by uid, and the subcommands refuse a fleet with another uid, such as one deleted and made again: start a new run directory for it. Beside it, the directory mirrors the controller's run directory: `run.json` and the evidence of every stage attempt that has ended. An attempt still running arrives once it ends, and `kubernetes-export.json` keeps which attempts the directory holds whole.
+
+The mirror arrives through export Jobs, never `exec`, and the workstation never creates one. It sets the fleet's `narwhal.example.com/export-request` annotation to a nonce and the attempts it holds; the controller creates the export Job from its own image, user and group, and names the Job under that nonce in `status.exports`. The Job has no ServiceAccount token and mounts, read-only, only `run.json` and the attempt directories asked for, so the salt that keys the run record's digests and the key check's salt and HMACs never reach it. Once the Job's pod succeeds, the controller reads the pod's log itself and adds the pod's name and the log's SHA-256 and size to the answer. The workstation reads that pod's log, imports nothing unless its digest matches, and checks each file against the manifest at its end, so a truncated or altered log writes nothing, and a copied file never replaces evidence the directory already holds. A log stays under 8 MiB, below the kubelet's 10 MiB log rotation, and the next Job carries the rest. A file too large for one log stays in the cluster, and the command result names it.
+
+The workstation's identity needs the chart's `<release>-fleet-editor` Role and this Role:
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+```
+
+Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. The Role above lets it read the export Job's pod the controller names and its log, and the engine, sidecar and router pods for the live checks of `plan` and `status`. Together they grant no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, so the identity cannot start a pod of its own. Editing the fleet is still a lot of power: the fleet chooses the engine image, which receives the engine API key, and names the Secrets the engines and routers read, so whoever can edit it can read any Secret of the namespace. The controller and the namespace's admission policy bound the rest, as [Security and access](../deploy/Kubernetes.md#security-and-access) describes.
+
 ## Host keys and time limits
 
 Every connection checks the host's key against `NARWHAL_SSH_KNOWN_HOSTS` alone, with OpenSSH `StrictHostKeyChecking=yes`, before it authenticates, whatever your SSH config sets. `narwhal deploy` never adds or replaces a key in that file. A host whose key is missing from the file or differs from it fails with `<host-id>: blocked at <operation>: the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it`. [Known-hosts handling](../configuration/04-Deployment-Inputs.md#known-hosts-handling) lists the options that override your SSH config, and [Jump host](../configuration/04-Deployment-Inputs.md#jump-host) how to reach the hosts through one.
@@ -156,9 +185,9 @@ In text mode, stdout carries progress lines, and a failure writes one stderr lin
 | --- | :--: |
 | Success | `0` |
 | A remote command fails or exceeds its time limit, a fabric check fails, a fabric sample is below a role's budget, a stage's check rejects it, a host cannot run units for `plan`, `status` finds the last run stopped at a failed or timed-out stage, or another operating-system error | `1` |
-| Invalid arguments, inventory, environment, package or discovery inputs, or an output that already exists | `2` |
+| Invalid arguments, inventory, environment, package or discovery inputs, an output that already exists, or a fleet the API server or the controller refuses | `2` |
 | `status` finds a recorded process gone or changed, or a route changed | `3` |
-| A stage of `run` fails without a verdict or exceeds its time limit, or another runner holds the run for `run` or `down` | `4` |
+| A stage of `run` fails without a verdict or exceeds its time limit, another runner holds the run for `run` or `down`, an apply or `plan`'s dry run meets another field manager's field, or `run` or `down` follows a cluster's fleet past `--timeout` | `4` |
 | `run` or `tunnel` stopped with Ctrl+C | `130` |
 | `tunnel` stopped with SIGTERM or SIGHUP | `143` or `129` |
 
@@ -166,7 +195,7 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 
 ## Options
 
-`--format` applies to every subcommand except `shell` and `tunnel`, `--target` to `plan`, `run`, `status` and `down`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` and `--trial` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
+`--format` applies to every subcommand except `shell` and `tunnel`, `--target` to `plan`, `run`, `status` and `down`, `--timeout` to `run` and `down` with `--target kubernetes`, `--delete` to `down` with `--target kubernetes`, and `--hosts` to every subcommand except `plan`, `run`, `status`, `down`, `discover` and `cache-groups`. `--out` applies to `discover`, `package`, `transfer-measure`, `cache-groups` and `fabric`, `--run` to `plan`, `run`, `status`, `down`, `install`, `transfer-measure`, `cache-groups`, `fabric` and `shell`, `--until` and `--trial` to `plan` and `run`, `--cache-layout` and `--transfer-record` to `cache-groups`, `--groups` and `--retained` to `fabric`, `--host` to `install`, `--role` to `install`, `shell` and `tunnel`, and `--forward` and `--remote-address` to `tunnel`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -177,6 +206,8 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 | `--transfer-record` | None | `ROLE=PATH`: the `transfer.json` that `transfer-measure` wrote for the role, with `before.prom` and `after.prom` beside it. Repeatable, once for each engine whose handoffs are measured. | An `engine-<n>` role of the launch records |
 | `--run` | Required for every subcommand that takes it except `shell`, none for `shell` | For `plan`, `run`, `status` and `down`, the run directory that holds the run record; `run` creates it at mode 0700, and `run`, `status` and `down` refuse one another user owns or may enter. For the others, the package directory that `package` wrote. `transfer-measure`, `cache-groups` and `fabric` read the engines' packaged launch records from it, and `transfer-measure` and `fabric` their role files. | |
 | `--target` | `ssh` | Where `plan`, `run`, `status` and `down` run the fleet: on SSH hosts, or on a Kubernetes cluster, whose `NarwhalFleet` they apply and follow. A run directory keeps the target it started with. | `ssh` or `kubernetes` |
+| `--timeout` | `86400` for `run`, `900` for `down` | Seconds `run` follows the fleet until it is ready or stalled, or `down` waits for it to stop. The controller keeps working once it passes. | A positive number |
+| `--delete` | Off | `down` deletes the `NarwhalFleet` once it has stopped. | |
 | `--until` | `monitoring`, `trial` with `--trial`, or `router-start` with `--target kubernetes` | The last stage `plan` decides or `run` runs. | A stage of the [stage table](../Deploy.md#rerunning-after-a-change) up to `trial`, which needs `--trial` |
 | `--trial` | None | A `narwhal.capacity-trial` file with the [capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial)'s workload, rates and thresholds. Its SHA-256 is the run's `trial` input. | A readable file, on the `ssh` target |
 | `--groups` | Required | The `cache-groups.json` that `cache-groups` derived from the same package. `fabric` takes each group and its representative from it, and sizes each budget from the cache layout or transfer record the groups were derived from. | A file whose packaged launch digests and geometry-source digests still match |

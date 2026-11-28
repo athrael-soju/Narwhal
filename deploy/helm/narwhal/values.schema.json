@@ -729,14 +729,8 @@
       "properties": {
         "images": {
           "type": "object",
-          "description": "The images the fleet runs besides the engine's, each by registry digest",
+          "description": "The third-party images the fleet runs besides the engine's, each by registry digest. The routers, gate Jobs and attestation sidecars run the controller's own image, which the narwhal chart's images.narwhal pins",
           "properties": {
-            "narwhal": {
-              "type": "string",
-              "description": "The Narwhal image: the controller, routers, gate Jobs and attestation sidecars",
-              "maxLength": 512,
-              "pattern": "^[^\\s@\\x00-\\x1f\\x7f-\\x9f]+@sha256:[0-9a-f]{64}$"
-            },
             "haproxy": {
               "type": "string",
               "description": "The HAProxy image",
@@ -751,7 +745,6 @@
             }
           },
           "required": [
-            "narwhal",
             "haproxy",
             "fabric"
           ],

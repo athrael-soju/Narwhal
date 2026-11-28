@@ -98,8 +98,7 @@ A field marked Yes is required whenever the field that holds it is set.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `spec.images` | object | Yes | The images the fleet runs besides the engine's, each by registry digest. |
-| `spec.images.narwhal` | string | Yes | The Narwhal image: the controller, routers, gate Jobs and attestation sidecars. At most 512 characters. |
+| `spec.images` | object | Yes | The third-party images the fleet runs besides the engine's, each by registry digest. The routers, gate Jobs and attestation sidecars run the controller's own image, which the narwhal chart's images.narwhal pins. |
 | `spec.images.haproxy` | string | Yes | The HAProxy image. At most 512 characters. |
 | `spec.images.fabric` | string | Yes | The image the fabric Jobs run ib_write_bw from. At most 512 characters. |
 | `spec.engines` | object | Yes | The engine pods. |
@@ -206,6 +205,14 @@ The controller writes the status; nothing else may.
 | `status.stages.<stage>.total` | integer | Instances the stage runs. From 0 to 1000000. |
 | `status.stages.<stage>.lastPassedTime` | string | When an instance last passed. At most 64 characters. |
 | `status.previousRuns` | list of strings | The fleet UIDs of the run directories an earlier fleet of this name left. At most 16 items. |
+| `status.exports` | list of objects | The export Jobs the controller made for the latest narwhal.example.com/export-request values. At most 4 items. Each item's `nonce` is unique. |
+| `status.exports[].nonce` | string | The request's nonce. At most 32 characters. |
+| `status.exports[].job` | string | The export Job's name. At most 63 characters. |
+| `status.exports[].uid` | string | The export Job's UID. At most 36 characters. |
+| `status.exports[].pod` | string | The export Job's pod the controller read. At most 253 characters. |
+| `status.exports[].sha256` | string | The SHA-256 of the pod's log. At most 64 characters. |
+| `status.exports[].size` | integer | The size of the pod's log in bytes. From 0 to 2147483647. |
+| `status.exports[].error` | string | Why the export failed. At most 1024 characters. |
 
 `kubectl get narwhalfleet` prints these columns:
 

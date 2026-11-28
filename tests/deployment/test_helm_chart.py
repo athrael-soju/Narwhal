@@ -462,9 +462,14 @@ class ChartTests(Rendering, unittest.TestCase):
                 "runtimeClassNames": ["nvidia"],
                 "admissionPolicy": f"{chart_fixtures.NAMESPACE}-narwhal",
                 "keyCheckPeriodSeconds": 900,
+                # Export Jobs run the controller's own image, user and group.
+                "image": values["images"]["narwhal"],
+                "runAsUser": 10001,
+                "runAsGroup": 10001,
             },
         )
         self.assertEqual(Settings.of(settings).key_check_period, 900)
+        self.assertEqual(Settings.of(settings).image, values["images"]["narwhal"])
         self.assertEqual(
             VolumePolicy.from_values(settings),
             VolumePolicy(
@@ -693,8 +698,14 @@ class ChartTests(Rendering, unittest.TestCase):
         values["runtimeClassNames"] = ["nvidia"]
         variables, _ = policy(values)
         self.assertEqual(json.loads(variables["runtimeClasses"]), ["nvidia"])
+        # Only the controller's own Deployment runs as its ServiceAccount, and only the
+        # controller's workloads mount the state claim.
+        self.assertIn("variables.serviceAccount != '", validations)
+        self.assertIn("v.persistentVolumeClaim.claimName == 'narwhal-state'", validations)
+        self.assertIn("object.metadata.name == 'fleet-controller'", variables["controllerPath"])
         # Every case the live check sends is one a fleet's objects or a refusal covers.
         self.assertTrue(chart_live.refused("fleet"))
+        self.assertTrue(chart_live.workstation_refused("fleet"))
         for policy_values in chart_live.POLICIES:
             cases = chart_live.volume_cases(policy_values)
             self.assertEqual(len(cases), len(chart_live.MODEL_VOLUMES))

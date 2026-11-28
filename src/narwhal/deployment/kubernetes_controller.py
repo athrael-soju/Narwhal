@@ -47,6 +47,15 @@ resources, an image or a Secret, so a pass started by a live change would usuall
 same way, and one started on every change would turn the stall into a loop of failing Jobs.
 `requested-at` is the retry.
 
+A new `<GROUP>/export-request` value asks for an export Job, which copies finished evidence
+out of the run directory for a workstation; see `kubernetes_export`. A thread apart from the
+passes makes it, from the controller's own image, user and group in controller.json, and names
+it in `status.exports` by the request's nonce, so an export never waits for a stage. Once the
+Job's pod succeeds, the thread reads the pod's log itself, from the pod the Job of that UID
+controls, and adds the pod's name and the log's SHA-256 and size to the answer. The
+workstation imports a log only when it has that digest, so a pod someone else made under the
+Job's name, which the chart's admission policy also refuses, exports nothing.
+
 `spec.stopped` cancels a running stage, deletes the routers, HAProxy, the engines and then the
 Jobs, and keeps the volumes and the run directory, so clearing it starts again from the record.
 The fleet has no finalizer: deleting it leaves removal to owner-reference garbage collection.
@@ -59,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -81,18 +91,28 @@ import httpx
 from narwhal.runtime import kubernetes_api, kubernetes_lease
 from narwhal.runtime.kubernetes_api import (
     CUSTOM_RESOURCE_DEFINITION,
+    POD,
     STATEFUL_SET,
     ApiClient,
+    Conflict,
     Informer,
     Kind,
     KubernetesError,
+    LogTooLarge,
     NotFound,
     WatchEvent,
     WorkQueue,
 )
 from narwhal.runtime.kubernetes_lease import KubernetesLease
 
-from . import fleet_resource, kubernetes_objects, kubernetes_target, run_record, stages
+from . import (
+    fleet_resource,
+    kubernetes_export,
+    kubernetes_objects,
+    kubernetes_target,
+    run_record,
+    stages,
+)
 from .deploy import InputError
 from .fleet_resource import (
     CONTROLLER_LEASE,
@@ -107,6 +127,7 @@ from .fleet_resource import (
     VolumePolicy,
     stage_condition,
 )
+from .kubernetes_export import EXPORT_REQUEST
 from .kubernetes_graph import KUBERNETES_GRAPH
 from .kubernetes_objects import Owner, controlled
 from .kubernetes_target import FLEET, Cluster, KubernetesDeployment
@@ -215,6 +236,11 @@ class Settings:
     runtime_classes: tuple[str, ...]
     admission_policy: str
     key_check_period: float = KEY_CHECK_SECONDS
+    # The controller's own image, which every Job and sidecar that runs Narwhal code runs, and
+    # the user and group export Jobs run as.
+    image: str = ""
+    user: int = 0
+    group: int = 0
 
     @classmethod
     def of(cls, values: Mapping[str, Any]) -> Settings:
@@ -246,6 +272,12 @@ class Settings:
             or period <= 0
         ):
             problems.append("keyCheckPeriodSeconds must be a positive number of seconds")
+        image = values.get("image", "")
+        if not (isinstance(image, str) and kubernetes_objects.DIGEST.fullmatch(image)):
+            problems.append("image must name the controller's image by registry digest")
+        ids = [values.get(name, 0) for name in ("runAsUser", "runAsGroup")]
+        if not all(type(n) is int and 0 <= n < 2**31 for n in ids):
+            problems.append("runAsUser and runAsGroup must be user and group IDs")
         if problems:
             raise ValueError("controller settings: " + "; ".join(problems))
         return cls(
@@ -254,6 +286,9 @@ class Settings:
             tuple(runtime_classes),
             str(values["admissionPolicy"]),
             float(period),
+            str(image),
+            int(ids[0]),
+            int(ids[1]),
         )
 
     @classmethod
@@ -690,6 +725,14 @@ class Controller:
         self._ready: dict[str, int] = {}
         # The uids of the other run directories kept, by fleet uid.
         self._previous: dict[str, list[str]] = {}
+        # Export requests not yet answered, by fleet key, and the value last taken of each.
+        self._export_pending: dict[str, dict[str, Any]] = {}
+        self._export_seen: dict[str, str] = {}
+        self._export_wake = threading.Event()
+        # The answers `status.exports` holds, by fleet uid.
+        self._exports: dict[str, list[dict[str, Any]]] = {}
+        # One status write at a time: a pass's or an export's.
+        self._status_lock = threading.RLock()
 
     # Leadership.
 
@@ -724,6 +767,7 @@ class Controller:
                 self._pass if self._pass is not None and self._pass.key == object_key else None
             )
         before = self._seen.get(object_key)
+        self._take_export(object_key, fleet, deleted=event.type == "DELETED")
         # A fleet gone: deleted, or, as a relist after a 410 finds it, made again under the
         # name with a new uid. Its pass and its state end with it.
         gone = {before[0] if before else "", running.uid if running else ""} - {"", uid}
@@ -733,6 +777,7 @@ class Controller:
             self._written.pop(old, None)
             self._ready.pop(old, None)
             self._previous.pop(old, None)
+            self._exports.pop(old, None)
         if running is not None and running.uid in gone:
             # The garbage collector removes what the pass made; it starts nothing more.
             running.stop.cancel(*STAGES)
@@ -749,6 +794,21 @@ class Controller:
         # Recorded last: a handler that raises hears the event again.
         self._seen[object_key] = seen
         self.queue.add(object_key)
+
+    def _take_export(self, object_key: str, fleet: Mapping[str, Any], *, deleted: bool) -> None:
+        """Queue the fleet's export request when its value is new."""
+        with self._lock:
+            if deleted:
+                self._export_pending.pop(object_key, None)
+                self._export_seen.pop(object_key, None)
+                return
+            annotations = (fleet.get("metadata") or {}).get("annotations") or {}
+            value = annotations.get(EXPORT_REQUEST)
+            if not isinstance(value, str) or self._export_seen.get(object_key) == value:
+                return
+            self._export_seen[object_key] = value
+            self._export_pending[object_key] = dict(fleet)
+        self._export_wake.set()
 
     def _interrupt(self, running: _Pass, fleet: Mapping[str, Any]) -> None:
         """Stop a pass an edit overtook: cancel the running stage when the edit changes a fact
@@ -804,6 +864,165 @@ class Controller:
             self.queue.done(object_key)
         return True
 
+    def export_once(self) -> int:
+        """Answer every queued export request; return how many were taken. A controller that
+        does not hold a valid Lease answers none."""
+        if not self.lease.valid():
+            return 0
+        with self._lock:
+            pending, self._export_pending = self._export_pending, {}
+            self._export_wake.clear()
+        for object_key, fleet in pending.items():
+            try:
+                self._export(fleet)
+            except Exception:
+                log.exception("export request of %s failed", object_key)
+        for fleet in self.informer.items():
+            try:
+                self._follow_exports(fleet)
+            except Exception:
+                log.exception("export Jobs of %s not followed", kubernetes_api.key(fleet))
+        return len(pending)
+
+    def _follow_exports(self, fleet: Mapping[str, Any]) -> None:
+        """Finish each answer whose export Job runs, once its pod has ended."""
+        for entry in list(self._exports.get(_uid(fleet)) or []):
+            if not entry.get("job") or "sha256" in entry or entry.get("error"):
+                continue
+            ended = self._export_ended(str(entry["job"]), str(entry["uid"]))
+            if ended is not None:
+                answer = {k: entry[k] for k in ("nonce", "job", "uid")}
+                self._answer(fleet, {**answer, **ended})
+
+    def _export_ended(self, name: str, uid: str) -> dict[str, Any] | None:
+        """The pod and the digest and size of its log once the export Job's pod succeeds, an
+        error once it cannot, or None while it runs. Only a pod the Job of `uid` controls
+        counts, and the Job runs one pod at most: a second is no pod of the Job's own."""
+        pods = [
+            pod
+            for pod in self.client.list(POD, labels={kubernetes_target.JOB_NAME_LABEL: name}).items
+            if any(
+                reference.get("kind") == "Job"
+                and reference.get("uid") == uid
+                and reference.get("controller") is True
+                for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
+            )
+        ]
+        if len(pods) > 1:
+            names = ", ".join(sorted(pod["metadata"]["name"] for pod in pods))
+            return {"error": f"more than one pod claims export Job {name}: {names}"[:1024]}
+        for pod in pods:
+            pod_name = pod["metadata"]["name"]
+            phase = (pod.get("status") or {}).get("phase")
+            if phase == "Succeeded":
+                try:
+                    data = self.client.log(
+                        pod_name,
+                        container=kubernetes_export.EXPORT,
+                        limit_bytes=kubernetes_export.EXPORT_LOG_BYTES,
+                    )
+                except LogTooLarge:
+                    limit = kubernetes_export.EXPORT_LOG_BYTES
+                    return {"error": f"export Job {name} logged more than {limit} bytes"}
+                digest = hashlib.sha256(data).hexdigest()
+                return {"pod": pod_name, "sha256": digest, "size": len(data)}
+            if phase == "Failed":
+                return {"error": f"export Job {name}'s pod {pod_name} failed"}
+            if cause := kubernetes_target.never_runs(pod, scheduled=False):
+                return {"error": f"export Job {name}: {cause}"[:1024]}
+        job = self.client.get(kubernetes_target.JOB, name)
+        if job is None or job["metadata"].get("uid") != uid:
+            return {"error": f"export Job {name} is gone"}
+        conditions = (job.get("status") or {}).get("conditions") or []
+        if any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions):
+            return {"error": f"export Job {name} failed"}
+        return None
+
+    def _export(self, fleet: Mapping[str, Any]) -> None:
+        uid = _uid(fleet)
+        value = ((fleet.get("metadata") or {}).get("annotations") or {}).get(EXPORT_REQUEST)
+        try:
+            request = kubernetes_export.Request.parse(str(value))
+        except ValueError as exc:
+            log.warning("export request refused: %s", exc)
+            nonce = None
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                nonce = json.loads(str(value)).get("nonce")
+            if isinstance(nonce, str) and kubernetes_export.NONCE.fullmatch(nonce):
+                self._answer(fleet, {"nonce": nonce, "error": _message(str(exc))[:1024]})
+            return
+        status = fleet.get("status") if isinstance(fleet.get("status"), dict) else {}
+        answered = self._exports.get(uid, (status or {}).get("exports") or [])
+        if any(entry.get("nonce") == request.nonce for entry in answered):
+            return
+        directory = run_directory(self.state, self.namespace, uid)
+        try:
+            if not (directory / run_record.RECORD).is_file():
+                raise ValueError("the controller has written no run record for the fleet yet")
+            check_directory(directory)
+            record = run_record.read(directory)
+            attempts = kubernetes_export.wanted(record, request, directory)
+            document = kubernetes_export.job(
+                Owner.of(fleet),
+                request,
+                attempts,
+                image=self.settings.image,
+                user=self.settings.user,
+                group=self.settings.group,
+                claim=str(self.settings.values["stateClaim"]),
+                runs=f"{RUNS}/{self.namespace}/{uid}",
+            )
+        except ValueError as exc:
+            self._answer(fleet, {"nonce": request.nonce, "error": _message(str(exc))[:1024]})
+            return
+        name = document["metadata"]["name"]
+        try:
+            created = self.writer.create(kubernetes_target.JOB, document)
+        except Conflict:
+            found = self.client.get(kubernetes_target.JOB, name)
+            if found is None:
+                raise
+            created = found
+        log.info("export Job %s for request %s: %d attempts", name, request.nonce, len(attempts))
+        self._answer(
+            fleet, {"nonce": request.nonce, "job": name, "uid": created["metadata"]["uid"]}
+        )
+
+    def _answer(self, fleet: Mapping[str, Any], answer: dict[str, Any]) -> None:
+        """Name the export request's answer in `status.exports`, keeping the latest ones."""
+        uid = _uid(fleet)
+        with self._status_lock:
+            status = fleet.get("status") if isinstance(fleet.get("status"), dict) else {}
+            kept = [
+                dict(entry)
+                for entry in self._exports.get(uid, (status or {}).get("exports") or [])
+                if entry.get("nonce") != answer["nonce"]
+            ]
+            self._exports[uid] = [*kept, answer][-kubernetes_export.KEPT_ANSWERS :]
+            # The test keeps the write to this fleet; a pass's next status carries the answers.
+            operations: list[dict[str, Any]] = [
+                {"op": "test", "path": "/metadata/uid", "value": uid}
+            ]
+            if self._written.get(uid) or status:
+                operations.append(
+                    {"op": "add", "path": "/status/exports", "value": self._exports[uid]}
+                )
+            else:
+                operations.append(
+                    {"op": "add", "path": "/status", "value": {"exports": self._exports[uid]}}
+                )
+            try:
+                written = self.writer.patch(
+                    FLEET, fleet["metadata"]["name"], operations, status=True
+                )
+            except NotFound:
+                return
+            except (KubernetesError, ValueError) as exc:
+                log.warning("export answer not written: %s", exc)
+                self._written[uid] = None
+                return
+            self._written[uid] = dict(written.get("status") or {})
+
     def reconcile(self, object_key: str) -> None:
         fleet = self.informer.get(object_key)
         if fleet is None:
@@ -815,6 +1034,7 @@ class Controller:
         live: dict[str, Any] = dict(status) if isinstance(status, dict) else {}
         if self._written.get(uid) is None:
             self._written[uid] = dict(live)
+            self._exports.setdefault(uid, list(live.get("exports") or []))
             ready = next((c for c in live.get("conditions") or [] if c.get("type") == READY), None)
             if (
                 ready
@@ -1030,6 +1250,17 @@ class Controller:
     ) -> None:
         """Write the fleet's status if it changed. A failed write is made again on the next
         change or reconcile, since its outcome may be unknown."""
+        with self._status_lock:
+            self._publish_now(fleet, outcome, directory=directory, started=started)
+
+    def _publish_now(
+        self,
+        fleet: Mapping[str, Any],
+        outcome: _Outcome,
+        *,
+        directory: Path | None,
+        started: int | None,
+    ) -> None:
         uid, generation = _uid(fleet), _generation(fleet)
         cached = self.informer.get(kubernetes_api.key(fleet))
         if cached is None or _uid(cached) != uid:
@@ -1105,6 +1336,8 @@ class Controller:
         }
         if found.stage:
             desired["stage"] = found.stage
+        if self._exports.get(uid):
+            desired["exports"] = list(self._exports[uid])
         if _same_status(desired, live):
             return
         # A JSON patch whose first operation tests the uid lands only on this fleet, never on
@@ -1138,6 +1371,7 @@ class Controller:
             threading.Thread(target=self.informer.run, args=(stop,), name="informer"),
             threading.Thread(target=self._renew, args=(stop,), name="lease"),
             threading.Thread(target=self._work, args=(stop,), name="worker"),
+            threading.Thread(target=self._export_work, args=(stop,), name="exports"),
         ]
         for thread in threads:
             thread.daemon = True
@@ -1152,6 +1386,15 @@ class Controller:
                 self.lease.renew()
             except kubernetes_lease.LeaseError as exc:
                 log.warning("controller Lease renewal: %s", exc)
+
+    def _export_work(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            self._export_wake.wait(WORK_WAIT_SECONDS)
+            try:
+                self.export_once()
+            except Exception:
+                log.exception("controller export worker failed")
+                time.sleep(RETRY_SECONDS)
 
     def _work(self, stop: threading.Event) -> None:
         while not stop.is_set():
