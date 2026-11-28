@@ -358,3 +358,30 @@ class DeploymentRowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def served_panel(title: str) -> dict:
+    served = artifacts.narwhal_dashboard(SHIPPED, "http://127.0.0.1:18020/console")
+    [panel] = [
+        element["spec"]
+        for element in served["spec"]["elements"].values()
+        if element["spec"]["title"] == title
+    ]
+    return panel
+
+
+class DeploymentRowLayoutTests(unittest.TestCase):
+    def test_the_stages_tile_shows_only_the_value_at_the_query_time(self):
+        # Over a range, the `or vector(0)` series from before a failure is a second series,
+        # which the stat panel draws as a second tile.
+        [query] = served_panel("Stages not passed")["data"]["spec"]["queries"]
+        self.assertTrue(query["spec"]["query"]["spec"]["instant"])
+
+    def test_fabric_edges_merge_the_measured_and_budget_rows_of_each_fleet_and_edge(self):
+        # Joining by the edge alone repeats every other label once per query, as `fleet 1`
+        # and `fleet 2` columns, and mixes the rows of fleets whose edges share a name.
+        spec = served_panel("Fabric edges")["data"]["spec"]
+        kinds = [step["kind"] for step in spec["transformations"]]
+        self.assertEqual(kinds, ["merge", "organize"])
+        renamed = spec["transformations"][1]["spec"]["options"]["renameByName"]
+        self.assertEqual(renamed["fleet"], "Fleet")

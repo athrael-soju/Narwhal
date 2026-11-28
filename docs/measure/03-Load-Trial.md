@@ -76,7 +76,7 @@ Each run manifest records:
 
 The client limits concurrent requests with `--max-inflight` (default 64) and scheduling lag with `--max-lag` (default 0.05 s).
 
-`--unix-socket <path>` sends every request through a Unix socket, such as an SSH forward's. `--base` then sets only the scheme, the `Host` header and the path, for example `--base http://localhost`.
+`--unix-socket <path>` sends every request through a Unix socket, such as an SSH forward's. `--base` then sets only the scheme, the `Host` header and the path, for example `--base http://localhost`. `--state-socket <path>` sends the drain reads of `/narwhal/state` through another socket, such as the forward of the router that controls the fleet, when `--unix-socket` reaches a load balancer that forwards only the serving routes.
 
 An offer over either limit becomes a terminal `client_schedule_miss` record with `client_schedule_valid: false` in the summary.
 

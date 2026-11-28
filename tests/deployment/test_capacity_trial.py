@@ -5,7 +5,9 @@ import hashlib
 import io
 import json
 import os
+import re
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -96,6 +98,11 @@ class CapacityTrialTests(unittest.TestCase):
             self.assertEqual(run["--expected-model"], "served-model")
             self.assertEqual(
                 self.fleet._forwarded(run["--unix-socket"]), ("node-1", "10.0.0.1:8080")
+            )
+            # The drain reads go to the controlling router, which the load balancer does not
+            # forward them to.
+            self.assertEqual(
+                self.fleet._forwarded(run["--state-socket"]), ("node-1", "10.0.0.1:8000")
             )
         # Each router and Prometheus on the primary's host are forwarded, and every forward is
         # closed before the KV ring.
@@ -272,6 +279,42 @@ class CapacityTrialTests(unittest.TestCase):
         self.assertEqual(
             [row["series"] for row in series if not row["passed"]], ["engine", "pool-load"]
         )
+
+    def test_the_series_window_starts_once_a_restarted_prometheus_scraped_every_target(self):
+        # `monitoring` started Prometheus again just before the trial: the window must not
+        # reach back to before its first scrapes, or every series misses scrapes it never made.
+        self.fleet.prometheus_start = time.time() - deploy.capacity.FIRST_SCRAPES_S - 2
+        code, result = self.deploy("run", "--trial", str(self.trial))
+        self.assertEqual(code, 0, result)
+        windows = {int(w) for q in self.fleet.queries for w in re.findall(r"\[(\d+)s\]", q)}
+        self.assertTrue(windows and max(windows) < deploy.SERIES_MARGIN_S, windows)
+
+    def test_the_trial_waits_for_the_first_scrapes_of_a_prometheus_that_just_started(self):
+        waits, started = [], []
+
+        def pause(seconds):
+            waits.append(seconds)
+
+        def prometheus_started(socket):
+            # Prometheus started half a second before the stage first asks.
+            started.append(started[0] if started else time.time() - 0.5)
+            return started[-1]
+
+        with (
+            patch.object(deploy, "_pause", pause),
+            patch.object(deploy.capacity, "prometheus_started", prometheus_started),
+        ):
+            code, result = self.deploy("run", "--trial", str(self.trial))
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(waits), 1)
+        self.assertGreater(waits[0], deploy.capacity.FIRST_SCRAPES_S - 1)
+
+    def test_a_prometheus_restart_during_the_trial_fails_its_series(self):
+        starts = iter((self.fleet.prometheus_start, time.time()))
+        with patch.object(deploy.capacity, "prometheus_started", lambda socket: next(starts)):
+            code, result = self.deploy("run", "--trial", str(self.trial))
+        self.assertEqual(code, 1, result)
+        self.assertIn("Prometheus started again during the trial", result["errors"][0]["message"])
 
     def test_a_failed_kv_ring_fails_the_trial_gate(self):
         self.fleet.fail_stage = "trial"

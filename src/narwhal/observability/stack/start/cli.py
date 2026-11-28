@@ -54,6 +54,7 @@ def start(
     target_writer(contract, console, control, tools)
     stack.up()
     launched = wait_ready(services, stack, get=get, timeout_s=timeout_s)
+    stack.protect_grafana()
     prometheus = next(service for service in services if service.name == "prometheus")
     for warning in wait_collection(prometheus, contract, get=get, timeout_s=timeout_s):
         print(f"warning: {warning}", file=sys.stderr)

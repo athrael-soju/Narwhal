@@ -156,7 +156,7 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 
 `extra_args` accepts these options, each with a value: `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy` and `--decode-attention-backend`. It accepts these flags: `--trust-remote-code`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`. Each option and flag may appear once.
 
-The launcher sets `--page-size 1`, `--attention-backend triton`, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It passes `max_sequences` as `--max-running-requests`, or `256` when unset, and adds `--kv-events-config` while prefix caching and `kv_events` are on. At engine start it passes `NARWHAL_KV_SIDE_CHANNEL_PORT` as `--disaggregation-bootstrap-port` and the engine credential, if any, as `--api-key`.
+The launcher sets `--page-size 1`, `--attention-backend triton`, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It passes `max_sequences` as `--max-running-requests`, or `256` when unset, and adds `--kv-events-config` while prefix caching and `kv_events` are on. At engine start it passes `NARWHAL_KV_SIDE_CHANNEL_PORT` as `--disaggregation-bootstrap-port` and the engine credential, if any, as `--api-key`. The launch wrapper runs SGLang's server in its own process and adds `--api-key` only to the server's in-memory arguments, so the key appears in no process's command line, which `ps` shows every user on the host.
 
 Prefill and decode engines must use the same page size. A decode engine that connects to a prefill engine with a different page size fails with `Page size mismatch`.
 
@@ -166,7 +166,7 @@ On SGLang 0.5.23 and later, discovery adds `--decode-attention-backend flashinfe
 
 On an earlier SGLang release, for a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to every SGLang engine, unless the engine arguments already set `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`. With the overlap scheduler on, those releases use `extra_buffer` for a model that supports it, and an engine switched to decode exits under sustained load. On those releases, when your `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`, set it to `no_buffer` and add `--disable-overlap-schedule`.
 
-`--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. Give each engine on a host its own device.
+`--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. The engine arguments are cache inputs, so engines whose `--disaggregation-ib-device` differs fall into different cache groups, and [`transfer-measure`](../deploy/04-Qualify-Fabric.md#measuring-kv-handoffs) finds no peer for them: it fails with `no other engine matches it`. Leave the option unset, or give it the same value on every engine of a cache group.
 
 `narwhal-engine prepare` rejects a native SGLang launch whose model path is a file.
 

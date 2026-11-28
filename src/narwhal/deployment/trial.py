@@ -29,6 +29,7 @@ from narwhal.backends import names as backend_names
 
 from ..contracts import TRIAL, ContractVersionError, validate_document
 from ..diagnostics.bundle import DIAGNOSTIC_HEADERS
+from ..engines.host_process import started_at_seconds
 from .launch_engine.runtime import regular_file_digest
 
 # The optional fields of a definition and their defaults, the load client's own.
@@ -331,6 +332,19 @@ def prometheus_at(socket: Path) -> Iterator[Query]:
         yield prometheus(LOCAL_ORIGIN, client)
 
 
+def prometheus_started(socket: Path) -> float:
+    """Seconds since the epoch at which the Prometheus forwarded to `socket` started, from its
+    runtime information."""
+    with unix_client(socket, 30) as client:
+        response = client.get(LOCAL_ORIGIN + "/api/v1/status/runtimeinfo")
+        response.raise_for_status()
+        body = response.json()
+    started = body.get("data", {}).get("startTime") if isinstance(body, dict) else None
+    if body.get("status") != "success" or not isinstance(started, str):
+        raise ValueError(f"Prometheus runtime information names no start time: {body}")
+    return started_at_seconds(started)
+
+
 @dataclass(frozen=True)
 class Series:
     """One series check: a query whose every sample is 1 when the series holds.
@@ -399,6 +413,9 @@ SERIES = (
 )
 # The stack's Prometheus scrape interval, from its prometheus.yml.
 SCRAPE_INTERVAL_S = 5
+# Seconds after Prometheus starts by which it has scraped every target once: it opens its
+# storage, then spreads the targets' first scrapes over one interval.
+FIRST_SCRAPES_S = 2 * SCRAPE_INTERVAL_S
 POOLS = ("prefill", "decode")
 
 

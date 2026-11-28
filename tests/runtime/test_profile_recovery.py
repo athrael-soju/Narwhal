@@ -17,6 +17,7 @@ from narwhal.runtime.lifecycle.identity import allow_profile_recovery
 from narwhal.runtime.monitoring import readmit, sweep_liveness
 from narwhal.runtime.standby import ready, standby_loop
 from narwhal.serving.app import create_app
+from tests import CONTROL_TOKEN
 from tests.fixtures import bind_identity_profiles, fleet
 
 
@@ -189,6 +190,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
             probe_interval_s=0.001,
             takeover_after=1,
             transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+            token=CONTROL_TOKEN,
         )
         self.assertTrue(observed_readiness)
         self.assertFalse(any(observed_readiness))

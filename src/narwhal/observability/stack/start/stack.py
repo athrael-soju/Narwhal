@@ -27,6 +27,11 @@ BASE = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BASE / "compose.yml"
 RENDERER_PORT = 8081
 RENDERER_TOKEN = MOUNTS.parent / "renderer-token"
+# Grafana's admin password, private to the operator beside the renderer token, and the mount
+# that hands a copy to the Grafana container, whose user cannot read the private file. The
+# mounts directory itself is private to the operator.
+ADMIN_PASSWORD = "grafana-admin-password"
+ADMIN_PASSWORD_MOUNT = Path("mounts") / "grafana-secrets"
 # Prometheus reads these staged files only at start.
 PROMETHEUS_CONFIG = (
     MOUNTS / "prometheus" / "prometheus.yml",
@@ -43,6 +48,9 @@ class Stack(Protocol):
 
     def container(self, service: str) -> Container | None:
         """Return the project's container for one service."""
+
+    def protect_grafana(self) -> None:
+        """Set Grafana's admin password to the stack's private one, once Grafana is ready."""
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -85,6 +93,8 @@ class ComposeStack:
             grafana.listener.host, RENDERER_PORT
         ).authority
         self._compose_env["NARWHAL_RENDERER_TOKEN"] = renderer_token(token_path)
+        self._password_path = token_path.parent / ADMIN_PASSWORD
+        self._password_mount = token_path.parent / ADMIN_PASSWORD_MOUNT
         self._prefix = [
             "docker",
             "compose",
@@ -110,6 +120,7 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
+        stage_admin_password(self._password_path, self._password_mount)
         self._compose_env["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] = config_digest(
             self._prometheus_config
         )
@@ -118,6 +129,33 @@ class ComposeStack:
             print(result.stdout, end="")
         if result.stderr:
             print(result.stderr, end="", file=sys.stderr)
+
+    def protect_grafana(self) -> None:
+        """Reset Grafana's admin password to the private one.
+
+        Grafana reads `GF_SECURITY_ADMIN_PASSWORD__FILE` only when it creates its database, so a
+        database from an earlier start keeps the password it had, such as the default `admin`.
+        The password goes to the reset on standard input, never on a command line.
+        """
+        self._runner(
+            [
+                *self._prefix,
+                "exec",
+                "-T",
+                "grafana",
+                "grafana",
+                "cli",
+                "admin",
+                "reset-admin-password",
+                "--password-from-stdin",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_S,
+            env=self._compose_env,
+            input=admin_password(self._password_path) + "\n",
+        )
 
     def container(self, service: str) -> Container | None:
         """Inspect a service container selected through this Compose project."""
@@ -170,3 +208,30 @@ def renderer_token(path: Path) -> str:
         with os.fdopen(fd, "w") as output:
             output.write(secrets.token_hex(32))
     return path.read_text().strip()
+
+
+def admin_password(path: Path) -> str:
+    """Return Grafana's admin password, creating a private random one on first use."""
+    return renderer_token(path)
+
+
+def stage_admin_password(path: Path, mount: Path) -> None:
+    """Copy the admin password into the directory the Grafana container mounts.
+
+    Grafana runs as its own user, which cannot read the operator's private file, so the copy is
+    readable; the mounts directory above it is private to the operator.
+    """
+    password = admin_password(path)
+    mount.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if mount.is_symlink():
+        raise ValueError(f"Monitoring mount directory must be a real directory: {mount}")
+    mount.mkdir(mode=0o755, exist_ok=True)
+    mount.chmod(0o755)
+    target = mount / ADMIN_PASSWORD
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w") as output:
+        os.fchmod(output.fileno(), 0o644)
+        output.write(password)
+    os.replace(temporary, target)

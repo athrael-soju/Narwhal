@@ -228,7 +228,7 @@ cat /sys/class/infiniband/<hca>/ports/<port>/link_layer  # InfiniBand or Etherne
 ls /sys/class/infiniband/<hca>/device/infiniband_verbs   # uverbs<k>
 ```
 
-Pick an `ACTIVE` port. Its verbs device is `/dev/infiniband/uverbs<k>`, which goes in `NARWHAL_NODE_<n>_TRANSFER_DEVICES` with `/dev/infiniband/rdma_cm`. On an `InfiniBand` link layer, set the RoCE mode to `infiniband` and the GID index to `0`. On `Ethernet`, set the RoCE mode to `v2` and the GID index to the `<i>` whose `ports/<port>/gid_attrs/types/<i>` reads `RoCE v2` and whose `ports/<port>/gid_attrs/ndevs/<i>` names the interface in `NARWHAL_FABRIC_INTERFACE`. [Getting started](../deploy/Getting-Started.md#writing-the-inputs-file) shows the inputs for two engines.
+Pick an `ACTIVE` port. Its verbs device is `/dev/infiniband/uverbs<k>`, which goes in `NARWHAL_NODE_<n>_TRANSFER_DEVICES`. The engines need no `/dev/infiniband/rdma_cm`. On an `InfiniBand` link layer, set the RoCE mode to `infiniband` and the GID index to `0`. On `Ethernet`, set the RoCE mode to `v2` and the GID index to the `<i>` whose `ports/<port>/gid_attrs/types/<i>` reads `RoCE v2` and whose `ports/<port>/gid_attrs/ndevs/<i>` names the interface in `NARWHAL_FABRIC_INTERFACE`. [Getting started](../deploy/Getting-Started.md#writing-the-inputs-file) shows the inputs for two engines.
 
 [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) shows how the workload sets the required rate.
 

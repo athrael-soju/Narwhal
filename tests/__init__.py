@@ -1,6 +1,7 @@
 """Narwhal test suite and shared fixtures."""
 
 import atexit
+import json
 import os
 import shutil
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from narwhal.deployment.launch_engine import plan as _launch_plan
 from narwhal.engines import host_process as _host_process
 from narwhal.observability.tools import METRICS_URL_ENV
+from narwhal.runtime.state import SIGNATURE_HEADER, sign
 from narwhal.serving.control_token import ROUTER_TOKEN_ENV, headers
 
 # Per-run cache-event socket root for test launch plans.
@@ -26,3 +28,14 @@ os.environ.pop(METRICS_URL_ENV, None)
 CONTROL_TOKEN = "5e" * 32
 CONTROL_HEADERS = headers(CONTROL_TOKEN)
 os.environ[ROUTER_TOKEN_ENV] = CONTROL_TOKEN
+
+
+def handoff_response(document, token=CONTROL_TOKEN):
+    """A primary's `/narwhal/handoff` answer with `document`, signed under `token`."""
+    import httpx
+
+    body = json.dumps(document).encode()
+    signature = sign(json.loads(body), body, token)
+    return httpx.Response(
+        200, content=body, headers={"content-type": "application/json", SIGNATURE_HEADER: signature}
+    )

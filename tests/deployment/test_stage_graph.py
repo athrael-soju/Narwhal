@@ -65,8 +65,34 @@ class StageGraphTests(unittest.TestCase):
         self.assertEqual(reruns[0], Rerun("attest-capture", every=True))
         self.assertEqual(
             [rerun.stage for rerun in reruns[1:]],
-            ["finalize-fleet", "profile", "calibrate", "fleet-limits", "preflight", "router-start"],
+            [
+                "finalize-fleet",
+                "profile",
+                "calibrate",
+                "fleet-limits",
+                "preflight",
+                "router-start",
+                "trial",
+            ],
         )
+
+    def test_a_rerun_reaches_every_stage_that_copies_or_loads_its_output(self):
+        # fleet-limits copies the profile store and the calibration into the fleet file, which
+        # preflight, the routers and the trial load. A rule that reruns a stage of this chain
+        # without the stages that read its output leaves them on the earlier output.
+        readers = {
+            "profile": ("fleet-limits",),
+            "calibrate": ("fleet-limits",),
+            "fleet-limits": ("preflight", "router-start", "trial"),
+        }
+        for name in DEPLOY_GRAPH.facts:
+            stages = [rerun.stage for rerun in DEPLOY_GRAPH.reruns(name)]
+            for stage, consumers in readers.items():
+                if stage not in stages:
+                    continue
+                for consumer in consumers:
+                    with self.subTest(fact=name, stage=stage, reader=consumer):
+                        self.assertIn(consumer, stages)
 
     def test_cache_capture_runs_only_where_a_backend_captures_a_layout(self):
         self.assertEqual(DEPLOY_GRAPH.stages["cache-capture"].capability, "cache_capture")

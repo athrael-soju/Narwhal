@@ -98,7 +98,7 @@ With text output, `prepare` exits 2 when it fails and 1 when its `--out` directo
 | `--pod-evidence` | | Directory with an engine pod's `checkpoint.json` and `runtime-check.json`, read by `check`. Required for a Kubernetes plan and refused for the others. |
 | `--out` | required | New launch directory for `prepare`. Evidence directory for `inspect-host` and `probe`, created at mode 0700 when absent; the action refuses one that already holds its evidence. |
 | `--run` | required | Launch directory for every action except `inspect-host` and `prepare`, given two to eight times for `start-shared` and one to eight times for `start-native`. |
-| `--ready-seconds` | 180; none for `start` | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. `start` waits only when you pass it, and fails when the container exits or `/health` does not answer in time. |
+| `--ready-seconds` | 180; none for `start` | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. `start` waits only when you pass it, and fails when the container exits or `/health` does not answer in time. An answer counts only while the container still runs and, on an engine that publishes its process start in `/metrics`, such as vLLM, only when that start is the container's, so an engine left on the port from an earlier start does not pass. |
 
 ## Kubernetes plans
 

@@ -274,14 +274,14 @@ Run each fleet in a namespace of its own, which runs nothing else.
 | Router control token Secret, or the token in it | `controlTokenSecret`, and an HMAC of the token under the fleet's salt from a key-check Job, never the token itself | `router-start` |
 | SLO targets or router overhead | `slo.ttft_s`, `slo.tpot_s` and `slo.router_overhead_s` | `fleet-limits`, `preflight`, `router-start` |
 | First-token deadline margin | The margin above the calibrated first-token candidate | `fleet-limits`, `preflight`, `router-start` |
-| Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `preflight`, `router-start` |
+| Profiling sweep or warmup | The prefill and decode sweep lengths, the decode concurrency and the warmup requests | `profile`, `fleet-limits`, `preflight`, `router-start` |
 | First-token calibration inputs | The input tokens, samples and observation timeout | `calibrate`, `fleet-limits`, `preflight`, `router-start` |
 | Fabric budget workload | The prompt tokens, handoffs per second, burst, transfer budget and headroom | `transfer-measure` on SGLang when the prompt tokens change, `fabric-budget`, `fabric-edge` |
 | Fabric test settings | The test port, and each engine's RDMA GID index and RoCE mode | `fabric-edge` |
 | Router settings | The fleet's `routers` and `haproxy` | `router-start` |
 | Prepared engine pod | The SHA-256 of the launch directory's `launch.json` and `kubernetes.json` | `install`; `engine-start`, `engine-check` for that engine |
 | Engine pod replaced or its engine container restarted | The pod UID and node, and the engine container's ID, image ID and start, checked live on every run | `engine-check`, `cache-capture` on TensorRT-LLM or vLLM, `transfer-measure` on SGLang, `attest-capture`, `sidecar-start`, `sidecar-verify` for that engine; `finalize-fleet`, `preflight`, `router-start` to readmit the engine to a router pair that still runs |
-| Engine cache geometry | The SHA-256 of `cache-layout.json` | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a node of the engine's group |
+| Engine cache geometry | The SHA-256 of `cache-layout.json` without `plan_sha256`, which names its launch directory's plan | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a node of the engine's group |
 | Measured KV handoff size of an engine | The SHA-256 of the engine's `transfer.json` handoff measurement | `cache-groups`; `fabric-budget` for the engine's cache group; `fabric-edge` for every edge leaving a node of the engine's group |
 | Fabric route of a directed node edge | The link fingerprint: roles, addresses, interfaces, both live routes, transport, tool version and test parameters, checked live on every run | `fabric-edge` for that edge; `calibrate`, `fleet-limits`, `preflight`, `router-start` |
 | Attested binding digest of an engine | The `launch_digest`, or the `attestation_digest` when the attestation has no launch evidence | `profile`, `calibrate`, `fleet-limits`, `preflight`, `router-start` |

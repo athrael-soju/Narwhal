@@ -272,7 +272,8 @@ FACTS = (
         WORKSTATION,
         "Profiling sweep or warmup",
         "The prefill and decode sweep lengths, the decode concurrency and the warmup requests",
-        _reruns("profile", *_SERVING),
+        # fleet-limits copies the profile into the fleet the routers and preflight load.
+        _reruns("profile", "fleet-limits", *_SERVING),
     ),
     Fact(
         "calibration",
@@ -360,7 +361,8 @@ FACTS = (
         PRODUCT,
         ENGINE,
         "Engine cache geometry",
-        "The SHA-256 of `cache-layout.json`",
+        "The SHA-256 of `cache-layout.json` without `plan_sha256`, which names its launch "
+        "directory's plan",
         _GEOMETRY_RERUNS,
     ),
     Fact(
@@ -397,14 +399,7 @@ FACTS = (
         "The `EngineContract` fields of its attestation",
         (
             Rerun("attest-capture", every=True),
-            *_reruns(
-                "finalize-fleet",
-                "profile",
-                "calibrate",
-                "fleet-limits",
-                "preflight",
-                "router-start",
-            ),
+            *_reruns("finalize-fleet", "profile", "calibrate", "fleet-limits", *_SERVING),
         ),
     ),
     Fact(

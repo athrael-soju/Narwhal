@@ -168,12 +168,14 @@ async def standby_loop(
     takeover_after: int = TAKEOVER_AFTER,
     max_handoff_age_s: float = MAX_HANDOFF_AGE_S,
     transport: httpx.AsyncBaseTransport | None = None,
+    token: str,
 ) -> None:
     """Shadow an active primary and claim its expired lease before takeover.
 
     A valid primary lease blocks takeover even when the primary HTTP path is lost. Once the loop
     ends, for any reason, no probe vouches for the primary, so the router counts its refusals as
-    client outcomes again.
+    client outcomes again. The standby accepts only a handoff signed under the control `token`
+    the pair shares, and not one older than the last it accepted or `max_handoff_age_s`.
     """
     try:
         await _shadow(
@@ -184,6 +186,7 @@ async def standby_loop(
             takeover_after=takeover_after,
             max_handoff_age_s=max_handoff_age_s,
             transport=transport,
+            token=token,
         )
     finally:
         router.primary_seen = False
@@ -198,9 +201,14 @@ async def _shadow(
     takeover_after: int,
     max_handoff_age_s: float,
     transport: httpx.AsyncBaseTransport | None,
+    token: str,
 ) -> None:
     """Probe the primary and take over once it misses `takeover_after` probes in a row."""
     doc = handoff_state.load(router.cfg.state_path)
+    # The time of the newest handoff this loop accepted; an older one is a replay.
+    accepted_at = float("-inf")
+    # The reason the last handoff was refused, logged once per change.
+    refused = ""
     misses = 0
     # The block a failed takeover attempt set while the loop keeps shadowing, or "".
     transient = ""
@@ -217,7 +225,15 @@ async def _shadow(
                     readiness.raise_for_status()
                 response = await client.get(f"{primary}/narwhal/handoff")
                 response.raise_for_status()
-                fresh = handoff_state.validate(response.json())
+                fresh = _current(
+                    handoff_state.verified(
+                        response.content,
+                        response.headers.get(handoff_state.SIGNATURE_HEADER),
+                        token,
+                    ),
+                    accepted_at,
+                    max_handoff_age_s,
+                )
                 shared = await asyncio.to_thread(lease.read)
                 if (
                     shared is None
@@ -228,11 +244,18 @@ async def _shadow(
                     raise LeaseError("primary handoff does not own the shared lease")
             except ContractVersionError:
                 raise
+            except handoff_state.HandoffRefused as exc:
+                misses += 1
+                router.primary_seen = False
+                if str(exc) != refused:
+                    refused = str(exc)
+                    log.warning("refused the primary's handoff: %s", exc)
             except (httpx.HTTPError, LeaseError, ValueError):
                 misses += 1
                 router.primary_seen = False
             else:
-                doc, misses = fresh, 0
+                doc, misses, refused = fresh, 0, ""
+                accepted_at = float(fresh["at"])
                 router.primary_seen = True
                 last_good = time.monotonic()
                 if router.failover_blocked == transient:
@@ -261,6 +284,22 @@ async def _shadow(
                         )
                         return
             await asyncio.sleep(probe_interval_s)
+
+
+def _current(doc: dict[str, Any], accepted_at: float, max_age_s: float) -> dict[str, Any]:
+    """Return a signed handoff `doc` unless it predates the last accepted one or is stale."""
+    at = doc.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        raise handoff_state.HandoffRefused("handoff has no time")
+    if at < accepted_at:
+        raise handoff_state.HandoffRefused(
+            f"handoff from {at:.3f} predates the one accepted from {accepted_at:.3f}"
+        )
+    if abs(time.time() - at) > max_age_s:
+        raise handoff_state.HandoffRefused(
+            f"handoff is {time.time() - at:.1f}s old, more than {max_age_s:g}s"
+        )
+    return doc
 
 
 async def _take_control(

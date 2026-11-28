@@ -262,6 +262,17 @@ class UnixSocketTests(unittest.TestCase):
                 query("up")
         self.assertEqual(seen, [("/api/v1/query", "query=up", None)])
 
+    def test_prometheus_start_is_read_from_its_runtime_information(self):
+        body = {"status": "success", "data": {"startTime": "2026-01-01T00:10:00.250000123Z"}}
+        routes = {"/api/v1/status/runtimeinfo": ("application/json", json.dumps(body))}
+        with unix_server(routes) as (socket, seen):
+            self.assertEqual(trial.prometheus_started(socket), 1767226200.25)
+        self.assertEqual(seen, [("/api/v1/status/runtimeinfo", "", None)])
+        refused = {"status": "error", "error": "unavailable"}
+        routes = {"/api/v1/status/runtimeinfo": ("application/json", json.dumps(refused))}
+        with unix_server(routes) as (socket, _), self.assertRaisesRegex(ValueError, "start"):
+            trial.prometheus_started(socket)
+
 
 def sample(router: str, ha: dict | None, after: dict | None = None) -> dict:
     """A router sample whose two state reads report `ha` and then `after`."""

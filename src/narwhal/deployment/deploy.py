@@ -762,13 +762,7 @@ class Deployment:
                 if units.stop(supervision.identity_from_record(process)):  # type: ignore[arg-type]
                     self.announce(f"{role}: stopped this run's sidecar for the inspection")
         for process in (stages.get(key("engine-start", role)) or {}).get("processes", []):
-            if self._container_state(ssh, host, context.stage, process) is not None:
-                ssh.run(
-                    host,
-                    context.stage,
-                    f"remove this run's {role} container",
-                    f"docker rm --force {shlex.quote(process['container_id'])} > /dev/null",
-                )
+            if self._remove_container(ssh, host, context.stage, process, role) is not None:
                 self.announce(f"{role}: removed this run's engine container for the inspection")
 
     def engine_prepare(self, context: StageContext) -> Outcome:
@@ -875,20 +869,37 @@ class Deployment:
         raise Spent("launch", context.instance, f"it already started container {cid}")
 
     def _stop_previous_engine(self, context: StageContext, host: Host) -> None:
-        """Remove the engine an earlier attempt of this stage started, while it still runs."""
+        """Remove the engine container an earlier attempt of this stage started, whatever its
+        state: Docker may have restarted it in place, with the same ID and a new start, and it
+        would still hold the engine's port and GPUs."""
         previous = (context.previous or {}).get("products", {}).get("engine_identity")
         if not previous:
             return
-        if self._container_state(self.ssh(context), host, context.stage, previous) is None:
-            return
-        self.announce(f"{context.instance}: removing the engine container of the earlier start")
-        ssh = self.ssh(context)
-        ssh.run(
-            host,
-            context.stage,
-            "remove the earlier engine container",
-            f"docker rm --force {shlex.quote(previous['container_id'])} > /dev/null",
+        state = self._remove_container(
+            self.ssh(context), host, context.stage, previous, "earlier engine"
         )
+        if state is not None:
+            self.announce(
+                f"{context.instance}: removed the engine container of the earlier start ({state})"
+            )
+
+    @staticmethod
+    def _remove_container(
+        ssh: SSH, host: Host, stage: str, identity: Mapping[str, Any], name: str
+    ) -> str | None:
+        """Remove this run's recorded container while it exists, and return the state it was
+        in, `running` or `stopped`; None when it is gone. The container ID is the run's own, so
+        a container started again under it is removed too."""
+        cid = shlex.quote(identity["container_id"])
+        output = ssh.run(
+            host,
+            stage,
+            f"remove the {name} container",
+            f"state=$(docker inspect --format '{{{{.State.Running}}}}' {cid} 2> /dev/null) || "
+            f"{{ echo gone; exit 0; }}; docker rm --force {cid} > /dev/null && "
+            f'{{ test "$state" = true && echo running || echo stopped; }}',
+        )
+        return None if output.strip() in ("", "gone") else output.strip()
 
     @staticmethod
     def _container_state(ssh: SSH, host: Host, stage: str, identity: Mapping[str, Any]) -> Any:
@@ -927,7 +938,8 @@ class Deployment:
             returns={"cache-layout.json": f"{launch}/cache-layout.json"},
             workdir=False,
         )
-        return Outcome({"cache_geometry": _digest(context.directory / "cache-layout.json")})
+        layout = context.directory / "cache-layout.json"
+        return Outcome({"cache_geometry": cache_groups.geometry_digest(layout)})
 
     def transfer_measure(self, context: StageContext) -> Outcome:
         env, manifest, package = self.package_of(context)
@@ -1121,13 +1133,7 @@ class Deployment:
         ssh = self.ssh(context, env)
         units = self.supervisor(ssh, host, context.stage, context.run_id)
         self._systemd_ready(units, host)
-        for record in (context.previous or {}).get("processes", []):
-            if record.get("name") == name:
-                with contextlib.suppress(supervision.IdentityMismatch):
-                    units.stop(supervision.identity_from_record(record))  # type: ignore[arg-type]
-        # The unit name carries the run ID, so a unit of this name that no record names is
-        # one an earlier attempt of this run started before it recorded it.
-        units.discard(name)
+        self._stop_earlier(context, units, name)
         root = f"{self.home(ssh, host, context.stage)}/{manifest['remote_dir']}"
         work = f"{root}/{self.remote(context)}"
         ssh.run(
@@ -1152,6 +1158,24 @@ class Deployment:
             error.add_note(f"{name} log on {host.id}: {work}/{name}.log")
             raise
         return unit
+
+    @staticmethod
+    def _stop_earlier(context: StageContext, units: supervision.SystemdUnits, name: str) -> bool:
+        """Stop the unit `name` that an earlier attempt of this stage started; return whether
+        one ran."""
+        stopped = False
+        for record in (context.previous or {}).get("processes", []):
+            if record.get("name") == name:
+                with contextlib.suppress(supervision.IdentityMismatch):
+                    stopped |= units.stop(supervision.identity_from_record(record))  # type: ignore[arg-type]
+        # The unit name carries the run ID, so a unit of this name that no record names is
+        # one an earlier attempt of this run started before it recorded it.
+        return units.discard(name) or stopped
+
+    @staticmethod
+    def _holds(lease: Mapping[str, Any], host: Host) -> bool:
+        """Whether the lease names this host's router, whose router ID is the host ID."""
+        return str(lease.get("holder") or "").split(":", 1)[0] == host.id
 
     @staticmethod
     def _wait(ssh: SSH, host: Host, stage: str, url: str, seconds: int, remote_dir: str) -> None:
@@ -1576,11 +1600,29 @@ class Deployment:
                 self._measure(context, host, env, manifest["remote_dir"], (url, peer), values)
                 return kept
         lease = self._lease_state(context, ssh, host, manifest["remote_dir"], routers.lease_path)
+        # The live holder may be this host's router from an earlier attempt, such as one that
+        # claimed the lease and then failed its overhead check. Its replacement would shadow
+        # it and take its place, so no router would hold the lease. Stop it first; its lease
+        # then ages out below, as any stopped primary's does, unless the standby takes it over.
+        stopped_own = False
+        own = primary and lease["live"] and self._holds(lease, host)
+        if own and self._stop_earlier(context, units, "router"):
+            self.announce(
+                f"router-start: {host.id}'s router of the earlier attempt holds the lease; "
+                "stopped it so its lease can age out"
+            )
+            stopped_own = True
+            lease = self._lease_state(
+                context, ssh, host, manifest["remote_dir"], routers.lease_path
+            )
         for _ in range(3):
-            if not primary or lease["live"] or lease.get("holder") is None:
+            if not primary or lease.get("holder") is None:
+                break
+            if lease["live"] and not (stopped_own and self._holds(lease, host)):
                 break
             # A standby may still take over a lease that expired this recently, so the primary
             # would start as its standby; once no standby can, the primary claims the lease.
+            # A lease that this host's stopped router still holds counts from its expiry.
             expired = lease["now"] - lease["expires_at"]
             wait = MAX_HANDOFF_AGE_S + DEFAULT_SAFETY_MARGIN_S - expired
             if wait <= 0:
@@ -2112,6 +2154,12 @@ class Deployment:
                     item.check()
 
             client = sockets["load-balancer" if paired(self.env) else self.primary()]
+            # The series window must not start before Prometheus, which `monitoring` may just
+            # have started again, has scraped every target once.
+            scraping = capacity.prometheus_started(sockets["prometheus"]) + capacity.FIRST_SCRAPES_S
+            if (wait := scraping - time.time()) > 0:
+                self.announce(f"trial: waiting {wait:.0f}s for Prometheus's first scrapes")
+                _pause(wait)
             self.announce("trial: offering load through SSH forwards from the workstation")
             started = time.time()
             self._offer(
@@ -2123,7 +2171,13 @@ class Deployment:
                 result,
                 alive,
             )
-            window = math.ceil(time.time() - started) + SERIES_MARGIN_S
+            restarted = capacity.prometheus_started(sockets["prometheus"])
+            if restarted + capacity.FIRST_SCRAPES_S != scraping:
+                raise CheckFailed(
+                    "Prometheus started again during the trial, so its series cannot cover the "
+                    "trial; run the trial again"
+                )
+            window = max(1, math.ceil(time.time() - max(started - SERIES_MARGIN_S, scraping)))
             iids = [str(engine["iid"]) for engine in fleet["engines"]]
             with capacity.prometheus_at(sockets["prometheus"]) as query:
                 series, found = capacity.check_series(
@@ -2206,11 +2260,24 @@ class Deployment:
             out = context.directory / name
             log = context.directory / f"{name}.log"
             samples, before, unknown_before = sample()
+            # The load balancer forwards only the serving routes, so the client reads the drain
+            # state from the router that controls the fleet, through that router's forward.
+            state: list[str] = []
+            if client not in routers.values():
+                if before is None:
+                    _private(context.directory / f"{name}-samples-before.json", samples)
+                    raise CheckFailed(
+                        f"{name}: the fleet's control is not one router throughout: "
+                        f"{unknown_before} before the rate; a failover invalidates the rate. The "
+                        f"router samples are in {context.directory / f'{name}-samples-before.json'}"
+                    )
+                state = ["--state-socket", str(routers[str(before["router"])])]
             code = _load_client(
                 [
                     *_LOAD_CLIENT,
                     "run",
                     *common,
+                    *state,
                     "--workload",
                     str(workload / "workload.json"),
                     "--expected-model",
@@ -2394,6 +2461,10 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
             return None
         try:
             current = units.confirm(identity, lambda _: verify(ssh, host))  # type: ignore[arg-type]
+        except supervision.NotRestarted as error:
+            # Nothing restarted: the message names the unit and its state, such as stopped.
+            self.announce(f"{stage}: {error}")
+            return None
         except (supervision.SupervisionError, RemoteError, RemoteTimeout, OSError) as error:
             # A restart that fails its check is not this stage's process any more.
             self.announce(f"{stage}: the restarted {recorded.get('unit', 'unit')} failed: {error}")
@@ -2584,21 +2655,50 @@ cat {launch}/container-start.json 2> /dev/null || echo '{{}}'
                             # Another start owns the unit now; it is not this run's to stop.
                             ran = False
                         stopped.append({"name": process["name"], "host": host.id, "stopped": ran})
+            engines: dict[str, dict[str, Any]] = {}
             for entry in entries.values():
                 if entry["stage"] != "engine-start":
                     continue
                 for process in entry["processes"]:
                     host = self.host(process["host"])
-                    ran = self._container_state(ssh, host, "down", process) is not None
-                    if ran:
-                        ssh.run(
-                            host,
-                            "down",
-                            f"remove the {process['name']} container",
-                            f"docker rm --force {shlex.quote(process['container_id'])} > /dev/null",
-                        )
-                    stopped.append({"name": process["name"], "host": host.id, "stopped": ran})
+                    state = self._remove_container(ssh, host, "down", process, process["name"])
+                    engines[process["name"]] = {
+                        "name": process["name"],
+                        "host": host.id,
+                        "stopped": state == "running",
+                    }
+            prepared = any(entry["stage"] == "engine-prepare" for entry in entries.values())
+            _, manifest, _ = self.recorded_package() if prepared else ({}, {}, Path())
+            for role in self.engines() if prepared else ():
+                host = self.owner(role)
+                removed = self._remove_exited(ssh, host, manifest["remote_dir"], record, role)
+                if removed:
+                    process = engines.setdefault(
+                        role, {"name": role, "host": host.id, "stopped": False}
+                    )
+                    process["removed_exited"] = removed
+            stopped += engines.values()
         return stopped
+
+    @staticmethod
+    def _remove_exited(
+        ssh: SSH, host: Host, remote_dir: str, record: Mapping[str, Any], role: str
+    ) -> list[str]:
+        """Remove each container that a launch directory of this run's `role` started and that
+        no longer runs, such as one an earlier attempt left after it exited; return their IDs.
+        `docker rm` without `--force` refuses a container that runs."""
+        launches = f"runs/deploy/{record['run_id']}/stages/engine-prepare/{role}"
+        output = ssh.run(
+            host,
+            "down",
+            f"remove the run's exited {role} containers",
+            f"cd {shlex.quote(remote_dir)} && for file in {shlex.quote(launches)}/attempt-*/"
+            'launch/container.id; do test -f "$file" || continue; cid=$(cat "$file"); '
+            "case \"$cid\" in ''|*[!0-9a-f]*) continue;; esac; "
+            'test "$(docker inspect --format \'{{.State.Running}}\' "$cid" 2> /dev/null)" '
+            '= false || continue; docker rm "$cid" > /dev/null && echo "$cid"; done; true',
+        )
+        return output.split()
 
 
 # The load client, from the installed wheel on the workstation.

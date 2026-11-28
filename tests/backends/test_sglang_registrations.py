@@ -241,19 +241,54 @@ class MooncakeRegistrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(runs), 2)
         self.assertEqual(set(runs), {"ran"})
 
-    def test_serve_starts_sglang_with_the_site_hook_first_on_the_path(self):
-        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", "PYTHONPATH": "/narwhal-hooks"}
+    def serve(self, environ):
+        """`serve` with `environ`; return SGLang's argv, the environment it ran with, and the
+        argument lists of any process it started."""
+        seen = {}
+
+        def run_module(name, run_name, alter_sys):
+            self.assertEqual(
+                (name, run_name, alter_sys), ("sglang.launch_server", "__main__", True)
+            )
+            seen.update(argv=list(sys.argv), environ=dict(os.environ))
+
+        started = []
         with (
             patch.dict(os.environ, environ, clear=True),
-            patch.object(runtime.os, "execve") as execve,
+            patch.object(sys, "argv", list(sys.argv)),
+            patch.object(runtime.runpy, "run_module", run_module),
+            patch.object(runtime, "keep_mooncake_registrations") as kept,
+            patch.object(runtime.os, "execve", lambda *args: started.append(args[1])),
+            patch.object(runtime.os, "execv", lambda *args: started.append(args[1])),
+            patch.object(subprocess, "Popen", lambda args, **_: started.append(args)),
         ):
             runtime.serve(["--port", "8000"])
-        command, started = execve.call_args.args[1:]
-        self.assertEqual(command[1:3], ["-m", "sglang.launch_server"])
-        site, rest = started["PYTHONPATH"].split(":", 1)
+        kept.assert_called_once_with()
+        site = seen["environ"]["PYTHONPATH"].split(":", 1)[0]
         self.addCleanup(shutil.rmtree, site)
+        return seen["argv"], seen["environ"], started
+
+    def test_serve_runs_sglang_with_the_site_hook_first_on_the_path(self):
+        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", "PYTHONPATH": "/narwhal-hooks"}
+        argv, started, _ = self.serve(environ)
+        self.assertEqual(argv[1:], ["--port", "8000", "--disaggregation-bootstrap-port", "5600"])
+        site, rest = started["PYTHONPATH"].split(":", 1)
         self.assertEqual(rest, "/narwhal-hooks")
         self.assertEqual((Path(site) / "sitecustomize.py").read_text(), runtime.SITE_HOOK)
+
+    def test_the_engine_key_reaches_no_process_argument_list(self):
+        # Any local user reads a process's arguments in ps or /proc/<pid>/cmdline, so the key
+        # goes only into SGLang's argv in this process, and leaves the inherited environment.
+        key = "engine-key-" + "9" * 32
+        environ = {runtime.BOOTSTRAP_PORT_ENV: "5600", runtime.API_KEY_ENV: key}
+        before = list(sys.orig_argv)
+        argv, started, processes = self.serve(environ)
+        self.assertEqual(processes, [])
+        self.assertEqual(sys.orig_argv, before)
+        self.assertNotIn(key, " ".join(sys.orig_argv))
+        self.assertEqual(argv[-2:], ["--api-key", key])
+        self.assertNotIn(runtime.API_KEY_ENV, started)
+        self.assertNotIn(key, json.dumps(started))
 
 
 if __name__ == "__main__":

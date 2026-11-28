@@ -38,7 +38,7 @@ A command-line option takes precedence over the matching fleet configuration fie
 
 ## Standby takeover and lease fencing
 
-A standby router started with `--standby-of URL` polls the primary every `--standby-probe-interval` seconds. It takes over when all of these hold:
+A standby router started with `--standby-of URL` polls the primary every `--standby-probe-interval` seconds. A poll counts as failed unless the primary returns a handoff [signed](../http-api/07-Handoff-and-Lifecycle.md#get-narwhalhandoff) under the standby's own `NARWHAL_ROUTER_TOKEN`, no older than the last one the standby accepted and at most `--standby-max-handoff-age` seconds from the standby's clock, so give both routers of a pair the same token. It takes over when all of these hold:
 
 - `--standby-takeover-after` consecutive polls have failed.
 - The last handoff the standby received is at most `--standby-max-handoff-age` seconds old.

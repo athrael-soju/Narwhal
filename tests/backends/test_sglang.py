@@ -429,16 +429,12 @@ class LaunchTests(unittest.TestCase):
             env = launcher.engine_env("192.0.2.11", 5600, "", wildcard)
             self.assertEqual(launcher.side_channel_address(env), ("192.0.2.11", 5600))
 
-    def test_the_wrapper_adds_the_bootstrap_port_and_key(self):
-        command = runtime.server_command(
+    def test_the_wrapper_adds_the_bootstrap_port_and_leaves_the_key_out(self):
+        arguments = runtime.server_args(
             ["--port", "8000"],
             {runtime.BOOTSTRAP_PORT_ENV: "5600", runtime.API_KEY_ENV: "secret"},
         )
-        self.assertEqual(command[1:3], ["-m", "sglang.launch_server"])
-        self.assertEqual(
-            command[3:],
-            ["--port", "8000", "--disaggregation-bootstrap-port", "5600", "--api-key", "secret"],
-        )
+        self.assertEqual(arguments, ["--port", "8000", "--disaggregation-bootstrap-port", "5600"])
 
     def test_model_dimensions_come_from_the_model_config(self):
         config = {

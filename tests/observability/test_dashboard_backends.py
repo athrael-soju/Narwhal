@@ -14,7 +14,7 @@ from narwhal.observability.stack import artifacts, make_targets
 from narwhal.observability.stack.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "eae8d94b7ef5a9e09ede2ca84d7d858f4f1e614d634fb5ec45b013aff00fe971"
+RENDERED_SHA256 = "51603ec2bf1f8f57ceffe042a8fad799735307952eda913c2d8c1a39f3b6e6e1"
 
 
 def charted() -> set[str]:
