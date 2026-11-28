@@ -29,7 +29,7 @@ from . import (
 from . import deploy as stage_run
 from . import trial as capacity
 from .deploy_graph import DEPLOY_GRAPH
-from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
+from .hosts import SSH, Host, RemoteError, RemoteTimeout, SignalStop, load_hosts
 from .launch_engine.evidence import CheckFailed
 from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed, stale_notice
 
@@ -395,6 +395,8 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
     )
     try:
         ssh.tunnel(host, forwards)
+    except SignalStop as stop:
+        return 128 + stop.signum
     except KeyboardInterrupt:
         return 130
     return 0

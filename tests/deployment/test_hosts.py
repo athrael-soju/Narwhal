@@ -911,21 +911,59 @@ class SshTests(unittest.TestCase):
             helper = kwargs["env"].get("SSH_ASKPASS")
             if helper:
                 self.assertEqual(askpass_answer(helper), (PASSWORD + "\n").encode())
-            return subprocess.CompletedProcess(args, 0)
+            return SimpleNamespace(wait=lambda: 0)
 
-        with patch("narwhal.deployment.hosts.subprocess.run", side_effect=execute):
+        with patch("narwhal.deployment.hosts.subprocess.Popen", side_effect=execute):
             for host in self.hosts:
                 ssh.tunnel(host, ["127.0.0.1:18000:127.0.0.1:8000"])
         self.assertEqual([args[0] for args in calls], ["ssh", "ssh"])
         self.assert_private_logs()
         with (
             patch(
-                "narwhal.deployment.hosts.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 255),
+                "narwhal.deployment.hosts.subprocess.Popen",
+                return_value=SimpleNamespace(wait=lambda: 255),
             ),
             self.assertRaisesRegex(RemoteError, "^node-1: blocked at service tunnel"),
         ):
             ssh.tunnel(self.hosts[0], ["127.0.0.1:18000:127.0.0.1:8000"])
+
+    def test_a_stop_signal_closes_the_tunnel_and_its_ssh(self):
+        # Ctrl+C reaches `ssh` through the terminal's process group, but SIGTERM and SIGHUP
+        # reach only `narwhal`, so each signal goes to `narwhal` alone.
+        inventory = self.root / "hosts.json"
+        router = {"id": "node-1", "ssh_env": "NODE_2_SSH", "roles": ["router", "engine-1"]}
+        inventory.write_text(json.dumps({"hosts": [router]}))
+        program = "import sys; from narwhal.dev.cli import main; sys.exit(main())"
+        tunnel = [sys.executable, "-c", program, "deploy", "tunnel", "--hosts", str(inventory)]
+        for stop, code in ((signal.SIGINT, 130), (signal.SIGTERM, 143), (signal.SIGHUP, 129)):
+            with self.subTest(signal=stop.name):
+                record = self.root / f"ssh-{stop.name}.pid"
+                started = shlex.quote(str(record))
+                with self.fake_ssh(
+                    f"echo $$ > {started}.new && mv {started}.new {started}\nexec sleep 60"
+                ):
+                    narwhal = subprocess.Popen(
+                        [*tunnel, "--forward", "18000:8000"],
+                        cwd=self.root,
+                        env={**os.environ, **self.env},
+                        stdout=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                self.addCleanup(narwhal.kill)
+                deadline = time.monotonic() + 30
+                while not record.exists():
+                    self.assertIsNone(narwhal.poll(), "the tunnel ended before ssh started")
+                    self.assertLess(time.monotonic(), deadline, "ssh did not start")
+                    time.sleep(0.05)
+                self.addCleanup(self.kill_quietly, int(record.read_text()))
+                os.kill(narwhal.pid, stop)
+                self.assertEqual(narwhal.wait(30), code)
+                self.assert_stopped(record)
+
+    @staticmethod
+    def kill_quietly(pid):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
 
     def test_role_shell_allocates_a_terminal(self):
         ssh = SSH(self.env, self.root / "logs")

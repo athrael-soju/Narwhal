@@ -88,6 +88,7 @@ These commands add exit codes for specific cases:
 | `narwhal deploy status` | `3` | A recorded process is gone or changed, or a fabric route changed. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal deploy run`, `down` | `4` | A stage fails without a verdict or exceeds its time limit, or another runner holds the run. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal deploy run`, `tunnel` | `130` | Ctrl+C stops the run or closes the tunnel. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
+| `narwhal deploy tunnel` | `143`, `129` | SIGTERM or SIGHUP closes the tunnel. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal-engine prepare` | `2` | Preparation fails. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-engine` | `1` | An output artifact already exists. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-check` | `1` | `narwhal-check` skips a gate with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |

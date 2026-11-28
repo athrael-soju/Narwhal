@@ -72,6 +72,10 @@ KILL_AFTER_S = 5
 HOST_GRACE_S = 30.0
 # Seconds the workstation gives the host to stop an interrupted command.
 STOP_LIMIT_S = 30.0
+# A tunnel stops on these signals as it does on Ctrl+C, and gives its `ssh` this many seconds
+# to exit before it kills it.
+TUNNEL_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+TUNNEL_STOP_S = 5.0
 # Where each host command records the process ID of its `timeout`, relative to the SSH user's
 # home, so an interrupted command can be stopped from a second connection.
 COMMANDS_DIRECTORY = ".cache/narwhal-commands"
@@ -328,6 +332,47 @@ class RemoteTimeout(TimeoutError):
         super().__init__(
             f"{host}: {operation} exceeded the {limit:g}s {stage} time limit; inspect {log}"
         )
+
+
+class SignalStop(KeyboardInterrupt):
+    """SIGTERM or SIGHUP stopped an interactive command, as Ctrl+C would."""
+
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(f"signal {signum}")
+
+
+@contextmanager
+def _signal_stops() -> Iterator[None]:
+    """Raise SignalStop for SIGTERM and SIGHUP while the block runs in the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def stop(signum: int, frame: object) -> None:
+        raise SignalStop(signum)
+
+    previous = {sig: signal.signal(sig, stop) for sig in TUNNEL_STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _end(process: subprocess.Popen[bytes]) -> None:
+    """Stop `process` with SIGTERM, and with SIGKILL if it outlives TUNNEL_STOP_S."""
+    try:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(TUNNEL_STOP_S)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        # A second signal during the wait still leaves no `ssh` behind.
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 class SSH:
@@ -637,7 +682,11 @@ class SSH:
             raise RemoteError(host.id, "shell", "role shell", self.log(host))
 
     def tunnel(self, host: Host, forwards: list[str]) -> None:
-        """Hold local port forwards to `host` until SSH exits or the operator interrupts."""
+        """Hold local port forwards to `host` until SSH exits or the operator interrupts.
+
+        Ctrl+C, SIGTERM and SIGHUP stop the `ssh` process before they reach the caller, as
+        KeyboardInterrupt or SignalStop, so no forward outlives this call.
+        """
         options = [
             "-N",
             "-T",
@@ -650,14 +699,24 @@ class SSH:
         ]
         for forward in forwards:
             options += ["-L", forward]
-        with self._record(host, "service tunnel") as log, self._client(host) as client:
+        with (
+            _signal_stops(),
+            self._record(host, "service tunnel") as log,
+            self._client(host) as client,
+        ):
             log.write(" ".join(forwards) + "\n")
             log.flush()
-            result = subprocess.run(
+            process = subprocess.Popen(
                 self._arguments(host, options), stdin=subprocess.DEVNULL, env=client
             )
-            log.write(f"exit={result.returncode}\n")
-        if result.returncode:
+            try:
+                returncode = process.wait()
+            except BaseException:
+                _end(process)
+                log.write(f"stopped; ssh exit={process.returncode}\n")
+                raise
+            log.write(f"exit={returncode}\n")
+        if returncode:
             raise RemoteError(host.id, "tunnel", "service tunnel", self.log(host))
 
     @contextmanager
