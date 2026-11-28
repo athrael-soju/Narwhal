@@ -97,18 +97,22 @@ The `monitoring` stage starts the [monitoring stack](../observability/01-Start-a
   --sidecar-url http://<engine-1 sidecar host>:<port> --sidecar-url http://<engine-2 sidecar host>:<port>
 ```
 
-The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the listen addresses from the deployment inputs in its environment. Prometheus scrapes both routers and each engine's attestation sidecar, and reads the engine targets through the load balancer. Every series carries the `fleet` label. Prometheus sends alerts to the Alertmanager when `NARWHAL_ALERTMANAGER_URL` is set; without one, they show only on the Prometheus alerts page. Prometheus runs on the primary router's host, so route `NarwhalWatchdog` to a dead man's switch that pages while that host is down, as in [Monitor](../operate/02-Monitor.md). After every run, the command uploads the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to both router hosts, and the dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows it. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. Docker Compose runs each container with the `always` restart policy. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory, and each service's output is in `docker logs` of its container.
+On a fleet with one router, leave out the standby's `--router-url` and `--targets-url`. The stage runs it with `NARWHAL_FLEET_NAME`, `NARWHAL_ALERTMANAGER_URL` and the listen addresses from the deployment inputs in its environment. Prometheus scrapes each router and each engine's attestation sidecar, and reads the engine targets through the load balancer, or from the router on a fleet with one router. Every series carries the `fleet` label. Prometheus sends alerts to the Alertmanager when `NARWHAL_ALERTMANAGER_URL` is set; without one, they show only on the Prometheus alerts page. Prometheus runs on the primary router's host, so route `NarwhalWatchdog` to a dead man's switch that pages while that host is down, as in [Monitor](../operate/02-Monitor.md). After every run, the command uploads the [deployment status](../telemetry/06-Deployment-Runs.md#deployment-status) to both router hosts, and the dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows it. The stage prints the command's `<service> ready at <URL> (<container ID>, <image>)` lines and records each service's container. Docker Compose runs each container with the `always` restart policy. When a container stops or is replaced, the next run starts the stack again. The stack's state is `runs/observability/` in the deployment directory, and each service's output is in `docker logs` of its container.
+
+A stack you start by hand is not in the run record, so `down` leaves it running. Stop it on its host with `docker compose -p observability stop`, and remove its containers with `docker compose -p observability rm -f`. Both keep the volumes, as `down` does.
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 
-The routers, Prometheus and Grafana listen on the private network. To reach them from the workstation, with `.env` loaded, open a tunnel to the primary router's host and keep its terminal open:
+The router and HAProxy listen on the addresses in `NARWHAL_ROUTER_URL` and `NARWHAL_LOAD_BALANCER_URL`, and Prometheus and Grafana on `127.0.0.1` of the primary router's host. A tunnel forwards to one remote address, so open one for each, with `.env` loaded, each in its own terminal:
 
 ```bash
-narwhal deploy tunnel --hosts runs/deploy/first-deploy/stages/discover/attempt-1/config/hosts.local.json \
-  --forward 18000:8000 --forward 19090:9090 --forward 13000:3000
+H=runs/deploy/first-deploy/stages/discover/attempt-1/config/hosts.local.json
+narwhal deploy tunnel --hosts "$H" --forward 19090:9090 --forward 13000:3000
+narwhal deploy tunnel --hosts "$H" --remote-address <router host address> \
+  --forward 18000:8000 --forward 18080:8080
 ```
 
-`--hosts` names the inventory of the run's last passed `discover`, as in [Opening installed role shells](02-Install.md#opening-installed-role-shells). Replace the remote ports with the router's port and the monitoring stack's listen ports. From another workstation shell:
+`--hosts` names the inventory of the run's last passed `discover`, as in [Opening installed role shells](02-Install.md#opening-installed-role-shells). Replace the remote ports with the router's, the load balancer's and the monitoring stack's listen ports, and leave out `18080:8080` on a fleet with one router. Ctrl+C, SIGTERM or SIGHUP closes a tunnel and its forwards. From another workstation shell:
 
 ```bash
 curl -fsS http://127.0.0.1:18000/health
@@ -119,18 +123,13 @@ curl -fsSG http://127.0.0.1:19090/api/v1/query \
 
 Open Grafana at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`. To run a load client by hand, as the [measurement pages](../Measure.md) do, point it at `http://127.0.0.1:18000`.
 
-The tunnel listens on workstation loopback ports and forwards them to `127.0.0.1` on the router. It verifies the router against its key in `NARWHAL_SSH_KNOWN_HOSTS`, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
+The tunnel listens on workstation loopback ports and forwards them to `--remote-address` on the router's host, `127.0.0.1` by default. It verifies the router against its key in `NARWHAL_SSH_KNOWN_HOSTS`, authenticates with the router role's configured password, key, or agent, and logs to `runs/access-<id>/`. Latency through the tunnel includes SSH network and encryption overhead.
 
 ### Troubleshooting the tunnel
 
-If a workstation port is already in use:
+If a workstation port is already in use, the tunnel prints `bind [127.0.0.1]:<port>: Address already in use` and exits without holding any of its forwards. Pick another local port in `--forward` and match the client URL to it.
 
-1. Pick another local port in `--forward`.
-2. Match the client URL to it.
-
-If a forwarded request fails after SSH connects, inspect the listener on the router host.
-
-If a service listens on an address other than the router's `127.0.0.1`, pass one tunnel per remote address, each with `--remote-address`.
+If a forwarded request fails after SSH connects, check that the tunnel's `--remote-address` is the address the service listens on, then inspect the listener on the router's host.
 
 ## Running the initial capacity trial
 
