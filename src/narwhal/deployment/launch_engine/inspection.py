@@ -23,7 +23,7 @@ from .. import stages
 from .accelerators import gpu_inventory
 from .backend import engine_backend, plan_launcher
 from .docker import docker
-from .evidence import CheckFailed, evidence_directory, write_json
+from .evidence import CheckFailed, write_json
 from .plan import build, verify_model
 from .runtime import digest
 
@@ -159,12 +159,6 @@ def same_ids(credentials: Mapping[str, object]) -> list[str]:
                 "are not the IDs that the device owners name"
             )
     return problems
-
-
-def inspect_host(out: Path, env: Mapping[str, str], backend: str) -> dict:
-    """Inspect this host for the engine role that NARWHAL_ENGINE_LAUNCH_CONFIG selects."""
-    out = evidence_directory(out, (EVIDENCE, LOG, OWNER))
-    return inspect(out, load_inputs(env, backend, out))
 
 
 def inspect(out: Path, inputs: Inputs) -> dict:

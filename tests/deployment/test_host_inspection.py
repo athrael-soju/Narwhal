@@ -13,12 +13,14 @@ from unittest.mock import patch
 from narwhal.deployment.launch_engine import inspection
 from narwhal.deployment.launch_engine.accelerators import gpu_inventory
 from narwhal.deployment.launch_engine.cli import main
-from narwhal.deployment.launch_engine.evidence import CheckFailed
+from narwhal.deployment.launch_engine.evidence import CheckFailed, evidence_directory
 from narwhal.deployment.launch_engine.inspection import (
     EVIDENCE,
     LOG,
+    OWNER,
     can_read_write,
-    inspect_host,
+    inspect,
+    load_inputs,
 )
 from tests.deployment.fixtures import cuda_engine, launcher_inputs
 
@@ -128,7 +130,9 @@ class HostInspectionTests(unittest.TestCase):
 
     def inspect(self, backend="container") -> dict:
         with self.host.patched():
-            return inspect_host(self.out, self.env, backend)
+            # As `narwhal-engine inspect-host` runs it.
+            out = evidence_directory(self.out, (EVIDENCE, LOG, OWNER))
+            return inspect(out, load_inputs(self.env, backend, out))
 
     def failures(self, backend="container") -> list[str]:
         with self.assertRaises(CheckFailed) as caught:

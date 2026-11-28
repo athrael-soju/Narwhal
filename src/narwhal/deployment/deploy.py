@@ -208,8 +208,6 @@ class Settings:
     input_tokens: str
     samples: int
     observation_timeout_s: float
-    router_host: str
-    router_port: int
     router_url: str
 
 
@@ -237,7 +235,6 @@ def settings(env: Mapping[str, str]) -> Settings:
         problems.append("set NARWHAL_ROUTER_URL to the router's http://HOST:PORT")
     if problems:
         raise InputError(problems)
-    assert address.hostname is not None and port is not None
     return Settings(
         ttft,
         tpot,
@@ -250,8 +247,6 @@ def settings(env: Mapping[str, str]) -> Settings:
         tokens,
         samples,
         observation,
-        address.hostname,
-        port,
         url.rstrip("/"),
     )
 
