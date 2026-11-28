@@ -19,7 +19,7 @@ To open a monitoring tunnel:
 
 3. Keep the tunnel terminal open.
 
-The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, and Prometheus opens at `http://127.0.0.1:19090`. Grafana grants anonymous Viewer access through the local tunnel.
+The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, and Prometheus opens at `http://127.0.0.1:19090`. Grafana grants anonymous Viewer access through the local tunnel. To edit dashboards or settings, sign in as `admin` with the password in `runs/observability/grafana-admin-password`, a random password that the stack writes at mode 0600 on its first start, beside the stack's other state on the host that runs it. Each start resets Grafana's admin password to that file, so a stack from an earlier release no longer keeps the default `admin` password. Grafana reads a copy under the stack's private `runs/observability/mounts/` directory.
 
 To add the fleet control service port to this tunnel, follow [Reaching the console through the tunnel](../operate/fleet-control/02-Open-the-Console.md#reaching-the-console-through-the-tunnel).
 

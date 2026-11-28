@@ -19,6 +19,8 @@ from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
 
+import yaml
+
 from narwhal.observability.stack.make_targets import TargetContract
 from narwhal.observability.stack.start import cli as observe_cli
 from narwhal.observability.stack.start import listeners as observe_listeners
@@ -49,6 +51,9 @@ class FakeStack:
 
     def up(self) -> None:
         self.up_calls += 1
+
+    def protect_grafana(self) -> None:
+        pass
 
     def container(self, service: str) -> observe_services.Container | None:
         values = self.states.get(service, [None])
@@ -595,6 +600,8 @@ class ReadinessTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(calls, ["listeners", "targets http://127.0.0.1:18020/console", "up"])
+        # Once Grafana is ready, its admin password is set to the stack's private one.
+        stack.protect_grafana.assert_called_once_with()
 
     def test_start_stages_the_tool_target_from_the_environment(self) -> None:
         stack = mock.Mock(spec=observe_stack.Stack)
@@ -744,6 +751,53 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
         self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
+
+    def test_grafana_admin_password_is_random_private_and_never_on_a_command_line(self) -> None:
+        token = self._token()
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            calls.append((command, kwargs))
+            return CompletedProcess(command, 0, "", "")
+
+        stack = observe_stack.ComposeStack(runner, {}, token)
+        stack.up()
+        stack.up()
+        stack.protect_grafana()
+        private = token.parent / "grafana-admin-password"
+        mounted = token.parent / "mounts" / "grafana-secrets" / "grafana-admin-password"
+        password = private.read_text()
+        self.assertRegex(password, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(password, "admin")
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
+        # The Grafana user reads the copy; the mounts directory keeps other host users out.
+        self.assertEqual(mounted.read_text(), password)
+        self.assertEqual(stat.S_IMODE(mounted.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE((token.parent / "mounts").stat().st_mode), 0o700)
+        command, kwargs = calls[-1]
+        reset = ["exec", "-T", "grafana", "grafana", "cli", "admin", "reset-admin-password"]
+        self.assertEqual(command[-8:], [*reset, "--password-from-stdin"])
+        self.assertEqual(kwargs["input"], password + "\n")
+        for command, kwargs in calls:
+            self.assertNotIn(password, " ".join(command))
+            self.assertNotIn(password, json.dumps(kwargs.get("env") or {}))
+
+    def test_the_rendered_compose_gives_grafana_the_password_file_and_keeps_anonymous_viewers(
+        self,
+    ) -> None:
+        compose = yaml.safe_load(observe_stack.COMPOSE_FILE.read_text())
+        grafana = compose["services"]["grafana"]
+        environment = grafana["environment"]
+        self.assertEqual(
+            environment["GF_SECURITY_ADMIN_PASSWORD__FILE"],
+            "/run/secrets/narwhal/grafana-admin-password",
+        )
+        self.assertNotIn("GF_SECURITY_ADMIN_PASSWORD", environment)
+        self.assertIn("./mounts/grafana-secrets:/run/secrets/narwhal:ro", grafana["volumes"])
+        self.assertEqual(
+            (environment["GF_AUTH_ANONYMOUS_ENABLED"], environment["GF_AUTH_ANONYMOUS_ORG_ROLE"]),
+            ("true", "Viewer"),
+        )
 
     def test_a_changed_prometheus_config_or_rule_file_changes_the_compose_digest(self) -> None:
         config = self._token().parent / "prometheus.yml"
