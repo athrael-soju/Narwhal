@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
+from ...command_results import redact_secrets
+from ...serving.control_token import ROUTER_TOKEN_ENV
 from ..launch_engine import pod as pod_steps
 from ..launch_engine.backend import (
     CacheRegistration,
@@ -24,6 +27,7 @@ from ..launch_engine.backend import (
     engine_backend,
     plan_launcher,
 )
+from ..launch_engine.plan import API_KEY_ENV, launch_headers
 from ..launch_engine.runtime import digest
 from .document import STARTUP_LOG, generate
 from .evidence import (
@@ -49,6 +53,8 @@ ATTEMPTS = "attestation"
 PUBLISHED = "published-attestation.json"
 # Written into an attempt when one of its captures fails.
 FAILURE = "capture-failure.json"
+# Beside a pod's attempts: why the sidecar shared no attempt, which the gates read.
+REFUSED = "capture-refused.json"
 # An attempt's name: its UTC creation time and a random suffix.
 ATTEMPT_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
 DOCKER_LOGS_SECONDS = 120
@@ -118,11 +124,26 @@ def save_startup_log(run: Path, attempt: Path) -> Path:
     else:
         # The engine keeps appending to its startup.log; the document attests a fixed copy.
         data = (run / "startup.log").read_bytes()
+    # An engine may print its own arguments, its key among them, as it starts.
+    text = data.decode("utf-8", errors="surrogateescape")
+    data = redact_secrets(text, credentials(run, plan)).encode("utf-8", errors="surrogateescape")
     destination = attempt / STARTUP_LOG
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(data)
     return destination
+
+
+def credentials(run: Path, plan: dict) -> set[str]:
+    """The engine's key and the routers' control token, as far as this process holds them."""
+    found = {os.environ.get(API_KEY_ENV, ""), os.environ.get(ROUTER_TOKEN_ENV, "")}
+    try:
+        headers = launch_headers(run, plan) or {}
+    except (OSError, ValueError):
+        # A launch with no environment file holds no key of its own to redact.
+        headers = {}
+    found.add(headers.get("Authorization", "").removeprefix("Bearer "))
+    return {value for value in found if value}
 
 
 def live_cache_layout(run: Path, plan: dict, checked: dict) -> Path:
@@ -248,24 +269,75 @@ def refuse_published(home: Path) -> None:
         raise AlreadyPublished(str(read_json(home / PUBLISHED).get("attempt")))
 
 
-def _share(path: Path, mode: int) -> None:
-    os.chown(path, -1, os.getegid(), follow_symlinks=False)
-    path.chmod(mode)
+def _share(path: Path, mode: int, *, directory: bool) -> None:
+    """Give `path` to the sidecar's group at `mode`, through a descriptor opened without
+    following a link: the engine container can write the pod's directory, so a link there is
+    refused, not followed."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else os.O_NONBLOCK)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(
+            f"{path} is not the {'directory' if directory else 'file'} the "
+            f"capture wrote, or a link: {error}"
+        ) from error
+    try:
+        info = os.fstat(descriptor)
+        if not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
+            raise ValueError(
+                f"{path} is not the {'directory' if directory else 'file'} the capture wrote"
+            )
+        os.fchown(descriptor, -1, os.getegid())
+        os.fchmod(descriptor, mode)
+    finally:
+        os.close(descriptor)
 
 
-def share(home: Path, attempt: Path) -> None:
+def _tree(attempt: Path) -> Iterator[tuple[Path, bool]]:
+    """Each directory and file of `attempt`, refusing any link."""
+    yield attempt, True
+    for root, directories, files in os.walk(attempt, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(root) / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError(f"{path} is a symbolic link; a capture writes none")
+            yield path, stat.S_ISDIR(info.st_mode)
+
+
+def holding(attempt: Path, secrets: Collection[str]) -> list[str]:
+    """The files of `attempt` that hold any of `secrets`, by path within it."""
+    needles = [secret.encode() for secret in secrets if secret]
+    found = []
+    for path, directory in _tree(attempt):
+        if not directory and any(needle in path.read_bytes() for needle in needles):
+            found.append(path.relative_to(attempt).as_posix())
+    return found
+
+
+def share(home: Path, attempt: Path, secrets: Collection[str] = ()) -> None:
     """Let the sidecar's own group read a pod's attempt, and nothing else of the sidecar's.
 
     The gate Jobs that copy and verify the published attempt run with that group as a
-    supplementary one; the engine container, and any other user, reads none of it. The attempt
-    holds what those Jobs copy into the run directory anyway, and no credential.
+    supplementary one; the engine container, and any other user, reads none of it. An attempt
+    whose files still hold the engine's key or the routers' token is not shared: the sidecar
+    records why beside the attempts, for the gates to report, and the capture fails.
     """
-    for directory in (home.parent, home, home / ATTEMPTS):
-        _share(directory, 0o750)
-    for path in [attempt, *sorted(attempt.rglob("*"))]:
-        if path.is_symlink():
-            raise ValueError(f"{path} is a symbolic link; a capture writes none")
-        _share(path, 0o750 if path.is_dir() else 0o640)
+    for folder in (home.parent, home, home / ATTEMPTS):
+        _share(folder, 0o750, directory=True)
+    leaked = holding(attempt, secrets)
+    if leaked:
+        message = (
+            f"the capture attempt {attempt.name} holds the engine's credential in "
+            f"{', '.join(leaked)}, so it stays private; nothing is published"
+        )
+        refusal = home / REFUSED
+        refusal.unlink(missing_ok=True)
+        write_private_json(refusal, {"attempt": attempt.name, "files": leaked, "error": message})
+        _share(refusal, 0o640, directory=False)
+        raise ValueError(message)
+    for path, directory in _tree(attempt):
+        _share(path, 0o750 if directory else 0o640, directory=directory)
 
 
 def publish(home: Path, attempt: Path, *, shared: bool = False) -> Path:
@@ -282,7 +354,7 @@ def publish(home: Path, attempt: Path, *, shared: bool = False) -> Path:
     try:
         write_private_json(temporary, record)
         if shared:
-            _share(temporary, 0o640)
+            _share(temporary, 0o640, directory=False)
         try:
             os.link(temporary, destination)
         except FileExistsError:
@@ -306,6 +378,11 @@ def capture(
     require_pod_evidence(read_json(run / "launch.json"), pod_evidence)
     plan, _, _ = checked_plan(run)
     home = attestation_home(run, plan, pod_evidence)
+    if pod_evidence is not None:
+        # The engine container can write the pod's directory, so a link there is refused.
+        for path in (home.parent, home):
+            if path.is_symlink():
+                raise ValueError(f"{path} is a symbolic link; the sidecar writes none there")
     refuse_published(home)
     attempt = new_attempt(home)
     try:
@@ -330,7 +407,13 @@ def capture(
             raise failed from error
     try:
         if pod_evidence is not None:
-            share(home, attempt)
+            try:
+                share(home, attempt, credentials(run, plan))
+            except ValueError as error:
+                write_private_json(
+                    attempt / FAILURE, {"capture": "share", "output": REFUSED, "error": str(error)}
+                )
+                raise
         publish(home, attempt, shared=pod_evidence is not None)
     except AlreadyPublished as error:
         # Another attempt passed and published while this one ran.

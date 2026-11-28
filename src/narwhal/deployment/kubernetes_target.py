@@ -885,12 +885,14 @@ print(
 )
 
 # Read a published attestation attempt of an engine container from the state volume.
-_PUBLISHED = """import shutil, sys, time
+_PUBLISHED = """import json, shutil, sys, time
 from pathlib import Path
-from narwhal.deployment.attestation_contract.capture import PUBLISHED, published_attempt
+from narwhal.deployment.attestation_contract.capture import PUBLISHED, REFUSED, published_attempt
 home, out, seconds = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
 deadline = time.monotonic() + seconds
 while not (home / PUBLISHED).exists():
+    if (home / REFUSED).exists():
+        sys.exit("narwhal-gate: " + json.loads((home / REFUSED).read_text())["error"])
     if time.monotonic() > deadline:
         sys.exit(f"narwhal-gate: the sidecar published no attestation in {home} in {seconds:g}s")
     time.sleep(2)

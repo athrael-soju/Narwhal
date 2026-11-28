@@ -201,6 +201,63 @@ class PodCaptureTests(unittest.TestCase):
                 self.assertEqual(info.st_gid, os.getegid())
                 self.assertEqual(info.st_mode & 0o777, 0o750 if path.is_dir() else 0o640)
 
+    def test_the_startup_log_keeps_no_engine_key(self):
+        # An engine may print its own arguments as it starts, its key among them.
+        directory = self.pod.path(pod.ENGINE) / ENGINE_PROCESS
+        printed = f"ServerArgs(model='m', api_key='{SECRET_VALUE}')\n"
+        (directory / pod.STARTUP_LOG).write_text(self.fixtures.startup_log + printed)
+        document = self.capture()
+        log = (document.parent / "startup.log").read_text()
+        self.assertNotIn(SECRET_VALUE, log)
+        self.assertIn("api_key='[REDACTED]'", log)
+        self.assertTrue(log.startswith(self.fixtures.startup_log))
+
+    def test_an_attempt_that_still_holds_the_key_is_not_shared(self):
+        home = pod_engine.engine_home(self.pod.state, ENGINE_ID)
+        with (
+            patch.object(
+                capture_module, "redact_secrets", lambda text, extra=(): text, create=True
+            ),
+            self.assertRaisesRegex(ValueError, "holds the engine's credential in startup.log"),
+        ):
+            # The engine's startup log names its key, and the redaction misses it.
+            directory = self.pod.path(pod.ENGINE) / ENGINE_PROCESS
+            log = self.fixtures.startup_log + f"api_key={SECRET_VALUE}\n"
+            (directory / pod.STARTUP_LOG).write_text(log)
+            self.capture()
+        self.assertFalse((home / capture_module.PUBLISHED).exists())
+        [attempt] = (home / capture_module.ATTEMPTS).iterdir()
+        for path in [attempt, *attempt.rglob("*")]:
+            with self.subTest(path=path.name):
+                self.assertEqual(path.stat().st_mode & 0o077, 0)
+        # The gates read why, which names the file and not the key.
+        refusal = home / capture_module.REFUSED
+        self.assertEqual(refusal.stat().st_mode & 0o777, 0o640)
+        self.assertNotIn(SECRET_VALUE, refusal.read_text())
+        self.assertIn("startup.log", json.loads(refusal.read_text())["files"])
+
+    def test_a_link_planted_in_the_pods_directory_is_refused(self):
+        # The engine container can write the pod's directory.
+        elsewhere = self.pod.state.parent / "elsewhere"
+        elsewhere.mkdir()
+        (self.pod.state / pod_engine.CONTAINERS).symlink_to(elsewhere)
+        with self.assertRaisesRegex(ValueError, "is a symbolic link"):
+            self.capture()
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_sharing_refuses_a_link_in_the_attempt(self):
+        document = self.capture()
+        home = pod_engine.engine_home(self.pod.state, ENGINE_ID)
+        target = self.pod.state.parent / "target"
+        target.write_text("x")
+        (document.parent / "planted").symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "planted is a symbolic link"):
+            capture_module.share(home, document.parent)
+        home.parent.chmod(0o755)
+        (home.parent / "link").symlink_to(home)
+        with self.assertRaisesRegex(ValueError, "or a link"):
+            capture_module.share(home.parent / "link", document.parent)
+
     def test_an_attempt_that_fails_stays_private(self):
         config = self.pod.path(pod.MODEL) / "config.json"
         status = config.stat()
