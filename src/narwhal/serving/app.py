@@ -367,7 +367,7 @@ def create_app(
     app.state.router = router
     app.state.yield_control = yield_control
     app.state.begin_shutdown = begin_shutdown
-    app.add_middleware(ServingIngress, router=router)
+    app.add_middleware(ServingIngress, router=router, control_token=control_token)
     app.add_exception_handler(FleetNotControlled, not_controlling_response)
     app.add_exception_handler(Unauthenticated, _unauthenticated)
 

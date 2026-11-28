@@ -142,6 +142,55 @@ class ControlRouteTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path):
                 self.assertEqual(response.status_code, 503, response.text)
 
+    async def send_body(self, path, headers, size, chunk=1024 * 1024):
+        """Stream a `size`-byte body to `path`; return the status and the bytes read."""
+        read = 0
+        status = {}
+
+        async def receive():
+            nonlocal read
+            if read >= size:
+                return {"type": "http.disconnect"}
+            read += chunk
+            return {"type": "http.request", "body": b" " * chunk, "more_body": read < size}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"content-type", b"application/json"), *headers],
+            "server": ("router", 80),
+            "client": ("client", 1),
+        }
+        await self.app(scope, receive, send)
+        return status["code"], read
+
+    async def test_a_control_request_without_the_token_is_refused_before_its_body_is_read(self):
+        # A route reads its body model before its token dependency runs, so the router itself
+        # checks the token first: no unauthenticated body is read at all.
+        for path in ("/narwhal/lifecycle/drain", "/narwhal/lifecycle/readmit", "/narwhal/engines"):
+            with self.subTest(path=path):
+                status, read = await self.send_body(path, [], 64 * 1024 * 1024)
+                self.assertEqual((status, read), (401, 0))
+
+    async def test_a_control_body_above_64_kib_is_refused_once_it_passes_the_limit(self):
+        token = [(b"authorization", f"Bearer {CONTROL_TOKEN}".encode())]
+        status, read = await self.send_body(
+            "/narwhal/lifecycle/drain", token, 64 * 1024 * 1024, chunk=16 * 1024
+        )
+        self.assertEqual(status, 413)
+        self.assertLessEqual(read, 64 * 1024 + 16 * 1024)
+
     async def test_reads_need_no_token(self):
         transport = httpx.ASGITransport(app=self.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
