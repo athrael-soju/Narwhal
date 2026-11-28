@@ -549,6 +549,21 @@ class PlanResultTests(WorkstationTest):
             {"manager": "kubectl-edit", "field": ".spec.slo.ttftS"}, error["context"]["fields"]
         )
 
+    def test_each_plan_into_a_run_directory_logs_apart_from_the_last(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        seen: list[Path] = []
+
+        def connect(env: dict, logs: Path) -> ApiWorkstation:
+            seen.append(logs)
+            return self.ws
+
+        with patch.object(kubernetes_cli, "connect", connect):
+            for _ in range(2):
+                self.assertEqual(self.deploy("plan")[0], 0)
+        self.assertEqual(len(set(seen)), 2)
+        for logs in seen:
+            self.assertEqual(logs.parent, self.run_dir.resolve() / kubernetes_cli.KUBECTL_LOGS)
+
     def test_plan_checks_the_run_directory_before_it_writes_there(self):
         self.run_dir.mkdir(parents=True, mode=0o700)
         self.run_dir.chmod(0o777)

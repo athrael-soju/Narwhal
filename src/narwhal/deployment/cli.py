@@ -817,8 +817,9 @@ def _cluster_plan(args: argparse.Namespace, env: dict[str, str]) -> int:
     if directory.exists():
         # Task 18's checks hold before plan logs into the run directory.
         check_directory(directory)
-    logs = directory if directory.is_dir() else _access_logs()
-    session = kubernetes_cli.Session(directory, env, logs=logs / kubernetes_cli.KUBECTL_LOGS)
+    # Into a run directory, plan logs to a directory of its own there, as every command does.
+    logs = None if directory.is_dir() else _access_logs() / kubernetes_cli.KUBECTL_LOGS
+    session = kubernetes_cli.Session(directory, env, logs=logs)
     if directory.is_dir():
         session.check_target()
     live = session.live()
