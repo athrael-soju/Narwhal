@@ -32,6 +32,7 @@ from ..observability.stack.start.services import parse_prometheus_listener
 from ..profiling.calibration import MIN_SAMPLES_PER_GROUP
 from ..runtime.lease import DEFAULT_SAFETY_MARGIN_S, WITNESS_NAME
 from ..runtime.standby import MAX_HANDOFF_AGE_S
+from ..serving.control_token import ROUTER_TOKEN_ENV, token_problem
 from . import (
     balancer,
     cache_groups,
@@ -364,6 +365,9 @@ def inputs(env: Mapping[str, str], trial: capacity.Snapshot | None = None) -> di
         hosts = discovery.derive_hosts(env)
     except ValueError as error:
         problems.append(str(error))
+    # The routers require the control token; its keyed digest is part of `discovery`.
+    if problem := token_problem(env.get(ROUTER_TOKEN_ENV, "")):
+        problems.append(problem)
     known = Path(env.get("NARWHAL_SSH_KNOWN_HOSTS", ""))
     if not env.get("NARWHAL_SSH_KNOWN_HOSTS") or not known.is_file():
         problems.append("set NARWHAL_SSH_KNOWN_HOSTS to the known-hosts file with every host key")
@@ -1870,6 +1874,7 @@ class Deployment:
                     url,
                     str(READMIT_SECONDS),
                     *engines,
+                    role=self.router_role(host.id),
                 ),
             )
             remote.write(context.directory, remote.files(output))
@@ -2617,9 +2622,14 @@ def _reachable(address: str | None) -> str:
     return "::1" if address == "::" else str(address)
 
 
-def _host_http(remote_dir: str, *args: str) -> str:
-    """A host script that runs one `host_http` command from the installed wheel."""
-    return f"cd {shlex.quote(remote_dir)} && " + shlex.join(
+def _host_http(remote_dir: str, *args: str, role: str | None = None) -> str:
+    """A host script that runs one `host_http` command from the installed wheel.
+
+    With `role`, the command runs in that role's environment, so a readmission holds the
+    router's control token from the role file rather than from its command line.
+    """
+    environment = f"set +x && . ./runs/deployment/.env.{role} && " if role else ""
+    return f"cd {shlex.quote(remote_dir)} && {environment}" + shlex.join(
         [".venv/bin/python", "-m", "narwhal.deployment.host_http", *args]
     )
 

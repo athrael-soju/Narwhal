@@ -35,6 +35,8 @@ from narwhal.deployment.hosts import Host, RemoteError, stage_limit, write_priva
 from narwhal.deployment.role_env import write_environment
 from narwhal.deployment.supervision import Observation, Supervisor, SystemdUnit
 from narwhal.runtime.lease import WITNESS_NAME, FileLease
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
 
 REMOTE_DIR = "Narwhal-deploy/" + "b" * 32
 SHA = "c" * 64
@@ -53,6 +55,7 @@ def environment(root: Path) -> dict[str, str]:
         "NARWHAL_NODE_1_SSH": "deploy@h1",
         "NARWHAL_NODE_2_SSH": "deploy@h2",
         "NARWHAL_SSH_KNOWN_HOSTS": str(known),
+        ROUTER_TOKEN_ENV: CONTROL_TOKEN,
         "NARWHAL_WHEEL": str(wheel),
         "NARWHAL_WHEEL_SHA256": hashlib.sha256(b"wheel").hexdigest(),
         "NARWHAL_REQUIREMENTS": str(lock),
@@ -156,6 +159,8 @@ class Fleet:
         self.units: dict[str, tuple[str, str, int]] = {}
         self.routes: dict[str, str] = {}
         self.readmitted: list[list[str]] = []
+        # The script of each readmission, as the router host runs it.
+        self.readmissions: list[str] = []
         self.verified: list[str] = []
         self.fail_stage: str | None = None
         self.fail_status = 1
@@ -723,6 +728,7 @@ class _SSH:
         if operation == "readmit restarted engines":
             engines = script.split("readmit", 1)[1].split()[2:]
             fleet.readmitted.append([part.strip("'") for part in engines])
+            fleet.readmissions.append(script)
             return _file("readmission.json", b"{}")
         if operation == "check the router":
             return "\n".join(_file(name, b"{}") for name in ("health.json", "ready.json"))

@@ -18,6 +18,9 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 | `NARWHAL_WHEEL_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that wheel, 64 lowercase hex digits |
 | `NARWHAL_REQUIREMENTS` | `narwhal deploy package`, then `pip` on each host | Hash-checking lock of the wheel's dependencies, as in [Dependency lock](#dependency-lock) |
 | `NARWHAL_REQUIREMENTS_SHA256` | `narwhal deploy package`, then `narwhal deploy install` on each host | SHA-256 of that lock |
+| `NARWHAL_ROUTER_TOKEN` | `narwhal deploy plan` and `run`, then each router through its role environment | The router's [control token](../HTTP-API.md#control-token), at least 32 random bytes: 64 hex digits or 43 base64url characters. Generate it with `python -c 'import secrets; print(secrets.token_hex(32))'` |
+
+The control token is a credential. It reaches only the router role files, `.env.router` and `.env.standby-router` at mode 0600, which the routers and the readmission in `router-start` read. The run record holds only its HMAC under the run's salt, as part of the `discovery` input, so changing the token reruns `discover` and every stage after it, as changing `NARWHAL_ENGINE_KEY` does. A Kubernetes fleet takes the token from a Secret instead, and refuses an environment that holds it.
 
 `NARWHAL_SSH_JUMP` is optional. It names the one jump host, an alias or `user@host`, through which every connection reaches its destination, as in [Jump host](#jump-host).
 

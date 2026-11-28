@@ -253,7 +253,10 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["run"])')
     ROUTER_URL='http://127.0.0.1:18000'
     IID='n3'
+    NARWHAL_ROUTER_TOKEN=$(cat "$instance/router-token")
     ```
+
+    The instance's router takes its [control token](HTTP-API.md#control-token) from `NARWHAL_ROUTER_TOKEN` when `up` runs with one set, and otherwise from `router-token` in the instance directory, which `up` writes once at mode 0600. With a token of your own exported, use it instead.
 
 2. Save the engine's entry from the run's fleet file:
 
@@ -271,6 +274,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
     ```
 
@@ -280,6 +284,7 @@ The engines of an instance are `n1` to `n<count>`, and the router listens at `ht
 
     ```bash
     curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+      -H "Authorization: Bearer $NARWHAL_ROUTER_TOKEN" \
       -H 'content-type: application/json' -d @"$RUN_DIR/$IID.json" \
       -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
     ```

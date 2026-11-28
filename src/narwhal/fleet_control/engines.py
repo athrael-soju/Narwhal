@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse
 from narwhal.backends import DEFAULT_BACKEND
 from narwhal.backends import load as load_backend
 from narwhal.engines.dialect import EngineDialect
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV, headers
 
 from .app import API, action_reply
 from .config import Hook
@@ -125,7 +127,11 @@ async def _responds(client: httpx.AsyncClient, url: str) -> bool:
 
 
 class EngineActions:
-    """Run engine actions through the service so each one is recorded."""
+    """Run engine actions through the service so each one is recorded.
+
+    `router_token` is the router's control token, by default `NARWHAL_ROUTER_TOKEN`, which
+    every request to the router carries.
+    """
 
     def __init__(
         self,
@@ -133,9 +139,13 @@ class EngineActions:
         transport: httpx.AsyncBaseTransport | None = None,
         poll_s: float = RETURN_POLL_S,
         read_retry_s: float = READ_RETRY_S,
+        router_token: str | None = None,
     ) -> None:
         self.service = service
         self._transport = transport
+        if router_token is None:
+            router_token = os.environ.get(ROUTER_TOKEN_ENV, "")
+        self._headers = headers(router_token) if router_token else {}
         self._poll_s = poll_s
         self._read_retry_s = read_retry_s
         service.members = self.live_members
@@ -253,7 +263,10 @@ class EngineActions:
     def _client(self) -> httpx.AsyncClient:
         router = self.service.config.router
         return httpx.AsyncClient(
-            base_url=router.url, timeout=router.timeout_s, transport=self._transport
+            base_url=router.url,
+            timeout=router.timeout_s,
+            transport=self._transport,
+            headers=self._headers,
         )
 
     async def act(self, iid: str, action: str, params: Mapping[str, Any]) -> Action:

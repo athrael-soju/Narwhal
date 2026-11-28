@@ -26,6 +26,7 @@ from narwhal.scheduling.monitor import Instance
 from narwhal.serving import app as serving_app
 from narwhal.serving.router.membership import Membership
 from narwhal.types import Phase, Request, Role
+from tests import CONTROL_HEADERS
 from tests.fixtures import contract_free_router, fleet, profile
 
 
@@ -411,7 +412,9 @@ class MembershipRouteTests(unittest.IsolatedAsyncioTestCase):
             router = app.state.router
             self.addAsyncCleanup(router.engines.aclose)
             client = httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://router"
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://router",
+                headers=CONTROL_HEADERS,
             )
             self.addAsyncCleanup(client.aclose)
             self.assertEqual(router.membership.ids, ["e3", "e0"])

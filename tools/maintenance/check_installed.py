@@ -32,7 +32,7 @@ async def check_http():
             slo=SLO(1, 1),
             profiles_path=root / "profiles.json",
         )
-        app = create_app(cfg, journal_path=root / "journal.jsonl")
+        app = create_app(cfg, journal_path=root / "journal.jsonl", control_token="5e" * 32)
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://installed"
@@ -43,6 +43,8 @@ async def check_http():
                 state = await client.get("/narwhal/state")
                 assert state.status_code == 200
                 assert state.json()["schema"] == "narwhal.state"
+                drain = await client.post("/narwhal/lifecycle/drain", json={"engines": ["e"]})
+                assert drain.status_code == 401
                 metrics = await client.get("/metrics")
                 assert metrics.status_code == 200
                 assert "narwhal_" in metrics.text

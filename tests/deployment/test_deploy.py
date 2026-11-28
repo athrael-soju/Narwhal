@@ -1,6 +1,7 @@
 """`narwhal deploy plan|run|status|down` over the whole graph, against stubbed hosts and engines."""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -18,6 +19,8 @@ from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.dev import cli
 from narwhal.observability.stack.start import cli as stack_cli
 from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
 from tests.deployment.deploy_hosts import Fleet
 
 ENGINES = ("engine-1", "engine-2")
@@ -183,8 +186,12 @@ class DeployTests(unittest.TestCase):
                 ),
             },
         )
-        # Only the router that holds the lease readmits.
+        # Only the router that holds the lease readmits, with the control token from its role
+        # file rather than its command line.
         self.assertEqual(self.fleet.readmitted, [["n2"]])
+        [script] = self.fleet.readmissions
+        self.assertIn(". ./runs/deployment/.env.router && ", script)
+        self.assertNotIn(CONTROL_TOKEN, script)
         self.assertEqual(self.fleet.calls["start router"], 2)
         # The readmission measured the overhead on the router that controls the fleet again.
         self.assertEqual(self.fleet.calls["measure the router overhead"], 4)
@@ -638,6 +645,50 @@ class DeployTests(unittest.TestCase):
         info = (self.run / run_record.SALT).stat()
         self.assertEqual((info.st_mode & 0o777, info.st_size), (0o600, 32))
 
+    def test_plan_refuses_a_missing_or_short_control_token(self):
+        for token, problem in (
+            (None, "set NARWHAL_ROUTER_TOKEN to the router control token"),
+            ("", "set NARWHAL_ROUTER_TOKEN to the router control token"),
+            ("a" * 63, "must hold at least 32 random bytes"),
+            ("A" * 42, "must hold at least 32 random bytes"),
+            ("a b" * 30, "must hold at least 32 random bytes"),
+        ):
+            with self.subTest(token=token):
+                os.environ.pop(ROUTER_TOKEN_ENV, None)
+                if token is not None:
+                    os.environ[ROUTER_TOKEN_ENV] = token
+                code, result = self.deploy("plan")
+                self.assertEqual(code, 2, result)
+                messages = [error["message"] for error in result["errors"]]
+                self.assertTrue(any(problem in m for m in messages), messages)
+        self.assertFalse(self.run.exists())
+        os.environ[ROUTER_TOKEN_ENV] = "A_-" * 15
+        self.assertEqual(self.deploy("plan")[0], 0)
+
+    def test_no_run_file_or_log_holds_the_control_token(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        token = CONTROL_TOKEN.encode()
+        plain = hashlib.sha256(token).hexdigest().encode()
+        for path in self.run.rglob("*"):
+            if path.is_file():
+                with self.subTest(path=str(path.relative_to(self.run))):
+                    self.assertNotIn(token, path.read_bytes())
+                    self.assertNotIn(plain, path.read_bytes())
+        self.assertNotIn(CONTROL_TOKEN, self.stderr.getvalue())
+        for value in run_record.read(self.run)["inputs"].values():
+            self.assertRegex(value["digest"], "^hmac-sha256:[0-9a-f]{64}$")
+
+    def test_a_changed_control_token_reruns_the_routers(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        os.environ[ROUTER_TOKEN_ENV] = "d4" * 32
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertTrue(
+            {"discover", "package", *(f"router-start[{host}]" for host in ROUTERS)}
+            <= self.ran(result)
+        )
+        self.assertEqual(self.ran(self.deploy("run")[1]), set())
+
     def test_a_changed_engine_key_reruns_the_stages_its_input_feeds(self):
         self.keyed_run("stub-key-1")
         salt = (self.run / run_record.SALT).read_bytes()
@@ -834,6 +885,8 @@ class InputTests(unittest.TestCase):
     def test_secrets_enter_only_as_digests(self):
         inputs = deploy.inputs({**self.env, "NARWHAL_ENGINE_KEY": "secret-value"})
         self.assertNotIn("secret-value", json.dumps({k: vars(v) for k, v in inputs.items()}))
+        self.assertNotIn(CONTROL_TOKEN, json.dumps({k: vars(v) for k, v in inputs.items()}))
+        self.assertEqual(self.changed(NARWHAL_ROUTER_TOKEN="d4" * 32), {"discovery"})
 
     def test_every_malformed_input_is_named(self):
         env = {

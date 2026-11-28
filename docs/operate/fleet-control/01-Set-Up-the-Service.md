@@ -37,6 +37,8 @@ export NARWHAL_CONTROL_TOKEN="$(openssl rand -hex 32)"
 
 Keep the token in your secret store. The console and every API request need it.
 
+The service sends the router's own [control token](../../HTTP-API.md#control-token) with each drain, readmission, join and removal, from `NARWHAL_ROUTER_TOKEN`. The router shell already exports it from the router's role file. The two tokens must differ, because the service's token reaches browsers and Prometheus; the service refuses to start when they match or when `NARWHAL_ROUTER_TOKEN` is unset or shorter than 32 random bytes.
+
 ## Start the service
 
 In the router shell, run:

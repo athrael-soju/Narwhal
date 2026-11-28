@@ -3,7 +3,7 @@
 #
 #   docker build -t narwhal .
 #   docker run --rm -p 8000:8000 -v "$PWD/config:/config:ro" \
-#     -v "$PWD/runs:/home/narwhal/runs" narwhal \
+#     -v "$PWD/runs:/home/narwhal/runs" -e NARWHAL_ROUTER_TOKEN narwhal \
 #     narwhal-serve --fleet /config/fleet.json --host 0.0.0.0 --port 8000
 #
 # Profiles must be reachable at the config's profiles.path. The narwhal user,

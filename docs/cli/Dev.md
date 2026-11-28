@@ -60,6 +60,8 @@ Running `init` on an existing instance changes nothing. When the settings you su
 
 To authenticate engine requests, export `NARWHAL_ENGINE_API_KEY` before `up` and keep it set for later commands. `up` passes it to the engines, and sets `engine.engine_api_key_env` in the fleet configuration so that the profiler, preflight and router send it.
 
+The router needs a [control token](../HTTP-API.md#control-token) for its join, removal, drain and readmission routes. `up` passes it `NARWHAL_ROUTER_TOKEN` when that holds a valid token, and otherwise the instance's own, which it draws once and keeps at mode 0600 in `router-token` in the instance directory. Send it with a control request as `Authorization: Bearer $(cat <instance>/router-token)`.
+
 A failed `verify` writes its reason, evidence directory and failure time to `verification_failure` in `lifecycle.json` and to `failure.json` in its evidence directory. `status` reports `degraded` with that `verification_failure` until a later `verify` succeeds or `down` stops every process.
 
 ## Output and exit codes

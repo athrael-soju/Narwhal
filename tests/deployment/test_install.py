@@ -26,6 +26,8 @@ from narwhal.deployment.install import (
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.role_env import ENGINE_FIELDS, helpers
 from narwhal.dev.cli import main
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
+from tests import CONTROL_TOKEN
 from tests.deployment.fixtures import cuda_engine, launch_document, package_inputs, runtime
 from tools.maintenance.check_publication import private_path
 
@@ -119,6 +121,7 @@ class PackageTests(unittest.TestCase):
             "NODE_1_SSH": "operator@one.example.invalid",
             "NODE_1_PASSWORD": "synthetic-management-secret",
             "NODE_2_SSH": "operator@two.example.invalid",
+            ROUTER_TOKEN_ENV: CONTROL_TOKEN,
             **package_inputs(self.root),
             **{f"NARWHAL_{field}": "synthetic-value" for field in ENGINE_FIELDS},
         }
@@ -326,6 +329,17 @@ class PackageTests(unittest.TestCase):
         self.env["NARWHAL_WHEEL_SHA256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
         run, _ = self.package_run()
         self.assertEqual((run / "node-2/cache_capture_hook.py").read_text(), "released hook\n")
+
+    def test_only_the_router_role_file_holds_the_control_token(self):
+        run, _ = self.package_run()
+        token = CONTROL_TOKEN.encode()
+        held = sorted(
+            str(path.relative_to(run))
+            for path in run.rglob("*")
+            if path.is_file() and token in path.read_bytes()
+        )
+        self.assertEqual(held, ["node-1/.env.router"])
+        self.assertEqual((run / "node-1/.env.router").stat().st_mode & 0o777, 0o600)
 
     def test_the_package_records_the_wheel_as_every_role_revision(self):
         run, manifest = self.package_run()
