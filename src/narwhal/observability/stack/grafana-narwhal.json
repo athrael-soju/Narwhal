@@ -4233,6 +4233,7 @@
                       "kind": "prometheus",
                       "spec": {
                         "expr": "count by (fleet) (max by (fleet, stage, stage_instance) ((narwhal_deployment_stage_state{job=\"narwhal-router\",state!=\"passed\"} and on (fleet, instance) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"} == on (fleet) group_left max by (fleet) (narwhal_deployment_updated_timestamp_seconds{job=\"narwhal-router\"}))))) or on () vector(0)",
+                        "instant": true,
                         "legendFormat": "Stages not passed"
                       }
                     },
@@ -4569,13 +4570,10 @@
               ],
               "transformations": [
                 {
-                  "kind": "joinByField",
+                  "kind": "merge",
                   "spec": {
-                    "id": "joinByField",
-                    "options": {
-                      "byField": "edge",
-                      "mode": "outer"
-                    }
+                    "id": "merge",
+                    "options": {}
                   }
                 },
                 {
