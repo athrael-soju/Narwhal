@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 from narwhal.deployment import deploy, discovery, run_record
 from narwhal.dev import cli
+from narwhal.observability.stack.start import cli as stack_cli
 from narwhal.profiling.calibration import MIN_SAMPLES_PER_GROUP
 from tests.deployment.deploy_hosts import Fleet
 
@@ -22,6 +24,27 @@ EDGES = ("node-1-to-node-2", "node-2-to-node-1")
 # The primary router's host, then the standby's.
 ROUTERS = ("node-1", "node-2")
 UNITS = 4
+
+
+def assert_stack_accepts(test: unittest.TestCase, command: str) -> None:
+    """Start the monitoring stack from the stage's command line, up to its containers.
+
+    The stack's own option parser and target contract read the arguments, with only the
+    listener variables the stage sets in the environment, as on the router host.
+    """
+    words = shlex.split(command)
+    module = words.index("narwhal.observability.stack.start.cli")
+    listeners = dict(word.split("=", 1) for word in words[1 : words.index(".venv/bin/python")])
+    stderr = io.StringIO()
+    with (
+        patch.dict(os.environ, listeners, clear=True),
+        patch.object(stack_cli, "compose_problem", return_value=None),
+        patch.object(stack_cli, "start") as start,
+        contextlib.redirect_stderr(stderr),
+    ):
+        code = stack_cli.main(words[module + 1 :])
+    test.assertEqual(code, 0, stderr.getvalue())
+    start.assert_called_once()
 
 
 def every_stage() -> set[str]:
@@ -85,6 +108,7 @@ class DeployTests(unittest.TestCase):
             self.assertIn(f"--sidecar-url {origin}", command)
         self.assertIn("NARWHAL_FLEET_NAME=fleet-a", command)
         self.assertIn("--targets-url http://10.0.0.1:8080", command)
+        assert_stack_accepts(self, command)
         self.assertIn("load-balancer", self.fleet.containers)
         fleet = json.loads((self.run / "stages/fleet-limits/attempt-1/fleet.json").read_text())
         self.assertEqual(fleet["slo"], {"ttft_s": 4.0, "tpot_s": 0.1, "router_overhead_s": 0.05})
@@ -625,7 +649,8 @@ class SingleRouterTests(unittest.TestCase):
         self.assertNotIn("load-balancer", self.fleet.containers)
         command = self.fleet.monitoring_command
         self.assertEqual(command.count("--router-url"), 1, command)
-        self.assertIn("--targets-url http://10.0.0.1:8000", command)
+        self.assertNotIn("--targets-url", command)
+        assert_stack_accepts(self, command)
         self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
         # A rerun finds the router running and repeats nothing.
         code, out, err = self.deploy("run")
