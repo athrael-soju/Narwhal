@@ -727,6 +727,31 @@ class KubernetesDeployTests(KubernetesTest):
             names,
         )
 
+    def test_down_returns_only_once_the_stopped_pods_are_gone(self):
+        # A deleted engine pod holds its node's GPUs until the kubelet ends it, so a fleet
+        # started again at once would have its pods refused at admission.
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.rig.store.patch(
+            POD, NAMESPACE, "engine-1", {"metadata": {"finalizers": ["example.com/kubelet"]}}
+        )
+        waits = []
+
+        def kubelet() -> None:
+            names = {item["metadata"]["name"] for item in self.rig.store.live(POD, NAMESPACE)}
+            if "engine-1" in names:
+                waits.append(1)
+                if len(waits) == 3:
+                    self.rig.store.patch(
+                        POD, NAMESPACE, "engine-1", {"metadata": {"finalizers": None}}
+                    )
+
+        self.rig.on_tick = kubelet
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(waits), 3)
+        names = {item["metadata"]["name"] for item in self.rig.store.live(POD, NAMESPACE)}
+        self.assertNotIn("engine-1", names)
+
     def test_down_changes_nothing_for_another_fleet(self):
         self.assertEqual(self.deploy("run")[0], 0)
         deletes = len(self.rig.store.deletes)
@@ -893,6 +918,53 @@ class AdoptionTests(KubernetesTest):
         self.assertIn(("Job", name, "Background"), deletions(self.rig))
         self.rig.settle()
         self.assertEqual(self.rig.live_jobs(), [])
+
+    def test_a_cancelled_stage_ends_only_once_its_jobs_pods_are_gone(self):
+        # The pod of a deleted Job holds its node's resources until the kubelet ends it, so the
+        # next attempt's Job on that node would be refused at admission.
+        self.rig.hold = {"profile"}
+        deployment = self.deployment()
+        runner = deployment.runner()
+        stop = Stop()
+        held: dict[str, str] = {}
+        waits = []
+
+        def pods(job: str) -> list[dict]:
+            return [
+                pod
+                for pod in self.rig.store.live(POD, NAMESPACE)
+                if pod["metadata"]["labels"].get(kubernetes_target.JOB_NAME_LABEL) == job
+            ]
+
+        def cancel() -> None:
+            if not held:
+                for job in active(self.rig, "profile"):
+                    for pod in pods(job["metadata"]["name"]):
+                        held[job["metadata"]["name"]] = pod["metadata"]["name"]
+                        self.rig.store.patch(
+                            POD,
+                            NAMESPACE,
+                            pod["metadata"]["name"],
+                            {"metadata": {"finalizers": ["example.com/kubelet"]}},
+                        )
+                if held:
+                    stop.cancel("profile")
+                return
+            [(job, pod)] = held.items()
+            jobs = {item["metadata"]["name"] for item in self.rig.store.live(JOB, NAMESPACE)}
+            if job not in jobs and pods(job):
+                # The kubelet ends the pod a few waits after its Job is gone.
+                waits.append(1)
+                if len(waits) == 3:
+                    self.rig.store.patch(POD, NAMESPACE, pod, {"metadata": {"finalizers": None}})
+
+        self.rig.on_tick = cancel
+        result = runner.run(kubernetes_target.inputs(self.rig.env), stop=stop)
+        self.assertTrue(result.stopped)
+        self.assertEqual(self.record()["stages"]["profile"]["status"], "cancelled")
+        [job] = held
+        self.assertEqual(len(waits), 3)
+        self.assertEqual(pods(job), [])
 
     def test_a_job_of_the_name_another_owner_controls_is_refused(self):
         uid = self.rig.env[kubernetes_target.FLEET_UID]

@@ -1549,11 +1549,24 @@ class KubernetesDeployment:
         raise ValueError(f"Job {name} could not be created after {WRITE_TRIES} tries")
 
     def _gone(self, cluster: Cluster, name: str) -> None:
-        """Wait until the Job of `name` and its pods are deleted."""
+        """Wait until the Job of `name` and its pods are deleted. A background delete removes
+        the Job first, and its pod holds its node's resources, such as the GPUs a discovery
+        Job takes, until the kubelet ends it, so a Job started on that node before then is
+        refused at admission."""
+        self._wait_gone(
+            f"Job {name}",
+            lambda: (
+                cluster.get(JOB, name) is not None
+                or bool(cluster.list(POD, {JOB_NAME_LABEL: name}))
+            ),
+        )
+
+    def _wait_gone(self, what: str, left: Callable[[], bool]) -> None:
+        """Poll until `left()` is false, for at most GONE_SECONDS."""
         deadline = self.clock() + GONE_SECONDS
-        while cluster.get(JOB, name) is not None:
+        while left():
             if self.clock() > deadline:
-                raise ValueError(f"Job {name} was not deleted within {GONE_SECONDS}s")
+                raise ValueError(f"{what} was not deleted within {GONE_SECONDS}s")
             self.sleep(POLL_SECONDS)
 
     # Jobs across restarts.
@@ -1593,6 +1606,9 @@ class KubernetesDeployment:
         for name in stale:
             self.remove(cluster, JOB, name)
             self.remove(cluster, CONFIG_MAP, name)
+        # This attempt's Jobs may need the same node's resources.
+        for name in stale:
+            self._gone(cluster, name)
         context.jobs_deleted(stale)
 
     def clean_up(self, context: StageContext) -> None:
@@ -1748,10 +1764,14 @@ class KubernetesDeployment:
                 backoff = min(backoff * 2, BACKOFF_SECONDS)
 
     def _cancel(self, context: StageContext, cluster: Cluster) -> None:
-        """Delete every Job the cancelled attempt started, then end it."""
-        for name in self._jobs.get(self._attempt(context), []):
+        """Delete every Job the cancelled attempt started, wait until their pods are gone, so
+        the next attempt's Jobs find their nodes' resources free, then end it."""
+        names = self._jobs.get(self._attempt(context), [])
+        for name in names:
             self.remove(cluster, JOB, name)
             self.remove(cluster, CONFIG_MAP, name)
+        for name in names:
+            self._gone(cluster, name)
         raise Cancelled(f"{key(context.stage, context.instance)} was cancelled; its Jobs are gone")
 
     def finish_gate(
@@ -2984,7 +3004,10 @@ fi
     def stop(self, cluster: Cluster) -> list[kubernetes_objects.Deletion]:
         """Delete every workload the fleet controls, keeping the volumes: the routers, HAProxy,
         the engines and then the Jobs, each workload before the Services and ConfigMaps it
-        uses. Only objects whose controlling owner is this fleet are deleted."""
+        uses. Only objects whose controlling owner is this fleet are deleted. Returns once
+        their pods are gone, which hold their nodes' GPUs until the kubelet ends them, so a
+        fleet started again at once finds them free."""
+        pods = {pod["metadata"]["uid"] for pod in cluster.list(POD) if self.controls(cluster, pod)}
         live = [item for kind in STOP_KINDS for item in cluster.list(kind)]
         components = {
             (item["kind"], item["metadata"]["name"]): (item["metadata"].get("labels") or {}).get(
@@ -3002,6 +3025,10 @@ fi
         deletions = sorted(deletions, key=order)
         for deletion in deletions:
             self.remove(cluster, KINDS[deletion.kind], deletion.name)
+        self._wait_gone(
+            "the stopped fleet's pods",
+            lambda: any(pod["metadata"].get("uid") in pods for pod in cluster.list(POD)),
+        )
         return deletions
 
     def down(self) -> list[dict[str, Any]]:

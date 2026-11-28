@@ -47,7 +47,7 @@ help:
 	  '  docs-build   Build documentation in strict mode' \
 	  '  chart-tools  Install the pinned helm and kubeconform into local/bin' \
 	  '  chart-check  Lint, render and validate the Helm charts, and run their tests' \
-	  '  chart-e2e    Run the chart on a kind cluster with CPU engines and fail over its routers' \
+	  '  chart-e2e    Run both charts and the fleet controller on kind, and fail over its routers' \
 	  '  observe      Start provisioned Prometheus and Grafana services' \
 	  '  help         Show this command list without setting up an environment' \
 	  '' \
