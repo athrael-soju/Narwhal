@@ -1,5 +1,9 @@
+import asyncio
+import contextlib
 import copy
+import io
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -412,3 +416,110 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             (events["sequence"], events["block_size"], events["reason"], len(events["changes"])),
             (1, 4, "complete event history", 1),
         )
+
+
+# The route and field each backend whose identity needs the key publishes its version in.
+KEYED_IDENTITY = {"sglang": ("/server_info", "version"), "llamacpp": ("/props", "build_info")}
+
+
+class KeyedEngineSidecarTests(unittest.TestCase):
+    """An engine that serves its identity only with its key still gets attested."""
+
+    def setUp(self):
+        contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
+        self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "launch"))
+        self.version = contract.engine_version
+
+    def engine(self, backend, seen):
+        path, field = KEYED_IDENTITY[backend]
+
+        def handle(request):
+            seen.append(request.headers.get("authorization"))
+            if request.headers.get("authorization") != "Bearer engine-key":
+                return httpx.Response(401, json={"error": "Unauthorized"})
+            if request.url.path != path:
+                return httpx.Response(404)
+            return httpx.Response(200, json={field: self.version})
+
+        return httpx.MockTransport(handle)
+
+    def run_sidecar(self, backend, argv, **kwargs):
+        """Run `main` against the fake engine; return its status, stderr, the headers the engine
+        saw, and the served app's /health status."""
+        seen: list[str | None] = []
+        transport = self.engine(backend, seen)
+        client = httpx.AsyncClient
+        served = {}
+        with (
+            patch.object(attestation.AttestationDocument, "load", return_value=self.document),
+            patch.object(attestation, "process_clock", return_value=lambda: 100.0),
+            patch.object(
+                attestation.httpx,
+                "AsyncClient",
+                lambda **options: client(**{**options, "transport": transport}),
+            ),
+            patch.object(attestation.uvicorn, "run", lambda app, **_: served.update(app=app)),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            status = attestation.main(
+                [
+                    "--document",
+                    "document.json",
+                    "--engine-base",
+                    "http://engine",
+                    "--backend",
+                    backend,
+                    "--engine-pid",
+                    "1",
+                    *argv,
+                ],
+                **kwargs,
+            )
+            health = None
+            if "app" in served:
+
+                async def probe():
+                    async with client(
+                        transport=httpx.ASGITransport(app=served["app"]),
+                        base_url="http://sidecar",
+                    ) as sidecar:
+                        return (await sidecar.get("/health")).status_code
+
+                health = asyncio.run(probe())
+        return status, stderr.getvalue(), seen, health
+
+    def test_sidecar_sends_the_engine_key_it_is_given_on_every_engine_request(self):
+        for backend in KEYED_IDENTITY:
+            with self.subTest(backend=backend):
+                status, _, seen, health = self.run_sidecar(
+                    backend, [], engine_headers={"Authorization": "Bearer engine-key"}
+                )
+                self.assertEqual((status, health), (0, 200))
+                # Startup and /health each read the identity with the key.
+                self.assertEqual(seen, ["Bearer engine-key"] * 2)
+
+    def test_sidecar_reads_the_engine_key_from_the_variable_it_names(self):
+        for backend in KEYED_IDENTITY:
+            with (
+                self.subTest(backend=backend),
+                patch.dict(os.environ, {"ENGINE_KEY": "engine-key"}),
+            ):
+                status, _, seen, health = self.run_sidecar(
+                    backend, ["--engine-key-env", "ENGINE_KEY"]
+                )
+                self.assertEqual((status, health), (0, 200))
+                self.assertEqual(seen, ["Bearer engine-key"] * 2)
+
+    def test_an_unset_key_variable_is_an_argument_error(self):
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit) as exit:
+            self.run_sidecar("sglang", ["--engine-key-env", "ENGINE_KEY"])
+        self.assertEqual(exit.exception.code, 2)
+
+    def test_a_refused_key_fails_startup_without_logging_the_key(self):
+        status, stderr, seen, health = self.run_sidecar(
+            "sglang", [], engine_headers={"Authorization": "Bearer wrong-key"}
+        )
+        self.assertEqual((status, health), (1, None))
+        self.assertIn("401 Unauthorized", stderr)
+        self.assertNotIn("wrong-key", stderr)
+        self.assertEqual(seen, ["Bearer wrong-key"])

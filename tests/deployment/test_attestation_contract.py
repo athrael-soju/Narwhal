@@ -222,6 +222,10 @@ class AttestationContractTests(unittest.TestCase):
                 patch(
                     "narwhal.deployment.attestation_contract.sidecar.attest_main", return_value=0
                 ) as sidecar,
+                patch(
+                    "narwhal.deployment.attestation_contract.sidecar.launch_headers",
+                    return_value={"Authorization": "Bearer engine-key"},
+                ),
                 patch.dict(
                     os.environ,
                     {"NARWHAL_NODE_1_ATTESTATION_URL": "http://192.0.2.11:8010/v1/attestation"},
@@ -233,6 +237,13 @@ class AttestationContractTests(unittest.TestCase):
                     output.write("GET /metrics HTTP/1.1 200 OK\n")
                 self.assertEqual(serve(run), 0)
                 sidecar.assert_called_once()
+                # The sidecar reads the engine with the launch's key; the key stays off its
+                # argument list.
+                self.assertEqual(
+                    sidecar.call_args.kwargs["engine_headers"],
+                    {"Authorization": "Bearer engine-key"},
+                )
+                self.assertNotIn("engine-key", " ".join(sidecar.call_args.args[0]))
 
     def test_sidecar_serves_residency_only_for_checked_event_publication(self):
         plan = {

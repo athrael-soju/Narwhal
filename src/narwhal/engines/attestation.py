@@ -210,7 +210,7 @@ async def fetch_engine_identity(
     *,
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
     reader: EngineIdentityReader | None = None,
     attestation_url: str | None = None,
     process: Callable[[], float] | None = None,
@@ -670,7 +670,10 @@ def build_app(
     hca: HcaPort | None = None,
     supervised: Callable[[], dict[str, int]] | None = None,
     kubelet: Callable[[], dict[str, int]] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> FastAPI:
+    """Return the sidecar app. `headers`, the engine's authorization header, goes with every
+    request the sidecar sends the engine, and never to a sidecar."""
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
     epoch = uuid4().hex
@@ -681,6 +684,7 @@ def build_app(
                 engine_base,
                 timeout_s=timeout_s,
                 transport=transport,
+                headers=headers,
                 reader=reader,
                 process=process,
             )
@@ -798,7 +802,10 @@ def watch_process(process: Callable[[], float]) -> None:
     threading.Thread(target=watch, name="engine-process-watch", daemon=True).start()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, engine_headers: Mapping[str, str] | None = None) -> int:
+    """Run the sidecar. `engine_headers`, the engine's authorization header, goes with every
+    request to the engine; the contract tool passes its launch's. Without it, the header holds
+    the key in the variable `--engine-key-env` names."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
@@ -816,6 +823,12 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=5.0,
         help="engine identity HTTP timeout in seconds (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--engine-key-env",
+        metavar="NAME",
+        help="environment variable holding the engine API key, sent as a bearer token on "
+        "every request to the engine",
     )
     parser.add_argument(
         "--kv-events",
@@ -858,6 +871,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
         parser.error("--kv-events requires --model")
+    headers = dict(engine_headers or {})
+    if engine_headers is None and args.engine_key_env is not None:
+        key = os.environ.get(args.engine_key_env)
+        if not key:
+            parser.error(f"--engine-key-env {args.engine_key_env} is not set in the environment")
+        headers = {"authorization": f"Bearer {key}"}
     hca = None
     if args.hca is not None:
         try:
@@ -889,7 +908,11 @@ def main(argv: list[str] | None = None) -> int:
             process = pod_clock(args.engine_pod_container)
         identity = asyncio.run(
             fetch_engine_identity(
-                args.engine_base, timeout_s=args.timeout_s, reader=backend.identity, process=process
+                args.engine_base,
+                timeout_s=args.timeout_s,
+                headers=headers,
+                reader=backend.identity,
+                process=process,
             )
         )
         if identity.version != document.contract.engine_version:
@@ -928,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
                 hca=hca,
                 supervised=restarts.supervisor("sidecar"),
                 kubelet=_kubelet(args.pod),
+                headers=headers,
             ),
             host=args.host,
             port=args.port,
