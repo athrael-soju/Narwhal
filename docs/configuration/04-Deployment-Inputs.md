@@ -155,7 +155,7 @@ Export fails when:
 
 ### Kubernetes launch inputs
 
-[`narwhal-engine prepare --backend kubernetes`](../cli/Engine.md#kubernetes-plans) reads these variables as well as the engine inputs above, except `NARWHAL_NODE_<n>_IP`. It refuses a missing or malformed value.
+[`narwhal-engine prepare --backend kubernetes`](../cli/Engine.md#kubernetes-plans) reads these variables as well as the engine inputs above, except `NARWHAL_NODE_<n>_IP`. It refuses a missing or malformed value. On a cluster, the fleet controller sets each of them from the `NarwhalFleet` and the narwhal chart's settings when it prepares an engine.
 
 | Variable | Value |
 | --- | --- |
@@ -164,25 +164,43 @@ Export fails when:
 | `NARWHAL_KUBERNETES_MODEL_VOLUME` | A JSON volume source that serves the staged checkpoint, with one of `persistentVolumeClaim`, `hostPath`, `nfs` or `csi`, such as `{"persistentVolumeClaim": {"claimName": "models", "readOnly": true}}` |
 | `NARWHAL_KUBERNETES_STATE_CLAIM` | The name of the state PersistentVolumeClaim, where the engine pod writes its records |
 | `NARWHAL_KUBERNETES_API_KEY_SECRET` | `<secret name>/<key>` of the Secret that holds `NARWHAL_ENGINE_API_KEY`. Required when `NARWHAL_ENGINE_API_KEY` is set, and refused when it is not |
-| `NARWHAL_KUBERNETES_SERVICE_ACCOUNT` | The service account the engine pod's attestation sidecar runs as. `kubernetes.json` holds it with a Role and RoleBinding that grant `get` on pods in its namespace |
+| `NARWHAL_KUBERNETES_SERVICE_ACCOUNT` | The service account the engine pod's attestation sidecar runs as. `kubernetes.json` holds it with a Role and RoleBinding that grant `get` on pods in its namespace. On a cluster it is the narwhal chart's `<release>-engine`, which no fleet sets |
 | `NARWHAL_KUBERNETES_SIDECAR_IMAGE` | The Narwhal image the attestation sidecar runs, as a registry digest, `<repository>@sha256:<hex>` |
+| `NARWHAL_KUBERNETES_SIDECAR_USER` | Optional. The non-root user and group the attestation sidecar runs as, 10002 by default. On a cluster it is the narwhal chart's `sidecarUser` |
 | `NARWHAL_KUBERNETES_RUNTIME_CLASS` | Optional. The RuntimeClass the engine pod runs under, such as `nvidia`, for nodes whose default container runtime exposes no GPUs |
 
 A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Kubernetes reserves those domains. `NARWHAL_ENGINE_IMAGE` must be a registry digest, and `NARWHAL_NODE_<n>_URL` must name the engine pod. `NARWHAL_NODE_<n>_ATTESTATION_URL` must name the pod's sidecar route, `http://<pod>:<NARWHAL_ATTEST_PORT>/v1/attestation`, which the plan pins.
 
 ### Kubernetes target inputs
 
-`narwhal deploy --target kubernetes` reads the Kubernetes launch inputs above, the engine and fabric inputs, the [deployment run inputs](#deployment-run-inputs) and these, as [Deploying on Kubernetes](../deploy/Kubernetes.md#inputs) describes:
+On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployment inputs, and the fleet controller turns its fields back into these variables, so validation, digests and rerun rules are the same as for the variables. `narwhal deploy --target kubernetes` reads them from the workstation's environment and builds the fleet from them. [Needs verification: step I]
 
-| Variable | Value |
+| Variable | Fleet field |
 | --- | --- |
-| `NARWHAL_KUBERNETES_NAMESPACE` | The namespace the fleet runs in. One fleet per namespace |
-| `NARWHAL_KUBERNETES_VALUES` | A JSON file of chart values for `images`, `state`, `routers`, `haproxy`, `credentials` and `monitoring`. The run sets `engines`, `placement`, `gates`, `routers.enabled`, `routers.fleet` and `state.claimName` itself, and refuses a file that sets the first three. `images.narwhal` and `images.fabric` must be registry digests |
-| `NARWHAL_NODE_<n>_KUBERNETES_NODE` | The node engine `n` runs on. Each one names an engine role; at least two are required |
-| `NARWHAL_KUBERNETES_RELEASE` | Optional. The Helm release name, `narwhal` by default |
-| `NARWHAL_KUBERNETES_CONTEXT` | Optional. The kubeconfig context; the current one by default |
-| `NARWHAL_KUBERNETES_CHART` | Optional. The chart directory; `deploy/helm/narwhal` of the checkout by default |
-| `NARWHAL_KUBECTL`, `NARWHAL_HELM` | Optional. The `kubectl` and `helm` executables |
+| `NARWHAL_KUBERNETES_NAMESPACE` | The fleet's namespace. One fleet per namespace, named `fleet` |
+| `NARWHAL_KUBERNETES_SIDECAR_IMAGE`, `NARWHAL_KUBERNETES_HAPROXY_IMAGE`, `NARWHAL_KUBERNETES_FABRIC_IMAGE` | `images.narwhal`, `images.haproxy`, `images.fabric` |
+| `NARWHAL_ENGINE_IMAGE` | `engines.image` |
+| `NARWHAL_ENGINE_MODEL_NAME`, `NARWHAL_MODEL_TREE_SHA256` | `engines.model.name`, `engines.model.treeSha256` |
+| `NARWHAL_MODEL_PATH`, `NARWHAL_MODEL_SHA256` | `engines.model.file`, the path below `/model`, and `engines.model.fileSha256` |
+| `NARWHAL_KUBERNETES_MODEL_VOLUME` | `engines.modelVolume` |
+| `NARWHAL_KUBERNETES_GPU_RESOURCE`, `NARWHAL_KUBERNETES_RDMA_RESOURCE`, `NARWHAL_KUBERNETES_RUNTIME_CLASS` | `engines.resources.gpu`, `rdma` and `runtimeClassName` |
+| `NARWHAL_ENGINE_PORT`, `NARWHAL_ATTEST_PORT` | `engines.ports.engine` and `attestation`, shared by every engine |
+| `NARWHAL_KUBERNETES_API_KEY_SECRET` | `engines.apiKeySecret`, from `<secret name>/<key>` |
+| `NARWHAL_NODE_<n>_KUBERNETES_NODE` | `engines.nodes[n-1].node`: the node engine `n` runs on. At least two engines |
+| `NARWHAL_NODE_<n>_FABRIC_INTERFACE` | `engines.nodes[n-1].fabricInterface` |
+| `NARWHAL_NODE_<n>_RDMA_GID_INDEX`, `NARWHAL_NODE_<n>_RDMA_ROCE_MODE` | `engines.nodes[n-1].rdma.gidIndex` and `roceMode` |
+| `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`, `NARWHAL_ROUTER_OVERHEAD_S` | `slo.ttftS`, `tpotS` and `routerOverheadS` |
+| `NARWHAL_FIRST_TOKEN_MARGIN_S` | `firstTokenMarginS` |
+| `NARWHAL_PROFILE_PREFILL_LENS`, `NARWHAL_PROFILE_DECODE_INPUT_LENS`, `NARWHAL_PROFILE_DECODE_CONCURRENCY`, `NARWHAL_PROFILE_WARMUP_REQUESTS` | `profiling.prefillLens`, `decodeInputLens`, `decodeConcurrency` and `warmupRequests` |
+| `NARWHAL_CALIBRATION_INPUT_TOKENS`, `NARWHAL_CALIBRATION_SAMPLES`, `NARWHAL_CALIBRATION_OBSERVATION_TIMEOUT_S` | `calibration.inputTokens`, `samples` and `observationTimeoutS` |
+| `NARWHAL_FABRIC_PROMPT_TOKENS`, `NARWHAL_FABRIC_HANDOFFS_PER_S`, `NARWHAL_FABRIC_BURST`, `NARWHAL_FABRIC_TRANSFER_BUDGET_S`, `NARWHAL_FABRIC_HEADROOM` | `fabric.workload.promptTokens`, `handoffsPerS`, `burst`, `transferBudgetS` and `headroom` |
+| `NARWHAL_FABRIC_TEST_PORT` | `fabric.testPort` |
+| `NARWHAL_KUBERNETES_ROUTERS`, `NARWHAL_KUBERNETES_HAPROXY` | `routers` and `haproxy`, each as one JSON object |
+| `NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET` | `controlTokenSecret`, from `<secret name>/<key>` |
+| `NARWHAL_STAGE_TIMEOUT_SECONDS`, `NARWHAL_STAGE_<STAGE>_TIMEOUT_SECONDS` | `timeouts.defaultSeconds` and `timeouts.stages.<stage>` |
+| Any other engine or launch input, such as `NARWHAL_ENGINE_BACKEND` or `NARWHAL_TRANSFER_TRANSPORT` | One `engines.launch` entry each |
+
+The fleet refuses a launch name that another field sets, or that names a credential: the engine key and the control token stay in their Secrets. `NARWHAL_KUBERNETES_CONTEXT` and `NARWHAL_KUBECTL` choose the kubeconfig context and the `kubectl` executable, and `NARWHAL_KUBERNETES_STATE_CLAIM` names the state claim; none of them is a fleet field. The variables of the Helm-driven target, `NARWHAL_KUBERNETES_VALUES`, `NARWHAL_KUBERNETES_CHART`, `NARWHAL_KUBERNETES_RELEASE` and `NARWHAL_HELM`, are refused: the fleet holds what they gave.
 
 ### Fabric qualification inputs
 
@@ -278,7 +296,7 @@ Narwhal sets these itself, in the role environments, the units and containers it
 | `NARWHAL_SGLANG_API_KEY`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT`, `NARWHAL_TRTLLM_API_KEY`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT`, `NARWHAL_CACHE_PLAN`, `NARWHAL_CACHE_OUTPUT`, `NARWHAL_CAPTURE_CACHE` | The launcher, in the engine container, as [Engine endpoints and launch](05-Engine-Launch.md) describes |
 | `NARWHAL_POD_IP`, `NARWHAL_POD_NAME`, `NARWHAL_POD_UID`, `NARWHAL_NODE_NAME`, `NARWHAL_ROLE` | The engine pod's specification, from the pod's own fields |
 | `NARWHAL_GATE_KEEP` | A Kubernetes gate Job, for the directory that keeps its returned files |
-| `NARWHAL_KUBERNETES_FLEET_UID`, `NARWHAL_KUBERNETES_HAPROXY_IMAGE`, `NARWHAL_KUBERNETES_FABRIC_IMAGE`, `NARWHAL_KUBERNETES_ROUTERS`, `NARWHAL_KUBERNETES_HAPROXY` | The in-cluster controller, from a `NarwhalFleet` resource. [Needs verification: task 26] |
+| `NARWHAL_KUBERNETES_FLEET_UID` | The fleet controller, from the `NarwhalFleet`'s uid |
 | `NARWHAL_PROMETHEUS_URL`, `NARWHAL_GRAFANA_URL`, `NARWHAL_RENDERER_ADDRESS`, `NARWHAL_RENDERER_TOKEN`, `NARWHAL_PROMETHEUS_CONFIG_DIGEST` | The monitoring stack's start, for Docker Compose |
 
 Other commands read their own variables: `NARWHAL_TARGETS_URL` and `NARWHAL_SIDECAR_URLS` the [monitoring stack](../observability/01-Start-and-Verify.md) started by hand, `NARWHAL_TOOL_METRICS_URL` [`narwhal-check`](../cli/Check.md) and [`narwhal-profile`](../cli/Profile.md), `NARWHAL_MODEL_REVISION` [`narwhal-engine`](../cli/Engine.md), `NARWHAL_DOCKER_RECONCILE_SECONDS` the [Docker command reconciliation](../dev/Recovery-and-Qualification.md#docker-command-reconciliation) of `narwhal dev`, the `NARWHAL_CONTROL_` variables the [fleet control service](../operate/fleet-control/09-Configuration-Reference.md), and the `NARWHAL_TRIAL_` variables the [measurement pages](../Measure.md).

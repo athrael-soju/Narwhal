@@ -21,7 +21,21 @@ On SSH hosts, `narwhal deploy` starts and supervises the fleet's processes, and 
 | Public ingress | Site | TLS, client authentication, rate limits, model routing, streaming proxy settings |
 | Alerting and logs | Site | The Alertmanager and its paging, the dead man's switch for `NarwhalWatchdog`, and retention of the unit logs, container logs and request journals, which Narwhal does not rotate |
 
-On Kubernetes, the lease store is a Kubernetes `Lease`, and the [Helm chart](../deploy/Kubernetes.md) runs the engines, sidecars, routers and HAProxy.
+On Kubernetes, the [fleet controller](../deploy/Kubernetes.md) runs the stages for the namespace's `NarwhalFleet` and builds the fleet's workloads, the kubelet restarts their containers, and the site keeps the cluster:
+
+| Component | Owner | Responsibility |
+| --- | --- | --- |
+| Engines and attestation sidecars | Narwhal | The controller builds one StatefulSet of engine pods, each with its engine container and its sidecar, from checked launch plans, and pins each pod to the node discovery measured. The kubelet restarts a failed container, and the controller checks the new identity on its next pass, as [Engine restarts](../deploy/Kubernetes.md#engine-restarts) describes |
+| Routers | Narwhal | The controller builds the router pair's StatefulSet, and the kubelet restarts a failed router. The routers elect the primary through a `Lease`, as [Electing the primary on Kubernetes](#electing-the-primary-on-kubernetes) describes |
+| Load balancer | Narwhal | The controller builds HAProxy's Deployment and Service from the shipped configuration |
+| Gate Jobs | Narwhal | The controller runs every check as a Job, adopts the Jobs a restarted controller left running, and deletes them in the background so their pods go too |
+| Prometheus and Grafana | Narwhal or site | The chart runs both, or leaves them to the cluster's Prometheus Operator and Grafana, as [Monitoring](../deploy/Kubernetes.md#monitoring) describes |
+| Cluster | Site | Kubernetes 1.30 or later, the nodes, the GPU and RDMA device plugins, the storage classes, a network plugin that enforces NetworkPolicy, and the images in a registry the nodes reach |
+| Charts and access | Site | Installing and upgrading both charts, the namespace of each fleet, the RBAC bindings of whoever writes the fleet, and the Secrets that hold the engine key and the routers' control token, as [Security and access](../deploy/Kubernetes.md#security-and-access) describes |
+| Staged inputs | Site | The staged checkpoint on the model volume, and the deployment inputs in the `NarwhalFleet` |
+| Recovery | Site | Asking a stalled fleet to run again, stopping it before a change that reruns discovery, replacing a lost controller node, and deleting what a deleted fleet leaves, as [Recovery](../deploy/Kubernetes.md#recovery) describes |
+| Cluster health, alerting and logs | Site | Node GPU health, volume usage and Job outcomes in the cluster's own monitoring, the Alertmanager, and retention of the container logs, which the kubelet rotates |
+| Public ingress | Site | TLS, client authentication, rate limits, model routing, streaming proxy settings |
 
 ## Keeping one deployment set
 
@@ -73,7 +87,7 @@ Configure the load balancer from the shipped [HAProxy configuration](https://git
 
 HAProxy takes a router out of rotation at the first check that fails, and returns it at the first check that passes. A check also fails when the router does not accept its connection within 200 milliseconds or does not answer within one second.
 
-`narwhal deploy` and the chart forward only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets` through HAProxy, matched by method and exact path. Every other request answers HTTP 404 there, so a client of the load balancer cannot reach `/narwhal/state`, `/metrics`, membership or lifecycle routes. Stages, the other router and monitoring read those at a router's own address. The shipped file itself forwards every path; `narwhal deploy` adds the filter when it binds the file to the pair.
+`narwhal deploy` and the Kubernetes fleet controller forward only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets` through HAProxy, matched by method and exact path. Every other request answers HTTP 404 there, so a client of the load balancer cannot reach `/narwhal/state`, `/metrics`, membership or lifecycle routes. Stages, the other router and monitoring read those at a router's own address. The shipped file itself forwards every path; `narwhal deploy` adds the filter when it binds the file to the pair.
 
 A standby, a fenced router, a router that is shutting down and a stopped router are therefore out of rotation. While no router is in rotation, HAProxy holds each new request and tries again every second, up to 10 times, then answers HTTP 503 itself. It retries a request whose connection to a router fails in the same way. A new request therefore waits for the standby when the standby takes over within 10 seconds of the request, as it does at the default `--lease-ttl`. The held requests reach the new router together, and admission can refuse some of them with HTTP 429. A request in flight on a crashed router fails.
 
@@ -116,7 +130,7 @@ Configure the supervisor to restart each router with `--standby-of` set to the o
 
 ### Electing the primary on Kubernetes
 
-On Kubernetes the routers elect the primary through a `coordination.k8s.io` Lease instead of a file, so no shared volume holds the lease. Start both routers with `--kubernetes-lease` set to the same Lease name in place of `--lease-path`. The [Helm chart](../deploy/Kubernetes.md#starting-the-router-pair) uses the Lease `narwhal-router`. The router's ServiceAccount needs `get` and `update` on that Lease, and `create` on Leases so the first router can create it. RBAC cannot limit `create` to one name, since the name is in the request body.
+On Kubernetes the routers elect the primary through a `coordination.k8s.io` Lease instead of a file, so no shared volume holds the lease. Start both routers with `--kubernetes-lease` set to the same Lease name in place of `--lease-path`. The [fleet controller](../deploy/Kubernetes.md#starting-the-router-pair) starts them on the Lease `narwhal-router`. The router's ServiceAccount, which the narwhal chart makes, needs `get` and `update` on that Lease, and `create` on Leases so the first router can create it. RBAC cannot limit `create` to one name, since the name is in the request body.
 
 Each router fences itself on its own clock, `CLOCK_BOOTTIME` on Linux, which keeps counting while the host is suspended, so a holder that resumes finds its deadline gone. No decision compares one router's clock with the other's or with the API server's:
 

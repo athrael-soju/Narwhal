@@ -14,7 +14,7 @@ narwhal deploy status --run runs/deploy/first-deploy
 narwhal deploy down --run runs/deploy/first-deploy
 ```
 
-With `--target kubernetes`, `plan`, `run`, `status` and `down` run the same graph on a Kubernetes cluster through `helm` and `kubectl`, as [Deploying on Kubernetes](../deploy/Kubernetes.md) describes. The other subcommands work on SSH hosts only.
+With `--target kubernetes`, `plan`, `run`, `status` and `down` work on the namespace's `NarwhalFleet` instead: the fleet controller in the cluster runs the graph, and the workstation applies the fleet, follows its status and copies the evidence back, as [Applying the fleet](../deploy/Kubernetes.md#applying-the-fleet) describes. [Needs verification: step I] The other subcommands work on SSH hosts only.
 
 The other subcommands run one stage, or one gate's stages, alone: discovery, the access check, packaging, installation, SGLang handoff measurement, the cache-equivalence groups and fabric qualification. They also open role shells and port tunnels:
 
@@ -176,7 +176,7 @@ With `--format json`, `plan`, `run`, `status`, `down`, `discover`, `access`, `pa
 | `--cache-layout` | None | `ROLE=PATH`: the `cache-layout.json` that `narwhal-engine capture-cache` wrote for the role. Repeatable, once for each engine that captures its cache layout. | An `engine-<n>` role of the launch records |
 | `--transfer-record` | None | `ROLE=PATH`: the `transfer.json` that `transfer-measure` wrote for the role, with `before.prom` and `after.prom` beside it. Repeatable, once for each engine whose handoffs are measured. | An `engine-<n>` role of the launch records |
 | `--run` | Required for every subcommand that takes it except `shell`, none for `shell` | For `plan`, `run`, `status` and `down`, the run directory that holds the run record; `run` creates it at mode 0700, and `run`, `status` and `down` refuse one another user owns or may enter. For the others, the package directory that `package` wrote. `transfer-measure`, `cache-groups` and `fabric` read the engines' packaged launch records from it, and `transfer-measure` and `fabric` their role files. | |
-| `--target` | `ssh` | Where `plan`, `run`, `status` and `down` run the fleet: on SSH hosts, or on a Kubernetes cluster through `helm` and `kubectl`. A run directory keeps the target it started with. | `ssh` or `kubernetes` |
+| `--target` | `ssh` | Where `plan`, `run`, `status` and `down` run the fleet: on SSH hosts, or on a Kubernetes cluster, whose `NarwhalFleet` they apply and follow. A run directory keeps the target it started with. | `ssh` or `kubernetes` |
 | `--until` | `monitoring`, `trial` with `--trial`, or `router-start` with `--target kubernetes` | The last stage `plan` decides or `run` runs. | A stage of the [stage table](../Deploy.md#rerunning-after-a-change) up to `trial`, which needs `--trial` |
 | `--trial` | None | A `narwhal.capacity-trial` file with the [capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial)'s workload, rates and thresholds. Its SHA-256 is the run's `trial` input. | A readable file, on the `ssh` target |
 | `--groups` | Required | The `cache-groups.json` that `cache-groups` derived from the same package. `fabric` takes each group and its representative from it, and sizes each budget from the cache layout or transfer record the groups were derived from. | A file whose packaged launch digests and geometry-source digests still match |

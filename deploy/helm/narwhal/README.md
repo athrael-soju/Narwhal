@@ -11,7 +11,7 @@ The chart runs the fleet controller for one namespace, and what the controller d
 - a `NarwhalFleet`, when `fleet` is set
 - or [direct engines](#direct-engines) that run on CPUs without attestation
 
-Install the [CRD chart](../narwhal-crds/README.md) first. The controller builds the engines, the gate Jobs, the router pair and HAProxy from the namespace's `NarwhalFleet` and owns them through owner references, so the chart renders none of them. The cluster needs Kubernetes 1.30 or later, the GPU and RDMA device plugins the fleet names, and a ReadWriteMany storage class for the state claim. Install each release in a namespace of its own, which runs nothing else: see [Who may write the fleet](#who-may-write-the-fleet).
+[Deploying on Kubernetes](https://athrael-soju.github.io/Narwhal/deploy/Kubernetes/) takes a fleet through the controller from install to recovery, and [Getting started](https://athrael-soju.github.io/Narwhal/deploy/Getting-Started/#deploying-on-kubernetes) gives a complete values file. Install the [CRD chart](../narwhal-crds/README.md) first. The controller builds the engines, the gate Jobs, the router pair and HAProxy from the namespace's `NarwhalFleet` and owns them through owner references, so the chart renders none of them. The cluster needs Kubernetes 1.30 or later, the GPU and RDMA device plugins the fleet names, and a ReadWriteMany storage class for the state claim. Install each release in a namespace of its own, which runs nothing else: see [Who may write the fleet](#who-may-write-the-fleet).
 
 ## Controller
 
@@ -58,7 +58,7 @@ Helm creates the policy after the controller, and `helm uninstall` keeps the pol
 
 ## The fleet
 
-`fleet` holds a `NarwhalFleet`'s `spec`, which `values.schema.json` checks against the CRD's schema; the API server checks the CRD's CEL rules when Helm applies it. The chart names the fleet `fleet` and marks it `argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true`, so one Argo CD Application can hold both charts. Leave `fleet` out to apply the fleet with `narwhal deploy --target kubernetes` or another tool.
+`fleet` holds a `NarwhalFleet`'s `spec`, which `values.schema.json` checks against the CRD's schema; the API server checks the CRD's CEL rules when Helm applies it. [NarwhalFleet reference](https://athrael-soju.github.io/Narwhal/deploy/NarwhalFleet/) lists every field. The chart names the fleet `fleet` and marks it `argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true`, so one Argo CD Application can hold both charts. Leave `fleet` out to apply the fleet with `narwhal deploy --target kubernetes` or another tool.
 
 ## Direct engines
 

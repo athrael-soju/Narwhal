@@ -10,6 +10,8 @@ The CRD sits in `templates/`, so `helm upgrade` updates it. It carries `helm.sh/
 
 The cluster admin decides which model volumes a fleet may use, in the `narwhal` chart's values. `modelVolumeSources` allows only `persistentVolumeClaim` by default. A hostPath also needs a directory in `modelHostPathPrefixes`, an NFS export a server in `modelNfsServers`, and a CSI volume a driver in `modelCsiDrivers`. Each of those lists is empty by default, which keeps that source off. The CRD itself refuses a hostPath that is not a normalised path with `type: Directory`, and any path that is or lies in a node's system, user, log, kubelet, etcd, CNI or container runtime directory.
 
-The chart needs Kubernetes 1.30 or later and has no values. `tools/maintenance/crd_schema.py` writes its template from `SCHEMA` in `src/narwhal/deployment/fleet_resource.py`; edit the schema, then run the tool. The unit suite fails while the template differs from the schema.
+The chart needs Kubernetes 1.30 or later and has no values. `tools/maintenance/crd_schema.py` writes its template from `SCHEMA` in `src/narwhal/deployment/fleet_resource.py`; edit the schema, then run that tool and `tools/maintenance/fleet_reference_doc.py`. The unit suite fails while the template or the reference page differs from the schema.
 
-The API group `narwhal.example.com` is a placeholder under a domain RFC 2606 reserves. Every label and annotation key derives from it.
+The API group `narwhal.example.com` is a placeholder under a domain RFC 2606 reserves. The group and the version `v1alpha1` will change before the resource reaches `v1beta1`, once the project owns a domain. Every label, annotation, condition type, scheduling gate and Lease name derives from the group.
+
+[NarwhalFleet reference](https://athrael-soju.github.io/Narwhal/deploy/NarwhalFleet/) lists every field, and `tools/maintenance/fleet_reference_doc.py` writes its tables from the same schema. [Deploying on Kubernetes](https://athrael-soju.github.io/Narwhal/deploy/Kubernetes/) covers the fleet controller that acts on it.
