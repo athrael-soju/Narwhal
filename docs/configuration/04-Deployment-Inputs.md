@@ -25,7 +25,7 @@ The trust inputs pin what the deployment accepts. The commands that read them re
 
 | Variable | Value |
 | --- | --- |
-| `NARWHAL_NODE_<n>_SSH` | SSH destination of engine `<n>`'s host, an alias or `user@host`. Set one for each engine; engines with the same destination share a host |
+| `NARWHAL_NODE_<n>_SSH` | SSH destination of engine `<n>`'s host: an alias, `user@host`, or `ssh://user@host:port` for a port other than 22. Set one for each engine; engines with the same destination share a host |
 | `NARWHAL_ROUTER_SSH` | Optional destination of the primary router's host. It defaults to the lowest-numbered engine's destination |
 | `NARWHAL_STANDBY_ROUTER_SSH`, `NARWHAL_LOAD_BALANCER_SSH` | The hosts of the [router pair](#router-pair)'s standby and load balancer |
 | `<destination variable>_PASSWORD` | Optional SSH password of that destination, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Without one, the connection uses a key or the SSH agent |
@@ -197,6 +197,16 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 | `NARWHAL_RDMA_ROCE_MODE` | For `ucx_rdma` engines, `v2` or `v1` for RoCE, or `infiniband` for a native InfiniBand port |
 
 `NARWHAL_NODE_<n>_RDMA_GID_INDEX` and `NARWHAL_NODE_<n>_RDMA_ROCE_MODE` set the value for engine `<n>`, for example when engines on one host use different HCAs. The HCA and port come from the engine's `transfer.net_devices`, which `NARWHAL_TRANSFER_NET_DEVICES` or `NARWHAL_NODE_<n>_TRANSFER_NET_DEVICES` sets before discovery. Each `ucx_rdma` engine names exactly one `device:port`.
+
+Read each value from sysfs on the engine's host, for the HCA and port you choose:
+
+```bash
+cat /sys/class/infiniband/<hca>/ports/<port>/state       # 4: ACTIVE
+cat /sys/class/infiniband/<hca>/ports/<port>/link_layer  # InfiniBand or Ethernet
+ls /sys/class/infiniband/<hca>/device/infiniband_verbs   # uverbs<k>
+```
+
+Pick an `ACTIVE` port. Its verbs device is `/dev/infiniband/uverbs<k>`, which goes in `NARWHAL_NODE_<n>_TRANSFER_DEVICES` with `/dev/infiniband/rdma_cm`. On an `InfiniBand` link layer, set the RoCE mode to `infiniband` and the GID index to `0`. On `Ethernet`, set the RoCE mode to `v2` and the GID index to the `<i>` whose `ports/<port>/gid_attrs/types/<i>` reads `RoCE v2` and whose `ports/<port>/gid_attrs/ndevs/<i>` names the interface in `NARWHAL_FABRIC_INTERFACE`. [Getting started](../deploy/Getting-Started.md#writing-the-inputs-file) shows the inputs for two engines.
 
 [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) shows how the workload sets the required rate.
 

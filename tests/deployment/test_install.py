@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.deployment.cli import forward_ports
-from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError
+from narwhal.deployment.hosts import HOST_CAUSE, Host, RemoteError, SignalStop
 from narwhal.deployment.install import (
     check_hardware,
     install,
@@ -580,8 +581,13 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(
                 ssh.return_value.tunnel.call_args.args[1], ["127.0.0.1:18000:[::1]:8000"]
             )
-            ssh.return_value.tunnel.side_effect = KeyboardInterrupt
-            self.assertEqual(main(["deploy", "tunnel", "--forward", "18000:8000"]), 130)
+            for stop, code in (
+                (KeyboardInterrupt(), 130),
+                (SignalStop(signal.SIGTERM), 143),
+                (SignalStop(signal.SIGHUP), 129),
+            ):
+                ssh.return_value.tunnel.side_effect = stop
+                self.assertEqual(main(["deploy", "tunnel", "--forward", "18000:8000"]), code)
 
     def test_interactive_actions_refuse_a_command_result(self):
         with (

@@ -55,10 +55,13 @@ For an empty directory with a Hugging Face source:
     ```
 
 4. Record the repository ID and commit SHA in the private record.
-5. Compute the checkpoint's tree digest from the staged files, with a Narwhal environment on a host that holds them:
+5. Compute the checkpoint's tree digest on one engine host. The digest module uses only the Python standard library, so the host runs it from the release wheel before anything is installed. With `.env` loaded on the workstation:
 
     ```bash
-    echo "{\"model_dir\": \"$NARWHAL_MODEL_DIR\"}" | python -m narwhal.deployment.launch_engine.checkpoint
+    scp "$NARWHAL_WHEEL" <host-a>:/tmp/narwhal.whl
+    ssh <host-a> "echo '{\"model_dir\": \"$NARWHAL_MODEL_DIR\"}' |
+      PYTHONPATH=/tmp/narwhal.whl python3 -m narwhal.deployment.launch_engine.checkpoint"
+    ssh <host-a> rm /tmp/narwhal.whl
     ```
 
 6. Set `NARWHAL_MODEL_TREE_SHA256` in `.env` to the output's `model_tree_sha256`.

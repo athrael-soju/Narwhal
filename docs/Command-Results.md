@@ -24,7 +24,7 @@ Text mode uses the [text-mode exit codes](CLI-Reference.md#text-mode-exit-codes)
 | Status | Exit code | Operation state | Error codes |
 | --- | :--: | --- | --- |
 | `success` | 0 | The requested operation completed | |
-| `failed_gate` | 1 | A preflight, evidence, health, host inspection, engine probe or deployment stage gate rejected the operation | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
+| `failed_gate` | 1 | A preflight, evidence, health, host inspection, engine probe or deployment stage gate rejected the operation, or `narwhal deploy status` found the last run stopped at a failed stage | `gate_failed`, `evidence_gate_failed`, `engine_unhealthy`, `failed_gate` |
 | `invalid_input` | 2 | Arguments, configuration, or required inputs failed validation | `invalid_arguments`, `invalid_input`, `input_missing`, `output_exists`, `engine_selection_empty`, `runtime_package_missing` |
 | `degraded` | 3 | Completed with skipped preflight gates, a degraded development instance, a deployment whose recorded process or route no longer holds, or a partial diagnostic bundle | `gates_skipped`, `instance_degraded`, `collection_partial` |
 | `error` | 4 | An operational failure or stage deadline interrupted completion | `permission_denied`, `engine_http_error`, `operation_failed`, `stage_timeout` |

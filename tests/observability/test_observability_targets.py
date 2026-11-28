@@ -73,7 +73,9 @@ class TargetGenerationTests(unittest.TestCase):
         for routers in (["http://router-a:8000", "http://router-b:8000"], ["http://router-a:8000"]):
             with (
                 self.subTest(routers=routers),
-                self.assertRaisesRegex(ValueError, "NARWHAL_TARGETS_URL names router router-a"),
+                self.assertRaisesRegex(
+                    ValueError, "--targets-url or NARWHAL_TARGETS_URL names router router-a"
+                ),
             ):
                 make_targets.load_contract(routers, "http://router-a:8000/")
 

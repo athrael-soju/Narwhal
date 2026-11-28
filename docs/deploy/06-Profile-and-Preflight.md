@@ -44,6 +44,18 @@ When an engine refuses a decode measurement request, reports an error in its str
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, the stage fails: set shorter `NARWHAL_PROFILE_PREFILL_LENS` and `NARWHAL_PROFILE_DECODE_INPUT_LENS` and run again. If the sequence limit leaves fewer than two decode concurrency points, change the engine launch policy.
 
+The stage also fails when the prefill curve does not fit the per-length medians within 20% mean error or 50% worst-point error, as [Prefill fit](../measure/01-Profile.md#prefill-fit) defines:
+
+```text
+narwhal-profile: ... n1: prefill median fit error 12.9%, worst point 55.6%; inspect the retained per-length measurements before using this profile
+```
+
+The medians are in `host/profiles.samples.json` in the stage's attempt directory. A small model on a fast GPU can give a flat curve with a step at short prompts, such as 17.8 ms at 256 tokens, 33.8 ms at 700 and 64.1 ms at 12,300, and the fit misses the shortest length. Drop the lengths below the step from `NARWHAL_PROFILE_PREFILL_LENS` and run again. Keep at least three lengths, and keep two on cache-block boundaries, such as 1024, 4096 and 8192, so the profiler can still set `ttft_split`, as [Prefill sweep](../measure/01-Profile.md#prefill-sweep) describes:
+
+```bash
+NARWHAL_PROFILE_PREFILL_LENS=1024,1300,2300,4096,4300,8192,8300,12300
+```
+
 The profiler's `.samples.json` sidecar stays beside the `profiles.path` store, and `fleet-limits` copies both.
 
 Preflight warns when an engine's profile measures decode below its sequence limit. It reads that limit from the profile's sidecar (recorded by `--limits`) and, on a fleet with an engine contract, from the engine's attestation when the sidecar records a lower limit or none. Decode seats stop at the profiled maximum, as [Engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) describes. To clear the warning, re-profile the engine with `--limits`, after you:

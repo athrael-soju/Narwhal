@@ -35,6 +35,8 @@ ssh-keyscan -t ed25519 <host-a> >> config/ssh.known_hosts
 ssh-keygen -lf config/ssh.known_hosts
 ```
 
+For a host whose SSH port is not 22, scan it with `ssh-keyscan -t ed25519 -p <port> <host-a>`, which writes the entry in the `[host]:port` form that OpenSSH looks up, and write its destination as `ssh://deploy@<host-a>:<port>` or as an alias with a `Port` line in your SSH config.
+
 `narwhal deploy` checks every host key against this file and never adds one. Add the jump host's key too when you reach the hosts through one, which `NARWHAL_SSH_JUMP` names. The jump connection authenticates with a key or the SSH agent. Load a key that has a passphrase into the agent first, since key authentication never prompts.
 
 ## Preparing SSH hosts
@@ -122,8 +124,8 @@ NARWHAL_FABRIC_TEST_PORT=5201
 # SLO targets, profiling and first-token calibration
 NARWHAL_TTFT_S=<seconds>
 NARWHAL_TPOT_S=<seconds>
-NARWHAL_ROUTER_OVERHEAD_S=<seconds>
-NARWHAL_FIRST_TOKEN_MARGIN_S=<seconds>
+NARWHAL_ROUTER_OVERHEAD_S=0.05
+NARWHAL_FIRST_TOKEN_MARGIN_S=0.1
 NARWHAL_PROFILE_PREFILL_LENS=256,700,1300,2300,4096,4300,8300,12300
 NARWHAL_PROFILE_DECODE_INPUT_LENS=512,4096,8192
 NARWHAL_PROFILE_WARMUP_REQUESTS=2
@@ -136,13 +138,16 @@ NARWHAL_ROUTER_URL=http://<host address>:8000
 NARWHAL_FLEET_NAME=first-fleet
 ```
 
-The profiling and calibration lengths above suit engines whose live context is 16,384 tokens; [Profile engines and run preflight](06-Profile-and-Preflight.md) explains how to choose them, and [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) the SLO targets. Engines on one host share its fabric interface, so they need distinct engine, attestation and side-channel ports and port ranges. A fleet on one host has no fabric edges to measure, and preflight checks the transfers between its engines. [Needs verification: task 13 follows this layout on one live host]
+The profiling and calibration lengths above suit engines whose live context is 16,384 tokens; [Profile engines and run preflight](06-Profile-and-Preflight.md) explains how to choose them, and [Setting production SLOs](../measure/02-Targets-and-Freeze.md#setting-production-slos) the SLO targets. If `profile` fails with a prefill fit error, change the lengths as [Profiling idle engines](06-Profile-and-Preflight.md#profiling-idle-engines) describes. Engines on one host share its fabric interface, so they need distinct engine, attestation and side-channel ports and port ranges. A fleet on one host has no fabric edges to measure, and preflight checks the transfers between its engines. [Needs verification: task 13 follows this layout on one live host]
+
+The router overhead and first-token margin above are starting values. `router-start` measures the overhead and fails when it exceeds `NARWHAL_ROUTER_OVERHEAD_S`. Preflight's [`slo` gate](../cli/Check.md#the-slo-gate) fails when the calibrated first-token deadline plus the margin, the slowest prefill of the longest calibrated input and the overhead add up to more than `NARWHAL_TTFT_S`.
 
 For several hosts, give each engine its own destination and add the standby router, the load balancer and the lease. Engines on different hosts can keep one set of ports:
 
 ```bash
 NARWHAL_NODE_1_SSH=deploy@<host-a>
 NARWHAL_NODE_2_SSH=deploy@<host-b>
+NARWHAL_GPU_IDS=0
 NARWHAL_STANDBY_ROUTER_SSH=deploy@<host-b>
 NARWHAL_ROUTER_URL=http://<host-a address>:8000
 NARWHAL_STANDBY_ROUTER_URL=http://<host-b address>:8000
@@ -151,7 +156,21 @@ NARWHAL_LEASE_PATH=/srv/shared/narwhal/router.lease
 NARWHAL_HAPROXY_IMAGE=haproxy@sha256:<digest>
 ```
 
-The primary router runs on the host of `NARWHAL_ROUTER_SSH`, which defaults to the lowest-numbered engine's host, and HAProxy on the same host unless `NARWHAL_LOAD_BALANCER_SSH` names another. Leave `NARWHAL_STANDBY_ROUTER_SSH` and the pair's variables unset for one router on several hosts. For KV over RDMA, also set `NARWHAL_TRANSFER_TRANSPORT=ucx_rdma`, the HCA port and devices, and the GID index and RoCE mode, as [Fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) describes.
+Without GPU IDs, each engine takes every GPU on its host, with tensor parallelism set to that count. `NARWHAL_GPU_IDS=0` gives each engine the host's first GPU. The primary router runs on the host of `NARWHAL_ROUTER_SSH`, which defaults to the lowest-numbered engine's host, and HAProxy on the same host unless `NARWHAL_LOAD_BALANCER_SSH` names another. Leave `NARWHAL_STANDBY_ROUTER_SSH` and the pair's variables unset for one router on several hosts.
+
+For KV over RDMA, also name each engine's HCA port and devices, and the GID index and RoCE mode. For example, with engine 1 on port 1 of `mlx5_0` and engine 2 on port 1 of `mlx5_1`, on an InfiniBand link:
+
+```bash
+NARWHAL_TRANSFER_TRANSPORT=ucx_rdma
+NARWHAL_NODE_1_TRANSFER_NET_DEVICES=mlx5_0:1
+NARWHAL_NODE_1_TRANSFER_DEVICES='["/dev/infiniband/uverbs0","/dev/infiniband/rdma_cm"]'
+NARWHAL_NODE_2_TRANSFER_NET_DEVICES=mlx5_1:1
+NARWHAL_NODE_2_TRANSFER_DEVICES='["/dev/infiniband/uverbs1","/dev/infiniband/rdma_cm"]'
+NARWHAL_RDMA_GID_INDEX=0
+NARWHAL_RDMA_ROCE_MODE=infiniband
+```
+
+[Fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) shows how to read each value from the host. Single-quote JSON values such as `NARWHAL_TRANSFER_DEVICES` and `NARWHAL_ENGINE_ARGS`: the shell reads `.env` when you load it, and strips unquoted double quotes, which leaves `[/dev/infiniband/uverbs0,/dev/infiniband/rdma_cm]`. [Needs verification: whether the engines need `/dev/infiniband/rdma_cm`]
 
 ## Checking the inputs with plan
 
@@ -188,9 +207,11 @@ Fix the cause and run the same command again. It resumes at the failed stage and
 narwhal deploy status --run runs/deploy/first-deploy
 ```
 
-`status` prints each stage's state, attempt and evidence directory, then checks every engine container, sidecar unit, router unit, HAProxy container, monitoring container and fabric route the run recorded. It exits 3 when one is gone or changed; run `run` again to restore it.
+`status` prints each stage's state, attempt and evidence directory, then checks every engine container, sidecar unit, router unit, HAProxy container, monitoring container and fabric route the run recorded. It exits 1 while the last run stopped at a failed stage, and 3 when a recorded process or route is gone or changed. Run `run` again in either case.
 
-Clients send requests to `NARWHAL_LOAD_BALANCER_URL`, or to `NARWHAL_ROUTER_URL` on a fleet with one router. Prometheus and Grafana listen on the primary router's host at `127.0.0.1:9090` and `127.0.0.1:3000` by default. Open a tunnel to them from the workstation, as [Tunnelling router, Prometheus, and Grafana to the workstation](07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) shows, then open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`. The dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows each stage of the last run, the fabric margins, the attestation generations and the supervisor restarts. Set `NARWHAL_ALERTMANAGER_URL` to deliver its alerts, as [Monitor](../operate/02-Monitor.md) describes.
+Clients send requests to `NARWHAL_LOAD_BALANCER_URL`, or to `NARWHAL_ROUTER_URL` on a fleet with one router. The router and HAProxy listen on the addresses in those URLs, and Prometheus and Grafana on the primary router's host at `127.0.0.1:9090` and `127.0.0.1:3000` by default, so the workstation needs one tunnel for each address, as [Tunnelling router, Prometheus, and Grafana to the workstation](07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) shows. Then open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`. The dashboard's [Deployment row](../observability/05-Dashboard.md#deployment) shows each stage of the last run, the fabric margins, the attestation generations and the supervisor restarts. Set `NARWHAL_ALERTMANAGER_URL` to deliver its alerts, as [Monitor](../operate/02-Monitor.md) describes.
+
+Grafana and Prometheus keep their data across `down`, and the **Fleet** selector opens on the first fleet they hold. If the dashboard shows an earlier fleet, with its engines at N/A and its router down, pick yours in **Fleet**, or open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator?var-fleet=<NARWHAL_FLEET_NAME>`.
 
 ## Stopping the fleet with down
 

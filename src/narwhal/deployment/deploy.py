@@ -1969,12 +1969,10 @@ class Deployment:
             "--router-url",
             values.router_url,
         ]
+        # The only router serves its own engine targets, so it takes no targets origin.
         if paired(self.env):
             routers = pair(self.env)
             args += ["--router-url", routers.standby_url, "--targets-url", routers.balancer_url]
-        else:
-            # The only router is the one that controls the fleet.
-            args += ["--targets-url", values.router_url]
         _, _, package = self.package_of(context)
         for role in self.engines():
             sidecar = self.role_env(package, role).get(

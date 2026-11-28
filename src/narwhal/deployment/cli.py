@@ -29,7 +29,7 @@ from . import (
 from . import deploy as stage_run
 from . import trial as capacity
 from .deploy_graph import DEPLOY_GRAPH
-from .hosts import SSH, Host, RemoteError, RemoteTimeout, load_hosts
+from .hosts import SSH, Host, RemoteError, RemoteTimeout, SignalStop, load_hosts
 from .launch_engine.evidence import CheckFailed
 from .runner import HelpersSurvived, RunCancelled, RunLocked, StageFailed, stale_notice
 
@@ -395,6 +395,8 @@ def _tunnel(args: argparse.Namespace, hosts: list[Host], env: dict[str, str]) ->
     )
     try:
         ssh.tunnel(host, forwards)
+    except SignalStop as stop:
+        return 128 + stop.signum
     except KeyboardInterrupt:
         return 130
     return 0
@@ -619,6 +621,7 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
         deployment = target.Deployment(directory, env, dry=True)
         record, checks = deployment.runner().inspect(refresh=False)
     rows = []
+    stopped = []
     for name, entry in record["stages"].items():
         row = {
             "stage": name,
@@ -631,6 +634,8 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
             row["failure"] = entry["failure"]["message"]
             row["recovery"] = target.recovery_url(entry["failure"]["recovery"])
             line += f"\n  {row['failure']}\n  Recovery: {row['recovery']}"
+        if entry["status"] in (run_record.FAILED, run_record.TIMEOUT):
+            stopped.append(row)
         print(line)
         rows.append(row)
     live = [vars(check) for check in checks]
@@ -645,6 +650,17 @@ def _status(args: argparse.Namespace, env: dict[str, str]) -> int:
             "live": live,
         }
     )
+    # A run that stopped at a failed stage left the fleet incomplete, whatever still holds.
+    if stopped:
+        for row in stopped:
+            results.record_error(
+                "failed_gate",
+                ": ".join(filter(None, (f"{row['stage']} {row['status']}", row.get("failure")))),
+                stage=row["stage"],
+                context={"recovery": row["recovery"]} if "recovery" in row else None,
+            )
+        results.set_status("failed_gate")
+        return 1
     if any(check.state != "holds" and check.state != "restarted and checked" for check in checks):
         results.set_status("degraded")
         return 3
