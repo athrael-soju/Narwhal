@@ -19,6 +19,13 @@ The Job prints each file as `kubernetes_gate` returns a gate's files, in path or
 its log would pass `EXPORT_LOG_BYTES`, below the kubelet's 10 MiB log rotation, then a
 summary line and the manifest `kubernetes_target.gate_files` checks. The next request
 carries on after the last file it received.
+
+Anyone who may patch the fleet may set the annotation, so the controller bounds what a loop
+of requests costs. It takes one request per fleet every `EXPORT_INTERVAL_SECONDS`, and the
+newest value waits for the next turn. It runs one export Job per fleet at a time: a request
+that arrives while one runs gets the error `RUNNING`, and the workstation asks again. An
+answer whose Job still runs stays in `status.exports` while newer answers push older ones
+out, and the controller deletes the Job of each answer it drops.
 """
 
 from __future__ import annotations
@@ -49,6 +56,11 @@ MAX_ATTEMPTS = 64
 REQUEST_MAX_BYTES = 64 * 1024
 # The answers `status.exports` keeps, newest last.
 KEPT_ANSWERS = 4
+# The controller takes one export request per fleet this often, so a loop of requests can
+# neither start Jobs faster nor push the workstation's answer out of `status.exports` sooner.
+EXPORT_INTERVAL_SECONDS = 5.0
+# The answer to a request that arrives while the fleet's export Job runs.
+RUNNING = "an export is running; retry"
 SUMMARY = "narwhal-export "
 _ATTEMPTS_ENV = "NARWHAL_EXPORT_ATTEMPTS"
 _AFTER_ENV = "NARWHAL_EXPORT_AFTER"
@@ -243,6 +255,30 @@ def wanted(record: Mapping[str, Any], request: Request, directory: Path) -> list
             continue
         attempts.append(relative)
     return sorted(attempts)
+
+
+def finished(job: Mapping[str, Any]) -> bool:
+    """Whether an export Job has completed or failed, so it starts no pod again."""
+    conditions = (job.get("status") or {}).get("conditions") or []
+    return any(
+        c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in conditions
+    )
+
+
+def in_flight(answer: Mapping[str, Any]) -> bool:
+    """Whether an answer names an export Job whose pod has not yet ended."""
+    return bool(answer.get("job")) and "sha256" not in answer and not answer.get("error")
+
+
+def kept(answers: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The newest `KEPT_ANSWERS` answers, and the ones dropped. An answer in flight is dropped
+    last, so the workstation that waits on it still finds it."""
+    found = [dict(answer) for answer in answers]
+    dropped = []
+    while len(found) > KEPT_ANSWERS:
+        index = next((n for n, answer in enumerate(found) if not in_flight(answer)), 0)
+        dropped.append(found.pop(index))
+    return found, dropped
 
 
 def job_name(uid: str, nonce: str) -> str:

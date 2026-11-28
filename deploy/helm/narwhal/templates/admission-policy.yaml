@@ -24,6 +24,11 @@ IPC_LOCK:
   names its ReplicaSet only by name, so the policy takes a ReplicaSet named after the
   controller's Deployment as one of its own; only the Deployment controller makes such a
   ReplicaSet with the controller's ServiceAccount.
+- Only the router StatefulSet the controller applies, and the pods the StatefulSet controller
+  makes for it, run as the routers' ServiceAccount, so no other pod gets the token that renews
+  the router Lease. A pod names its StatefulSet only by name, so the policy takes a pod the
+  StatefulSet controller makes for a StatefulSet of the routers' name as a router pod; any
+  StatefulSet that runs as the routers' ServiceAccount is the controller's.
 - Only the controller's workloads, the controller's own Deployment, and the pods and
   ReplicaSets the Kubernetes controllers make for them mount the state claim, which holds the
   run directories, their salts and the key check's HMACs. Of those, only the controller's own
@@ -54,6 +59,9 @@ it outlives the controller and the workloads the fleet leaves behind.
 {{- $model := include "narwhal.fleet.modelVolume" . }}
 {{- $controllerName := include "narwhal.controller" . }}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace $controllerName }}
+{{- $routerName := include "narwhal.routerName" . }}
+{{- /* The router StatefulSet's name, kubernetes_objects.ROUTER_SET. */}}
+{{- $routerSet := "router" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -163,6 +171,13 @@ spec:
               && variables.owner == 'Deployment' && variables.ownerName == '{{ $controllerName }}')
           || (object.kind == 'Pod' && variables.madeByOwner && variables.owner == 'ReplicaSet'
               && variables.ownerName.startsWith('{{ $controllerName }}-'))
+    # A StatefulSet the fleet controller applies, and the pods the StatefulSet controller
+    # makes for the router StatefulSet.
+    - name: routerPath
+      expression: |-
+        (object.kind == 'StatefulSet' && variables.requester == '{{ $controller }}')
+          || (object.kind == 'Pod' && variables.madeByOwner && variables.owner == 'StatefulSet'
+              && variables.ownerName == '{{ $routerSet }}')
     - name: serviceAccount
       expression: |-
         has(variables.spec.serviceAccountName) ? variables.spec.serviceAccountName
@@ -401,6 +416,11 @@ spec:
         variables.templateKept || variables.serviceAccount != '{{ $controllerName }}'
           || variables.controllerPath
       message: only the controller's Deployment and its pods run as the controller's ServiceAccount
+      reason: Forbidden
+    - expression: |-
+        variables.templateKept || variables.serviceAccount != '{{ $routerName }}'
+          || variables.routerPath
+      message: only the controller's router StatefulSet and its pods run as the routers' ServiceAccount
       reason: Forbidden
     - expression: |-
         !variables.volumes.exists(v, has(v.persistentVolumeClaim)

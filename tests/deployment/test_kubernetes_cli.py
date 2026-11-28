@@ -45,6 +45,7 @@ from tests.deployment.kubernetes_cluster import (
     SERVER,
     STATE_CLAIM,
     Exit,
+    Run,
     StoreTransport,
     Wait,
     _rbac,
@@ -920,11 +921,128 @@ class ExportTests(WorkstationTest):
                     patch_type="merge",
                 )
                 jobs = len(self.export_jobs())
+                self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
                 self.work(self.controllers[0])
                 nonce = json.loads(value)["nonce"]
                 [answer] = [a for a in self.status()["exports"] if a["nonce"] == nonce]
                 self.assertIn(kubernetes_export.EXPORT_REQUEST, answer["error"])
                 self.assertEqual(len(self.export_jobs()), jobs)
+
+    def request_export(self, nonce: str) -> None:
+        """Set the fleet's export request as anyone who may patch the fleet can."""
+        value = kubernetes_export.Request(nonce).value()
+        self.store.patch(
+            self.fleet_kind,
+            NAMESPACE,
+            fleet_resource.NAME,
+            {"metadata": {"annotations": {kubernetes_export.EXPORT_REQUEST: value}}},
+            patch_type="merge",
+        )
+
+    def live_export_jobs(self) -> list[dict]:
+        return [
+            job
+            for job in self.store.live(JOB, NAMESPACE)
+            if job["metadata"]["labels"].get(fleet_resource.GATE_LABEL) == kubernetes_export.EXPORT
+            and not job["metadata"].get("deletionTimestamp")
+        ]
+
+    def running_export_jobs(self) -> list[dict]:
+        return [job for job in self.live_export_jobs() if not kubernetes_export.finished(job)]
+
+    def hold(self, names: set[str]) -> None:
+        """Keep the pods of the export Jobs `names` names running until a test empties it."""
+        kubelet = self.store.kubelet
+
+        def held(pod: dict) -> Any:
+            if pod["metadata"].get("labels", {}).get(kubernetes_target.JOB_NAME_LABEL) in names:
+                return Run()
+            return kubelet(pod)
+
+        self.store.kubelet = held
+
+    def test_a_loop_of_export_requests_runs_one_export_job_at_a_time(self):
+        before = len(self.export_jobs())
+        for n in range(40):
+            self.store.clock.advance(1)
+            self.request_export(f"{n:032x}")
+            self.work(self.controllers[0])
+            self.assertLessEqual(len(self.running_export_jobs()), 1)
+            self.store.settle()
+            self.assertLessEqual(len(self.live_export_jobs()), kubernetes_export.KEPT_ANSWERS)
+        # One request per fleet every interval at most, so one Job at most.
+        made = len(self.export_jobs()) - before
+        self.assertLessEqual(made, 40 // kubernetes_export.EXPORT_INTERVAL_SECONDS + 1)
+        self.assertLessEqual(len(self.status()["exports"]), kubernetes_export.KEPT_ANSWERS)
+        # The newest request waits for its turn and is answered then.
+        self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+        self.work(self.controllers[0])
+        self.assertIn(f"{39:032x}", {a["nonce"] for a in self.status()["exports"]})
+
+    def test_a_request_while_an_export_job_runs_starts_none(self):
+        self.hold({kubernetes_export.job_name(self.live()["metadata"]["uid"], "a" * 32)})
+        self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+        self.request_export("a" * 32)
+        self.work(self.controllers[0])
+        [running] = [a for a in self.status()["exports"] if a["nonce"] == "a" * 32]
+        jobs = len(self.export_jobs())
+        for n in range(10):
+            self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+            self.request_export(f"{n:032x}")
+            self.work(self.controllers[0])
+            self.store.settle()
+            answers = {a["nonce"]: a for a in self.status()["exports"]}
+            self.assertEqual(
+                answers[f"{n:032x}"], {"nonce": f"{n:032x}", "error": kubernetes_export.RUNNING}
+            )
+            # The answer the first requester waits on stays while newer ones push the rest out.
+            self.assertEqual(answers["a" * 32]["job"], running["job"])
+        self.assertEqual(len(self.export_jobs()), jobs)
+        self.assertEqual(
+            [j["metadata"]["name"] for j in self.running_export_jobs()], [running["job"]]
+        )
+
+    def test_the_controller_deletes_the_export_jobs_of_the_answers_it_drops(self):
+        made = []
+        for n in range(kubernetes_export.KEPT_ANSWERS + 3):
+            self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+            self.request_export(f"{n:032x}")
+            self.work(self.controllers[0])
+            self.store.settle()
+            self.work(self.controllers[0])
+            [answer] = [a for a in self.status()["exports"] if a["nonce"] == f"{n:032x}"]
+            made.append(answer["job"])
+        kept = {a.get("job") for a in self.status()["exports"]}
+        live = {j["metadata"]["name"] for j in self.live_export_jobs()}
+        self.assertLessEqual(set(made[-kubernetes_export.KEPT_ANSWERS :]), kept)
+        self.assertTrue(set(made[: -kubernetes_export.KEPT_ANSWERS]))
+        self.assertFalse(set(made[: -kubernetes_export.KEPT_ANSWERS]) & live)
+        # Every export Job left is one an answer names.
+        self.assertLessEqual(live, kept)
+
+    def test_the_workstation_asks_again_while_another_export_job_runs(self):
+        name = self.late_attempt()
+        held = {kubernetes_export.job_name(self.live()["metadata"]["uid"], "c" * 32)}
+        self.hold(held)
+        self.store.clock.advance(kubernetes_export.EXPORT_INTERVAL_SECONDS)
+        self.request_export("c" * 32)
+        self.work(self.controllers[0])
+        waits = []
+
+        def wait() -> None:
+            waits.append(len(self.running_export_jobs()))
+            if len(waits) == 20:
+                held.clear()
+            with contextlib.suppress(Exited):
+                self.work(self.controllers[0])
+
+        self.on_wait = wait
+        self.session().export()
+        self.assertTrue((self.run_dir / name).exists())
+        self.assertLessEqual(max(waits), 1)
+        busy = [a for a in self.live()["status"]["exports"] if a.get("error")]
+        self.assertTrue(busy)
+        self.assertTrue(all(a["error"] == kubernetes_export.RUNNING for a in busy))
 
     def test_no_export_job_mounts_a_run_directory_the_controller_has_not_made(self):
         self.store.remove(self.fleet_kind, NAMESPACE, fleet_resource.NAME)

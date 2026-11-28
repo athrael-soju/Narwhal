@@ -12,8 +12,9 @@ chart is installed, and returns every case the server decided otherwise:
   are pods and workloads a user with the namespace's `edit` role sends with the labels of the
   controller's objects; the policy must refuse them too, and `relabel` checks that the user
   cannot give an existing pod those labels. `workstation_refused()` are Jobs the user
-  `WORKSTATION` sends, who holds the workstation's role and may also create Jobs: none may run
-  as the controller's ServiceAccount or mount the state claim. `check_ephemeral` adds an
+  `WORKSTATION` sends, who holds the workstation's role and may also create Jobs, and pods and
+  workloads the forger sends: none may run as the controller's or the routers' ServiceAccount
+  or mount the state claim. `check_ephemeral` adds an
   ephemeral container to the controller's pod and to a gate Job's pod, which the policy must
   refuse, and to a plain pod, which it must not.
 - `volume_cases(policy)` pairs each of `MODEL_VOLUMES` with whether
@@ -361,6 +362,14 @@ def admitted(
     found["a router StatefulSet"] = Case(router, user=sender)
     found["a router StatefulSet's pod"] = made_by(
         pod_of(router, "chart-live-router-0"), "StatefulSet", "chart-live-router"
+    )
+    # The router StatefulSet runs as the routers' ServiceAccount, and so do the pods the
+    # StatefulSet controller makes for it.
+    as_router = copy.deepcopy(router)
+    as_router["spec"]["template"]["spec"]["serviceAccountName"] = objects.ROUTER_ACCOUNT
+    found["a router StatefulSet as the routers' ServiceAccount"] = Case(as_router, user=sender)
+    found["a router pod as the routers' ServiceAccount"] = made_by(
+        pod_of(as_router, "chart-live-router-1"), "StatefulSet", objects.ROUTER_SET
     )
     # An export Job, as the controller makes it from its own image, and its pod.
     export = _export(namespace, claim=state_claim)
@@ -777,6 +786,7 @@ def forged(release: str) -> dict[str, Case]:
 
 
 ACCOUNT = "run as the controller's ServiceAccount"
+ROUTER_ACCOUNT = "run as the routers' ServiceAccount"
 STATE = "mount the state claim"
 
 
@@ -799,6 +809,8 @@ def workstation_refused(release: str, state_claim: str = "narwhal-state") -> dic
         ],
     )
     plain: dict[str, str] = {}
+    router = _plain(serviceAccountName=objects.ROUTER_ACCOUNT)
+    other = made_by(_pod("as-router-0", None, router), "StatefulSet", "engine")
     cases = {
         "a Job as the controller's ServiceAccount": Case(
             _workload("Job", "as-controller", plain, account), ACCOUNT, WORKSTATION
@@ -824,6 +836,21 @@ def workstation_refused(release: str, state_claim: str = "narwhal-state") -> dic
             ).document,
             ACCOUNT,
             FORGER,
+        ),
+        # The routers' token renews the router Lease, so only the router pods hold it.
+        "a Job as the routers' ServiceAccount": Case(
+            _workload("Job", "as-router", plain, router), ROUTER_ACCOUNT, WORKSTATION
+        ),
+        "a pod as the routers' ServiceAccount": Case(
+            _pod("as-router", None, router), ROUTER_ACCOUNT, FORGER
+        ),
+        "a StatefulSet of the routers' name as their ServiceAccount": Case(
+            _workload("StatefulSet", objects.ROUTER_SET, {"app": "x"}, router),
+            ROUTER_ACCOUNT,
+            FORGER,
+        ),
+        "a pod of another StatefulSet as the routers' ServiceAccount": Case(
+            other.document, ROUTER_ACCOUNT, other.user
         ),
     }
     return cases

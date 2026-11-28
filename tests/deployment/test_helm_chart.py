@@ -731,6 +731,9 @@ class ChartTests(Rendering, unittest.TestCase):
         self.assertIn("variables.serviceAccount != '", validations)
         self.assertIn("v.persistentVolumeClaim.claimName == 'narwhal-state'", validations)
         self.assertIn("object.metadata.name == 'fleet-controller'", variables["controllerPath"])
+        # Only the controller's router StatefulSet and its pods run as the routers' account.
+        self.assertIn(f"variables.serviceAccount != '{objects.ROUTER_ACCOUNT}'", validations)
+        self.assertIn(f"variables.ownerName == '{objects.ROUTER_SET}'", variables["routerPath"])
         # Every case the live check sends is one a fleet's objects or a refusal covers.
         self.assertTrue(chart_live.refused("fleet"))
         self.assertTrue(chart_live.workstation_refused("fleet"))

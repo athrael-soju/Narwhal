@@ -1123,6 +1123,9 @@ def policy_refusals(
             for m in c.get("volumeMounts", [])
         ),
         "controller ServiceAccount": account != CONTROLLER_NAME or controller_path,
+        # A workload's create: only a StatefulSet the controller applies runs as the routers'.
+        "router ServiceAccount": account != objects.ROUTER_ACCOUNT
+        or (document["kind"] == "StatefulSet" and requester == CONTROLLER_USER),
         "state claim": not any(
             (v.get("persistentVolumeClaim") or {}).get("claimName") == state_claim for v in volumes
         )
@@ -1456,11 +1459,10 @@ class RouterTests(unittest.TestCase):
             if case.document["kind"] == "Pod":
                 continue
             with self.subTest(name):
-                rule = (
-                    "controller ServiceAccount"
-                    if case.words == chart_live.ACCOUNT
-                    else "state claim"
-                )
+                rule = {
+                    chart_live.ACCOUNT: "controller ServiceAccount",
+                    chart_live.ROUTER_ACCOUNT: "router ServiceAccount",
+                }.get(case.words, "state claim")
                 self.assertIn(rule, policy_refusals(case.document, workstation))
         # The installer's controller Deployment, and the export Job the controller makes.
         admitted = chart_live.admitted(chart_fixtures.NAMESPACE, "fleet")
@@ -1522,14 +1524,15 @@ class RouterTests(unittest.TestCase):
     def test_the_router_pair_passes_the_charts_admission_policy(self):
         validations = POLICY.read_text().split("  validations:\n", 1)[1].split("\n---", 1)[0]
         # The mirror holds every validation of the policy.
-        self.assertEqual(validations.count("\n    - expression:") + 1, 25)
+        self.assertEqual(validations.count("\n    - expression:") + 1, 26)
         statefulset = router_set()
         self.assertEqual(policy_refusals(statefulset), [])
         # The router labels are reserved: only the controller may apply them.
         self.assertEqual(
             policy_refusals(statefulset, f"system:serviceaccount:{chart_fixtures.NAMESPACE}:x"),
-            # Nor may anyone else mount the state claim the routers mount.
-            ["reserved label", "state claim"],
+            # Nor may anyone else run as the routers' ServiceAccount or mount the state claim
+            # the routers mount.
+            ["reserved label", "router ServiceAccount", "state claim"],
         )
         # Each rule the routers keep to refuses them once broken.
         broken = {
