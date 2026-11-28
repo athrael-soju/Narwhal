@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import math
@@ -417,7 +418,15 @@ async def prepare(client: httpx.AsyncClient, base: str, args: argparse.Namespace
     private_json(args.out / "workload.json", workload)
 
 
-async def run_trial(client: httpx.AsyncClient, base: str, args: argparse.Namespace) -> int:
+async def run_trial(
+    client: httpx.AsyncClient,
+    base: str,
+    args: argparse.Namespace,
+    state: httpx.AsyncClient | None = None,
+) -> int:
+    """Offer the workload through `client`; read the router's drain state through `state`,
+    the controlling router's own client, or through `client` when it reaches the router."""
+    state = state or client
     run_id = getattr(args, "run_id", uuid.uuid4().hex)
     workload = load_workload(args.workload)
     if args.run_seed and workload["kind"] != SHARED_PREFIX:
@@ -425,7 +434,7 @@ async def run_trial(client: httpx.AsyncClient, base: str, args: argparse.Namespa
     if getattr(args, "expected_model", None) and workload["model"] != args.expected_model:
         raise ValueError("Workload model differs from --expected-model")
     private_json(args.out / "workload.json", workload)
-    private_json(args.out / "state-before.json", await drain(client, base, args.timeout))
+    private_json(args.out / "state-before.json", await drain(state, base, args.timeout))
     warmup = await request_one(
         client,
         base,
@@ -437,7 +446,7 @@ async def run_trial(client: httpx.AsyncClient, base: str, args: argparse.Namespa
     private_json(args.out / "warmup.json", warmup)
     if warmup["outcome"] != "completed":
         raise ValueError("Warmup failed; inspect warmup.json before offering trial traffic")
-    private_json(args.out / "state-after-warmup.json", await drain(client, base, args.timeout))
+    private_json(args.out / "state-after-warmup.json", await drain(state, base, args.timeout))
     private_json(
         args.out / "network-before.json", {"proc_net_dev": Path("/proc/net/dev").read_text()}
     )
@@ -493,7 +502,7 @@ async def run_trial(client: httpx.AsyncClient, base: str, args: argparse.Namespa
             task.add_done_callback(pending.discard)
         await asyncio.gather(*tasks)
         await asyncio.sleep(max(0.0, start + args.requests / args.rate - time.monotonic()))
-    private_json(args.out / "state-after.json", await drain(client, base, args.timeout))
+    private_json(args.out / "state-after.json", await drain(state, base, args.timeout))
     private_json(
         args.out / "network-after.json", {"proc_net_dev": Path("/proc/net/dev").read_text()}
     )
@@ -514,6 +523,13 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="send every request through this Unix socket, such as an SSH forward's; --base "
         "then gives only the scheme, the Host header and the path",
+    )
+    parser.add_argument(
+        "--state-socket",
+        type=Path,
+        help="read the router's /narwhal/state drain state through this Unix socket, such as "
+        "the controlling router's forward, when --unix-socket reaches a load balancer that "
+        "forwards only the serving routes",
     )
     parser.add_argument("--out", required=True, type=Path, help="fresh private output directory")
     parser.add_argument(
@@ -599,17 +615,30 @@ def main(argv: list[str] | None = None) -> int:
             if args.unix_socket
             else None
         )
-        async with httpx.AsyncClient(
-            headers=headers,
-            timeout=args.timeout,
-            trust_env=False,
-            limits=limits,
-            transport=transport,
-        ) as client:
+        async with contextlib.AsyncExitStack() as stack:
+            client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers=headers,
+                    timeout=args.timeout,
+                    trust_env=False,
+                    limits=limits,
+                    transport=transport,
+                )
+            )
             if args.command == "prepare":
                 await prepare(client, args.base.rstrip("/"), args)
                 return 0
-            return await run_trial(client, args.base.rstrip("/"), args)
+            state = None
+            if args.state_socket:
+                state = await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        headers=headers,
+                        timeout=args.timeout,
+                        trust_env=False,
+                        transport=httpx.AsyncHTTPTransport(uds=str(args.state_socket)),
+                    )
+                )
+            return await run_trial(client, args.base.rstrip("/"), args, state)
 
     try:
         args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -623,6 +652,7 @@ def main(argv: list[str] | None = None) -> int:
                     "out": str(args.out),
                     "workload": str(args.workload),
                     "unix_socket": str(args.unix_socket) if args.unix_socket else None,
+                    "state_socket": str(args.state_socket) if args.state_socket else None,
                 },
                 "workload_sha256": digest(args.workload) if args.workload else None,
             },

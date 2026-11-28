@@ -9,8 +9,9 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
+from ...engines.host_process import started_at_seconds
 from .. import stages
 from .backend import cache_capture, plan_launcher
 from .check import read_checked, require_checked
@@ -20,6 +21,7 @@ from .plan import (
     config_files_changed,
     container_options,
     env_file_name,
+    launch_headers,
     load,
     model_file_changed,
     read_env,
@@ -219,10 +221,44 @@ def distinct_roles_and_ports(selected: list[tuple[Path, dict]]) -> None:
             ports[port] = f"{role} {label}"
 
 
+def _answering_process(run: Path, plan: dict, state: dict) -> str:
+    """Why the process that answered the engine's endpoint is not the container's, or "".
+
+    An endpoint answers for whichever process holds its port, such as an engine left running
+    from an earlier start. Where the backend publishes its process start in /metrics, as the
+    probe and the attestation read it, that start must be the container's.
+    """
+    # The evidence module imports the native engine start, which imports this module.
+    from ..attestation_contract.evidence import CONTAINER_START_TOLERANCE_S
+
+    process_start = plan_launcher(plan).live_probe.process_start
+    if process_start is None:
+        return ""
+    request = Request(plan["endpoint"].rstrip("/") + "/metrics")
+    for name, value in (launch_headers(run, plan) or {}).items():
+        request.add_header(name, value)
+    try:
+        with urlopen(request, timeout=5) as response:
+            started = process_start(response.read().decode())
+    except (OSError, ValueError) as error:
+        return f"its /metrics names no process start: {error}"
+    container = started_at_seconds(state["StartedAt"])
+    if abs(started - container) > CONTAINER_START_TOLERANCE_S:
+        return (
+            f"the process that answered started at {started}, not with the container at "
+            f"{container}; another process holds the engine port"
+        )
+    return ""
+
+
 def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
+    """Wait for the container's own engine to answer `/health`: the container must still run
+    after the answer, and the answering process must be the container's."""
     deadline = time.monotonic() + seconds
     url = plan["endpoint"].rstrip("/") + "/health"
-    while time.monotonic() < deadline:
+    other = ""
+
+    def inspect() -> dict:
         state = json.loads(
             docker(["inspect", "--format", "{{json .State}}", cid], run, "launch.log")
         )
@@ -231,13 +267,22 @@ def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:
             raise ValueError(
                 f"{plan['role']}: container exited {state.get('ExitCode')}: {logs[-2000:]}"
             )
+        return state
+
+    while time.monotonic() < deadline:
+        inspect()
         try:
             with urlopen(url, timeout=2) as response:
-                if response.status == 200:
-                    return
+                healthy = response.status == 200
         except (OSError, ValueError):
-            pass
+            healthy = False
+        if healthy:
+            other = _answering_process(run, plan, inspect())
+            if not other:
+                return
         time.sleep(2)
+    if other:
+        raise ValueError(f"{plan['role']}: the health endpoint answered, but {other}")
     raise ValueError(f"{plan['role']}: health endpoint did not respond within {seconds}s")
 
 

@@ -739,6 +739,8 @@ def _down(args: argparse.Namespace, env: dict[str, str]) -> int:
     stopped = TARGETS[args.target].Deployment(directory, env).down()
     for process in stopped:
         state = "stopped" if process["stopped"] else "not running"
+        if removed := process.get("removed_exited"):
+            state += f"; removed {len(removed)} exited container{'s' * (len(removed) > 1)}"
         print(f"{process['name']} on {process['host']}: {state}")
     results.set_data({"run": str(directory), "processes": stopped})
     return 0
@@ -1112,6 +1114,8 @@ def _cluster_down(args: argparse.Namespace, env: dict[str, str]) -> int:
             data["deleted"] = session.delete(uid)
     for process in processes:
         state = "stopped" if process["stopped"] else "not running"
+        if removed := process.get("removed_exited"):
+            state += f"; removed {len(removed)} exited container{'s' * (len(removed) > 1)}"
         print(f"{process['name']} on {process['host']}: {state}")
     data["fleet"] = kubernetes_cli.summary(followed.fleet or live)
     data["processes"] = processes

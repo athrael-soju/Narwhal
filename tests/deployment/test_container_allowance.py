@@ -90,6 +90,10 @@ class ContainerAllowanceTests(unittest.TestCase):
 
             response = MagicMock()
             response.__enter__.return_value.status = 200
+            # /metrics names the start of the container the synthetic Docker reports.
+            response.__enter__.return_value.read.return_value = (
+                b"process_start_time_seconds 1767225600.0\n"
+            )
             with (
                 patched_docker(side_effect=docker),
                 patch("narwhal.deployment.launch_engine.start.gpu_memory", side_effect=gpu_memory),

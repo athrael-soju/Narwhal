@@ -440,6 +440,37 @@ class SshTests(unittest.TestCase):
             self.assertIn("access: stop management access", ssh.log(self.hosts[1]).read_text())
         self.assert_private_logs()
 
+    def test_an_interrupt_after_the_client_exited_stays_an_interrupt(self):
+        # Ctrl+C can land after `ssh` exited and was reaped, so its process group is gone and
+        # killing it raises ESRCH; the interrupt must still reach the caller.
+        class Exited:
+            pid = 4242
+            stdin = SimpleNamespace(write=lambda data: None, flush=lambda: None, close=lambda: None)
+            stdout = SimpleNamespace(fileno=lambda: -1)
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, timeout=None):
+                if timeout is not None:
+                    raise KeyboardInterrupt
+                return b"", b""
+
+        def gone(pid, sig):
+            raise ProcessLookupError(3, "No such process")
+
+        ssh = SSH(self.env, self.root / "logs")
+        with (
+            patch("narwhal.deployment.hosts.subprocess.Popen", Exited),
+            patch("narwhal.deployment.hosts.os.killpg", gone),
+            patch.object(SSH, "stop"),
+            patch("narwhal.deployment.hosts._read_line", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                ssh.run(self.hosts[1], "router-start", "management access", "true")
+            with self.assertRaises(KeyboardInterrupt):
+                ssh.clock_offset(self.hosts[1], "lease-check", "clock", "true", 1)
+
     def test_an_interrupt_stops_the_commands_that_other_threads_run(self):
         first, second = self.root / "first", self.root / "second"
         scripts = {

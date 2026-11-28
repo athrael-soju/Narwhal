@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from narwhal.deployment import balancer
 from narwhal.deployment import load_trial as trial
 
 WORKLOAD = {
@@ -286,17 +287,30 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 @contextmanager
-def local_router(unix_socket: Path | None = None):
+def local_router(unix_socket: Path | None = None, *, serving_only: bool = False):
     """Serve a fake router on loopback, or on `unix_socket`, and yield its base URL and the
-    streamed prompts."""
+    streamed prompts. With `serving_only` it answers as the load balancer does, 404 on every
+    route but `balancer.SERVING_ROUTES`."""
     prompts = []
 
     class Handler(BaseHTTPRequestHandler):
+        def refused(self, method):
+            if serving_only and (method, self.path) not in balancer.SERVING_ROUTES:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            return False
+
         def do_GET(self):
+            if self.refused("GET"):
+                return
             result = {"data": [{"id": "test-model"}]} if self.path == "/v1/models" else IDLE
             self.reply(json.dumps(result), "application/json")
 
         def do_POST(self):
+            if self.refused("POST"):
+                return
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if body.get("stream"):
                 prompts.append(tuple(body["prompt"]))
@@ -352,12 +366,35 @@ class AccountingTests(unittest.TestCase):
             manifest = self.prepare_and_run(socket)
         self.assertEqual(manifest["settings"]["unix_socket"], str(socket))
 
-    def prepare_and_run(self, unix_socket: Path | None = None) -> dict:
-        through = ["--unix-socket", str(unix_socket)] if unix_socket else []
+    def test_cli_offers_through_the_load_balancer_and_drains_at_the_router(self):
+        # The load balancer forwards only the serving routes, so the drain reads of
+        # /narwhal/state go to the controlling router's own socket.
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            router = Path(folder) / "router.sock"
+            with local_router(router):
+                manifest = self.prepare_and_run(
+                    Path(folder) / "balancer.sock", serving_only=True, state=router
+                )
+        self.assertEqual(manifest["settings"]["state_socket"], str(router))
+
+    def test_drain_reads_through_the_load_balancer_are_refused(self):
         with (
-            local_router(unix_socket) as (base, _),
+            tempfile.TemporaryDirectory(dir="/tmp") as folder,
+            self.assertRaisesRegex(AssertionError, "404 Not Found"),
+        ):
+            self.prepare_and_run(Path(folder) / "balancer.sock", serving_only=True)
+
+    def prepare_and_run(
+        self, unix_socket: Path | None = None, *, serving_only=False, state=None
+    ) -> dict:
+        through = ["--unix-socket", str(unix_socket)] if unix_socket else []
+        drains = ["--state-socket", str(state)] if state else []
+        errors = io.StringIO()
+        with (
+            local_router(unix_socket, serving_only=serving_only) as (base, _),
             tempfile.TemporaryDirectory() as directory,
             redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
         ):
             root = Path(directory)
             self.assertEqual(
@@ -382,6 +419,7 @@ class AccountingTests(unittest.TestCase):
                     [
                         "run",
                         *through,
+                        *drains,
                         "--base",
                         base,
                         "--out",
@@ -397,6 +435,7 @@ class AccountingTests(unittest.TestCase):
                     ]
                 ),
                 0,
+                errors.getvalue(),
             )
             manifest = json.loads((root / "run/manifest.json").read_text())
             self.assertEqual(manifest["helper_sha256"], trial.digest(Path(trial.__file__)))

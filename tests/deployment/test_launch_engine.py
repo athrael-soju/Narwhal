@@ -11,8 +11,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import Mock, patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.backends.vllm.dev import gguf_plugin_digests
@@ -728,6 +728,49 @@ class EngineLauncherTests(unittest.TestCase):
             ):
                 launch_start.start(run, plan, ready)
             self.assertEqual([call.args[3] for call in waited.call_args_list], waits)
+
+    def wait_ready(self, states, metrics_start):
+        """`wait_ready` against a container whose inspections return `states` in turn, and an
+        endpoint whose /metrics names `metrics_start` as its process start."""
+        plan = {"role": "engine-1", "endpoint": "http://127.0.0.1:8001"}
+        inspected = iter(states)
+        clock = iter(range(1000))
+
+        def docker(command, run, log, **kwargs):
+            if command[0] == "logs":
+                return "OSError: [Errno 98] Address already in use"
+            return json.dumps(next(inspected))
+
+        def urlopen(request, timeout):
+            url = request if isinstance(request, str) else request.full_url
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            body = f"process_start_time_seconds {metrics_start}\n".encode()
+            response.__enter__.return_value.read.return_value = body
+            self.assertTrue(url.endswith(("/health", "/metrics")), url)
+            return response
+
+        with (
+            patch.object(launch_start, "docker", side_effect=docker),
+            patch.object(launch_start, "urlopen", side_effect=urlopen),
+            patch.object(launch_start, "launch_headers", return_value=None, create=True),
+            patch.object(
+                launch_start, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=Mock())
+            ),
+        ):
+            launch_start.wait_ready(Path("/unused"), plan, "cid", 5)
+
+    def test_start_accepts_health_only_from_the_containers_own_process(self):
+        running = {"Running": True, "StartedAt": "2026-01-01T00:10:00Z"}
+        # 2026-01-01T00:10:00Z, the container's start.
+        self.wait_ready([running] * 2, 1767226200.4)
+        # An engine left from an earlier start answers on the port with its own process start.
+        with self.assertRaisesRegex(ValueError, "another process holds the engine port"):
+            self.wait_ready([running] * 20, 1767225000.0)
+        # The container exits after the old process answered: its exit is the failure.
+        exited = {"Running": False, "ExitCode": 1}
+        with self.assertRaisesRegex(ValueError, "container exited 1: OSError: .Errno 98"):
+            self.wait_ready([running, exited], 1767226200.4)
 
     def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:

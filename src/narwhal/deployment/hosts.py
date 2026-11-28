@@ -360,6 +360,12 @@ def _signal_stops() -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+def _kill_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill the process group of a local `ssh`, which may already have exited."""
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+
+
 def _end(process: subprocess.Popen[bytes]) -> None:
     """Stop `process` with SIGTERM, and with SIGKILL if it outlives TUNNEL_STOP_S."""
     try:
@@ -517,11 +523,12 @@ class SSH:
                     stdout, stderr = process.communicate(timeout=limit + HOST_GRACE_S)
                 except subprocess.TimeoutExpired:
                     unanswered = True
-                    os.killpg(process.pid, signal.SIGKILL)
+                    _kill_group(process)
                     self.stop(host, stage, operation, token)
                     stdout, stderr = process.communicate()
                 except BaseException:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    # An interrupt can land after the client exited; it stays the error.
+                    _kill_group(process)
                     self.stop(host, stage, operation, token)
                     process.communicate()
                     raise
@@ -653,13 +660,13 @@ class SSH:
                 process.stdin.close()
                 process.wait(timeout=max(deadline - time.monotonic(), 0.1))
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-                os.killpg(process.pid, signal.SIGKILL)
+                _kill_group(process)
                 self.stop(host, stage, operation, token)
                 _, stderr = process.communicate()
                 log.write(f"failed: {error}\n{stderr.decode(errors='replace')}")
                 raise RemoteError(host.id, stage, operation, log_path, f": {error}") from None
             except BaseException:
-                os.killpg(process.pid, signal.SIGKILL)
+                _kill_group(process)
                 self.stop(host, stage, operation, token)
                 process.communicate()
                 raise

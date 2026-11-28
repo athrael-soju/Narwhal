@@ -198,6 +198,35 @@ class DeployTests(unittest.TestCase):
         self.assertTrue(all("http://10.0.0.1:8000" in s for s in self.fleet.measured))
         self.assertEqual(self.fleet.calls["start sidecar-2"], 2)
 
+    def test_an_engine_restart_with_the_same_cache_geometry_keeps_the_groups_and_fabric(self):
+        self.deploy("run")
+        del self.fleet.containers["engine-2"]
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        ran = self.ran(result)
+        self.assertIn("cache-capture[engine-2]", ran)
+        # The fresh launch directory changed only the layout's plan digest.
+        self.assertFalse({"cache-groups", "fabric-budget[engine-1]", *EDGES} & ran, ran)
+        self.assertFalse(any(stage.startswith("fabric-edge") for stage in ran), ran)
+        # A changed geometry still reruns them.
+        del self.fleet.containers["engine-2"]
+        self.fleet.kv_layout = "NHD"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertLessEqual({"cache-groups", "fabric-budget[engine-1]"}, self.ran(result))
+
+    def test_an_engine_container_restarted_in_place_is_removed_before_the_new_start(self):
+        # Docker restarted the recorded container: same ID, new start. It still holds the
+        # engine's port and GPUs, so the new start removes it first.
+        self.deploy("run")
+        cid, _ = self.fleet.containers["engine-2"]
+        self.fleet.containers["engine-2"] = (cid, "2026-01-01T01:00:00Z")
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("engine-start[engine-2]", self.ran(result))
+        self.assertIn(cid, self.fleet.removed)
+        self.assertNotEqual(self.fleet.containers["engine-2"][0], cid)
+
     def test_an_engine_start_on_a_used_launch_directory_prepares_a_fresh_one_first(self):
         self.deploy("run")
         old = self.fleet.containers["engine-1"]
@@ -266,6 +295,17 @@ class DeployTests(unittest.TestCase):
         code, result = self.deploy("status")
         self.assertEqual((code, result["status"]), (0, "success"), result)
 
+    def test_status_reports_a_stopped_router_as_stopped_not_as_a_failed_restart(self):
+        self.deploy("run")
+        unit = next(n for n in self.fleet.units if n.startswith("node-1:") and "-router." in n)
+        del self.fleet.units[unit]
+        code, result = self.deploy("status")
+        self.assertEqual(code, 3, result)
+        live = {check["key"]: check["state"] for check in result["data"]["live"]}
+        self.assertEqual(live["router_identity[node-1]"], "gone")
+        self.assertIn(f"router-start: {unit} is not running", self.stderr.getvalue())
+        self.assertNotIn("the restarted", self.stderr.getvalue())
+
     def test_a_checked_restart_moves_the_process_record_down_stops(self):
         self.deploy("run")
         self.fleet.restart_unit("sidecar-2")
@@ -331,9 +371,25 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.ran(result), SLO_RERUN)
         self.assertEqual(self.fleet.calls["start router"], 4)
         self.assertEqual(len(self.fleet.units), UNITS)
-        # No start removes the lease; each reads it first.
+        # No start removes the lease; each reads it first. The primary's rerun finds its own
+        # router holding the lease, stops it and reads the lease again.
         self.assertEqual(self.fleet.calls["remove the lease"], 0)
-        self.assertEqual(self.fleet.calls["read the pair's lease"], 4)
+        self.assertEqual(self.fleet.calls["read the pair's lease"], 5)
+
+    def test_a_changed_profiling_sweep_reaches_the_fleet_the_routers_load(self):
+        self.deploy("run")
+        os.environ["NARWHAL_PROFILE_WARMUP_REQUESTS"] = "3"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(self.ran(result), {"profile"} | SLO_RERUN)
+        stages = run_record.read(self.run)["stages"]
+        profiled = self.run / stages["profile"]["directory"] / "host" / "profiles.json"
+        limits = stages["fleet-limits"]["directory"]
+        self.assertEqual(stages["fleet-limits"]["attempt"], 2)
+        self.assertEqual((self.run / limits / "profiles.json").read_bytes(), profiled.read_bytes())
+        # The restarted routers load the fleet file of the new fleet-limits attempt.
+        argv = self.fleet.argv["router"]
+        self.assertTrue(argv[argv.index("--fleet") + 1].endswith(f"{limits}/fleet.json"), argv)
 
     def test_a_lease_path_the_hosts_do_not_share_stops_the_run_before_the_routers(self):
         self.fleet.lease_coherent = False
@@ -384,6 +440,33 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.fleet.calls["remove the lease"], 0)
         start = self.run / "stages/router-start/node-1/attempt-1/router.json"
         self.assertEqual(json.loads(start.read_text())["lease"]["expires_at"], 969.0)
+
+    def test_a_rerun_after_a_failed_overhead_check_stops_its_own_lease_holder_first(self):
+        # The first attempt's router claimed the lease, then failed its overhead check and kept
+        # running. Its replacement must not shadow it: the stage stops it, waits until no
+        # standby could take its lease over, and starts the primary to claim it.
+        self.fleet.overhead_problem = "overhead 0.068s exceeds 0.05s"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 1, result)
+        self.assertEqual(self.fleet.lease_holder(), "node-1")
+        self.fleet.overhead_problem = None
+        # Stopping the router releases its lease, which leaves it expired at that moment.
+        self.fleet.lease_expired_ago = 0.0
+        waits = []
+
+        def pause(seconds):
+            waits.append(seconds)
+            self.fleet.lease_expired_ago += seconds
+
+        with patch.object(deploy, "_pause", pause):
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(waits, [31.0])
+        self.assertIn("router of the earlier attempt holds the lease", self.stderr.getvalue())
+        start = self.run / "stages/router-start/node-1/attempt-2/router.json"
+        lease = json.loads(start.read_text())["lease"]
+        self.assertEqual((lease["holder"], lease["live"]), ("node-1:old", False))
+        self.assertEqual(self.fleet.calls["remove the lease"], 0)
 
     def test_a_cold_start_after_a_long_stop_starts_the_primary_at_once(self):
         self.fleet.lease_expired_ago = 3600.0
@@ -477,6 +560,17 @@ class DeployTests(unittest.TestCase):
             (self.run / "stages/lease-check/attempt-2/lease-check.json").read_text()
         )
         self.assertAlmostEqual(checked["clock"]["skew_s"], 0.5)
+
+    def test_an_interrupt_during_router_start_records_it_cancelled(self):
+        self.fleet.interrupt_at = "ask which router controls the fleet"
+        code, result = self.deploy("run")
+        self.assertEqual(code, 130, result)
+        entry = run_record.read(self.run)["stages"]["router-start[node-1]"]
+        self.assertEqual(entry["status"], "cancelled")
+        self.assertIn("router-start[node-1] cancelled", self.stderr.getvalue())
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("router-start[node-1]", self.ran(result))
 
     def test_router_overhead_above_its_input_fails_router_start(self):
         self.fleet.overhead_problem = "router overhead 0.0900s exceeds NARWHAL_ROUTER_OVERHEAD_S"
@@ -591,6 +685,19 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.fleet.units, {})
         self.assertEqual(set(self.fleet.containers), set())
         self.assertFalse(self.fleet.monitoring_up)
+
+    def test_down_removes_the_runs_exited_engine_containers(self):
+        self.deploy("run")
+        # The recorded engine-2 container exited, and an earlier attempt left another.
+        recorded, _ = self.fleet.containers.pop("engine-2")
+        self.fleet.exited = {recorded: "engine-2", "e" * 64: "engine-2"}
+        code, result = self.deploy("down")
+        self.assertEqual(code, 0, result)
+        engine = next(p for p in result["data"]["processes"] if p["name"] == "engine-2")
+        self.assertFalse(engine["stopped"])
+        self.assertEqual(engine["removed_exited"], ["e" * 64])
+        self.assertEqual(self.fleet.exited, {})
+        self.assertIn(recorded, self.fleet.removed)
 
     def test_down_leaves_a_unit_another_start_owns_and_stops_the_rest(self):
         self.deploy("run")

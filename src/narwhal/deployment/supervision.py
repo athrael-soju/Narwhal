@@ -68,6 +68,11 @@ class IdentityMismatch(SupervisionError):
     """Something other than the recorded process holds its unit or process group."""
 
 
+class NotRestarted(SupervisionError):
+    """The recorded process neither runs nor restarted: it stopped, or another start holds its
+    unit or process group. The message says which."""
+
+
 @dataclass(frozen=True)
 class ProcessSpec:
     """One long-lived process, run from `cwd` with its output in `log`.
@@ -230,7 +235,7 @@ class Supervisor(ABC, Generic[Identity]):
         if observation.state == "running":
             return recorded
         if observation.state != "restarted" or observation.identity is None:
-            raise SupervisionError(observation.detail)
+            raise NotRestarted(observation.detail)
         verify(observation.identity)
         again = self.check(observation.identity)
         if again.state != "running":

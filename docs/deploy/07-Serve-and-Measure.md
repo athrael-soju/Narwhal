@@ -52,7 +52,7 @@ The stage names each offending option and its fix. Other file systems pass this 
 
 `router-start` runs for the primary first, then for the standby. Before either starts, the stage checks on that router's host that the lease directory holds the witness and has the file system type that `lease-check` recorded, so a host that rebooted without the shared mount starts no router. It also checks the mount's options again, since a remount may have changed them. Each router runs as a systemd user unit that restarts it on failure:
 
-- The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). It claims the lease when no lease file exists, or when the lease expired more than 30 seconds ago, the standby's `--standby-max-handoff-age`, so no standby can still take it over. Otherwise it starts as the standby of its peer. When the lease expired more recently, as when the pair stopped moments before, the stage waits until no standby can take it over before it starts the primary.
+- The primary serves `NARWHAL_ROUTER_URL` with `--standby-of` the standby and [`--first-start-primary`](../cli/Serve.md#standby-takeover-and-lease-fencing). It claims the lease when no lease file exists, or when the lease expired more than 30 seconds ago, the standby's `--standby-max-handoff-age`, so no standby can still take it over. Otherwise it starts as the standby of its peer. When the lease expired more recently, as when the pair stopped moments before, the stage waits until no standby can take it over before it starts the primary. When the lease's holder is this host's router from an earlier attempt of the stage, such as one that claimed the lease and then failed its overhead check, the stage stops that router first and waits the same way, from the lease's expiry. Otherwise the new primary would start as the standby of a router it then replaces, and no router would hold the lease.
 - The standby serves `NARWHAL_STANDBY_ROUTER_URL` with `--standby-of` the primary.
 
 The stage never removes the lease. It reads the lease's holder and expiry on the router's host before the start and keeps them in `router.json`. The unit `narwhal-<run-id>-router.service` runs, from the deployment directory with the router's role environment:
@@ -144,7 +144,7 @@ narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.
   "schema": "narwhal.capacity-trial",
   "schema_version": 1,
   "input_tokens": 8192,
-  "output_tokens": 128,
+  "output_tokens": 64,
   "seed": 1729,
   "requests": 200,
   "rates_rps": [0.5, 1],
@@ -157,7 +157,7 @@ narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.
 | Field | Value |
 | --- | --- |
 | `schema`, `schema_version` | `narwhal.capacity-trial` and `1` |
-| `input_tokens`, `output_tokens` | Prompt and output tokens of every request, integers of at least 1 |
+| `input_tokens`, `output_tokens` | Prompt and output tokens of every request, integers of at least 1. Both must lie in every engine's profiled range. `narwhal deploy` profiles decode with `narwhal-profile`'s 64 decode tokens, so `output_tokens` can be at most 64 |
 | `seed` | Seed of the synthetic prompts, an integer of at least 0 |
 | `requests` | Requests offered at each rate, an integer of at least 1 |
 | `rates_rps` | Offered rates in requests per second, in increasing order. The trial stops at the first rate that fails |
@@ -171,8 +171,8 @@ The load client runs on the workstation from the installed wheel. For the length
 
 1. Refuses to run when an engine's `checked.json` shows `prefix_caching` other than `false`, and when the workload leaves an engine's profiled domain: a prompt outside the profile's `prefill_min_tokens` to `prefill_max_tokens`, an output outside `decode_min_output_tokens` to `decode_max_output_tokens`, or one request's tokens above `decode_max_kv_tokens`.
 2. Prepares the workload from the router's served model with `load_trial prepare`.
-3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees. The state reads also give the router that controls the fleet, with its lease epoch and holder. A rate fails as well when no single router reported control before or after it, or when control moved or the lease epoch changed during it, as in a failover.
-4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query. A series must hold a sample for every 5-second scrape of the window, less one, so a series that stopped partway fails. The `role` and `pool-load` checks read only the controlling router, the one whose `narwhal_router_role{role="active"}` was 1 at every scrape of the window:
+3. Offers each rate in order with `load_trial run`, which waits for a drained router first, against the file's thresholds. The load balancer forwards only the serving routes, so on a pair the client reads the drain state from `/narwhal/state` of the router that controls the fleet, through that router's forward, and offers the load through the load balancer. It reads each router's `/narwhal/state`, as a diagnostic read that a standby answers too, and `/metrics` before and after the rate and [reconciles](../measure/04-Reconcile-and-Accept.md) every offer with the routers' journals and counters. A rate fails when the client missed its schedule, when fewer offers than `attainment` met both limits, or when an offer, a journal row or a counter disagrees. The state reads also give the router that controls the fleet, with its lease epoch and holder. A rate fails as well when no single router reported control before or after it, or when control moved or the lease epoch changed during it, as in a failover.
+4. Checks these series in Prometheus, each scoped to `NARWHAL_FLEET_NAME` over a window from 15 seconds before the workload was prepared to the query. The window never starts before Prometheus has scraped every target once, 10 seconds after Prometheus started, as read from its runtime information: when `monitoring` started Prometheus moments before, the stage waits for those first scrapes before it prepares the workload, and a Prometheus that started again during the trial fails the stage. A series must hold a sample for every 5-second scrape of the window, less one, so a series that stopped partway fails. The `role` and `pool-load` checks read only the controlling router, the one whose `narwhal_router_role{role="active"}` was 1 at every scrape of the window:
 
     | Series | Passes when |
     | --- | --- |

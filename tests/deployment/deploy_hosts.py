@@ -155,6 +155,10 @@ class Fleet:
         self.calls: Counter[str] = Counter()
         # Each engine role's running container: (container ID, start time).
         self.containers: dict[str, tuple[str, str]] = {}
+        # Containers that exited and were not removed, by ID, with their engine role; and the
+        # IDs of every container a stage or `down` removed, in order.
+        self.exited: dict[str, str] = {}
+        self.removed: list[str] = []
         # Each unit's current invocation: unit name -> (nonce, invocation, restarts).
         self.units: dict[str, tuple[str, str, int]] = {}
         self.routes: dict[str, str] = {}
@@ -165,6 +169,8 @@ class Fleet:
         self.fail_stage: str | None = None
         self.fail_status = 1
         self.fail_verify = False
+        # A host operation during which the operator presses Ctrl+C.
+        self.interrupt_at: str | None = None
         self.package_dir: Path | None = None
         self.run_directory = root / "run"
         # Each engine role's launch directory its running container started from.
@@ -196,6 +202,8 @@ class Fleet:
         self.active_router = "node-1"
         # What each engine's runtime check resolved for prefix caching.
         self.prefix_caching: bool | None = False
+        # The cache layout each engine's capture reports.
+        self.kv_layout = "HND"
         # The capacity trial: each load client argv, the forwards each host held, the journal
         # rows on each router host, each router's request counters, the exit code of a rate's
         # client run, the journal rows a router lost, and the series Prometheus leaves out.
@@ -217,6 +225,8 @@ class Fleet:
         self.queries: list[str] = []
         self.prometheus_open = 0
         self.prometheus_closed = 0
+        # When the monitoring stack's Prometheus started, in seconds since the epoch.
+        self.prometheus_start = 1_700_000_000.0
 
     def mount(self, host: str) -> str:
         """`lease_check mount` on `host`: the lease directory's mount."""
@@ -411,7 +421,12 @@ class Fleet:
         elif stage == "engine-probe":
             files["probe/probe.json"] = b"{}"
         elif stage == "cache-capture":
-            files["cache-layout.json"] = b'{"ranks": [{"kv_cache_layout": "HND"}]}'
+            # The layout names the launch plan it was captured from, which each launch
+            # directory changes; the geometry stays.
+            launch = re.search(r"--run (\S+)", step.command)
+            plan = hashlib.sha256(launch.group(1).encode() if launch else b"").hexdigest()
+            layout = {"plan_sha256": plan, "ranks": [{"kv_cache_layout": self.kv_layout}]}
+            files["cache-layout.json"] = json.dumps(layout).encode()
         elif stage == "attest-capture":
             if "published" in step.operation:
                 launch = {"role": role}
@@ -445,7 +460,9 @@ class Fleet:
                     }
                     for n in (1, 2)
                 ]
-                files["host/profiles.json"] = json.dumps({"profiles": rows}).encode()
+                # Each attempt's store differs, as a new sweep's measurements do.
+                store = {"profiles": rows, "attempt": directory.name}
+                files["host/profiles.json"] = json.dumps(store).encode()
                 files["host/profiles.samples.json"] = b"{}"
             elif stage == "calibrate":
                 files["host/first-token-calibration.json"] = b'{"candidate_deadline_s": 1.5}'
@@ -481,6 +498,13 @@ class Fleet:
             write_private(out / "workload.json", json.dumps(workload).encode())
             return 0
         run_id = uuid.uuid4().hex
+        # The load balancer forwards only the serving routes, so the drain reads of `run` go
+        # to the router that controls the fleet, through its own forward.
+        _, through = self._forwarded(options["--unix-socket"])
+        if through not in _ROUTER_HOSTS:
+            assert "--state-socket" in options, "the drain reads would reach the load balancer"
+            _, state = self._forwarded(options["--state-socket"])
+            assert _ROUTER_HOSTS[state] == self.active_router, (state, self.active_router)
         rate = options["--rate"]
         requests = int(options["--requests"])
         write_private(out / "manifest.json", json.dumps({"run_id": run_id}).encode())
@@ -583,6 +607,11 @@ class Fleet:
         finally:
             self.prometheus_closed += 1
 
+    def prometheus_started(self, socket: Path) -> float:
+        host, address = self._forwarded(socket)
+        assert (host, address) == ("node-1", "127.0.0.1:9090"), (host, address)
+        return self.prometheus_start
+
     # The SSH calls stages make directly.
 
     def ssh(self, env: Any, logs: Path) -> _SSH:
@@ -625,6 +654,7 @@ class Fleet:
                 (deploy, "_load_client", self.load_client),
                 (deploy.capacity, "sample_router", self.router_sample),
                 (deploy.capacity, "prometheus_at", self.prometheus),
+                (deploy.capacity, "prometheus_started", self.prometheus_started),
                 (deploy, "launch_digest", lambda contract, launch: json.dumps(launch)),
             )
             for owner, name, value in targets:
@@ -686,6 +716,9 @@ class _SSH:
 
     def run(self, host: Host, stage: str, operation: str, script: str, payload=None, reason=None):
         fleet = self.fleet
+        if fleet.interrupt_at == operation:
+            fleet.interrupt_at = None
+            raise KeyboardInterrupt
         if operation == "management access":
             return host.id
         if operation == "read the installed fleet":
@@ -701,11 +734,26 @@ class _SSH:
         if operation == "remove the container an unrecorded start left":
             fleet.calls["removed unrecorded"] += 1
             return ""
+        if operation.startswith("remove the run's exited "):
+            role = operation.split()[4]
+            assert f"stages/engine-prepare/{role}/attempt-*/launch/container.id" in script, script
+            gone = [cid for cid, owner in fleet.exited.items() if owner == role]
+            for cid in gone:
+                del fleet.exited[cid]
+                fleet.removed.append(cid)
+            return "\n".join(gone)
         if operation.startswith("remove ") and operation.endswith(" container"):
             for role, (cid, _) in list(fleet.containers.items()):
                 if cid in script:
                     del fleet.containers[role]
-            return ""
+                    fleet.removed.append(cid)
+                    return "running"
+            for cid in list(fleet.exited):
+                if cid in script:
+                    del fleet.exited[cid]
+                    fleet.removed.append(cid)
+                    return "stopped"
+            return "gone"
         if operation == "home directory":
             return "/home/deploy"
         if operation == "read the engine container":
@@ -759,7 +807,12 @@ class _SSH:
             if holder is None and fleet.lease_expired_ago is not None:
                 expires = 1000.0 - fleet.lease_expired_ago
                 return json.dumps(
-                    {"holder": "node-2:old", "epoch": 2, "expires_at": expires, "now": 1000.0}
+                    {
+                        "holder": f"{fleet.active_router}:old",
+                        "epoch": 2,
+                        "expires_at": expires,
+                        "now": 1000.0,
+                    }
                 )
             if holder is None:
                 return json.dumps({"holder": None, "now": 1000.0})
@@ -916,7 +969,7 @@ class _Units(Supervisor[SystemdUnit]):
 
     def check(self, recorded: SystemdUnit) -> Observation[SystemdUnit]:
         if recorded.unit not in self.fleet.units:
-            return Observation("stopped", "stopped")
+            return Observation("stopped", f"{recorded.unit} is not running")
         nonce, invocation, _ = self.fleet.units[recorded.unit]
         if nonce != recorded.nonce:
             return Observation("mismatch", "another start")

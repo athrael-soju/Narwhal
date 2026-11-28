@@ -2776,7 +2776,8 @@ fi
         if not source.is_file():
             raise ValueError(f"{role}: the sidecar's attestation holds no cache-layout.json")
         write_private(context.directory / "cache-layout.json", source.read_bytes())
-        return Outcome({"cache_geometry": _digest(context.directory / "cache-layout.json")})
+        layout = context.directory / "cache-layout.json"
+        return Outcome({"cache_geometry": cache_groups.geometry_digest(layout)})
 
     def transfer_measure(self, context: StageContext) -> Outcome:
         """Measure one engine's KV handoffs to its decode peer, as the SSH target does, in a

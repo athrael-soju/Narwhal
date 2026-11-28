@@ -58,6 +58,16 @@ def static_inputs(role: str, launch: Mapping[str, Any]) -> tuple[dict, Path]:
     return inputs, source
 
 
+def geometry_digest(path: Path) -> str:
+    """The digest of a `cache-layout.json` that the `cache_geometry` fact records: the whole
+    document but its `plan_sha256`, the digest of the launch plan it was captured from, which
+    every fresh launch directory changes while the geometry stays."""
+    layout = json.loads(path.read_text())
+    if not isinstance(layout, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return "sha256:" + _hash({key: value for key, value in layout.items() if key != "plan_sha256"})
+
+
 def signature(inputs: Mapping[str, Any]) -> str:
     """The 16-hex signature of a role's static cache inputs."""
     return _hash(dict(inputs))[:16]
