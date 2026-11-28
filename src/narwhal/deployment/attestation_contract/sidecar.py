@@ -257,8 +257,10 @@ def serve(run: Path, pod_evidence: Path | None = None) -> int:
     # A pod's sidecar follows its engine container's first process, and stops once it ends.
     if not backend.identity.reports_process_start or plan.get("backend") == "kubernetes":
         arguments += process
+    # The sidecar reads the engine with the launch's key, as the readiness and capture reads do.
     return attest_main(
-        arguments + residency_arguments(plan, checked) + hca_arguments(run, plan, pod_engine)
+        arguments + residency_arguments(plan, checked) + hca_arguments(run, plan, pod_engine),
+        engine_headers=launch_headers(run, plan) or {},
     )
 
 
