@@ -124,6 +124,19 @@ rules:
 
 Of the fleet-editor Role, it uses `get`, `create`, `patch` and `delete` on `narwhalfleets`. The Role above lets it read the export Job's pod the controller names and its log, and the engine, sidecar and router pods for the live checks of `plan` and `status`. Together they grant no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, so the identity cannot start a pod of its own. Editing the fleet is still a lot of power: the fleet chooses the engine image, which receives the engine API key, and names the Secrets the engines and routers read, so whoever can edit it can read any Secret of the namespace. The controller and the namespace's admission policy bound the rest, as [Security and access](../deploy/Kubernetes.md#security-and-access) describes.
 
+To give the workstation a ServiceAccount as that identity, bind both Roles to the account and put a token for it in the workstation's kubeconfig:
+
+```bash
+kubectl create serviceaccount <account> --namespace <namespace>
+kubectl create rolebinding <account>-fleet --namespace <namespace> \
+  --role <release>-fleet-editor --serviceaccount <namespace>:<account>
+kubectl create rolebinding <account>-pods --namespace <namespace> \
+  --role <pod reader role> --serviceaccount <namespace>:<account>
+kubectl create token <account> --namespace <namespace> --duration 8h
+```
+
+The API server may give the token a shorter life than `--duration` asks for. Create a new one when it expires.
+
 ## Host keys and time limits
 
 Every connection checks the host's key against `NARWHAL_SSH_KNOWN_HOSTS` alone, with OpenSSH `StrictHostKeyChecking=yes`, before it authenticates, whatever your SSH config sets. `narwhal deploy` never adds or replaces a key in that file. A host whose key is missing from the file or differs from it fails with `<host-id>: blocked at <operation>: the host key differs from NARWHAL_SSH_KNOWN_HOSTS or is missing from it`. [Known-hosts handling](../configuration/04-Deployment-Inputs.md#known-hosts-handling) lists the options that override your SSH config, and [Jump host](../configuration/04-Deployment-Inputs.md#jump-host) how to reach the hosts through one.

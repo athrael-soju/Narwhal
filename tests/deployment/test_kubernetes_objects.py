@@ -523,6 +523,33 @@ class GateTests(unittest.TestCase):
         self.assertEqual(container["image"], chart_fixtures.FABRIC_IMAGE)
         self.assertEqual(container["resources"]["limits"], {"rdma.example.com/hca": "1"})
 
+    def test_a_gates_command_and_variables_reach_its_shell_as_written(self):
+        # The kubelet expands `$$` to `$` and `$(NAME)` to a variable the container defines.
+        script = 'stage="$target.$$"; echo "$(NARWHAL_GATE_KEEP)" "$(date)"'
+        written = gate(
+            entry("fabric-node-a-node-b-server"),
+            command=["sh", "-c", script],
+            env={"PRICE": "$$5 $(NARWHAL_GATE_KEEP)"},
+        )
+        [container] = template(objects.job(fleet(), written))["containers"]
+        defined: dict[str, str] = {}
+        for item in container["env"]:
+            defined[item["name"]] = expand(item["value"], defined)
+        self.assertEqual([expand(part, defined) for part in container["command"]][-1], script)
+        self.assertEqual(defined["PRICE"], "$$5 $(NARWHAL_GATE_KEEP)")
+
+    def test_only_a_gate_that_reads_the_state_volume_takes_supplementary_groups(self):
+        pod = {"engines/engine-1/" + "1" * 8: False}
+        spec = template(objects.job(fleet(), gate(entry("state-1"), state=pod, groups=(10002,))))
+        self.assertEqual(spec["securityContext"]["supplementalGroups"], [10002])
+        plain = template(objects.job(fleet(), gate(entry("state-1"), state=pod)))
+        self.assertNotIn("supplementalGroups", plain["securityContext"])
+        for groups in ((0,), (True,), (2**31,)):
+            with self.assertRaisesRegex(ValueError, "no non-root group"):
+                gate(entry("state-1"), state=pod, groups=groups)
+        with self.assertRaisesRegex(ValueError, "reads the state volume only"):
+            gate(entry("state-1"), groups=(10002,))
+
     def test_the_runners_gates_get_their_inputs_node_and_identity(self):
         jobs = self.jobs()
         prepare = jobs["prepare-engine-1"]

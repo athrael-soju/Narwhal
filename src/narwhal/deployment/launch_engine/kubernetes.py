@@ -200,19 +200,20 @@ def sidecar_image(env: dict[str, str]) -> str:
     return image
 
 
-def hca_port(record: dict) -> int:
-    """Return the HCA port from the launch record's one `<HCA>:<port>` transfer device.
+def hca_device(record: dict) -> tuple[str, int]:
+    """Return the HCA and port of the launch record's one `<HCA>:<port>` transfer device.
 
-    The pod sends KV through the HCA the device plugin allocates, at this port.
+    The fleet's RDMA resource hands the pod this HCA, which the pod checks before it sends KV
+    through it, at this port.
     """
     net = record["transfer"]["net_devices"]
-    match = re.fullmatch(r"[^,:]+:([1-9][0-9]{0,2})", net)
+    match = re.fullmatch(r"([^,:]+):([1-9][0-9]{0,2})", net)
     if match is None:
         raise ValueError(
             f"{record['role']}: a Kubernetes engine's transfer.net_devices names one HCA and its "
             "port, <HCA>:<port>"
         )
-    return int(match[1])
+    return match[1], int(match[2])
 
 
 def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
@@ -235,6 +236,7 @@ def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
     if runtime_class and not re.fullmatch(DNS_SUBDOMAIN, runtime_class):
         raise ValueError(f"set {RUNTIME_CLASS_ENV} to a RuntimeClass name, or leave it unset")
     secret = api_key_secret(env)
+    hca, port = hca_device(record)
     budget = stages.seconds(
         "NARWHAL_STAGE_" + RUNTIME_CHECK_STAGE.upper().replace("-", "_") + "_TIMEOUT_SECONDS",
         stages.seconds("NARWHAL_STAGE_TIMEOUT_SECONDS", 300),
@@ -243,7 +245,8 @@ def pod_settings(env: dict[str, str], record: dict, plan: dict) -> dict:
         "gpu_resource": gpu,
         "gpus": len(record["gpu_ids"]),
         "rdma_resource": rdma,
-        "hca_port": hca_port(record),
+        "hca": hca,
+        "hca_port": port,
         "model_volume": model_volume(env),
         "state_claim": claim,
         "service_account": account,
@@ -657,9 +660,13 @@ def check(run: Path, plan: dict, evidence: Path) -> None:
         or device["ucx_net_devices"] != f"{device['hca']}:{device['port']}"
     ):
         raise ValueError(f"the runtime record names no allocated HCA; inspect {run / log}")
-    if device["port"] != plan["kubernetes"]["hca_port"]:
+    if (device["hca"], device["port"]) != (
+        plan["kubernetes"]["hca"],
+        plan["kubernetes"]["hca_port"],
+    ):
         raise ValueError(
-            f"the runtime record's HCA port differs from the plan; inspect {run / log}"
+            f"the runtime record's HCA {device['ucx_net_devices']} differs from the plan's; "
+            f"inspect {run / log}"
         )
     context = check_context(
         run, plan, str(log), read_env(run / "container.env"), model_metadata=False

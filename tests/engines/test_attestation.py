@@ -249,6 +249,32 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             start = 101
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
 
+    async def test_an_hca_reading_names_the_host_it_was_given(self):
+        with tempfile.TemporaryDirectory() as folder:
+            boot = Path(folder) / "boot_id"
+            boot.write_text("boot-a\n")
+            with (
+                patch.object(attestation, "INFINIBAND", Path(folder)),
+                patch.object(attestation, "BOOT_ID", boot),
+            ):
+                reading = HcaPort("mlx5_0", 1, host="node-a").counters()
+                self.assertNotIn("host", HcaPort("mlx5_0", 1).counters())
+        self.assertEqual((reading["host"], reading["boot_id"]), ("node-a", "boot-a"))
+        for host, valid in (("node-a", True), ("", False), (7, False)):
+            payload = {**reading, "host": host}
+            transport = httpx.MockTransport(lambda request, p=payload: httpx.Response(200, json=p))
+            with self.subTest(host=host):
+                if valid:
+                    found = await read_hca_counters(
+                        "http://sidecar/v1/attestation", transport=transport
+                    )
+                    self.assertEqual(found["host"], "node-a")
+                else:
+                    with self.assertRaisesRegex(ValueError, "returned no HCA counters"):
+                        await read_hca_counters(
+                            "http://sidecar/v1/attestation", transport=transport
+                        )
+
     async def test_hca_reading_without_a_counter_field_is_refused(self):
         payload = {"device": "mlx5_0", "port": 1, "boot_id": "boot-a", "counter_error": "gone"}
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))

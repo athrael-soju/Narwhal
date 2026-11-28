@@ -38,8 +38,8 @@ def _gpu_list(value: str) -> list[str]:
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="narwhal",
-        description="Deploy a fleet to SSH hosts, run a local development fleet, inspect fleet "
-        "files and collect diagnostics",
+        description="Deploy a fleet to SSH hosts or a Kubernetes cluster, run a local "
+        "development fleet, inspect fleet files and collect diagnostics",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Documentation: https://athrael-soju.github.io/Narwhal/CLI-Reference/\n\n"

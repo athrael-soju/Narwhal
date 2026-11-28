@@ -274,7 +274,8 @@ class ReconcileTests(ControllerTest):
             self.assertEqual(self.condition(kind)["status"], "False", kind)
         profile = self.condition(fleet_resource.stage_condition("profile"))
         self.assertEqual((profile["status"], profile["reason"]), ("True", "Passed"))
-        self.assertEqual(profile["message"], "no attempt yet")
+        # The message says why the stage ran.
+        self.assertEqual(profile["message"], "ran because: no attempt yet")
         self.assertEqual(status["stages"]["engine-start"]["passed"], 2)
         self.assertEqual(status["stages"]["engine-start"]["total"], 2)
         self.assertIn("lastPassedTime", status["stages"]["router-start"])
@@ -349,7 +350,12 @@ class ReconcileTests(ControllerTest):
     def test_a_failed_stage_stalls_the_fleet_until_an_edit_or_a_new_request(self):
         self.rig.fail_kind = "preflight"
         controller = self.leader()
-        self.work(controller)
+        with self.assertLogs(kubernetes_controller.log, "WARNING") as logged:
+            self.work(controller)
+        # The controller's log names the failure, as the fleet's status does.
+        self.assertTrue(
+            any("stalled: preflight failed" in line for line in logged.output), logged.output
+        )
         stalled = self.condition(fleet_resource.STALLED)
         self.assertEqual((stalled["status"], stalled["reason"]), ("True", "StageFailed"))
         self.assertIn("preflight failed", stalled["message"])
@@ -377,6 +383,28 @@ class ReconcileTests(ControllerTest):
         self.assertEqual(self.condition(fleet_resource.READY)["status"], "True", self.status())
         self.assertEqual(self.condition(fleet_resource.STALLED)["status"], "False")
         self.assertFalse((self.directory() / kubernetes_controller.STALL_FILE).exists())
+
+    def test_a_run_up_to_an_earlier_stage_names_that_stage_not_one_an_earlier_pass_failed(self):
+        self.rig.fail_kind = "preflight"
+        controller = self.leader()
+        self.work(controller)
+        self.rig.fail_kind = None
+        self.edit({"until": "fleet-limits"})
+        self.work(controller)
+        ready = self.condition(fleet_resource.READY)
+        self.assertEqual((ready["status"], ready["reason"]), ("True", "Passed"))
+        self.assertEqual(
+            ready["message"],
+            "every stage up to fleet-limits passed; spec.until stops the run there, before "
+            f"{kubernetes_target.LAST_STAGE}",
+        )
+        self.assertEqual(self.status()["stage"], "fleet-limits")
+        preflight = self.condition(fleet_resource.stage_condition("preflight"))
+        self.assertEqual(preflight["status"], "False")
+        self.assertTrue(
+            preflight["message"].endswith("from an earlier pass; spec.until stops at fleet-limits"),
+            preflight["message"],
+        )
 
     def test_a_failed_discover_after_a_new_release_says_the_fleet_is_down(self):
         controller = self.ready()

@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -176,13 +176,20 @@ def _child_stdout(diagnostics: _RedactedStream) -> Iterator[None]:
             diagnostics.flush()
 
 
-def _redactor() -> Callable[[str], str]:
+def redact_secrets(text: str, extra: Iterable[str] = ()) -> str:
+    """`text` with every credential this process holds, and each value of `extra`, replaced
+    by `[REDACTED]`, as command results redact them."""
+    return _redactor(extra)(text)
+
+
+def _redactor(extra: Iterable[str] = ()) -> Callable[[str], str]:
     secrets = sorted(
         {
             value
             for name, value in os.environ.items()
             if value and re.search(r"KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL", name, re.I)
-        },
+        }
+        | {value for value in extra if value},
         key=len,
         reverse=True,
     )

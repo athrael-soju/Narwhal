@@ -122,7 +122,8 @@ The dashboard needs rendering first, because its queries come from the installed
 
 ```bash
 python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
-helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
+helm upgrade --install narwhal deploy/helm/narwhal --namespace <namespace> \
+  --values config/helm/<fleet>.yaml \
   --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
 ```
 
@@ -151,7 +152,8 @@ Prometheus keeps 30 days of samples, as under `make observe`. A changed configur
 On a cluster that already runs the Prometheus Operator and Grafana, such as kube-prometheus-stack, the chart can leave both to them:
 
 ```bash
-helm install fleet deploy/helm/narwhal -f config/helm/values.yaml \
+helm upgrade --install narwhal deploy/helm/narwhal --namespace <namespace> \
+  --values config/helm/<fleet>.yaml \
   --set monitoring.enabled=true \
   --set monitoring.serviceMonitors.enabled=true \
   --set monitoring.serviceMonitors.labels.release=kube-prometheus-stack \
@@ -169,6 +171,8 @@ With `monitoring.serviceMonitors.enabled`, the chart runs no Prometheus. It rend
 | `PodMonitor` `<release>-sidecars` | The container `attestation` of each engine pod, at `engine-<n>.engines.<namespace>.svc:<attestation port>`. Rendered only with `fleet` set, which names the port |
 | `ScrapeConfig` `<release>-engines` | The engines that `/narwhal/targets` lists, read through the Service `haproxy` on port 8000 |
 | `PrometheusRule` `<release>-alerts` | The rules of `prometheus-alerts.yml`, unchanged |
+
+With the fleet applied outside the chart, with `kubectl` or from a workstation, the chart renders no `PodMonitor`, so the cluster's Prometheus scrapes no attestation sidecar and `NarwhalHostDown` never fires. Keep the fleet in `fleet` to monitor the sidecars.
 
 The monitors select what the controller builds by the labels `app.kubernetes.io/name: narwhal` and `app.kubernetes.io/component: router` or `engine`, and by the Service, container and port names above. `src/narwhal/deployment/kubernetes_objects.py` gives the objects those labels and names, and a chart test fails when the two drift apart. HAProxy serves no metrics of its own, so Prometheus reads only the engine targets through it.
 

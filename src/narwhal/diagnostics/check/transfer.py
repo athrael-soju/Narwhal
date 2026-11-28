@@ -34,8 +34,10 @@ async def gate_hca(
     The sidecar publishes the port only for a launch with no shared-memory device and no CUDA
     IPC, so the consume gate can check that KV between engines of one host crossed the HCA.
     Only such a pair needs the transmit counter. An engine whose counter is unreadable fails
-    when it has a live peer on its host, by boot ID, that it can send KV to or take KV from.
-    Returns the readings with a counter.
+    when it has a live peer on its host that it can send KV to or take KV from. Two readings
+    that both name their host, as Kubernetes engine pods name their nodes, share it when the
+    names match; otherwise they share it when their boot IDs match. Returns the readings with
+    a counter.
     """
     readings: dict[str, Mapping[str, Any]] = {}
     lines: list[tuple[bool, str]] = []
@@ -56,7 +58,11 @@ async def gate_hca(
     for iid, published in readings.items():
         peers = sorted(
             {dst if src == iid else src for src, dst in pairs if iid in (src, dst)}
-            & {other for other in readings if other != iid and _same_boot(readings, iid, other)}
+            & {
+                other
+                for other in readings
+                if other != iid and _same_host_reading(readings, iid, other)
+            }
         )
         if published["port_xmit_data"] is not None:
             lines.append((True, f"{iid} sends KV through HCA {_port(published)}"))
@@ -86,8 +92,16 @@ async def gate_hca(
     return {iid: r for iid, r in readings.items() if r["port_xmit_data"] is not None}
 
 
-def _same_boot(readings: Mapping[str, Mapping[str, Any]], a: str, b: str) -> bool:
-    return readings[a]["boot_id"] == readings[b]["boot_id"]
+def _one_host(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """Whether two HCA readings come from one host: by host name when both name theirs, since
+    nodes that share a kernel share its boot ID, and by boot ID otherwise."""
+    if a.get("host") and b.get("host"):
+        return bool(a["host"] == b["host"])
+    return bool(a["boot_id"] == b["boot_id"])
+
+
+def _same_host_reading(readings: Mapping[str, Mapping[str, Any]], a: str, b: str) -> bool:
+    return _one_host(readings[a], readings[b])
 
 
 def _port(reading: Mapping[str, Any]) -> str:
@@ -95,7 +109,7 @@ def _port(reading: Mapping[str, Any]) -> str:
 
 
 def _same_host(hca: Mapping[str, Mapping[str, Any]], src: str, dst: str) -> bool:
-    return src in hca and dst in hca and hca[src]["boot_id"] == hca[dst]["boot_id"]
+    return src in hca and dst in hca and _one_host(hca[src], hca[dst])
 
 
 async def gate_produce(
@@ -357,7 +371,7 @@ async def _hca_reading(
     """Read an engine's HCA counter again, requiring the port and host of its first reading."""
     reading = await read_hca_counters(attestation_url, timeout_s=cfg.health_timeout_s)
     if reading is None or any(
-        reading[name] != expected[name] for name in ("device", "port", "boot_id")
+        reading.get(name) != expected.get(name) for name in ("device", "port", "boot_id", "host")
     ):
         raise ValueError(f"{attestation_url} no longer publishes HCA {_port(expected)}")
     return reading

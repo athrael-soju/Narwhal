@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1428,9 +1428,9 @@ class CredentialTests(KubernetesTest):
                     self.assertTrue(
                         any(path == m or path.startswith(m + "/") for m in mounts), path
                     )
-        # An engine check stages its launch beside the launch's directory, and a sidecar check
-        # keeps its captures in the pod's; every other Job writes only its own work directory.
-        self.assertEqual(outside, {"engine-check", "sidecar-verify"})
+        # An engine check stages its launch beside the launch's directory; every other Job,
+        # a sidecar check among them, writes only its own work directory.
+        self.assertEqual(outside, {"engine-check"})
         [router] = [w for w in self.rig.workloads if w["metadata"]["name"] == "router"]
         [container] = router["spec"]["template"]["spec"]["containers"]
         [state] = [m for m in container["volumeMounts"] if m["name"] == "narwhal-state"]
@@ -2288,6 +2288,244 @@ class GateTests(unittest.TestCase):
             }
         }
         self.assertIsNone(never(gated, scheduled=True))
+
+
+def run_script(script: str, roots: Mapping[str, Path], tools: Path) -> subprocess.CompletedProcess:
+    """Run a gate's shell script here, each absolute path of `roots` under its directory, with
+    `tools` first on the PATH."""
+    for prefix, root in sorted(roots.items(), key=lambda item: -len(item[0])):
+        script = script.replace(prefix, str(root))
+    # The tests run with an empty environment, as the controller's pod has its own.
+    env = {"PATH": os.pathsep.join((str(tools), "/usr/local/bin", "/usr/bin", "/bin"))}
+    return subprocess.run(
+        ["sh", "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+
+
+def tool(directory: Path, name: str, body: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(f"#!/bin/sh\n{body}")
+    path.chmod(0o755)
+
+
+class WalkthroughTests(KubernetesTest):
+    """The failures a live walkthrough on a GPU cluster found in the gate Jobs' scripts, run
+    here in a shell as the kubelet hands them to the container."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.scratch = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.scratch)
+        # A script that changed a directory's mode leaves it unreadable to the removal.
+        self.addCleanup(subprocess.run, ["chmod", "-R", "u+rwX", str(self.scratch)], check=False)
+        self.state = self.scratch / "state"
+        self.inputs = self.scratch / "in"
+
+    def script(self, entry: dict) -> str:
+        return entry["command"][-1]
+
+    def engine_check(self, made: bool) -> tuple[Path, subprocess.CompletedProcess]:
+        [entry] = [e for e in self.entries("engine-check") if instance_of(e) == "engine-1"]
+        script = self.script(entry)
+        target = Path(re.search(r"^target=(\S+)$", script, re.M)[1])
+        local = self.state / target.relative_to("/narwhal-state")
+        self.inputs.mkdir()
+        (self.inputs / "launch.json").write_text('{"plan": 1}\n')
+        (self.inputs / "hook").mkdir()
+        (self.inputs / "hook" / "launch_engine.py").write_text("pass\n")
+        if made:
+            # The kubelet makes the sidecar's subPath directory once the pod starts.
+            local.mkdir(parents=True)
+        tools = self.scratch / "bin"
+        tool(tools, "narwhal-engine", 'echo "{}" > "$3/checked.json"\n')
+        return local, run_script(
+            script, {"/narwhal-state": self.state, "/tmp/narwhal-in": self.inputs}, tools
+        )
+
+    def test_engine_check_hands_the_launch_to_the_directory_the_sidecar_mounts(self):
+        for made in (True, False):
+            with self.subTest(kubelet_made_it=made):
+                if self.inputs.exists():
+                    shutil.rmtree(self.state, ignore_errors=True)
+                    shutil.rmtree(self.inputs)
+                before = None
+                local, result = self.engine_check(made)
+                if made:
+                    before = local.stat().st_ino
+                self.assertEqual(result.returncode, 0, result.stderr)
+                # The sidecar's mount holds the directory the kubelet made, and reads it.
+                self.assertEqual(
+                    sorted(p.name for p in local.iterdir()), ["checked.json", "hook", "launch.json"]
+                )
+                if made:
+                    self.assertEqual(local.stat().st_ino, before)
+                # The staging directory is gone, and was named by the shell's PID: the
+                # kubelet passed `$$` through as written.
+                self.assertEqual(sorted(p.name for p in local.parent.iterdir()), [local.name])
+
+    def test_fleet_limits_changes_the_mode_of_its_own_files_alone(self):
+        [entry] = [e for e in self.entries("state") if "/fleet-limits/" in e["keep"]]
+        script = self.script(entry)
+        work = Path(re.search(r"^mkdir -p (\S+)$", script, re.M)[1])
+        local = self.state / work.relative_to("/narwhal-state")
+        # The kubelet makes jobs/ in the work directory, as root, for each Job's keep mount;
+        # a mode change of it fails there.
+        (local / "jobs" / entry["name"]).mkdir(parents=True)
+        (local / "jobs").chmod(0o755)
+        self.inputs.mkdir()
+        for name, data in self.rig.files(entry).items():
+            (self.inputs / name).write_bytes(data)
+            (self.inputs / name).chmod(0o600)
+        result = run_script(
+            script, {"/narwhal-state": self.state, "/tmp/narwhal-in": self.inputs}, self.scratch
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((local / "jobs").stat().st_mode & 0o7777, 0o755)
+        for name in self.rig.files(entry):
+            self.assertEqual((local / name).stat().st_mode & 0o777, 0o644, name)
+
+    def test_only_the_gates_that_read_a_sidecars_attempt_join_its_group(self):
+        groups = {}
+        for name, job in self.rig.jobs.items():
+            context = job["job"]["spec"]["template"]["spec"].get("securityContext") or {}
+            groups[name] = (job["entry"], context.get("supplementalGroups"))
+        readers = {
+            entry["name"]
+            for entry, _ in groups.values()
+            if entry["kind"] == "sidecar-verify"
+            or (entry["kind"] == "state" and "/fleet-limits/" not in entry["keep"])
+        }
+        self.assertTrue(readers)
+        sidecar = int(self.rig.env.get(kubernetes_target.SIDECAR_USER) or 10002)
+        for name, (_entry, held) in groups.items():
+            with self.subTest(name):
+                self.assertEqual(held, [sidecar] if name in readers else None)
+        for entry, _ in groups.values():
+            if entry["kind"] == "sidecar-verify":
+                # It keeps its check in its own scratch directory, and writes no pod directory.
+                self.assertIn("--into /tmp/narwhal-checks", self.script(entry))
+
+    def test_a_fabric_job_measures_only_the_hca_its_engines_send_kv_through(self):
+        hosts = {role: Host(node, "", None, (role,)) for role, node in NODES.items()}
+        endpoints = {
+            role: fabric.Endpoint(
+                hosts[role],
+                f"10.0.0.{role[-1]}",
+                "f0",
+                "ucx_rdma",
+                fabric.Rdma(f"hca-{role[-1]}", 1, 3, "v2"),
+            )
+            for role in NODES
+        }
+        engines = {
+            role: fabric.Engine(
+                role,
+                hosts[role],
+                endpoints[role],
+                f"hca-{role[-1]}:1",
+                2,
+                Path("l"),
+                {},
+                {},
+                True,
+                False,
+            )
+            for role in NODES
+        }
+        plan = fabric.Fabric(engines, (), None, 5201, "/tmp", {}, {})  # type: ignore[arg-type]
+        sample = fabric.Sample(
+            endpoints["engine-1"], endpoints["engine-2"], ("engine-1",), ("engine-2",)
+        )
+        shell = kubernetes_target.JobShell(
+            self.deployment(),
+            kubernetes_target._LiveContext(self.run),  # type: ignore[arg-type]
+        )
+        before = len(self.rig.jobs)
+        self.rig.hold = {"fabric-server"}
+        shell.sample(plan, "gpu-a-to-gpu-b", sample)
+        entries = [job["entry"] for job in list(self.rig.jobs.values())[before:]]
+        scripts = {e["kind"]: self.script(e) for e in entries if e["kind"] != "fabric-probe"}
+        tools = self.scratch / "bin"
+        tool(tools, "timeout", "exit 0\n")
+        for kind, own, other in (
+            ("fabric-server", "hca-2", "hca-1"),
+            ("fabric-client", "hca-1", "hca-2"),
+        ):
+            for held in (own, other):
+                with self.subTest(kind, held=held):
+                    root = self.scratch / kind / held
+                    (root / "dev").mkdir(parents=True)
+                    (root / "dev" / "uverbs0").touch()
+                    verbs = root / "sys" / "uverbs0"
+                    verbs.mkdir(parents=True)
+                    (verbs / "ibdev").write_text(f"{held}\n")
+                    check = scripts[kind].split("status=0")[0].split("timeout -k")[0]
+                    result = run_script(
+                        check,
+                        {
+                            "/dev/infiniband": root / "dev",
+                            "/sys/class/infiniband_verbs": root / "sys",
+                        },
+                        tools,
+                    )
+                    if held == own:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn(
+                            f"allocated HCA {held} to this Job, and engine-{own[-1]} send KV "
+                            f"through {own}",
+                            result.stderr,
+                        )
+
+
+class FailureReportTests(unittest.TestCase):
+    def test_a_failed_gate_names_its_own_failure_not_the_wrappers_exit(self):
+        report = (
+            "hca\n"
+            "  FAIL  n1 HCA mlx5_0:1 counters are unreadable\n"
+            "  ok    n2 sends KV through HCA mlx5_1:1\n"
+            "  FAIL  n2 HCA mlx5_1:1 counters are unreadable\n"
+            "narwhal-gate: sh exited with status 1\n"
+        )
+        self.assertEqual(
+            kubernetes_target.failure_cause(report),
+            "n1 HCA mlx5_0:1 counters are unreadable; n2 HCA mlx5_1:1 counters are unreadable",
+        )
+        named = (
+            "narwhal-host: the ib_write_bw server exited\nnarwhal-gate: sh exited with status 1\n"
+        )
+        self.assertEqual(kubernetes_target.failure_cause(named), "the ib_write_bw server exited")
+        self.assertEqual(
+            kubernetes_target.failure_cause("noise\nnarwhal-gate: sh exited with status 4\n"),
+            "sh exited with status 4",
+        )
+        self.assertIsNone(kubernetes_target.failure_cause("noise\n"))
+
+    def test_a_failure_names_the_fleet_fields_not_the_ssh_variables(self):
+        error = ValueError(
+            "Set NARWHAL_RDMA_GID_INDEX or NARWHAL_NODE_2_RDMA_GID_INDEX to the GID index "
+            "engine-2 uses on mlx5_0:1"
+        )
+        kubernetes_target.name_fields(error)
+        self.assertEqual(
+            str(error),
+            "Set spec.engines.nodes[1].rdma.gidIndex to the GID index engine-2 uses on mlx5_0:1",
+        )
+        error = ValueError(
+            "engine-1: set NARWHAL_TRANSFER_DEVICES or NARWHAL_NODE_1_TRANSFER_DEVICES to the "
+            "RDMA device paths; NARWHAL_ENGINE_PORT, NARWHAL_NODE_1_KUBERNETES_NODE and "
+            "NARWHAL_KUBERNETES_SIDECAR_USER"
+        )
+        kubernetes_target.name_fields(error)
+        self.assertEqual(
+            str(error),
+            "engine-1: set the spec.engines.launch entry NARWHAL_TRANSFER_DEVICES or "
+            "NARWHAL_NODE_1_TRANSFER_DEVICES to the RDMA device paths; spec.engines.ports.engine, "
+            "spec.engines.nodes[0].node and NARWHAL_KUBERNETES_SIDECAR_USER",
+        )
 
 
 class GraphTests(unittest.TestCase):

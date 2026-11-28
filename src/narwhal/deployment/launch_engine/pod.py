@@ -117,7 +117,11 @@ def write_record(name: str, record: dict) -> None:
 
 
 def transfer_device(plan: dict) -> dict:
-    """Return the HCA the RDMA device plugin allocated to this container, at the plan's port."""
+    """Return the HCA the RDMA device plugin allocated to this container, at the plan's port.
+
+    The fabric stages measured the HCA the plan names, so the container sends KV through no
+    other: the fleet's RDMA resource must hold that HCA alone on the node.
+    """
     names = sorted(path.name for path in local(VERBS_DEVICES).glob("uverbs*"))
     if len(names) != 1:
         raise StepFailure(
@@ -130,6 +134,13 @@ def transfer_device(plan: dict) -> dict:
         raise StepFailure(f"the HCA of {names[0]} is unreadable: {error}") from error
     if not hca:
         raise StepFailure(f"{VERBS_CLASS / names[0] / 'ibdev'} names no HCA")
+    planned = plan["kubernetes"]["hca"]
+    if hca != planned:
+        raise StepFailure(
+            f"the RDMA device plugin allocated HCA {hca} to this container, and "
+            f"transfer.net_devices names {planned}, the HCA the fabric stages measure; give the "
+            f"fleet an RDMA resource that holds only {planned} on this node"
+        )
     port = plan["kubernetes"]["hca_port"]
     return {"verbs_device": names[0], "hca": hca, "port": port, "ucx_net_devices": f"{hca}:{port}"}
 

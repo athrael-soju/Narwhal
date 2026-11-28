@@ -241,10 +241,10 @@ On Kubernetes, a `NarwhalFleet` resource holds what `.env` holds on SSH hosts, a
 The cluster admin provides:
 
 - Kubernetes 1.30 or later, and `helm` and `kubectl` on the workstation.
-- A GPU device plugin and an RDMA device plugin on every engine node, which hand each engine pod its GPUs and one HCA under the resource names the fleet gives.
+- A GPU device plugin and an RDMA device plugin on every engine node, which hand each engine pod its GPUs and one HCA under the resource names the fleet gives. On each engine node, the RDMA resource must hold only the HCA the engines send KV through, and the engine pods and the fabric Jobs must be able to hold it at once, as [Cluster requirements](Kubernetes.md#cluster-requirements) describes.
 - A ReadWriteMany storage class for the state volume, a storage class for the routers' volumes, and a PersistentVolumeClaim in the namespace that serves the staged checkpoint.
 - A network plugin that enforces NetworkPolicy.
-- The engine image, a Narwhal image built from the repository's `Dockerfile`, an HAProxy image, an image with `ib_write_bw` for the fabric Jobs, and Prometheus and Grafana images, in a registry the nodes pull from, each pinned by digest. Narwhal publishes no image.
+- The engine image, a Narwhal image built from the repository's `Dockerfile`, an HAProxy image, an image with `ib_write_bw` for the fabric Jobs, and Prometheus and Grafana images, in a registry the nodes pull from, each pinned by digest. Narwhal publishes no image. Any image with perftest's `ib_write_bw` serves for the fabric Jobs, such as one built `FROM ubuntu:24.04` with `apt-get install -y perftest`. `make observe` pins Prometheus v3.14.0 and Grafana 13.2.1. [Needs verification: the HAProxy version the router pair is tested with]
 
 The model volume can also be a `hostPath`, `nfs` or `csi` volume once the admin allows it in the narwhal chart's values, as the [CRD chart](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal-crds/README.md) describes.
 
@@ -255,6 +255,8 @@ The narwhal chart's values hold the controller's image, the state volume, the mo
 ```yaml
 images:
   narwhal: <registry>/narwhal@sha256:<digest>
+
+runtimeClassNames: ["<GPU RuntimeClass>"]
 
 state:
   storageClassName: <ReadWriteMany storage class>
@@ -286,6 +288,7 @@ fleet:
     resources:
       gpu: <GPU resource name>
       rdma: <RDMA resource name>
+      runtimeClassName: <GPU RuntimeClass>
     ports:
       engine: 8001
       attestation: 9001
@@ -294,8 +297,14 @@ fleet:
     nodes:
       - node: <node-a>
         fabricInterface: <interface>
+        rdma:
+          gidIndex: <GID index>
+          roceMode: <v2, v1 or infiniband>
       - node: <node-b>
         fabricInterface: <interface>
+        rdma:
+          gidIndex: <GID index>
+          roceMode: <v2, v1 or infiniband>
     apiKeySecret:
       name: engine-key-v1
       key: key
@@ -304,6 +313,8 @@ fleet:
         value: ucx_rdma
       - name: NARWHAL_TRANSFER_NET_DEVICES
         value: mlx5_0:1
+      - name: NARWHAL_TRANSFER_DEVICES
+        value: '["/dev/infiniband/uverbs0"]'
   slo:
     ttftS: "<seconds>"
     tpotS: "<seconds>"
@@ -333,9 +344,20 @@ fleet:
     key: token
 ```
 
-`images.narwhal` is the Narwhal image the controller runs, and the routers, gate Jobs and sidecars it makes run it too; the fleet names only the engine, HAProxy and fabric images. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`; `NARWHAL_TRANSFER_NET_DEVICES` gives the HCA port, and each pod uses the HCA the device plugin allocates. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer, and `NARWHAL_NODE_<n>_GPU_IDS` to engines that share a node. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
+`images.narwhal` is the Narwhal image the controller runs, and the routers, gate Jobs and sidecars it makes run it too; the fleet names only the engine, HAProxy and fabric images. Each node's `fabricInterface` is the interface on the node that carries KV, since the engine pods run on the host network. On Kubernetes every engine transfers KV over `ucx_rdma`, and `NARWHAL_TRANSFER_NET_DEVICES` names the HCA and port, the HCA the RDMA resource holds on each node; give an engine whose node names its HCA differently its own `NARWHAL_NODE_<n>_TRANSFER_NET_DEVICES`. Discovery refuses a `ucx_rdma` engine without `NARWHAL_TRANSFER_DEVICES`, although each pod opens the HCA its RDMA resource hands it. `fabric-budget` needs `rdma.gidIndex` and `rdma.roceMode` for each engine; [Fabric qualification inputs](../configuration/04-Deployment-Inputs.md#fabric-qualification-inputs) shows how to read them.
+
+On nodes whose default container runtime exposes no GPUs, name the GPU RuntimeClass in both places: the chart's `runtimeClassNames` allows it, and `engines.resources.runtimeClassName` uses it. Leave both out where the default runtime exposes the GPUs.
+
+Compute `treeSha256` on a node that sees the checkpoint, as [Staging and identifying the checkpoint](01-Discover.md#staging-and-identifying-the-checkpoint) shows for a host. For a `hostPath` model volume, also set `modelVolumeSources: [hostPath]` and `modelHostPathPrefixes: ["<parent directory>"]` in the values, which allow it. Without GPU IDs, each engine takes every GPU of its node; add `NARWHAL_GPU_IDS` to `engines.launch` to give it fewer, and `NARWHAL_NODE_<n>_GPU_IDS` to engines that share a node. The profiling, calibration and fabric values are the starting points of the SSH inputs above, and the [NarwhalFleet reference](NarwhalFleet.md) lists every field.
 
 ### Installing and following the fleet
+
+The charts are not in the wheel. Check out the repository at the release you installed, and run the commands below from its root:
+
+```bash
+git clone --branch v<version> https://github.com/athrael-soju/Narwhal
+cd Narwhal
+```
 
 Create the namespace and the Secrets the values name, render the dashboard, then install both charts:
 
@@ -349,12 +371,12 @@ kubectl create secret generic engine-key-v1 --namespace narwhal \
 kubectl create secret generic grafana-admin --namespace narwhal --from-literal=user=admin \
   --from-literal=password="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
 python -m narwhal.observability.stack.chart_dashboard config/helm/dashboard.json
-helm install narwhal-crds deploy/helm/narwhal-crds
+helm install narwhal-crds deploy/helm/narwhal-crds --namespace narwhal-system --create-namespace
 helm install narwhal deploy/helm/narwhal --namespace narwhal --values config/helm/fleet.yaml \
   --set-file monitoring.grafana.dashboard=config/helm/dashboard.json
 ```
 
-The namespace label is needed only where the cluster enforces the Pod Security `baseline` level by default. After the second install, the controller runs every stage with no other command. [Needs verification: task 22, two `helm install`s reaching a serving fleet on the live cluster] Follow it:
+The CRD is cluster-wide, so its release record goes in a namespace of its own, `narwhal-system` here, and outlives the fleet's. The namespace label is needed only where the cluster enforces the Pod Security `baseline` level by default. After the second install, the controller runs every stage with no other command. [Needs verification: task 22, two `helm install`s reaching a serving fleet on the live cluster] Follow it:
 
 ```bash
 kubectl get narwhalfleet --namespace narwhal --watch
@@ -365,10 +387,12 @@ kubectl get narwhalfleet --namespace narwhal --watch
 Reach Grafana, Prometheus and the fleet from the workstation, each in its own terminal:
 
 ```bash
-kubectl port-forward --namespace narwhal svc/grafana 13000:3000
-kubectl port-forward --namespace narwhal svc/prometheus 19090:9090
-kubectl port-forward --namespace narwhal svc/haproxy 18000:8000
+kubectl port-forward --address 127.0.0.1 --namespace narwhal svc/grafana 13000:3000
+kubectl port-forward --address 127.0.0.1 --namespace narwhal svc/prometheus 19090:9090
+kubectl port-forward --address 127.0.0.1 --namespace narwhal svc/haproxy 18000:8000
 ```
+
+If a local port is taken, `kubectl port-forward` without `--address 127.0.0.1` may bind only `[::1]` and print only that line; `http://127.0.0.1:<port>` then reaches another service. With the flag, it fails instead.
 
 Open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, sign in with the login in `grafana-admin`, and send completions to `http://127.0.0.1:18000/v1/completions`.
 
@@ -378,14 +402,20 @@ To stop the fleet and keep its volumes, set `fleet.stopped: true` in the values 
 
 On several nodes, each entry of `fleet.engines.nodes` names the node its engine runs on, and a topology spread constraint keeps the two router pods on different nodes whenever more than one node can take them, so losing one node leaves a router. The values file above is that layout.
 
-On one node, the routers both run on that node, and both entries of `fleet.engines.nodes` name it. Engine pods run on the node's host network, so the second engine takes its own ports, as `NARWHAL_NODE_2_ENGINE_PORT` and its neighbours do on one SSH host, and each engine takes its own GPUs. The node needs a GPU share and an HCA from the device plugins for each engine. Replace `nodes` in the values file above, and add the GPU IDs to `launch`:
+On one node, the routers both run on that node, and both entries of `fleet.engines.nodes` name it. Engine pods run on the node's host network, so the second engine takes its own ports, as `NARWHAL_NODE_2_ENGINE_PORT` and its neighbours do on one SSH host, and each engine takes its own GPUs. The node needs a GPU share from the GPU device plugin for each engine, and both engines send KV through the one HCA the RDMA resource holds there. Replace `nodes` in the values file above, and add the GPU IDs to `launch`:
 
 ```yaml
     nodes:
       - node: <node-a>
         fabricInterface: <interface>
+        rdma:
+          gidIndex: <GID index>
+          roceMode: <v2, v1 or infiniband>
       - node: <node-a>
         fabricInterface: <interface>
+        rdma:
+          gidIndex: <GID index>
+          roceMode: <v2, v1 or infiniband>
         ports:
           engine: 8002
           attestation: 9002
@@ -396,10 +426,12 @@ On one node, the routers both run on that node, and both entries of `fleet.engin
         value: ucx_rdma
       - name: NARWHAL_TRANSFER_NET_DEVICES
         value: mlx5_0:1
+      - name: NARWHAL_TRANSFER_DEVICES
+        value: '["/dev/infiniband/uverbs0"]'
       - name: NARWHAL_NODE_1_GPU_IDS
         value: "0"
       - name: NARWHAL_NODE_2_GPU_IDS
         value: "1"
 ```
 
-The device plugin picks which GPUs and HCA each pod gets, so the GPU IDs set how many each engine takes. The engines transfer KV between them over their HCAs, with `UCX_SHM_DEVICES=none` and no `cuda_ipc`, and with no second node there is no fabric edge for `fabric-edge` to measure. The controller refuses a fleet whose engines on one node share a port. [Needs verification: task 22, on a live one-node cluster]
+The device plugin picks which GPUs each pod gets, so the GPU IDs set how many each engine takes. The engines transfer KV between them through that HCA, with `UCX_SHM_DEVICES=none` and no `cuda_ipc`, and with no second node there is no fabric edge for `fabric-edge` to measure. The controller refuses a fleet whose engines on one node share a port. Preflight then checks that same-node KV crosses the HCA by reading its `port_xmit_data` counter, so the node needs readable port counters, as [Cluster requirements](Kubernetes.md#cluster-requirements) lists. [Needs verification: task 22, on a live one-node cluster]

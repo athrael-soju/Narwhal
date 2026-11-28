@@ -470,18 +470,26 @@ def progress(
             count["lastPassedTime"] = _time(max(entry["ended_at"] for entry in passed))
         counts[stage] = count
         reasons = list(dict.fromkeys(r for entry in found for r in entry["reasons"]))
-        message = "; ".join(reasons)
+        # The reasons say why the stage ran, not how it ended.
+        message = f"ran because: {'; '.join(reasons)}" if reasons else ""
         failed = [entry for entry in found if entry["status"] in (FAILED, TIMEOUT)]
         if failed:
             entry = failed[0]
             text = entry["failure"]["message"]
-            message = f"{text}; ran because: {message}" if message else text
+            message = f"{text}; {message}" if message else text
+        if stage not in order:
+            # An earlier pass ran it; this one stops before it.
+            note = f"from an earlier pass; spec.until stops at {order[-1]}"
+            message = f"{message}; {note}" if message else note
         status = True if worst == PASSED else (None if worst == RUNNING else False)
         conditions.append(_condition(stage_condition(stage), status, _camel(worst), message))
         if worst == RUNNING or (not current and worst != PASSED and stage in order):
             current = stage
     if not current and counts:
-        current = next(stage for stage in reversed(STAGES) if stage in counts)
+        # Every stage the pass decides passed: the stage is the last of those, not one beyond
+        # `until` that an earlier pass left.
+        held = [stage for stage in order if stage in counts] or [s for s in STAGES if s in counts]
+        current = held[-1]
     settled = all(
         entry["status"] == PASSED for entry in entries if entry["stage"] in order
     ) and bool(entries)
@@ -1313,14 +1321,18 @@ class Controller:
                         "message": message,
                     },
                 )
+                log.warning("stalled: %s", message)
                 return _stage_failed(message)
             # An interrupted attempt is adopted by the next pass, and never stalls the fleet.
+            log.info("retrying: %s", exc)
             return _Outcome(retrying=str(exc))
         except RunLocked as exc:
             return _Outcome(retrying=str(exc))
         except HelpersSurvived as exc:
+            log.warning("stalled: %s", exc)
             return _Outcome(stalled=(HELPERS_SURVIVED, str(exc)))
         except InputError as exc:
+            log.warning("stalled: the fleet's inputs are refused: %s", "; ".join(exc.problems))
             return _Outcome(stalled=(INPUT_REFUSED, "; ".join(exc.problems)))
         finally:
             with self._lock:
@@ -1401,9 +1413,12 @@ class Controller:
         elif ready:
             stalled = _condition(STALLED, False, "Ready", "every stage passed")
             reconciling = _condition(RECONCILING, False, "Ready", "every stage passed")
-            ready_condition = _condition(
-                READY, True, "Passed", f"every stage up to {found.stage} passed"
-            )
+            message = f"every stage up to {found.stage} passed"
+            if spec.get("until") and spec["until"] != kubernetes_target.LAST_STAGE:
+                message += (
+                    f"; spec.until stops the run there, before {kubernetes_target.LAST_STAGE}"
+                )
+            ready_condition = _condition(READY, True, "Passed", message)
         else:
             stalled = _condition(STALLED, False, "Reconciling", "a pass is under way")
             if outcome.retrying:
@@ -1540,6 +1555,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--state", type=Path, default=STATE)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # httpx logs each request at INFO, every poll of a running Job; its warnings stay.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings.load(args.settings)
     holder = os.environ.get(POD_NAME_ENV, "")
     if not holder:

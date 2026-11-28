@@ -1,10 +1,12 @@
 # Narwhal CRD chart
 
-The chart installs the `NarwhalFleet` CustomResourceDefinition, `narwhalfleets.narwhal.example.com`, version `v1alpha1`. Install it before the `narwhal` chart:
+The chart installs the `NarwhalFleet` CustomResourceDefinition, `narwhalfleets.narwhal.example.com`, version `v1alpha1`. Install it before the `narwhal` chart, from a checkout of the repository at the release tag, since the charts are not in the wheel:
 
 ```bash
-helm install narwhal-crds deploy/helm/narwhal-crds
+helm install narwhal-crds deploy/helm/narwhal-crds --namespace <admin namespace> --create-namespace
 ```
+
+The CRD is cluster-wide, but Helm keeps the release's record in the namespace `--namespace` names, or the kubeconfig's namespace without it. Give it a namespace of its own rather than a fleet's, so the record outlives every fleet's namespace.
 
 The CRD sits in `templates/`, so `helm upgrade` updates it. It carries `helm.sh/resource-policy: keep`, so `helm uninstall` leaves the CRD and every fleet in place. Delete the CRD by hand to remove the fleets. The `narwhal.example.com/schema-sha256` annotation holds the digest of the CRD's spec, which the controller compares with its own.
 

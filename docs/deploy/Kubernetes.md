@@ -14,24 +14,33 @@ The cluster admin provides:
 
 - Kubernetes 1.30 or later. Both charts require it, and the admission policy is a `ValidatingAdmissionPolicy`.
 - A GPU device plugin and an RDMA device plugin on every engine node. Each engine pod requests its GPUs and one HCA under the extended resource names in `spec.engines.resources`, and `access` fails on an engine node that offers no GPU or no HCA under those names.
+- An RDMA resource, `spec.engines.resources.rdma`, that holds only one HCA on each engine node, the one `NARWHAL_TRANSFER_NET_DEVICES` or the node's `NARWHAL_NODE_<n>_TRANSFER_NET_DEVICES` names, and that several pods may hold at once. The engine pod and the fabric Jobs of `fabric-edge` both request it, so the fabric stages measure the HCA the engine sends KV through. A shared RDMA device plugin does this with a resource whose per-node selector picks that HCA, and room on it for the node's engine pods plus one fabric server and one fabric client Job. A pool that hands each pod any one of several HCAs does not work: the engine pod's runtime check and each fabric Job compare the HCA they hold with the one the fleet names, and fail with a message that names both. Engines that share a node also share its HCA, because the one engine StatefulSet requests one set of resources.
+- For engines that share a node, HCA port counters on that node: `cat /sys/class/infiniband/<hca>/ports/<port>/counters/port_xmit_data` must print a number there. Preflight's `hca` gate reads the counter to check that KV between those engines crossed the HCA, and fails without it. Engine pods run on the node's host network, so the sidecar reads the node's own counters and needs no extra mount. Preflight tells hosts apart by the node each sidecar reports, so engines on different nodes need no counters, even where nodes share a kernel and its boot ID, as kind nodes do.
 - A ReadWriteMany storage class for the state volume, which the controller, the engine pods, the gate Jobs and the routers on every node mount. The routers also need a storage class for a ReadWriteOnce volume each.
 - A volume that serves the staged checkpoint, a PersistentVolumeClaim in the namespace by default.
 - A network plugin that enforces NetworkPolicy. The chart's policy is what keeps the routers' control routes away from everything but HAProxy, the gate Jobs, the other router and monitoring.
-- Images in a registry the nodes pull from, each pinned by digest: the engine image, a Narwhal image built from the repository's `Dockerfile`, HAProxy, and an image with `ib_write_bw` for the fabric Jobs, plus Prometheus and Grafana when the chart runs them. Narwhal publishes no image.
+- Images in a registry the nodes pull from, each pinned by digest: the engine image, a Narwhal image built from the repository's `Dockerfile`, HAProxy, and an image with `ib_write_bw` for the fabric Jobs, plus Prometheus and Grafana when the chart runs them. Narwhal publishes no image. Any image with perftest's `ib_write_bw` serves as `images.fabric`, such as one built `FROM ubuntu:24.04` with `apt-get install -y perftest`. `make observe` pins Prometheus v3.14.0 and Grafana 13.2.1, and the chart's own monitoring runs the same configuration files. [Needs verification: the HAProxy version the router pair is tested with]
 - A namespace for each fleet, labelled `pod-security.kubernetes.io/enforce=privileged` when the cluster enforces the Pod Security `baseline` level by default. The engine pods need the host network and `IPC_LOCK`, which `baseline` refuses, and the chart's admission policy applies the baseline's other rules instead.
 
-The workstation needs `helm` and `kubectl`.
+The workstation needs `helm` and `kubectl`, and a checkout of the repository at the release it installs, because the charts are not in the wheel:
+
+```bash
+git clone --branch v<version> https://github.com/athrael-soju/Narwhal
+cd Narwhal
+```
+
+Run the `helm` commands on this page from the checkout's root.
 
 ## Installing the charts
 
 Install the CRD chart once for the cluster, then the narwhal chart in the fleet's namespace:
 
 ```bash
-helm install narwhal-crds deploy/helm/narwhal-crds
+helm install narwhal-crds deploy/helm/narwhal-crds --namespace <admin namespace> --create-namespace
 helm install narwhal deploy/helm/narwhal --namespace <namespace> --values config/helm/<fleet>.yaml
 ```
 
-The CRD chart keeps the CRD on `helm uninstall`, and `helm upgrade` updates it. Upgrade it to the narwhal chart's version first: a controller whose schema differs from the installed CRD's stalls with reason `SchemaStale` and starts nothing. The [narwhal chart's README](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal/README.md) lists its values, and [Getting started](Getting-Started.md#deploying-on-kubernetes) gives a complete values file.
+The CRD is cluster-wide, but Helm keeps each release's record in the namespace `--namespace` names. Give the CRD chart a namespace of its own, so its record outlives every fleet's namespace. The CRD chart keeps the CRD on `helm uninstall`, and `helm upgrade` updates it. Upgrade it to the narwhal chart's version first: a controller whose schema differs from the installed CRD's stalls with reason `SchemaStale` and starts nothing. The [narwhal chart's README](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal/README.md) lists its values, and [Getting started](Getting-Started.md#deploying-on-kubernetes) gives a complete values file.
 
 The chart creates the controller, its RBAC, the namespace's admission policy, the engines' ServiceAccount, the routers' ServiceAccount and Lease Role, the routers' NetworkPolicy, the state claim and the monitoring, and the fleet when `fleet` is set. It renders no engine, Job, router or HAProxy object.
 
@@ -83,7 +92,7 @@ The controller writes the status only when a condition or count changes. `status
 
 | Condition | `True` when | Reasons |
 | --- | --- | --- |
-| `Ready` | A pass for the current generation has passed every stage up to `spec.until` and its live checks hold | `Passed` when true. Otherwise the reason of the condition that is true: `Running`, `Retrying`, `Stopping`, `Stalled` or `Stopped`, or `EnginesStopped` when a failed `discover` stopped the engines |
+| `Ready` | A pass for the current generation has passed every stage up to `spec.until` and its live checks hold | `Passed` when true, with a message that names the last stage up to `spec.until` and says when `spec.until` stops the run before `router-start`. Otherwise the reason of the condition that is true: `Running`, `Retrying`, `Stopping`, `Stalled` or `Stopped`, or `EnginesStopped` when a failed `discover` stopped the engines |
 | `Reconciling` | A pass runs, or one will | `Running` while a stage runs, `Retrying` after an error the controller retries, such as an unreachable API server or an interrupted attempt, `Stopping` while `spec.stopped` takes effect. `Ready`, `Stalled` or `Stopped` when false |
 | `Stalled` | No pass runs until something changes | `StageFailed`, `InputRefused`, `SchemaStale`, `AdmissionPolicyMissing`, `RouterStorageImmutable`, `NameRefused`, `HelpersSurvived`, as below. `Ready`, `Reconciling` or `Stopped` when false |
 | `Stopped` | `spec.stopped` is true and the fleet's workloads are gone | `Stopped`, `Stopping` while they go, `Running` |
@@ -98,7 +107,7 @@ The controller writes the status only when a condition or count changes. `status
 | `NameRefused` | The fleet is not named `fleet` | Applying it as `fleet` |
 | `HelpersSurvived` | Processes an earlier runner started for a stage survived their cleanup | The next pass that finds them gone |
 
-Each stage the run record holds also has a condition, typed `stage.narwhal.example.com/<stage>`. Its reason is the run-record status of its worst instance, in CamelCase and in this order from worst: `Failed`, `Timeout`, `Interrupted`, `Cancelled`, `Running`, `Invalidated`, `Passed`. Its status is `True` for `Passed`, `Unknown` for `Running` and `False` for the rest. Its message gives the reasons the stage last ran, such as an input that changed, and for a failed instance its failure first. `status.stages.<stage>` counts the instances that passed, of all the stage runs, with the time one last passed. Per-instance detail stays in the run record.
+Each stage the run record holds also has a condition, typed `stage.narwhal.example.com/<stage>`. Its reason is the run-record status of its worst instance, in CamelCase and in this order from worst: `Failed`, `Timeout`, `Interrupted`, `Cancelled`, `Running`, `Invalidated`, `Passed`. Its status is `True` for `Passed`, `Unknown` for `Running` and `False` for the rest. Its message gives the reasons the stage last ran after `ran because:`, such as an input that changed, and for a failed instance its failure first. A stage after `spec.until` keeps the condition an earlier pass left, and its message ends `from an earlier pass; spec.until stops at <stage>`. A failed gate's message is the gate's own failure line, such as the `FAIL` lines of the preflight report, and a failure that names an input names the fleet field that sets it, such as `spec.engines.nodes[0].rdma.gidIndex` or the `spec.engines.launch` entry `NARWHAL_TRANSFER_DEVICES`. `status.stages.<stage>` counts the instances that passed, of all the stage runs, with the time one last passed. Per-instance detail stays in the run record.
 
 ## Evidence and logs
 
@@ -116,7 +125,7 @@ The logs stay where Kubernetes keeps them:
 
 | Process | Log |
 | --- | --- |
-| Controller | `kubectl logs deploy/<release>-controller`: each pass, stage instance, adopted Job and stall |
+| Controller | `kubectl logs deploy/<release>-controller`: each pass, stage instance, adopted Job and stall, with the failure that stalled the fleet |
 | Gate Job | `kubectl logs job/<job>`, while the Job exists. The run record names each attempt's Jobs under `jobs`, and `kubectl get jobs -l narwhal.example.com/gate=<kind>` lists them by kind |
 | Engine pod | `kubectl logs engine-<n> -c engine`; the init containers `checkpoint` and `runtime-check` check the checkpoint and the runtime first |
 | Attestation sidecar | `kubectl logs engine-<n> -c attestation` |
@@ -171,7 +180,7 @@ The engine StatefulSet uses `updateStrategy: OnDelete`, so a changed pod templat
 The chart's monitoring runs in one of two modes. [Monitoring](https://github.com/athrael-soju/Narwhal/blob/main/deploy/helm/narwhal/README.md#monitoring) in the chart's README lists every value.
 
 - **The chart's own Prometheus and Grafana.** With `monitoring.enabled: true`, the chart runs both from the files `make observe` uses. Prometheus scrapes both routers, the engines that `/narwhal/targets` lists through HAProxy, and each engine pod's attestation sidecar, with the alert rules of `make observe`.
-- **The cluster's Prometheus Operator and Grafana**, such as kube-prometheus-stack. With `monitoring.serviceMonitors.enabled` and `monitoring.dashboardConfigMap.enabled`, the chart runs neither. It renders `ServiceMonitor`, `PodMonitor` and `ScrapeConfig` objects that scrape the same targets with the same labels and interval, the alert rules as a `PrometheusRule`, and the dashboard as a ConfigMap for the Grafana dashboard sidecar. Put the labels the cluster's Prometheus selects by in `monitoring.serviceMonitors.labels`, and admit its namespace to the routers in `networkPolicy.monitoring`. [Needs verification: task 22, monitoring through `ServiceMonitor` objects in an existing Prometheus]
+- **The cluster's Prometheus Operator and Grafana**, such as kube-prometheus-stack. With `monitoring.serviceMonitors.enabled` and `monitoring.dashboardConfigMap.enabled`, the chart runs neither. It renders `ServiceMonitor`, `PodMonitor` and `ScrapeConfig` objects that scrape the same targets with the same labels and interval, the alert rules as a `PrometheusRule`, and the dashboard as a ConfigMap for the Grafana dashboard sidecar. Put the labels the cluster's Prometheus selects by in `monitoring.serviceMonitors.labels`, and admit its namespace to the routers in `networkPolicy.monitoring`. The chart renders the `PodMonitor` for the attestation sidecars only when `fleet` is in its values, since the fleet names their port. With the fleet applied outside the chart, the cluster's Prometheus scrapes no sidecar and `NarwhalHostDown` never fires. [Needs verification: task 22, monitoring through `ServiceMonitor` objects in an existing Prometheus]
 
 Both modes need the dashboard rendered for the installed engine backends:
 
@@ -184,10 +193,12 @@ helm upgrade narwhal deploy/helm/narwhal --namespace <namespace> --values config
 Reach the chart's Grafana and Prometheus, and the fleet through HAProxy, with `kubectl port-forward`, each in its own terminal:
 
 ```bash
-kubectl port-forward --namespace <namespace> svc/grafana 13000:3000
-kubectl port-forward --namespace <namespace> svc/prometheus 19090:9090
-kubectl port-forward --namespace <namespace> svc/haproxy 18000:8000
+kubectl port-forward --address 127.0.0.1 --namespace <namespace> svc/grafana 13000:3000
+kubectl port-forward --address 127.0.0.1 --namespace <namespace> svc/prometheus 19090:9090
+kubectl port-forward --address 127.0.0.1 --namespace <namespace> svc/haproxy 18000:8000
 ```
+
+Without `--address 127.0.0.1`, `kubectl port-forward` on a local port another process holds may bind only `[::1]` and print only that line, and `http://127.0.0.1:<port>` then reaches the other process. With it, the forward fails instead.
 
 Then open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` and sign in with the login in the Secret `monitoring.grafana.admin` names, unless `monitoring.grafana.anonymous` is set. Prometheus is at `http://127.0.0.1:19090`, and clients reach the serving routes at `http://127.0.0.1:18000`. HAProxy forwards only `POST /v1/completions`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`, `GET /ready` and `GET /narwhal/targets`. Every series carries the `fleet` label, the release name unless `monitoring.fleet` sets another.
 
@@ -219,7 +230,7 @@ kubectl create rolebinding fleet-editors --namespace <namespace> \
   --role <release>-fleet-editor --group <group>
 ```
 
-**The workstation** that runs `narwhal deploy --target kubernetes` needs the fleet-editor Role, of which it uses get, create, patch and delete, and a Role with get on `pods` and `pods/log`. It reads the engine, sidecar and router pods for the live checks of `plan` and `status`, and the log of each export Job's pod the controller names. The controller creates those Jobs when the workstation sets the fleet's `narwhal.example.com/export-request` annotation, so the workstation holds no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, and cannot start a pod of its own.
+**The workstation** that runs `narwhal deploy --target kubernetes` needs the fleet-editor Role, of which it uses get, create, patch and delete, and a Role with get on `pods` and `pods/log`. It reads the engine, sidecar and router pods for the live checks of `plan` and `status`, and the log of each export Job's pod the controller names. The controller creates those Jobs when the workstation sets the fleet's `narwhal.example.com/export-request` annotation, so the workstation holds no verb on Jobs, Secrets, RBAC, `pods/exec` or the fleet's status, and cannot start a pod of its own. To give the workstation a ServiceAccount identity, bind both Roles to the account and write a kubeconfig with its token from `kubectl create token <account> --namespace <namespace> --duration 8h`.
 
 **The routers** run as the ServiceAccount `narwhal-router`. Its Role grants get and update on the Lease `narwhal-router`, and create on Leases, because RBAC cannot limit a create to one name. A compromised router could create a Lease under a name nothing uses yet, but cannot read, renew, take over or delete one. Only the router container mounts the token, a projected token that lasts an hour. The routers run as UID 10001 on a read-only root filesystem with no capabilities.
 
@@ -293,7 +304,7 @@ Run each fleet in a namespace of its own, which runs nothing else.
 
 A Job runs once, within its kind's time limit, and `spec.timeouts` limits how long a whole stage may run. It receives its inputs in a ConfigMap mounted at `/narwhal-input`, which the controller deletes once the Job finishes. Its outputs come back in its log: each file as a `narwhal-file` line, then a manifest of their SHA-256 values and sizes. A log whose files differ from the manifest fails the stage, so a log the kubelet rotated or truncated is never read as complete.
 
-The Narwhal Jobs mount the whole state volume writable. A fabric Job runs the third-party `images.fabric`, so it mounts only its own keep directory, drops every capability but `IPC_LOCK`, which an RDMA sample needs, and may not gain more. The engine API key reaches only the key check and the Jobs that call engines: `transfer-measure`, `sidecar-verify`, `finalize-fleet`, `profile`, `calibrate` and `preflight`.
+A Narwhal Job mounts only the directories of the state volume it uses, as [Evidence and logs](#evidence-and-logs) describes. A fabric Job runs the third-party `images.fabric`, so it mounts only its own keep directory, drops every capability but `IPC_LOCK`, which an RDMA sample needs, and may not gain more. The engine API key reaches only the key check and the Jobs that call engines: `transfer-measure`, `sidecar-verify`, `finalize-fleet`, `profile`, `calibrate` and `preflight`.
 
 A Job or pod that cannot run fails its stage at once: a container whose configuration the kubelet cannot build, such as one that names a missing Secret, a Job pod the kubelet refuses at admission on its pinned node, such as `OutOf<resource>`, and an engine or router pod that no node can schedule. A router pod may wait up to five minutes for a node, as for a cluster autoscaler.
 
@@ -311,7 +322,7 @@ Engine pods run on the host network and take every GPU the fleet gives them, so 
 
 ### Preparing the engine pods
 
-`engine-prepare` runs [`narwhal-engine prepare --backend kubernetes`](../cli/Engine.md#kubernetes-plans) for each engine, in a Job on its node with the model volume, and returns the launch directory to `launch/`. A failure there is a failed prepare: its message names the input to fix. Every engine of a fleet must transfer KV over `ucx_rdma`, so the fleet's `engines.launch` sets `NARWHAL_TRANSFER_TRANSPORT=ucx_rdma` and `NARWHAL_TRANSFER_NET_DEVICES=<hca>:<port>`; the pod uses the HCA the device plugin allocates and keeps only the port.
+`engine-prepare` runs [`narwhal-engine prepare --backend kubernetes`](../cli/Engine.md#kubernetes-plans) for each engine, in a Job on its node with the model volume, and returns the launch directory to `launch/`. A failure there is a failed prepare: its message names the input to fix. Every engine of a fleet must transfer KV over `ucx_rdma`, so the fleet's `engines.launch` sets `NARWHAL_TRANSFER_TRANSPORT=ucx_rdma` and `NARWHAL_TRANSFER_NET_DEVICES=<hca>:<port>`, and each pod checks that the HCA its RDMA resource hands it is that one. Discovery refuses a `ucx_rdma` engine without `NARWHAL_TRANSFER_DEVICES`, the device paths the launch record keeps, although each pod opens the devices the device plugin gives it.
 
 ### Applying the engines
 
@@ -323,15 +334,17 @@ Each new engine pod waits at the `narwhal.example.com/placement` scheduling gate
 
 ### Checking the engine pods
 
-`engine-check` copies the launch directory into `engines/<role>/launches/<pod UID>` on the state volume and runs `narwhal-engine check` on the pod's records there. The check works in a staging directory and renames it into place once it passes, so the pod's attestation sidecar, which waits for that directory, reads a checked plan. A rejected check is a failed gate: the Job's log names the record to inspect.
+`engine-check` copies the launch directory into `engines/<role>/launches/<pod UID>` on the state volume and runs `narwhal-engine check` on the pod's records there. The check works in a staging directory beside the launch directory. Once it passes, it moves its files into the launch directory, which the kubelet may already have made for the sidecar's mount, with `checked.json` last, so the pod's attestation sidecar, which waits for `checked.json`, reads a checked plan. A rejected check is a failed gate: the Job's log names the record to inspect.
 
 ### Reading the sidecar's attestation
 
 The sidecar captures the attestation once the launch directory exists. `cache-capture` reads the cache layout from the attestation it published, and `attest-capture` reads the attestation itself. `attest-capture` then checks that the engine's live cache resolved the layout its cache group's representative resolved, as an SSH capture does, and fails when it did not. A sidecar that publishes nothing within fifteen minutes fails the stage; read the sidecar container's log.
 
+The sidecar runs as the chart's `sidecarUser`, 10002 by default, and the gate Jobs as the controller's user. Once a capture passes, the sidecar lets its own group read the attempt it published and the record that names it, and nothing else it wrote. `cache-capture`, `attest-capture` and `sidecar-verify` run with that group as a supplementary group and mount the pod's directory read-only; no other gate and no engine container reads the attempt. The sidecar removes the engine key and the routers' control token from the engine's startup log before it keeps it, since an engine may print its own arguments as it starts. It shares no attempt that still holds either: `cache-capture` then fails with a message that names the file, and the attempt stays private. It also refuses a symbolic link in the pod's directory, which the engine container can write.
+
 ### Checking the sidecar container
 
-`sidecar-start` waits for the attestation sidecar container to be ready and records its identity. `sidecar-verify` then runs `verify --pod-evidence` in a Job as the engines' ServiceAccount, which reads the engine pod through the API as the sidecar does.
+`sidecar-start` waits for the attestation sidecar container to be ready and records its identity. `sidecar-verify` then runs `verify --pod-evidence` in a Job as the engines' ServiceAccount, which reads the engine pod through the API as the sidecar does. The check keeps the sidecar's responses and the live identity in the Job's own scratch directory, with `verify --into`, and returns them in `verify/`.
 
 ### Starting the router pair
 

@@ -91,7 +91,7 @@ def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> lis
     UCX then has no shared-memory device and no GPU IPC, with `cuda_copy` on CUDA or
     `rocm_copy` on ROCm, so KV between engines on one host crosses their HCAs, and preflight
     checks that through the port's transmit counter. A Kubernetes engine sends through the HCA
-    its pod was allocated, `engine`'s.
+    its pod was allocated, `engine`'s, and the reading names the pod's node.
     """
     path = run / env_file_name(plan)
     if not env_matches(run, plan):
@@ -111,7 +111,10 @@ def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> lis
         and len(devices) == 1
         and re.fullmatch(r"[A-Za-z0-9_.-]+:[1-9][0-9]{0,2}", devices[0])
     ):
-        return ["--hca", devices[0]]
+        if engine is None:
+            return ["--hca", devices[0]]
+        # Nodes can share a kernel, and with it a boot ID, so a pod's HCA names its node.
+        return ["--hca", devices[0], "--hca-host", engine.identity.node]
     return []
 
 
@@ -295,9 +298,10 @@ def pod_verification(pod_evidence: Path, checked: dict) -> tuple[Path, dict]:
     return home, record
 
 
-def verify(run: Path, pod_evidence: Path | None = None) -> Path:
+def verify(run: Path, pod_evidence: Path | None = None, into: Path | None = None) -> Path:
     """Check the running sidecar against the live engine and the document's contract, keeping
-    the sidecar's responses and the live identity in a new attestation-check-* directory.
+    the sidecar's responses and the live identity in a new attestation-check-* directory of
+    `into`, or of the directory that holds the attestation.
 
     For a Kubernetes plan, the pod's live engine container must be the one its attestation
     binds: the Kubernetes API reports its container ID, image ID and start, and the sidecar
@@ -315,7 +319,7 @@ def verify(run: Path, pod_evidence: Path | None = None) -> Path:
     url, _, _ = attestation_url(plan)
     route = url.geturl()
     base = f"{url.scheme}://{url.netloc}"
-    out = Path(tempfile.mkdtemp(prefix="attestation-check-", dir=home))
+    out = Path(tempfile.mkdtemp(prefix="attestation-check-", dir=into or home))
     responses = {}
     with httpx.Client(timeout=15) as client:
         for name, path in (("health", "/health"), ("attestation", "/v1/attestation")):

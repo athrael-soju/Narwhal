@@ -532,8 +532,9 @@ _ENGINES = _object(
                     rules=[_UNRESERVED],
                 ),
                 "rdma": _string(
-                    "The RDMA device plugin's extended resource name, which hands each engine "
-                    "pod one HCA",
+                    "The RDMA device plugin's extended resource name. On each engine node it "
+                    "holds only the HCA the engine's NARWHAL_TRANSFER_NET_DEVICES names, shared "
+                    "by the engine pods and the fabric Jobs",
                     316,
                     pattern=_RESOURCE,
                     rules=[_UNRESERVED],
@@ -1197,3 +1198,66 @@ def variable_fact(name: str) -> str | None:
         if re.fullmatch(pattern, name):
             return fact
     raise ValueError(f"{name} is no variable of a fleet")
+
+
+# The fleet field each engine's variable comes from, under spec.engines.nodes[<n - 1>], and
+# the field each fleet-wide variable comes from.
+NODE_FIELDS = {
+    "KUBERNETES_NODE": "node",
+    "FABRIC_INTERFACE": "fabricInterface",
+    "RDMA_GID_INDEX": "rdma.gidIndex",
+    "RDMA_ROCE_MODE": "rdma.roceMode",
+    **{name: f"ports.{field}" for field, name in PORT_FIELDS},
+}
+SHARED_FIELDS = {
+    "ENGINE_IMAGE": "spec.engines.image",
+    "ENGINE_MODEL_NAME": "spec.engines.model.name",
+    "MODEL_TREE_SHA256": "spec.engines.model.treeSha256",
+    **{name: f"spec.engines.ports.{field}" for field, name in PORT_FIELDS},
+}
+_VARIABLE = re.compile(r"\bNARWHAL_(?:NODE_([1-9][0-9]*)_)?([A-Z][A-Z0-9_]*[A-Z0-9])\b")
+# `NARWHAL_X or NARWHAL_NODE_<n>_X`, as a message on SSH hosts names an input of one engine.
+_EITHER = re.compile(r"\bNARWHAL_([A-Z][A-Z0-9_]*[A-Z0-9]) or NARWHAL_NODE_([1-9][0-9]*)_\1\b")
+
+
+def _launch(name: str) -> bool:
+    """Whether `name` is a variable spec.engines.launch may set."""
+    return re.fullmatch(LAUNCH_REFUSED, name) is None
+
+
+def _field(node: str | None, name: str) -> str | None:
+    if node is not None and name in NODE_FIELDS:
+        return f"spec.engines.nodes[{int(node) - 1}].{NODE_FIELDS[name]}"
+    if node is None and name in SHARED_FIELDS:
+        return SHARED_FIELDS[name]
+    if node is None and name in NODE_FIELDS:
+        return f"spec.engines.nodes[].{NODE_FIELDS[name]}"
+    variable = f"NARWHAL_{f'NODE_{node}_' if node else ''}{name}"
+    return f"the spec.engines.launch entry {variable}" if _launch(variable) else None
+
+
+def fleet_terms(message: str) -> str:
+    """`message` with each deployment variable it names, as a message on SSH hosts names
+    them, replaced by the NarwhalFleet field that sets it. A variable no field sets stays."""
+
+    def either(match: re.Match[str]) -> str:
+        name, node = match[1], match[2]
+        if name in NODE_FIELDS:
+            return str(_field(node, name))
+        variable = f"NARWHAL_{name}"
+        if _launch(variable):
+            return f"the spec.engines.launch entry {variable} or NARWHAL_NODE_{node}_{name}"
+        return match[0]
+
+    def one(match: re.Match[str]) -> str:
+        return _field(match[1], match[2]) or match[0]
+
+    # The text between the pairs is translated variable by variable.
+    found = list(_EITHER.finditer(message))
+    out = []
+    for index, match in enumerate(found):
+        text = message[(found[index - 1].end() if index else 0) : match.start()]
+        out.append(_VARIABLE.sub(one, text))
+        out.append(either(match))
+    out.append(_VARIABLE.sub(one, message[found[-1].end() if found else 0 :]))
+    return "".join(out)
