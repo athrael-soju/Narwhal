@@ -578,6 +578,11 @@ STOP_ORDER = (
     kubernetes_objects.GATE,
 )
 
+# The stages whose objects `stop` deletes. Stopping marks them invalidated in the run record,
+# so the next run applies the engines and starts the engines, sidecars and routers again,
+# and nothing reads a stopped fleet's routers as running.
+STOP_INVALIDATES = ("install", "engine-start", "sidecar-start", "router-start")
+
 
 def kind_of(document: Mapping[str, Any]) -> Kind:
     """The kind of an object `kubernetes_objects` built."""
@@ -1105,7 +1110,9 @@ class KeyedRunner(Runner):
     def run(
         self, inputs: Mapping[str, Input], *, until: str | None = None, stop: Stop | None = None
     ) -> RunResult:
-        keyed = self.deployment.keyed(inputs, observe=True)
+        deployment = self.deployment
+        observe = deployment.key_check or deployment.recorded_credential() is None
+        keyed = deployment.keyed(inputs, observe=observe)
         return super().run(keyed, until=until, stop=stop)
 
     def plan(self, inputs: Mapping[str, Input], *, until: str | None = None) -> RunResult:
@@ -1123,7 +1130,10 @@ class KubernetesDeployment:
         dry: bool = False,
         cluster: Callable[[Mapping[str, str], Path], Cluster] | None = None,
         max_age: Mapping[str, float] | None = None,
+        state_root: Path | None = None,
     ) -> None:
+        """`state_root` is where this process mounts the state volume, as the fleet controller
+        does; the key check then removes what its Job kept there once it is read."""
         self.directory = directory
         self.env = target_env(env)
         # A dry deployment runs no Job: `plan`, and `status` while another runner holds the run.
@@ -1139,6 +1149,12 @@ class KubernetesDeployment:
         self._jobs: dict[tuple[str, str, int], list[str]] = {}
         # The key check's salt and HMAC, until the run directory can keep them.
         self._credential: dict[str, str] | None = None
+        self.state_root = state_root
+        # Whether `run` reads the key's HMAC through a key-check Job, or takes the recorded
+        # one; the fleet controller checks only after an edit or once a period.
+        self.key_check = True
+        # When this deployment's key check last returned, on the wall clock.
+        self.key_checked_at: float | None = None
 
     # The runner.
 
@@ -1267,6 +1283,7 @@ class KubernetesDeployment:
         digest = self._key_check(salt)
         self._credential = {"salt": salt, "hmac": digest}
         self.save_credential()
+        self.key_checked_at = time.time()
         return digest
 
     def save_credential(self) -> None:
@@ -1283,9 +1300,9 @@ class KubernetesDeployment:
     def _key_check(self, salt: str) -> str:
         """Run a key-check Job, which holds the key from its Secret, and return its HMAC."""
         cluster = self.cluster()
-        name = kubernetes_objects.job_name(
-            KEY_CHECK, self.env[FLEET_UID], KEY_CHECK, "", secrets.randbelow(2**31), 0
-        )
+        # One name per fleet: a key check a stopped process left is deleted, never adopted,
+        # since its HMAC may be of an earlier key.
+        name = kubernetes_objects.job_name(KEY_CHECK, self.env[FLEET_UID], KEY_CHECK, "", 0, 0)
         command = _gate_command(
             inputs=True,
             returns={"key.json": "/tmp/narwhal-key.json"},
@@ -1293,7 +1310,8 @@ class KubernetesDeployment:
         )
         files = {kubernetes_gate.INPUTS: kubernetes_gate.pack({"salt": salt.encode()})}
         gate = Gate(KEY_CHECK, KEY_CHECK, command, files=files)
-        job = self._gate_job_at(gate, name, f"deploy/{KEY_CHECK}/{name}", None)
+        keep = f"deploy/{KEY_CHECK}/{name}"
+        job = self._gate_job_at(gate, name, keep, None)
         fleet = self.fleet()
         inputs = kubernetes_objects.inputs(fleet, job, gate.files)
         with tempfile.TemporaryDirectory() as folder:
@@ -1302,6 +1320,8 @@ class KubernetesDeployment:
                 logs = self.directory / "live" / KEY_CHECK
             context = cast(StageContext, _KeyContext(logs))
             try:
+                self.remove(cluster, JOB, name)
+                self._gone(cluster, name)
                 self.apply(cluster, inputs)
                 self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
                 result = self.finish_gate(context, gate, name)
@@ -1312,6 +1332,12 @@ class KubernetesDeployment:
         digest = reported.get("hmac_sha256") if isinstance(reported, dict) else None
         if not isinstance(digest, str) or not HEX64.fullmatch(digest):
             raise GateOutputError(f"Job {name} reported no HMAC of the engine API key")
+        # Read: its log and what the Job kept are not needed again.
+        result.log.unlink(missing_ok=True)
+        if self.state_root is not None:
+            kept = self.state_root / keep
+            if kept.is_dir() and not kept.is_symlink():
+                shutil.rmtree(kept, ignore_errors=True)
         return digest
 
     def owner(self) -> Owner:
@@ -1578,6 +1604,10 @@ class KubernetesDeployment:
         for gate, name in zip(gates, names, strict=True):
             job = self._gate_job(context, gate, name)
             inputs = kubernetes_objects.inputs(fleet, job, gate.files) if gate.files else None
+            if isinstance(context, _LiveContext):
+                # A live check never adopts a Job: one under its name is an earlier check's.
+                self.remove(cluster, JOB, name)
+                self._gone(cluster, name)
             if inputs is not None:
                 self.apply(cluster, inputs)
             self.create_job(cluster, stamp(kubernetes_objects.job(fleet, job), inputs))
@@ -2941,7 +2971,24 @@ fi
                     host = process.get("host", "cluster")
                     stopped.append({"name": process["name"], "host": host, "stopped": ran})
             self.stop(cluster)
+            self.forget_started()
         return stopped
+
+    def forget_started(self) -> None:
+        """Mark the passed instances of `STOP_INVALIDATES` invalidated in the run record, after
+        `stop` deleted their objects. The caller holds the run lock."""
+        if not (self.directory / run_record.RECORD).is_file():
+            return
+        record = run_record.read(self.directory)
+        changed = False
+        for entry in record["stages"].values():
+            if entry["stage"] in STOP_INVALIDATES and entry["status"] == PASSED:
+                entry.update(
+                    status=run_record.INVALIDATED, invalidation="stop deleted the objects it made"
+                )
+                changed = True
+        if changed:
+            run_record.write(self.directory, record)
 
 
 def _redacted(objects: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -3136,8 +3183,9 @@ class _LiveContext:
     def __post_init__(self) -> None:
         self.directory = self.run_directory / "live"
         self.run_id = str(run_record.read(self.run_directory)["run_id"])
-        # A live check's Jobs are deleted once read, so their names need not repeat.
-        self.attempt = secrets.randbelow(2**31)
+        # A live check's Jobs are deleted once read; one a stopped process left goes before
+        # its name is used again.
+        self.attempt = 0
 
 
 class Topology:

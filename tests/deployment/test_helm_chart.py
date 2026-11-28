@@ -25,6 +25,7 @@ from narwhal.deployment import direct_engine_set, fleet_resource
 from narwhal.deployment import kubernetes_objects as objects
 from narwhal.deployment.direct_start import DirectEngine
 from narwhal.deployment.fleet_resource import VolumePolicy
+from narwhal.deployment.kubernetes_controller import Settings
 from narwhal.deployment.launch_engine import engine_set
 from narwhal.deployment.launch_engine.kubernetes import MANIFESTS
 from narwhal.observability.stack.artifacts import DEFAULT_CONSOLE_URL, stage_artifacts
@@ -460,8 +461,10 @@ class ChartTests(Rendering, unittest.TestCase):
                 **policy,
                 "runtimeClassNames": ["nvidia"],
                 "admissionPolicy": f"{chart_fixtures.NAMESPACE}-narwhal",
+                "keyCheckPeriodSeconds": 900,
             },
         )
+        self.assertEqual(Settings.of(settings).key_check_period, 900)
         self.assertEqual(
             VolumePolicy.from_values(settings),
             VolumePolicy(

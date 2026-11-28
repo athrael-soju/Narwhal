@@ -10,9 +10,17 @@ queues none.
 Only the holder of the controller Lease acts. It claims the Lease with task 25's
 `KubernetesLease`, on client-go's timings (a 15 s lease, a 10 s renew deadline, a renewal
 every 2 s), and stops acting before another controller can take over: once its renew deadline
-passes, the process ends with `os._exit` and touches no Job. SIGTERM ends it the same way. The
-next holder's pass finds the attempt that was running, which the runner records `interrupted`,
-and adopts its Jobs by their recorded names instead of starting them again.
+passes, the process ends with `os._exit` and touches no Job. Every write also goes through a
+transport that refuses it, and ends the process, once the Lease is not valid, and waits at
+most `WRITE_TIMEOUT_SECONDS` per phase, so a write never lands after another controller could
+hold the Lease. SIGTERM ends the process the same way. The next holder's pass finds the attempt
+that was running, which the runner records `interrupted`, and adopts its Jobs by their
+recorded names instead of starting them again.
+
+A pass checks the engine API key's HMAC through a key-check Job only after an edit or a new
+`requested-at` value, or once `keyCheckPeriodSeconds` from controller.json has passed; other
+passes take the HMAC the run directory recorded, in `controller-key-check.json` beside the
+credential file.
 
 Each fleet keeps its run directory at `<state>/runs/<namespace>/<fleet uid>/`. A pass prunes
 all but the newest `spec.retainRuns` directories of the namespace, and `status.previousRuns`
@@ -33,6 +41,12 @@ reasons it last ran as its message. The fleet is `Stalled`, and no pass runs, wh
   template does not hold, which the API server cannot change in place;
 - a stage failed or timed out, until the next `spec` edit or a new `requested-at` value.
 
+A live change, such as a replaced engine pod, does not clear a failed stage's stall. What
+fails a stage is mostly outside the live facts the run record tracks, such as a node's
+resources, an image or a Secret, so a pass started by a live change would usually fail the
+same way, and one started on every change would turn the stall into a loop of failing Jobs.
+`requested-at` is the retry.
+
 `spec.stopped` cancels a running stage, deletes the routers, HAProxy, the engines and then the
 Jobs, and keeps the volumes and the run directory, so clearing it starts again from the record.
 The fleet has no finalizer: deleting it leaves removal to owner-reference garbage collection.
@@ -52,6 +66,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -60,6 +75,8 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol
+
+import httpx
 
 from narwhal.runtime import kubernetes_api, kubernetes_lease
 from narwhal.runtime.kubernetes_api import (
@@ -103,7 +120,7 @@ from .run_record import (
     TIMEOUT,
     RunLocked,
 )
-from .runner import HelpersSurvived, StageFailed, Stop
+from .runner import HelpersSurvived, StageFailed, Stop, check_directory
 
 log = logging.getLogger("narwhal.kubernetes_controller")
 
@@ -124,11 +141,14 @@ FENCE_SECONDS = 0.5
 RESYNC_SECONDS = 60.0
 # A link observation holds this long before a pass probes it again.
 MAX_AGE = {"link": 1800.0}
-# The stages whose applied objects `spec.stopped` deletes and no live fact watches: the
-# engines' StatefulSet, Service and hooks. Stopping invalidates them, so clearing
-# `spec.stopped` applies them again; the engines', sidecars' and routers' live facts rerun
-# the rest.
-STOP_INVALIDATES = ("install",)
+# When the run directory last ran a key check, for the fleet's generation and requested-at.
+KEY_CHECK_FILE = "controller-key-check.json"
+# How often a pass checks the engine API key's HMAC when nothing else asks for it.
+KEY_CHECK_SECONDS = 900.0
+# Each write waits at most this long per phase (connect, pool, send, reply), so one sent while
+# the Lease is valid lands within 4.8 s, before the 5 s that separate the renew deadline from
+# the lease duration run out and another controller may take over.
+WRITE_TIMEOUT_SECONDS = 1.2
 # The condition message the CRD allows.
 MESSAGE_MAX = 32768
 # How a reconcile waits for work while it holds the Lease.
@@ -194,6 +214,7 @@ class Settings:
     policy: VolumePolicy
     runtime_classes: tuple[str, ...]
     admission_policy: str
+    key_check_period: float = KEY_CHECK_SECONDS
 
     @classmethod
     def of(cls, values: Mapping[str, Any]) -> Settings:
@@ -217,6 +238,14 @@ class Settings:
             found = values.get(name, [])
             if not isinstance(found, list) or not all(isinstance(item, str) for item in found):
                 problems.append(f"{name} must list strings")
+        period = values.get("keyCheckPeriodSeconds", KEY_CHECK_SECONDS)
+        if (
+            isinstance(period, bool)
+            or not isinstance(period, int | float)
+            or not math.isfinite(period)
+            or period <= 0
+        ):
+            problems.append("keyCheckPeriodSeconds must be a positive number of seconds")
         if problems:
             raise ValueError("controller settings: " + "; ".join(problems))
         return cls(
@@ -224,6 +253,7 @@ class Settings:
             VolumePolicy.from_values(values),
             tuple(runtime_classes),
             str(values["admissionPolicy"]),
+            float(period),
         )
 
     @classmethod
@@ -251,6 +281,85 @@ class Leadership(Protocol):
     def claim(self) -> bool: ...
 
     def renew(self) -> bool: ...
+
+
+class LeaseLost(BaseException):
+    """A write the fence refused: the controller Lease is no longer valid, so the process ends
+    before the request leaves it."""
+
+
+class FencedTransport(httpx.BaseTransport):
+    """Sends a request that writes only while `allowed()` holds, checked as each attempt is
+    sent, retries included. A refused write calls `lost()`, which ends the process."""
+
+    def __init__(
+        self,
+        inner: httpx.BaseTransport,
+        allowed: Callable[[], bool],
+        lost: Callable[[], Any],
+    ) -> None:
+        self._inner = inner
+        self._allowed = allowed
+        self._lost = lost
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if request.method != "GET" and not self._allowed():
+            log.error("%s %s refused: the controller Lease is lost", request.method, request.url)
+            self._lost()
+            raise LeaseLost(f"{request.method} {request.url.path}: the controller Lease is lost")
+        return self._inner.handle_request(request)
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> FencedTransport:
+        return self
+
+
+def fenced_client(
+    connection: kubernetes_api.Connection,
+    lease: Leadership,
+    *,
+    timeout_s: float,
+    lost: Callable[[], Any],
+    transport: httpx.BaseTransport | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ApiClient:
+    """An API client, as the controller's field manager, whose writes the Lease fences."""
+    inner = transport or httpx.HTTPTransport(
+        verify=connection.ssl_context if connection.ssl_context is not None else True,
+        trust_env=False,
+    )
+    return ApiClient(
+        connection,
+        field_manager=kubernetes_objects.MANAGER,
+        timeout_s=timeout_s,
+        transport=FencedTransport(inner, lambda: lease.valid(), lost),
+        sleep=sleep,
+    )
+
+
+class FencedCluster(kubernetes_target.ApiCluster):
+    """The target's cluster, reading through `client` and writing through `writer`, whose
+    short timeout keeps every write inside the Lease."""
+
+    def __init__(self, client: ApiClient, writer: ApiClient) -> None:
+        super().__init__(client)
+        self.writer = writer
+
+    def create(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        return self.writer.create(kind, obj)
+
+    def apply(self, kind: Kind, obj: Mapping[str, Any]) -> dict[str, Any]:
+        return self.writer.apply(kind, obj, force=True)
+
+    def patch(
+        self, kind: Kind, name: str, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        return self.writer.patch(kind, name, operations)
+
+    def delete(self, kind: Kind, name: str, *, uid: str | None = None) -> bool:
+        return self.writer.delete(kind, name, propagation=kubernetes_objects.BACKGROUND, uid=uid)
 
 
 # Status.
@@ -293,8 +402,11 @@ class Progress:
     settled: bool
 
 
-def progress(record: Mapping[str, Any] | None, *, until: str | None, engines: int) -> Progress:
-    """The status a run record gives: one condition and one count per stage it holds."""
+def progress(
+    record: Mapping[str, Any] | None, *, until: str | None, engines: int, stopped: bool = False
+) -> Progress:
+    """The status a run record gives: one condition and one count per stage it holds. A
+    stopped fleet serves nothing, whatever its record holds."""
     entries = list((record or {}).get("stages", {}).values())
     order = stage_order(until)
     conditions = []
@@ -329,7 +441,7 @@ def progress(record: Mapping[str, Any] | None, *, until: str | None, engines: in
     ) and bool(entries)
     checked = (counts.get("engine-check") or {}).get("passed", 0)
     router = [entry for entry in entries if entry["stage"] == kubernetes_target.LAST_STAGE]
-    serving = bool(router) and all(entry["status"] == PASSED for entry in router)
+    serving = not stopped and bool(router) and all(e["status"] == PASSED for e in router)
     return Progress(
         tuple(conditions),
         counts,
@@ -457,28 +569,32 @@ def _read_record(directory: Path) -> dict[str, Any] | None:
         return None
 
 
-def _forget(directory: Path, names: Sequence[str], why: str) -> None:
-    """Mark the passed instances of `names` invalidated in the run record, so the next pass
-    runs them again. The caller holds the run lock."""
-    record = _read_record(directory)
-    if record is None:
-        return
-    changed = False
-    for entry in record["stages"].values():
-        if entry["stage"] in names and entry["status"] == PASSED:
-            entry.update(status=INVALIDATED, invalidation=why)
-            changed = True
-    if changed:
-        run_record.write(directory, record)
-
-
-def _stall(directory: Path) -> dict[str, Any] | None:
-    path = directory / STALL_FILE
+def _read_private(path: Path) -> dict[str, Any] | None:
+    """A JSON object from a regular file this user owns, never through a symbolic link, or
+    None. The caller has checked the directory with `check_directory`."""
     try:
-        found = json.loads(path.read_text()) if path.is_file() else None
-    except (OSError, ValueError):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        log.warning("cannot read %s: %s", path, exc)
+        return None
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            log.warning("%s is not a regular file this user owns; ignoring it", path)
+            return None
+        try:
+            found = json.loads(stream.read(1 << 20))
+        except ValueError:
+            return None
     return found if isinstance(found, dict) else None
+
+
+def _write_private(directory: Path, name: str, document: Mapping[str, Any]) -> None:
+    """Replace one of the controller's files in a checked run directory, atomically."""
+    check_directory(directory)
+    stages.write_evidence(directory / name, dict(document))
 
 
 # The controller.
@@ -489,6 +605,7 @@ class _Pass:
     """The pass running now: the fleet and generation it started from, its input digests and
     the Stop that ends it early."""
 
+    key: str
     uid: str
     generation: int
     digests: dict[str, str]
@@ -536,6 +653,7 @@ class Controller:
         self,
         client: ApiClient,
         *,
+        writer: ApiClient | None = None,
         settings: Settings,
         lease: Leadership,
         state: Path = STATE,
@@ -545,11 +663,12 @@ class Controller:
         exit: Callable[[int], Any] = os._exit,
     ) -> None:
         self.client = client
+        self.writer = writer or client
         self.namespace = client.namespace
         self.settings = settings
         self.lease = lease
         self.state = state
-        self._cluster = cluster or (lambda env, logs: kubernetes_target.ApiCluster(client))
+        self._cluster = cluster or (lambda env, logs: FencedCluster(client, self.writer))
         self._clock = clock
         self._exit = exit
         self.queue = WorkQueue(clock=monotonic)
@@ -577,9 +696,7 @@ class Controller:
     def elect(self) -> bool:
         """Claim or renew the Lease once; return whether this controller may act now."""
         try:
-            if self.lease.owned:
-                self.lease.renew()
-            else:
+            if not (self.lease.owned and self.lease.renew()):
                 self.lease.claim()
         except kubernetes_lease.LeaseError as exc:
             log.warning("controller Lease: %s", exc)
@@ -603,23 +720,34 @@ class Controller:
         object_key = kubernetes_api.key(fleet)
         uid, generation, requested = _uid(fleet), _generation(fleet), _requested(fleet)
         with self._lock:
-            running = self._pass if self._pass is not None and self._pass.uid == uid else None
+            running = (
+                self._pass if self._pass is not None and self._pass.key == object_key else None
+            )
+        before = self._seen.get(object_key)
+        # A fleet gone: deleted, or, as a relist after a 410 finds it, made again under the
+        # name with a new uid. Its pass and its state end with it.
+        gone = {before[0] if before else "", running.uid if running else ""} - {"", uid}
+        if event.type == "DELETED":
+            gone.add(uid)
+        for old in gone:
+            self._written.pop(old, None)
+            self._ready.pop(old, None)
+            self._previous.pop(old, None)
+        if running is not None and running.uid in gone:
+            # The garbage collector removes what the pass made; it starts nothing more.
+            running.stop.cancel(*STAGES)
         if event.type == "DELETED":
             self._seen.pop(object_key, None)
-            self._written.pop(uid, None)
-            self._ready.pop(uid, None)
-            if running is not None:
-                # The garbage collector removes what the pass made; it starts nothing more.
-                running.stop.cancel(*STAGES)
             self.queue.add(object_key)
             return
         seen = (uid, generation, requested)
-        if event.type == "MODIFIED" and self._seen.get(object_key) == seen:
+        if event.type == "MODIFIED" and before == seen:
             # A status write, or a metadata change no reconcile reads.
             return
-        self._seen[object_key] = seen
-        if running is not None and generation != running.generation:
+        if running is not None and running.uid == uid and generation != running.generation:
             self._interrupt(running, fleet)
+        # Recorded last: a handler that raises hears the event again.
+        self._seen[object_key] = seen
         self.queue.add(object_key)
 
     def _interrupt(self, running: _Pass, fleet: Mapping[str, Any]) -> None:
@@ -772,7 +900,10 @@ class Controller:
             self.state, self.namespace, uid, int(spec.get("retainRuns") or 3)
         )
         env = self._env(fleet)
-        stall = _stall(directory)
+        stall = None
+        if directory.exists():
+            check_directory(directory)
+            stall = _read_private(directory / STALL_FILE)
         if stall and (stall.get("generation"), stall.get("requested_at")) == (
             generation,
             _requested(fleet),
@@ -781,9 +912,28 @@ class Controller:
         return self._run(fleet, directory, env)
 
     def _deployment(self, directory: Path, env: Mapping[str, str]) -> KubernetesDeployment:
-        deployment = KubernetesDeployment(directory, env, cluster=self._cluster, max_age=MAX_AGE)
+        deployment = KubernetesDeployment(
+            directory, env, cluster=self._cluster, max_age=MAX_AGE, state_root=self.state
+        )
         deployment.announce = log.info
         return deployment
+
+    def _key_check_due(self, directory: Path, fleet: Mapping[str, Any]) -> bool:
+        """Whether this pass reads the engine API key's HMAC through a key-check Job: after
+        an edit or a new requested-at value, and once `keyCheckPeriodSeconds` passed."""
+        if not directory.exists():
+            return True
+        check_directory(directory)
+        last = _read_private(directory / KEY_CHECK_FILE)
+        if last is None or (last.get("generation"), last.get("requested_at")) != (
+            _generation(fleet),
+            _requested(fleet),
+        ):
+            return True
+        at = last.get("at")
+        if isinstance(at, bool) or not isinstance(at, int | float):
+            return True
+        return self._clock() - at >= self.settings.key_check_period
 
     def _stop(self, directory: Path, uid: str) -> None:
         """Delete the routers, HAProxy, the engines and the Jobs, keeping volumes and record."""
@@ -792,7 +942,8 @@ class Controller:
         deployment = self._deployment(directory, env)
         with run_record.locked(directory):
             deleted = deployment.stop(deployment.cluster())
-            _forget(directory, STOP_INVALIDATES, "spec.stopped deleted the objects it applied")
+            # The next pass applies and starts them again, and no status reads them as running.
+            deployment.forget_started()
         if deleted:
             log.info("stopped the fleet: deleted %d objects", len(deleted))
 
@@ -800,8 +951,10 @@ class Controller:
         uid, generation = _uid(fleet), _generation(fleet)
         spec = _spec(fleet)
         inputs = kubernetes_target.inputs(env, policy=self.settings.policy)
-        current = _Pass(uid, generation, {name: value.digest for name, value in inputs.items()})
+        digests = {name: value.digest for name, value in inputs.items()}
+        current = _Pass(kubernetes_api.key(fleet), uid, generation, digests)
         deployment = self._deployment(directory, env)
+        deployment.key_check = self._key_check_due(directory, fleet)
 
         def announce(line: str) -> None:
             log.info("%s", line)
@@ -818,13 +971,26 @@ class Controller:
             self._interrupt(current, cached)
         try:
             self._publish(fleet, _Outcome(), directory=directory, started=generation)
-            result = deployment.runner().run(inputs, until=spec.get("until"), stop=current.stop)
+            try:
+                result = deployment.runner().run(inputs, until=spec.get("until"), stop=current.stop)
+            finally:
+                if deployment.key_checked_at is not None and directory.exists():
+                    _write_private(
+                        directory,
+                        KEY_CHECK_FILE,
+                        {
+                            "at": self._clock(),
+                            "generation": generation,
+                            "requested_at": _requested(fleet),
+                        },
+                    )
         except StageFailed as exc:
             entry = exc.record
             if entry["status"] in (FAILED, TIMEOUT):
                 message = f"{exc.key} {entry['status']}: {entry['failure']['message']}"
-                stages.write_evidence(
-                    directory / STALL_FILE,
+                _write_private(
+                    directory,
+                    STALL_FILE,
                     {
                         "generation": generation,
                         "requested_at": _requested(fleet),
@@ -875,8 +1041,10 @@ class Controller:
             directory = run_directory(self.state, self.namespace, uid)
         record = _read_record(directory) if directory is not None else None
         engines = len(spec.get("engines", {}).get("nodes") or [])
-        found = progress(record, until=spec.get("until"), engines=engines)
         stopped = bool(spec.get("stopped"))
+        found = progress(
+            record, until=spec.get("until"), engines=engines, stopped=stopped or outcome.stopped
+        )
         observed = generation
         if outcome.stalled is None and not outcome.stopped and started is None:
             # A pass reports the generation it started from until the next one starts.
@@ -947,7 +1115,7 @@ class Controller:
             {"op": "add", "path": "/status", "value": desired},
         ]
         try:
-            written = self.client.patch(FLEET, fleet["metadata"]["name"], operations, status=True)
+            written = self.writer.patch(FLEET, fleet["metadata"]["name"], operations, status=True)
         except NotFound:
             self._written.pop(uid, None)
             return
@@ -1026,7 +1194,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not holder:
         parser.error(f"set {POD_NAME_ENV} to the pod's name")
     connection = kubernetes_api.in_cluster()
-    client = ApiClient(connection, field_manager=kubernetes_objects.MANAGER)
     lease_client = ApiClient(
         connection,
         field_manager=kubernetes_objects.MANAGER,
@@ -1040,9 +1207,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         LEASE_SECONDS,
         safety_margin_s=LEASE_SECONDS - RENEW_DEADLINE_SECONDS,
     )
+    # Reads wait the client's default; writes wait less, so each lands inside the Lease.
+    client = fenced_client(connection, lease, timeout_s=10.0, lost=lambda: os._exit(1))
+    writer = fenced_client(
+        connection, lease, timeout_s=WRITE_TIMEOUT_SECONDS, lost=lambda: os._exit(1)
+    )
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, _exit_now)
-    Controller(client, settings=settings, lease=lease, state=args.state).serve()
+    Controller(client, writer=writer, settings=settings, lease=lease, state=args.state).serve()
     return 0
 
 

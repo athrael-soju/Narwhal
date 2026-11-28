@@ -41,6 +41,7 @@ from tests.deployment.kubernetes_cluster import (
     ApiError,
     Kind,
     Rig,
+    entry_of,
 )
 
 POLICY = f"{NAMESPACE}-narwhal"
@@ -140,12 +141,22 @@ class ControllerTest(unittest.TestCase):
             self.exits.append((holder, code))
             raise Exited(holder)
 
+        def fenced(timeout_s: float) -> ApiClient:
+            return kubernetes_controller.fenced_client(
+                Connection(SERVER, NAMESPACE),
+                lease,
+                timeout_s=timeout_s,
+                lost=lambda: self.exits.append((holder, "write")),
+                transport=self.rig.transport,
+                sleep=lambda seconds: None,
+            )
+
         return Controller(
-            client,
+            fenced(10.0),
+            writer=fenced(kubernetes_controller.WRITE_TIMEOUT_SECONDS),
             settings=self.settings,
             lease=lease,
             state=self.state,
-            cluster=self.rig.cluster,
             clock=self.store.clock,
             monotonic=self.store.clock,
             exit=exit,
@@ -265,15 +276,14 @@ class ReconcileTests(ControllerTest):
         self.assertIn("lastPassedTime", status["stages"]["router-start"])
         # The run directory is the fleet's, by uid, and private.
         self.assertEqual(oct(self.directory().stat().st_mode & 0o777), "0o700")
-        # A resync runs a pass that starts only the key check and writes no status.
-        jobs = len(self.rig.kinds)
+        # A resync runs a pass that starts no Job and writes nothing.
+        created = len(self.rig.created)
         since = len(self.rig.requests)
         self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
         self.assertTrue(controller.informer.resync())
         self.assertEqual(self.work(controller), 1)
-        self.assertEqual(self.rig.kinds[jobs:], ["key-check"])
-        status_writes = [w for w in self.writes(since) if w[2].endswith("/status")]
-        self.assertEqual(status_writes, [])
+        self.assertEqual(self.rig.created[created:], [])
+        self.assertEqual([w for w in self.writes(since) if w[2] != "leases"], [])
 
     def test_a_failed_stage_stalls_the_fleet_until_an_edit_or_a_new_request(self):
         self.rig.fail_kind = "preflight"
@@ -470,6 +480,84 @@ class EditTests(ControllerTest):
         self.assertEqual(self.record()["stages"]["profile"]["attempt"], 1)
         self.assertEqual(self.status()["observedGeneration"], 2)
 
+    def test_an_edit_whose_interrupt_fails_is_heard_again(self):
+        controller = self.leader()
+        self.rig.hold = {"profile"}
+        profiles: list[str] = []
+        interrupt = controller._interrupt
+        failures = []
+
+        def failing(running, fleet):
+            if not failures:
+                failures.append(True)
+                raise RuntimeError("the interrupt failed")
+            interrupt(running, fleet)
+
+        def edit() -> None:
+            for job in self.rig.live_jobs():
+                name = job["metadata"]["name"]
+                if job["metadata"]["labels"][fleet_resource.GATE_LABEL] != "profile":
+                    continue
+                if not (job.get("status") or {}).get("active") or name in profiles:
+                    continue
+                profiles.append(name)
+                if len(profiles) == 1:
+                    self.edit({"profiling": {"warmupRequests": 9}})
+                    with (
+                        patch.object(controller, "_interrupt", failing),
+                        self.assertRaises(RuntimeError),
+                    ):
+                        controller.pump()
+                    # The informer hears the same event again on its next watch.
+                    controller.pump()
+                else:
+                    self.rig.released.add(name)
+
+        self.rig.on_tick = edit
+        self.work(controller)
+        self.rig.on_tick = None
+        self.assertEqual(len(profiles), 2)
+        self.assertEqual(self.record()["stages"]["profile"]["attempt"], 2)
+        self.assertEqual(self.condition(fleet_resource.READY)["status"], "True")
+
+    def test_a_relist_that_finds_the_fleet_made_again_ends_the_old_pass(self):
+        controller = self.leader()
+        self.rig.hold = {"profile"}
+        old_uid = self.fleet()["metadata"]["uid"]
+        old = self.directory()
+        made: list[dict] = []
+
+        def recreate() -> None:
+            if self.held("profile") and not made:
+                self.store.delete(
+                    self.fleet_kind, NAMESPACE, fleet_resource.NAME, propagation_policy="Background"
+                )
+                fresh = copy.deepcopy(self.rig.fleet)
+                for field in ("uid", "resourceVersion", "creationTimestamp", "generation"):
+                    fresh["metadata"].pop(field, None)
+                fresh["metadata"].pop("managedFields", None)
+                fresh.pop("status", None)
+                made.append(self.store.create(fresh, field_manager="helm"))
+                # The watch expired, so the informer hears only what a list finds.
+                self.store.compact()
+                controller.pump()
+                self.rig.hold = set()
+
+        self.rig.on_tick = recreate
+        controller.elect()
+        controller.pump()
+        self.assertTrue(controller.work_once())
+        self.rig.on_tick = None
+        self.assertEqual(
+            json.loads((old / "run.json").read_text())["stages"]["profile"]["status"], "cancelled"
+        )
+        for state in (controller._written, controller._ready, controller._previous):
+            self.assertNotIn(old_uid, state)
+        self.rig.fleet = made[0]
+        self.work(controller)
+        self.assertNotEqual(self.directory(), old)
+        self.assertEqual(self.condition(fleet_resource.READY)["status"], "True", self.status())
+
     def test_an_expired_watch_lists_again_and_sees_the_edit(self):
         controller = self.ready()
         self.edit({"slo": {"ttftS": "5"}})
@@ -555,6 +643,30 @@ class StallTests(ControllerTest):
         self.work(controller)
         self.assertEqual(self.condition(fleet_resource.READY)["status"], "True", self.status())
 
+    def test_a_stall_file_behind_a_link_is_not_read(self):
+        controller = self.ready()
+        forged = self.root / "forged.json"
+        forged.write_text(json.dumps({"generation": 1, "requested_at": "", "message": "forged"}))
+        (self.directory() / kubernetes_controller.STALL_FILE).symlink_to(forged)
+        self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+        controller.informer.resync()
+        self.work(controller)
+        self.assertEqual(self.condition(fleet_resource.STALLED)["status"], "False")
+        self.assertEqual(self.condition(fleet_resource.READY)["status"], "True")
+
+    def test_a_run_directory_other_users_may_write_is_refused_before_its_files_are_read(self):
+        directory = self.directory()
+        directory.mkdir(parents=True, mode=0o700)
+        stall = {"generation": 1, "requested_at": "", "message": "written by another user"}
+        (directory / kubernetes_controller.STALL_FILE).write_text(json.dumps(stall))
+        directory.chmod(0o777)
+        self.work(self.leader())
+        self.assertEqual(self.condition(fleet_resource.STALLED)["status"], "False")
+        reconciling = self.condition(fleet_resource.RECONCILING)
+        self.assertEqual(reconciling["reason"], "Retrying")
+        self.assertIn("chmod 700", reconciling["message"])
+        self.assertEqual(self.rig.workloads, [])
+
     def test_router_storage_compares_quantities_by_value(self):
         live = {
             "spec": {
@@ -628,6 +740,36 @@ class StopTests(ControllerTest):
         self.assertTrue(self.status()["serving"])
         self.assertNotIn("discovery", self.rig.kinds[jobs:])
         self.assertEqual(self.record()["stages"]["engine-start[engine-1]"]["attempt"], 2)
+
+    def test_an_unstopped_fleet_does_not_serve_until_its_routers_start_again(self):
+        controller = self.ready()
+        self.edit({"stopped": True})
+        self.work(controller)
+        self.assertFalse(self.status()["serving"])
+        record = self.record()
+        for stage in kubernetes_target.STOP_INVALIDATES:
+            statuses = {e["status"] for e in record["stages"].values() if e["stage"] == stage}
+            self.assertEqual(statuses, {"invalidated"}, stage)
+        self.rig.hold = {"engine-check"}
+        seen: list[tuple[bool, set[str]]] = []
+
+        def look() -> None:
+            if self.held("engine-check") and not seen:
+                routers = {
+                    o["metadata"]["name"] for o in self.derived() if o["kind"] == "StatefulSet"
+                }
+                seen.append((self.status().get("serving"), routers))
+                self.rig.released.update(j["metadata"]["name"] for j in self.rig.live_jobs())
+                self.rig.hold = set()
+
+        self.rig.on_tick = look
+        self.edit({"stopped": False})
+        self.work(controller)
+        self.rig.on_tick = None
+        [(serving, sets)] = seen
+        self.assertNotIn("router", sets)
+        self.assertFalse(serving)
+        self.assertTrue(self.status()["serving"])
 
     def test_stopped_during_a_stage_cancels_it(self):
         controller = self.leader()
@@ -727,6 +869,27 @@ class LeaseTests(ControllerTest):
         self.assertTrue(second.elect())
         self.assertFalse(first.work_once())
 
+    def test_a_write_after_the_lease_is_lost_mid_pass_is_never_sent(self):
+        controller = self.leader()
+        self.rig.hold = {"profile"}
+        lost: list[int] = []
+        valid = patch.object(controller.lease, "valid", return_value=False)
+
+        def lose() -> None:
+            if self.held("profile") and not lost:
+                lost.append(len(self.rig.requests))
+                valid.start()
+                self.addCleanup(valid.stop)
+                self.rig.hold = set()
+
+        self.rig.on_tick = lose
+        controller.pump()
+        with self.assertRaises(kubernetes_controller.LeaseLost):
+            controller.work_once()
+        self.rig.on_tick = None
+        self.assertEqual(self.writes(lost[0]), [])
+        self.assertIn(("controller-a", "write"), self.exits)
+
     def crash_at(self, controller: Controller, kind: str) -> bytes:
         """Run until a Job of `kind` runs, then end the controller as a killed pod ends."""
         saved: dict[str, bytes] = {}
@@ -825,6 +988,99 @@ class LeaseTests(ControllerTest):
             kubernetes_controller._exit_now(signal.SIGTERM, None)
         exited.assert_called_once_with(0)
         self.assertEqual(self.rig.requests[since:], [])
+
+
+class KeyCheckTests(ControllerTest):
+    def key_checks(self, since: int = 0) -> list[dict]:
+        return [e for e in self.rig.created[since:] if e["kind"] == "key-check"]
+
+    def test_the_key_is_checked_after_an_edit_or_a_request_or_once_a_period(self):
+        controller = self.ready()
+        self.assertEqual(len(self.key_checks()), 1)
+        created = len(self.rig.created)
+        for _ in range(3):
+            self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+            controller.informer.resync()
+            self.work(controller)
+        self.assertEqual(self.key_checks(created), [])
+        self.store.clock.advance(self.settings.key_check_period)
+        controller.informer.resync()
+        self.work(controller)
+        self.assertEqual(len(self.key_checks(created)), 1)
+        created = len(self.rig.created)
+        self.annotate({fleet_resource.REQUESTED_AT: "2026-11-28T11:00:00Z"})
+        self.work(controller)
+        self.assertEqual(len(self.key_checks(created)), 1)
+        created = len(self.rig.created)
+        self.edit({"slo": {"ttftS": "5"}})
+        self.work(controller)
+        self.assertEqual(len(self.key_checks(created)), 1)
+
+    def test_the_period_comes_from_the_settings(self):
+        self.settings = Settings.of(
+            {**self.rig.settings, "admissionPolicy": POLICY, "keyCheckPeriodSeconds": 30}
+        )
+        controller = self.ready()
+        created = len(self.rig.created)
+        self.store.clock.advance(kubernetes_controller.RESYNC_SECONDS)
+        controller.informer.resync()
+        self.work(controller)
+        self.assertEqual(len(self.key_checks(created)), 1)
+
+    def test_a_key_checks_log_and_kept_files_go_once_read(self):
+        def keep(obj: dict, old: dict | None) -> None:
+            labels = obj["metadata"].get("labels") or {}
+            if old is None and labels.get(fleet_resource.GATE_LABEL) == "key-check":
+                entry = entry_of(obj)
+                kept = self.state / entry["keep"]
+                kept.mkdir(parents=True)
+                (kept / "log").write_text("kept\n")
+
+        self.store.validators[JOB].append(keep)
+        controller = self.ready()
+        # A later check writes its log beside the run record.
+        self.store.clock.advance(self.settings.key_check_period)
+        controller.informer.resync()
+        self.work(controller)
+        self.assertEqual(len(self.key_checks()), 2)
+        kept = self.state / "deploy" / "key-check"
+        self.assertTrue(kept.is_dir())
+        self.assertEqual(list(kept.iterdir()), [])
+        self.assertEqual(list((self.directory() / "live").rglob("*.log")), [])
+
+    def test_a_key_check_a_stopped_controller_left_is_deleted_not_adopted(self):
+        ttl = kubernetes_controller.LEASE_SECONDS
+        first = self.ready(self.leader("controller-a", ttl=ttl))
+        # The next check, with the recorded salt, is under way when the process is killed.
+        self.store.clock.advance(self.settings.key_check_period)
+        first.informer.resync()
+        self.rig.hold = {"key-check"}
+
+        def crash() -> None:
+            if self.held("key-check"):
+                raise Crash
+
+        self.rig.on_tick = crash
+        # A killed process runs no cleanup.
+        with (
+            patch.object(kubernetes_target.KubernetesDeployment, "remove"),
+            self.assertRaises(Crash),
+        ):
+            self.work(first)
+        self.rig.on_tick = None
+        [name] = {e["name"] for e in self.key_checks()}
+        self.assertIsNotNone(self.store.get(JOB, NAMESPACE, name))
+        second = self.controller("controller-b", ttl=ttl)
+        second.elect()
+        self.store.clock.advance(ttl)
+        self.rig.hold = set()
+        self.ready(second)
+        # Its HMAC may be of an earlier key, so the Job is made again rather than adopted.
+        self.assertEqual(len(self.key_checks()), 3)
+        deletes = [d for d in self.store.deletes if d.name == name and d.kind == "Job"]
+        self.assertTrue(deletes and all(d.propagation == "Background" for d in deletes))
+        self.rig.settle()
+        self.assertEqual(self.rig.live_jobs(), [])
 
 
 class ReplayTests(ControllerTest):

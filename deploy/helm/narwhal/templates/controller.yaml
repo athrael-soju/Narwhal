@@ -17,6 +17,7 @@ itself; the controller container alone mounts a projected one.
   "modelCsiDrivers" .Values.modelCsiDrivers
   "runtimeClassNames" .Values.runtimeClassNames
   "admissionPolicy" (printf "%s-narwhal" .Release.Namespace)
+  "keyCheckPeriodSeconds" .Values.controller.keyCheckPeriodSeconds
 }}
 {{- $config := toPrettyJson $settings }}
 apiVersion: v1
@@ -35,7 +36,8 @@ metadata:
     {{- include "narwhal.labels" (dict "root" . "component" "controller") | nindent 4 }}
 data:
   # The chart's settings: its state claim, the engines' ServiceAccount, the cluster admin's
-  # model volume and RuntimeClass allow-lists, and the admission policy that bounds the fleet.
+  # model volume and RuntimeClass allow-lists, the admission policy that bounds the fleet, and
+  # how often the controller checks the engine API key.
   controller.json: {{ $config | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

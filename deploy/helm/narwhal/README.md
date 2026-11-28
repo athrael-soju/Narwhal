@@ -76,6 +76,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | --- | --- |
 | `images.narwhal` | The Narwhal image by registry digest, `<repository>@sha256:<hex>`, which the controller runs |
 | `controller.runAsUser`, `controller.runAsGroup` | The controller's non-root user and group, default 10001. The group owns the run directories on the state volume |
+| `controller.keyCheckPeriodSeconds` | Seconds between the controller's checks of the engine API key, default 900. Each check runs a Job; an edit of the fleet or a new `requested-at` annotation also checks it |
 | `controller.resources`, `controller.nodeSelector`, `controller.tolerations` | The controller pod's resources and placement |
 | `fleet` | A `NarwhalFleet` spec, under [The fleet](#the-fleet) |
 | `directEngines` | Engines that start directly, from `direct_values` |

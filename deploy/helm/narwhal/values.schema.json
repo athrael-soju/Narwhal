@@ -90,11 +90,18 @@
           "items": {
             "type": "object"
           }
+        },
+        "keyCheckPeriodSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800,
+          "description": "Seconds between the controller's checks of the engine API key, apart from those an edit or a requested-at annotation asks for"
         }
       },
       "required": [
         "runAsUser",
-        "runAsGroup"
+        "runAsGroup",
+        "keyCheckPeriodSeconds"
       ]
     },
     "sidecarUser": {

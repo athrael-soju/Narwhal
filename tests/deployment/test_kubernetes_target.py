@@ -261,12 +261,13 @@ class KubernetesDeployTests(KubernetesTest):
         self.rig.settle()
         self.assertEqual(self.rig.store.live(POD, NAMESPACE), list(self.rig.pods.values()))
 
-        jobs = len(self.rig.jobs)
+        created = len(self.rig.created)
         code, result = self.deploy("run")
         self.assertEqual(code, 0, result)
         self.assertEqual(result["data"]["ran"], [])
-        # Only the key check ran, and it found the key unchanged.
-        self.assertEqual(self.rig.kinds[jobs:], ["key-check"])
+        # Only the key check ran, under the fleet's one key-check name, and it found the key
+        # unchanged.
+        self.assertEqual([entry["kind"] for entry in self.rig.created[created:]], ["key-check"])
 
     def test_every_object_names_the_fleet_as_its_controller(self):
         self.assertEqual(self.deploy("run")[0], 0)
@@ -703,6 +704,25 @@ class KubernetesDeployTests(KubernetesTest):
             order.index(("Deployment", "haproxy")), order.index(("StatefulSet", "engine"))
         )
         self.assertTrue(all(policy == "Background" for _, _, policy in stopping))
+
+    def test_a_run_after_down_applies_and_starts_the_workloads_again(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.assertEqual(self.deploy("down")[0], 0)
+        self.rig.settle()
+        record = self.record()
+        for stage in kubernetes_target.STOP_INVALIDATES:
+            entries = [e for e in record["stages"].values() if e["stage"] == stage]
+            self.assertTrue(entries, stage)
+            self.assertEqual({e["status"] for e in entries}, {"invalidated"}, stage)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertIn("install", result["data"]["ran"])
+        self.assertIn("router-start", result["data"]["ran"])
+        names = {(o["kind"], o["metadata"]["name"]) for o in self.derived()}
+        self.assertLessEqual(
+            {("StatefulSet", "engine"), ("StatefulSet", "router"), ("Deployment", "haproxy")},
+            names,
+        )
 
     def test_down_changes_nothing_for_another_fleet(self):
         self.assertEqual(self.deploy("run")[0], 0)
