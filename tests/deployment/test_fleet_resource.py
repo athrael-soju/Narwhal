@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import re
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -28,8 +27,8 @@ from tools.maintenance import crd_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = ROOT / "src" / "narwhal" / "contracts.py"
-# The variables a full fleet gives that today's Kubernetes environment does not hold, with the
-# fact each one belongs to, as `inputs()` classifies them.
+# The variables a full fleet gives that the stub's environment does not hold, with the fact
+# each one belongs to, as `inputs()` classifies them.
 NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",
@@ -501,10 +500,9 @@ class Values(unittest.TestCase):
 
 
 class Variables(unittest.TestCase):
-    def test_a_fleet_gives_the_variables_the_target_reads_today_and_no_others(self):
+    def test_a_fleet_gives_the_variables_the_target_reads_and_no_others(self):
         env = spec_env(fleet_fixtures.full_fleet(), state_claim=CLAIM, policy=POLICY)
-        with tempfile.TemporaryDirectory() as root:
-            today = kubernetes_cluster.environment(Path(root))
+        today = kubernetes_cluster.environment()
         # The fleet forces the model volume read-only.
         volume = json.loads(today["NARWHAL_KUBERNETES_MODEL_VOLUME"])
         volume["persistentVolumeClaim"]["readOnly"] = True
@@ -516,12 +514,8 @@ class Variables(unittest.TestCase):
         for name in sorted(set(today) & set(env)):
             with self.subTest(name):
                 self.assertEqual(env[name], today[name])
-        # The spec replaces the values file and the chart directory, and names each engine's
-        # fabric interface.
-        self.assertEqual(
-            set(today) - set(env),
-            {"NARWHAL_KUBERNETES_VALUES", "NARWHAL_KUBERNETES_CHART", "NARWHAL_FABRIC_INTERFACE"},
-        )
+        # The spec names each engine's fabric interface.
+        self.assertEqual(set(today) - set(env), {"NARWHAL_FABRIC_INTERFACE"})
         self.assertEqual(
             {name: fleet_resource.variable_fact(name) for name in set(env) - set(today)},
             NEW_VARIABLES,

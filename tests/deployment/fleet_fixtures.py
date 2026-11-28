@@ -1,4 +1,4 @@
-"""A `NarwhalFleet` for tests, with the inputs `kubernetes_cluster.environment` sets, and the
+"""A `NarwhalFleet` for tests, with the inputs `kubernetes_cluster.environment` holds, and the
 fleets the CRD's CEL rules refuse.
 
 `REFUSED` maps each case to a change of the fleet, the field the API server names and the

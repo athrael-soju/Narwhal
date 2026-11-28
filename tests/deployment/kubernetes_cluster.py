@@ -3213,33 +3213,10 @@ def keyed_kinds() -> set[str]:
     return set(kubernetes_objects.CREDENTIAL_KINDS)
 
 
-def environment(root: Path) -> dict[str, str]:
-    """The inputs the Kubernetes target read before the fleet resource: an environment with a
-    chart values file and a chart directory."""
-    values = root / "values.json"
-    values.write_text(
-        json.dumps(
-            {
-                "images": {
-                    "narwhal": NARWHAL_IMAGE,
-                    "haproxy": HAPROXY_IMAGE,
-                    "fabric": FABRIC_IMAGE,
-                },
-                "state": {"storageClassName": "shared", "size": "10Gi"},
-                "routers": {"fleet": "fleet.json", "storageClassName": "local", "size": "1Gi"},
-                "credentials": {
-                    "engineApiKey": {"env": "NARWHAL_ENGINE_KEY", "secretName": "k", "key": "v"}
-                },
-            }
-        )
-    )
-    chart = root / "chart"
-    chart.mkdir()
-    (chart / "Chart.yaml").write_text("name: narwhal\n")
+def environment() -> dict[str, str]:
+    """The deployment variables of the stub's two-engine fleet, one fabric interface for both."""
     return {
         "NARWHAL_KUBERNETES_NAMESPACE": NAMESPACE,
-        "NARWHAL_KUBERNETES_VALUES": str(values),
-        "NARWHAL_KUBERNETES_CHART": str(chart),
         "NARWHAL_KUBERNETES_GPU_RESOURCE": GPU,
         "NARWHAL_KUBERNETES_MODEL_VOLUME": '{"persistentVolumeClaim": {"claimName": "model"}}',
         "NARWHAL_KUBERNETES_STATE_CLAIM": STATE_CLAIM,
