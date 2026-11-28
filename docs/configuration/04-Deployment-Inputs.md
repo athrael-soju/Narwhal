@@ -173,7 +173,7 @@ A resource name in the `kubernetes.io` or `k8s.io` domain is refused, because Ku
 
 ### Kubernetes target inputs
 
-On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployment inputs, and the fleet controller turns its fields back into these variables, so validation, digests and rerun rules are the same as for the variables. `narwhal deploy --target kubernetes` reads them from the workstation's environment and builds the fleet from them. [Needs verification: step I]
+On a cluster, the [`NarwhalFleet`](../deploy/NarwhalFleet.md) holds the deployment inputs, and the fleet controller turns its fields back into these variables, so validation, digests and rerun rules are the same as for the variables. `narwhal deploy --target kubernetes` reads them from the workstation's environment and builds the fleet from them: a variable with a field of its own becomes that field, and any other input variable becomes an `engines.launch` entry, unless the fleet refuses its name, as it refuses every name that looks like a credential. The workstation refuses `NARWHAL_ENGINE_API_KEY` and `NARWHAL_ROUTER_TOKEN`; the fleet names their Secrets instead.
 
 | Variable | Fleet field |
 | --- | --- |

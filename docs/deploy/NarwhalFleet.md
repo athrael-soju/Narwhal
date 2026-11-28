@@ -206,6 +206,11 @@ The controller writes the status; nothing else may.
 | `status.stages.<stage>.total` | integer | Instances the stage runs. From 0 to 1000000. |
 | `status.stages.<stage>.lastPassedTime` | string | When an instance last passed. At most 64 characters. |
 | `status.previousRuns` | list of strings | The fleet UIDs of the run directories an earlier fleet of this name left. At most 16 items. |
+| `status.exports` | list of objects | The export Jobs the controller made for the latest narwhal.example.com/export-request values. At most 4 items. Each item's `nonce` is unique. |
+| `status.exports[].nonce` | string | The request's nonce. At most 32 characters. |
+| `status.exports[].job` | string | The export Job's name. At most 63 characters. |
+| `status.exports[].uid` | string | The export Job's UID. At most 36 characters. |
+| `status.exports[].error` | string | Why the controller made no export Job. At most 1024 characters. |
 
 `kubectl get narwhalfleet` prints these columns:
 

@@ -23,7 +23,7 @@ With `--trial`, `run` continues past the monitoring stack with the [capacity tri
 narwhal deploy run --run runs/deploy/first-deploy --trial config/capacity-trial.json
 ```
 
-On Kubernetes, a `NarwhalFleet` resource holds the inputs and a fleet controller in the cluster runs the stages, as [Deploying on Kubernetes](deploy/Kubernetes.md) describes. `narwhal deploy --target kubernetes` applies and follows that resource from the workstation. [Needs verification: step I]
+On Kubernetes, a `NarwhalFleet` resource holds the inputs and a fleet controller in the cluster runs the stages, as [Deploying on Kubernetes](deploy/Kubernetes.md) describes. `narwhal deploy --target kubernetes` applies that resource server-side from the workstation, unless another field manager owns its spec, follows its status, and copies the evidence back through export Jobs the controller makes on the workstation's request.
 
 ## Requirements
 
