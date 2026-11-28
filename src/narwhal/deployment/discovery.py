@@ -313,6 +313,12 @@ def build_records(
             transport = value(env, node, "TRANSFER_TRANSPORT", "ucx_tcp")
             net = value(env, node, "TRANSFER_NET_DEVICES", value(env, node, "FABRIC_INTERFACE"))
             devices = json.loads(value(env, node, "TRANSFER_DEVICES", "[]"))
+            if transport == "ucx_rdma" and not devices:
+                raise ValueError(
+                    f"{role}: set NARWHAL_TRANSFER_DEVICES or NARWHAL_NODE_{node}_TRANSFER_DEVICES "
+                    "to the RDMA device paths a ucx_rdma engine opens, such as "
+                    '["/dev/infiniband/uverbs0"]'
+                )
             sources[role] = {
                 "inspection": str(out / f"{role}.json"),
                 "policy": "workstation .env and documented discovery defaults",

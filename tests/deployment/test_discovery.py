@@ -803,6 +803,16 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlap"):
             build_records(hosts, env, observations, Path("/synthetic"))
 
+    def test_an_rdma_engine_without_its_device_paths_names_the_variable_to_set(self):
+        env = environment(Path("/synthetic"))
+        env.update(NARWHAL_TRANSFER_TRANSPORT="ucx_rdma", NARWHAL_TRANSFER_NET_DEVICES="mlx5_0:1")
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
+        with self.assertRaisesRegex(
+            ValueError, "engine-1: set NARWHAL_TRANSFER_DEVICES or NARWHAL_NODE_1_TRANSFER_DEVICES"
+        ):
+            build_records(hosts, env, observations, Path("/synthetic"))
+
     def test_mixed_hardware_and_management_environment_are_rejected(self):
         env = environment(Path("/synthetic"))
         hosts = derive_hosts(env)

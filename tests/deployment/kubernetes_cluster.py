@@ -3347,21 +3347,44 @@ def _gate_inputs(config_map: Mapping[str, Any]) -> bool:
     return (config_map["metadata"].get("labels") or {}).get(COMPONENT) == kubernetes_objects.GATE
 
 
+# The kubelet's expansion of a container's command and environment: `$$` is `$`, and `$(NAME)`
+# is the value of a variable the container defines before it, or stays as written.
+EXPANSION = re.compile(r"\$\$|\$\(([A-Za-z_][A-Za-z0-9_]*)\)")
+
+
+def kubelet_expand(value: str, defined: Mapping[str, str]) -> str:
+    return EXPANSION.sub(lambda m: "$" if m[0] == "$$" else defined.get(m[1], m[0]), value)
+
+
+def expanded(container: Mapping[str, Any]) -> tuple[list[str], list[dict]]:
+    """The command and environment a container's process gets, once the kubelet expands them."""
+    defined: dict[str, str] = {}
+    env = []
+    for item in container.get("env") or []:
+        if "value" in item:
+            item = {**item, "value": kubelet_expand(item["value"], defined)}
+            defined[item["name"]] = item["value"]
+        env.append(item)
+    return [kubelet_expand(part, defined) for part in container["command"]], env
+
+
 def entry_of(job: Mapping[str, Any]) -> dict:
-    """A gate Job in the shape the target's chart entries had: its name and kind, command,
-    node, image, resources other than the RDMA device, model volume and mounts."""
+    """A gate Job in the shape the target's chart entries had: its name and kind, the command
+    and environment its process gets, node, image, resources other than the RDMA device, model
+    volume and mounts."""
     spec = job["spec"]["template"]["spec"]
     [container] = spec["containers"]
+    command, env = expanded(container)
     volumes = {volume["name"]: volume for volume in spec.get("volumes") or []}
     limits = dict((container.get("resources") or {}).get("limits") or {})
     limits.pop(RDMA, None)
     entry: dict[str, Any] = {
         "name": job["metadata"]["name"],
         "kind": job["metadata"]["labels"][fleet_resource.GATE_LABEL],
-        "command": list(container["command"]),
+        "command": command,
         "deadlineSeconds": job["spec"]["activeDeadlineSeconds"],
         "image": container["image"],
-        "env": {item["name"]: item for item in container.get("env") or []},
+        "env": {item["name"]: item for item in env},
         "keep": next(
             m["subPath"] for m in container["volumeMounts"] if m["mountPath"] == "/narwhal-keep"
         ),

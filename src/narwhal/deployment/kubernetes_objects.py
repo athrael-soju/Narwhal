@@ -547,6 +547,8 @@ class GateJob:
     gate sees no other part of the volume. Only a gate in the controller's own image mounts
     one: a fabric gate runs the third-party fabric image and a discovery gate the engine image,
     so each mounts only its keep directory, and a fabric gate keeps no capability but IPC_LOCK.
+    `groups` are supplementary groups of the gate's user, such as the attestation sidecars'
+    group, whose published attempts the gates that copy and verify them read.
     """
 
     name: str
@@ -565,6 +567,7 @@ class GateJob:
     service_account: bool = False
     run: str | None = None
     state: Mapping[str, bool] = field(default_factory=dict)
+    groups: Sequence[int] = ()
 
     def __post_init__(self) -> None:
         _name(self.name, "a Job's name", DNS_LABEL)
@@ -622,6 +625,11 @@ class GateJob:
             raise ValueError(
                 f"{self.name}: only a gate in the controller's own image mounts the state volume"
             )
+        for group in self.groups:
+            if type(group) is not int or not 0 < group < 2**31:
+                raise ValueError(f"{self.name}: {group!r} is no non-root group ID")
+        if self.groups and not self.state:
+            raise ValueError(f"{self.name}: a supplementary group reads the state volume only")
 
 
 def _gate_labels(gate: GateJob) -> dict[str, str]:
@@ -651,7 +659,9 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
     if model is None and gate.kind == "discovery":
         model = fleet.model_volume
     env: list[dict[str, Any]] = [{"name": KEEP_ENV, "value": KEEP_MOUNT}]
-    env += [{"name": name, "value": gate.env[name]} for name in sorted(gate.env)]
+    # The kubelet expands `$$` and `$(NAME)` in a container's command and environment; a gate's
+    # scripts and values reach its shell as written.
+    env += [{"name": name, "value": engine_set.escape(gate.env[name])} for name in sorted(gate.env)]
     if fleet.api_key and gate.kind in CREDENTIAL_KINDS:
         env.append(fleet.api_key.variable())
     if fleet.control_token and gate.kind in CONTROL_KINDS:
@@ -659,7 +669,7 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
     container: dict[str, Any] = {
         "name": GATE,
         "image": gate.image or (fleet.fabric_image if fabric else fleet.narwhal_image),
-        "command": list(gate.command),
+        "command": [engine_set.escape(part) for part in gate.command],
         "env": env,
     }
     if rdma or gate.resources:
@@ -702,6 +712,8 @@ def job(fleet: Fleet, gate: GateJob) -> dict[str, Any]:
         # The chart's admission policy refuses a pod outside the engines without a seccomp filter.
         "securityContext": {"seccompProfile": {"type": RUNTIME_DEFAULT}},
     }
+    if gate.groups:
+        spec["securityContext"]["supplementalGroups"] = sorted(set(gate.groups))
     if gate.service_account:
         # Verifying a sidecar reads the engine pod through the API, as the sidecar does.
         spec["serviceAccountName"] = fleet.engine_account

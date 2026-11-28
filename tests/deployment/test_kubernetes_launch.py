@@ -426,14 +426,30 @@ class KubernetesLaunchTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "names one HCA and its port"):
                         kubernetes.pod_settings(env, record, plan)
                 else:
-                    self.assertEqual(kubernetes.pod_settings(env, record, plan)["hca_port"], port)
+                    settings = kubernetes.pod_settings(env, record, plan)
+                    self.assertEqual((settings["hca"], settings["hca_port"]), ("hca0", port))
         engine = self.pod(run, hcas=("mlx5_3",))
         with patch.object(pod, "ROOT", engine.root):
-            device = pod.transfer_device({"kubernetes": {"hca_port": 2}})
+            device = pod.transfer_device({"kubernetes": {"hca": "mlx5_3", "hca_port": 2}})
         self.assertEqual(
             device,
             {"verbs_device": "uverbs0", "hca": "mlx5_3", "port": 2, "ucx_net_devices": "mlx5_3:2"},
         )
+
+    def test_the_pod_sends_kv_through_no_hca_but_the_one_the_fabric_stages_measure(self):
+        # A device plugin that hands out any HCA of a pool gives the pod another HCA than the
+        # one transfer.net_devices names, which the fabric Jobs measured.
+        run, _ = self.prepared()
+        engine = self.pod(run, hcas=("mlx5_3",))
+        with (
+            patch.object(pod, "ROOT", engine.root),
+            self.assertRaisesRegex(
+                pod.StepFailure,
+                "allocated HCA mlx5_3 to this container, and transfer.net_devices names mlx5_0.*"
+                "holds only mlx5_0 on this node",
+            ),
+        ):
+            pod.transfer_device({"kubernetes": {"hca": "mlx5_0", "hca_port": 1}})
 
     def test_the_runtime_check_judges_the_probe_output_in_the_pod(self):
         run, plan = self.prepared()
@@ -515,7 +531,8 @@ class KubernetesLaunchTests(unittest.TestCase):
         engine.executed.clear()
         engine.allocate(("hca1",))
         self.assertEqual(engine.run("engine"), 1)
-        self.assertIn("allocated HCA differs", engine.stderr.getvalue())
+        # Another HCA than the plan's never serves, even one the runtime check did not see.
+        self.assertIn("allocated HCA hca1 to this container", engine.stderr.getvalue())
         engine.allocate(("hca0",))
         command = engine.containers["engine"]["command"]
         command.append("--changed")

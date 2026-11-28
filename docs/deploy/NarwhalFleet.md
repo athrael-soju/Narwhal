@@ -20,7 +20,6 @@ metadata:
   namespace: narwhal
 spec:
   images:
-    narwhal: registry.example.com/narwhal@sha256:<64 hex digits>
     haproxy: registry.example.com/haproxy@sha256:<64 hex digits>
     fabric: registry.example.com/perftest@sha256:<64 hex digits>
   engines:
@@ -42,8 +41,14 @@ spec:
     nodes:
       - node: gpu-node-a
         fabricInterface: eth1
+        rdma:
+          gidIndex: 3
+          roceMode: v2
       - node: gpu-node-b
         fabricInterface: eth1
+        rdma:
+          gidIndex: 3
+          roceMode: v2
     apiKeySecret:
       name: engine-key-v1
       key: key
@@ -52,6 +57,8 @@ spec:
         value: ucx_rdma
       - name: NARWHAL_TRANSFER_NET_DEVICES
         value: mlx5_0:1
+      - name: NARWHAL_TRANSFER_DEVICES
+        value: '["/dev/infiniband/uverbs0"]'
   slo:
     ttftS: "2.0"
     tpotS: "0.1"
@@ -83,7 +90,7 @@ spec:
 
 Decimal fields such as `slo.ttftS` are strings, as the Kubernetes API conventions keep floating point out of a spec. The values above show the shape only. [Deployment inputs](../configuration/04-Deployment-Inputs.md#kubernetes-target-inputs) names the variable each field becomes, and the sections it links explain how to choose them.
 
-Every engine of a fleet transfers KV over `ucx_rdma`, which `engines.launch` sets as above. Two engines may share a node. Engine pods run on the node's host network, so give each engine after the first its own ports in its entry of `engines.nodes`, and give each its GPUs with `NARWHAL_NODE_<n>_GPU_IDS` in `engines.launch`:
+Every engine of a fleet transfers KV over `ucx_rdma`, which `engines.launch` sets as above, with the HCA port in `NARWHAL_TRANSFER_NET_DEVICES` and the verbs device in `NARWHAL_TRANSFER_DEVICES`, which discovery requires. `engines.resources.rdma` must hold only that HCA on each engine node, shared by the engine pods and the fabric Jobs, as [Cluster requirements](Kubernetes.md#cluster-requirements) describes; each pod refuses another HCA. Each engine's `rdma` gives the GID index and RoCE mode `fabric-budget` needs. Two engines may share a node, and then share its HCA. Engine pods run on the node's host network, so give each engine after the first its own ports in its entry of `engines.nodes`, and give each its GPUs with `NARWHAL_NODE_<n>_GPU_IDS` in `engines.launch`:
 
 ```yaml
     nodes:
@@ -149,7 +156,7 @@ A field marked Yes is required whenever the field that holds it is set.
 | `spec.engines.modelVolume.csi.volumeAttributes` | map of strings |  | The driver's volume attributes. At most 32 entries. API server rule: an attribute name holds at most 253 characters. |
 | `spec.engines.resources` | object | Yes | The device plugins' extended resources, and the engine pods' RuntimeClass. API server rule: gpu and rdma must name two resources. |
 | `spec.engines.resources.gpu` | string | Yes | The GPU device plugin's extended resource name, <domain>/<name>. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
-| `spec.engines.resources.rdma` | string | Yes | The RDMA device plugin's extended resource name, which hands each engine pod one HCA. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
+| `spec.engines.resources.rdma` | string | Yes | The RDMA device plugin's extended resource name. On each engine node it holds only the HCA the engine's NARWHAL_TRANSFER_NET_DEVICES names, shared by the engine pods and the fabric Jobs. At most 316 characters. API server rule: the kubernetes.io and k8s.io domains are reserved. |
 | `spec.engines.resources.runtimeClassName` | string |  | The RuntimeClass of nodes whose default container runtime exposes no GPUs. At most 253 characters. |
 | `spec.engines.ports` | object | Yes | The ports each engine pod serves on, unless its entry of nodes sets its own. API server rule: the engine, attestation and side channel ports must differ. API server rule: the engine, attestation and side channel ports must lie outside the UCX TCP port range. |
 | `spec.engines.ports.engine` | integer | Yes | The engine's HTTP port. From 1 to 65535. |

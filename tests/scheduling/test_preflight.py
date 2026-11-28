@@ -870,6 +870,32 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_hca_gate_tells_hosts_apart_by_the_node_each_reading_names(self):
+        # Kubernetes nodes that run in containers share their kernel, and with it a boot ID.
+        missing = "/sys/class/infiniband/mlx5_0/ports/1/counters/port_xmit_data: missing"
+        hosts = {"engine-0.invalid": "node-a", "engine-3.invalid": "node-b"}
+
+        def sidecar(request):
+            reading = {"device": "mlx5_0", "port": 1, "boot_id": "shared", "port_xmit_data": None}
+            reading["counter_error"] = missing
+            if hosts[request.url.host] is not None:
+                reading["host"] = hosts[request.url.host]
+            return httpx.Response(200, json=reading)
+
+        transport = httpx.MockTransport(sidecar)
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+        self.assertEqual(report.failed, [])
+        for named in ("node-a", None):
+            # One node, or a reading that names no host, as on SSH hosts: the boot ID decides.
+            hosts["engine-3.invalid"] = named
+            hosts["engine-0.invalid"] = named
+            report = Report()
+            with redirect_stdout(io.StringIO()):
+                await transfer.gate_hca(self.cfg, {"e0", "e3"}, report, transport)
+            self.assertEqual(len(report.failed), 2, named)
+
     async def test_consume_requires_same_host_kv_to_cross_the_producer_hca(self):
         connector = NixlConnector()
         result = connector.prefill_result(

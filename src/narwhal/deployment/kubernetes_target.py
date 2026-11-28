@@ -680,6 +680,8 @@ class Gate:
     plain: bool = False
     # The directories of the state volume the gate mounts, by path, and whether it writes each.
     state: Mapping[str, bool] = field(default_factory=dict)
+    # Supplementary groups, such as the attestation sidecars' to read their published attempts.
+    groups: Sequence[int] = ()
 
 
 @dataclass(frozen=True)
@@ -740,6 +742,28 @@ def _on_state(path: str) -> str:
 
 def _shell(script: str) -> list[str]:
     return ["sh", "-c", "set -eu\n" + script]
+
+
+# The lines a gate's log names its failure with, and the job wrapper's own last line, which
+# says only that the command exited.
+CAUSES = ("narwhal-gate: ", "narwhal-host: ", "narwhal: ")
+EXITED = re.compile(r"\S+ exited with status [0-9]+")
+# A check's report line for a gate that failed, as `narwhal-check` prints it.
+REPORT_FAIL = "  FAIL  "
+
+
+def failure_cause(output: str) -> str | None:
+    """The failure a gate's log names: its last cause line other than the wrapper's exit
+    status, else the check report's failed lines, else the wrapper's line."""
+    lines = output.splitlines()
+    causes = [line.split(": ", 1)[-1] for line in lines if line.startswith(CAUSES)]
+    named = [cause for cause in causes if not EXITED.fullmatch(cause)]
+    if named:
+        return named[-1]
+    failed = [line[len(REPORT_FAIL) :].strip() for line in lines if line.startswith(REPORT_FAIL)]
+    if failed:
+        return "; ".join(failed)
+    return causes[-1] if causes else None
 
 
 def _conditions(obj: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1224,6 +1248,15 @@ def _empty(directory: Path) -> None:
             path.unlink()
 
 
+def name_fields(error: BaseException) -> None:
+    """Make a failure that names the variables of an SSH deployment name the NarwhalFleet
+    fields that set them, which the user edits on Kubernetes."""
+    if error.args and isinstance(error.args[0], str):
+        named = fleet_resource.fleet_terms(error.args[0])
+        if named != error.args[0]:
+            error.args = (named, *error.args[1:])
+
+
 class _Action:
     """A stage action as the runner calls it, with the Jobs of its attempt kept in order.
 
@@ -1255,7 +1288,11 @@ class _Action:
             _empty(context.directory)
         else:
             deployment.remove_stale(context)
-        outcome = self.action(context)
+        try:
+            outcome = self.action(context)
+        except Exception as error:
+            name_fields(error)
+            raise
         deployment.clean_up(context)
         deployment.announce(f"{where}: passed")
         return outcome
@@ -1808,6 +1845,7 @@ class KubernetesDeployment:
             service_account=gate.service_account,
             run=run,
             state=dict(gate.state),
+            groups=tuple(gate.groups),
         )
 
     def start_gates(
@@ -1986,16 +2024,11 @@ class KubernetesDeployment:
         if failed:
             terminated = (_container(pod, GATE_CONTAINER) or {}).get("state", {}).get("terminated")
             status = int((terminated or {}).get("exitCode", 4))
-            causes = [
-                line.split(": ", 1)[-1]
-                for line in output.splitlines()
-                if line.startswith(("narwhal-gate: ", "narwhal-host: ", "narwhal: "))
-            ]
             reason = conditions["Failed"].get("message") or conditions["Failed"].get("reason", "")
-            if not causes and (refused := never_runs(pod, scheduled=False)):
-                causes = [refused]
-            cause = causes[-1] if causes else (reason or f"exited {status}")
-            raise GateFailed(here, f"Job {name}", status, cause, log)
+            cause = failure_cause(output) or never_runs(pod, scheduled=False)
+            raise GateFailed(
+                here, f"Job {name}", status, cause or reason or f"exited {status}", log
+            )
         files = {} if gate.plain else gate_files(output)
         return GateResult(name, log, output, files, pod)
 
@@ -2722,20 +2755,27 @@ class KubernetesDeployment:
         }
         target = shlex.quote(self._launch_dir(role, uid))
         evidence = shlex.quote(self._pod_dir(role, uid))
-        # The check runs in a staging directory renamed into place once it passes, so the
-        # sidecar, which waits for the directory, reads a checked plan.
+        # The check runs in a staging directory beside the launch directory. The kubelet makes
+        # the launch directory itself for the sidecar's mount once the pod starts, and the
+        # sidecar sees only that directory, so a passed check moves its files into it, with
+        # checked.json last: the sidecar waits for checked.json, and then reads a checked plan.
         script = f"""target={target}
 if test -e "$target/checked.json"; then
   test "$(sha256sum < /tmp/narwhal-in/launch.json)" = "$(sha256sum < "$target/launch.json")" ||
     {{ echo "narwhal-gate: $target holds another launch plan" >&2; exit 1; }}
 else
   stage="$target.$$"
-  mkdir -p "$(dirname "$target")"
+  rm -rf "$stage"
+  mkdir -p "$target"
   cp -R /tmp/narwhal-in "$stage"
   narwhal-engine check --run "$stage" --pod-evidence {evidence}
   # The attestation sidecar, another user, reads the launch, which holds no key.
   chmod -R u=rwX,go=rX "$stage"
-  mv "$stage" "$target"
+  # An earlier attempt may have stopped part way through moving its files.
+  find "$target" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +
+  find "$stage" -mindepth 1 -maxdepth 1 ! -name checked.json -exec mv {{}} "$target"/ \\;
+  mv "$stage/checked.json" "$target/checked.json"
+  rmdir "$stage"
 fi
 """
         self.narwhal_gate(
@@ -2767,6 +2807,8 @@ fi
             script,
             {f"{into}/": "/tmp/narwhal-published"},
             state={_on_state(self._pod_dir(role, identity["pod_uid"])): False},
+            # The sidecar shares its published attempt with its own group alone.
+            groups=(sidecar_user(self.env),),
         )
 
     def cache_capture(self, context: StageContext) -> Outcome:
@@ -2986,11 +3028,13 @@ fi
         identity = context.product("engine_identity", role)
         launch = shlex.quote(self._launch_dir(role, identity["pod_uid"]))
         evidence = shlex.quote(self._pod_dir(role, identity["pod_uid"]))
+        # The check keeps its captures in the Job's own scratch directory, and reads the pod's
+        # directory, where the sidecar shares its published attempt with its own group.
         script = (
+            "mkdir -p /tmp/narwhal-checks /tmp/narwhal-verify\n"
             "out=$(python -m narwhal.deployment.attestation_contract.cli verify "
-            f"--run {launch} --pod-evidence {evidence})\n"
+            f"--run {launch} --pod-evidence {evidence} --into /tmp/narwhal-checks)\n"
             "printf '%s\\n' \"$out\" >&2\n"
-            "mkdir -p /tmp/narwhal-verify\n"
             'cp -R "${out##*captures in }"/. /tmp/narwhal-verify/\n'
         )
         self.narwhal_gate(
@@ -2999,11 +3043,11 @@ fi
             script,
             {"verify/": "/tmp/narwhal-verify"},
             service_account=True,
-            # The check keeps its captures in the pod's directory.
             state={
                 _on_state(self._launch_dir(role, identity["pod_uid"])): False,
-                _on_state(self._pod_dir(role, identity["pod_uid"])): True,
+                _on_state(self._pod_dir(role, identity["pod_uid"])): False,
             },
+            groups=(sidecar_user(self.env),),
         )
 
     # The fleet: finalize, profile, calibrate, limits, preflight.
@@ -3117,10 +3161,14 @@ fi
         ):
             files[name] = (folder / name).read_bytes()
             write_private(context.directory / name, files[name])
+        # The work directory also holds jobs/, which the kubelet makes as root for each Job's
+        # keep mount, so the gate changes the mode of its own files alone.
+        sources = " ".join(f"/tmp/narwhal-in/{name}" for name in sorted(files))
+        copies = " ".join(f"{work}/{name}" for name in sorted(files))
         self.narwhal_gate(
             context,
             "state",
-            f"mkdir -p {work}\ncp /tmp/narwhal-in/* {work}/\nchmod 644 {work}/*\n",
+            f"mkdir -p {work}\ncp {sources} {work}/\nchmod 644 {copies}\n",
             {"state/fleet.json": f"{work}/fleet.json"},
             files,
             state={_on_state(work): True},
@@ -3492,6 +3540,31 @@ def _model_config(deployment: KubernetesDeployment, role: str) -> bytes:
     ).read_bytes()
 
 
+def held_hca(rdma: fabric.Rdma | None, roles: Sequence[str]) -> str:
+    """The lines a fabric sample's Job runs first, on RDMA: the HCA the RDMA device plugin
+    allocated to the Job must be the one `ib_write_bw -d` names, the HCA `roles` send KV
+    through, so the sample measures the engines' own HCA. The engine pods check the same."""
+    if rdma is None:
+        return ""
+    return (
+        f"want={shlex.quote(rdma.device)}\n"
+        f"roles={shlex.quote(', '.join(roles))}\n"
+        "set -- /dev/infiniband/uverbs*\n"
+        'if [ "$#" -ne 1 ] || [ ! -e "$1" ]; then\n'
+        '  echo "narwhal-host: the Job holds no single RDMA verbs device under '
+        '/dev/infiniband" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'held=$(cat "/sys/class/infiniband_verbs/${1##*/}/ibdev")\n'
+        'if [ "$held" != "$want" ]; then\n'
+        '  echo "narwhal-host: the RDMA device plugin allocated HCA $held to this Job, and $roles '
+        "send KV through $want; give the fleet an RDMA resource that holds only $want on this "
+        'node, which the engine pods and the fabric Jobs share" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+    )
+
+
 class JobShell:
     """The SSH runner's `run` over gate Jobs, for the fabric stages' host scripts.
 
@@ -3566,7 +3639,8 @@ class JobShell:
             + fabric.TCP_OMIT_S
             + max(fabric.TCP_DURATION_S, fabric.RDMA_DURATION_S)
         )
-        server_script = f"""timeout -k 5 {window} {shlex.join(server)} &
+        server_script = held_hca(sample.destination.rdma, sample.destination_roles)
+        server_script += f"""timeout -k 5 {window} {shlex.join(server)} &
 pid=$!
 until ss -Hltn "sport = :{port}" | grep -q .; do
   kill -0 "$pid" 2> /dev/null ||
@@ -3576,7 +3650,8 @@ done
 echo narwhal-listening
 wait "$pid"
 """
-        client_script = f"""status=0
+        client_script = held_hca(sample.source.rdma, sample.source_roles)
+        client_script += f"""status=0
 {shlex.join(client)} > /tmp/narwhal-report 2> /tmp/narwhal-client.err || status=$?
 cat /tmp/narwhal-client.err >&2
 printf 'narwhal-file report %s\\n' "$(base64 -w 0 < /tmp/narwhal-report)"

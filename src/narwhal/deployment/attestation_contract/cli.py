@@ -32,6 +32,11 @@ def main(argv: list[str] | None = None) -> int:
         "verify", help="check the running sidecar against the live engine"
     )
     verified.add_argument("--run", required=True, type=Path, help="engine launch directory")
+    verified.add_argument(
+        "--into",
+        type=Path,
+        help="the directory to keep the check in, in place of the attestation's own directory",
+    )
     for command in (captured, served, verified):
         command.add_argument(
             "--pod-evidence",
@@ -49,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "serve":
             return serve(args.run, args.pod_evidence)
         elif args.command == "verify":
-            result = verify(args.run, args.pod_evidence)
+            result = verify(args.run, args.pod_evidence, args.into)
             print(f"Sidecar attestation matches the live engine and contract; captures in {result}")
         else:
             contract = finalize_fleet(args.fleet)

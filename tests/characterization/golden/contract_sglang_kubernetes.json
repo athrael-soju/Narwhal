@@ -882,6 +882,7 @@
         },
         "gpu_resource": "gpu.example.com/gpu",
         "gpus": 2,
+        "hca": "hca0",
         "hca_port": 1,
         "model_volume": {
           "persistentVolumeClaim": {

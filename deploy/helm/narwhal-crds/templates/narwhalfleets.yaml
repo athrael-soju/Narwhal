@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "705ea728c7785abc56431bd67da16c933dd45e95bb3a0f98229fa9974e148ee5"
+    "narwhal.example.com/schema-sha256": "8be8c79758f38fbc6dfeea33459c5b361be1c43cb25af111c32935075cdbbf27"
 spec:
   group: "narwhal.example.com"
   names:
@@ -223,7 +223,7 @@ spec:
                               message: "the kubernetes.io and k8s.io domains are reserved"
                         rdma:
                           type: "string"
-                          description: "The RDMA device plugin's extended resource name, which hands each engine pod one HCA"
+                          description: "The RDMA device plugin's extended resource name. On each engine node it holds only the HCA the engine's NARWHAL_TRANSFER_NET_DEVICES names, shared by the engine pods and the fabric Jobs"
                           maxLength: 316
                           pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
                           x-kubernetes-validations:

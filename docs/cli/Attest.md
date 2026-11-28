@@ -45,6 +45,7 @@ While the engine's version or process start time differs from startup, or cannot
 | `--engine-container ID` |             | Engine container whose start time identifies the engine process. Required for llama.cpp, SGLang and TensorRT-LLM unless `--engine-pid` is set. |
 | `--engine-pid PID`      |             | Native engine process whose start time identifies the engine process.                                              |
 | `--hca DEVICE:PORT`     | optional    | HCA port the engine sends KV through, such as `mlx5_0:1`, which turns on `/v1/hca`.                                |
+| `--hca-host NAME`       | optional    | The engine's host by name, with `--hca`. An engine pod's sidecar passes its node. `/v1/hca` reports it as `host`.  |
 | `--engine-pod-container ID` |         | Engine container of this pod, by runtime container ID. Its first process in the pod's shared process namespace identifies the engine process. |
 | `--pod NAMESPACE/NAME`  | optional    | This engine pod, whose containers' kubelet restart counts `/metrics` exports. The contract tool passes it in an engine pod. |
 
@@ -55,7 +56,7 @@ While the engine's version or process start time differs from startup, or cannot
 | `GET /health`                      | `{"status": "ok"}` once the identity check passes                                                                         |
 | `GET /v1/attestation`              | The [attestation](../configuration/01-Fleet-Schema.md#attestation) for the engine's current identity                      |
 | `GET /v1/process`                  | `process_start_time_seconds`, the engine process start time read on the host, with `--engine-container`, `--engine-pid` or `--engine-pod-container` |
-| `GET /v1/hca`                      | `device`, `port`, the host's `boot_id` and the port's `port_xmit_data` counter, with `--hca`; a null counter with its `counter_error` when the counter is unreadable |
+| `GET /v1/hca`                      | `device`, `port`, the host's `boot_id`, `host` with `--hca-host`, and the port's `port_xmit_data` counter, with `--hca`; a null counter with its `counter_error` when the counter is unreadable |
 | `GET /metrics`                     | `narwhal_supervisor_restarts{process="sidecar"}` under the systemd unit that `narwhal deploy` writes, and `narwhal_kubelet_restarts{container}` with `--pod`, as in [Deployment and restart metrics](../telemetry/03-Metrics-and-Control.md#deployment-and-restart-metrics) |
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |

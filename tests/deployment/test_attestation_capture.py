@@ -127,12 +127,12 @@ class CaptureRecoveryTests(StartedEngine):
         run, live = self.started("sglang")
         first: list[Path] = []
 
-        def race(run: Path, attempt: Path) -> Path:
+        def race(run: Path, attempt: Path, *, shared: bool = False) -> Path:
             # Another capture of this launch directory passes and publishes first.
             if not first:
                 first.append(Path(shutil.copytree(attempt, run / ATTEMPTS / ATTEMPT)))
                 publish(run, first[0])
-            return publish(run, attempt)
+            return publish(run, attempt, shared=shared)
 
         with (
             live.serving(),

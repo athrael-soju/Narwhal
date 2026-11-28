@@ -176,6 +176,8 @@ class PodCaptureTests(unittest.TestCase):
         # The HCA the device plugin allocated to the pod, which the check of the pod recorded.
         self.assertEqual(self.checked["transfer_device"]["ucx_net_devices"], "hca0:1")
         self.assertEqual(option("--hca"), "hca0:1")
+        # Nodes can share a kernel and its boot ID, so the reading names the pod's node.
+        self.assertEqual(option("--hca-host"), NODE)
         # A second start of the sidecar serves the attempt the container published.
         with (
             patch.object(sidecar, "engine_ready", return_value=True),
@@ -185,6 +187,31 @@ class PodCaptureTests(unittest.TestCase):
             self.assertEqual(sidecar.serve(self.run_dir, self.pod.state), 0)
         captured.assert_not_called()
         self.assertEqual(again.call_args.args, served.call_args.args)
+
+    def test_the_published_attempt_is_readable_by_the_sidecars_group_alone(self):
+        # The gate Jobs that copy and verify it run as another user, with this group.
+        document = self.capture()
+        home = pod_engine.engine_home(self.pod.state, ENGINE_ID)
+        attempt = document.parent
+        shared = [home.parent, home, home / capture_module.ATTEMPTS, attempt]
+        shared += [home / capture_module.PUBLISHED, *attempt.rglob("*")]
+        for path in shared:
+            info = path.stat()
+            with self.subTest(path=path.name):
+                self.assertEqual(info.st_gid, os.getegid())
+                self.assertEqual(info.st_mode & 0o777, 0o750 if path.is_dir() else 0o640)
+
+    def test_an_attempt_that_fails_stays_private(self):
+        config = self.pod.path(pod.MODEL) / "config.json"
+        status = config.stat()
+        os.utime(config, ns=(status.st_atime_ns, status.st_mtime_ns + 10**9))
+        with self.assertRaises(CaptureFailed):
+            self.capture()
+        home = pod_engine.engine_home(self.pod.state, ENGINE_ID)
+        [attempt] = (home / capture_module.ATTEMPTS).iterdir()
+        for path in [attempt, *attempt.rglob("*")]:
+            with self.subTest(path=path.name):
+                self.assertEqual(path.stat().st_mode & 0o077, 0)
 
     def test_model_files_changed_after_the_checkpoint_are_not_attested(self):
         # A model file rewritten in place, here with its own content.

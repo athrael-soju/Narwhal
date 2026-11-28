@@ -920,7 +920,7 @@
                 },
                 "rdma": {
                   "type": "string",
-                  "description": "The RDMA device plugin's extended resource name, which hands each engine pod one HCA",
+                  "description": "The RDMA device plugin's extended resource name. On each engine node it holds only the HCA the engine's NARWHAL_TRANSFER_NET_DEVICES names, shared by the engine pods and the fabric Jobs",
                   "maxLength": 316,
                   "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
                 },

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import json
 import math
 import os
@@ -426,6 +427,7 @@ async def read_hca_counters(
         or type(payload.get("port")) is not int
         or not isinstance(payload.get("boot_id"), str)
         or not payload["boot_id"]
+        or ("host" in payload and (not isinstance(payload["host"], str) or not payload["host"]))
         or not (
             (type(payload.get("port_xmit_data")) is int and payload["port_xmit_data"] >= 0)
             or (
@@ -601,10 +603,15 @@ def verify_attestation(
 
 @dataclass(frozen=True)
 class HcaPort:
-    """The RDMA device port that an engine sends its KV through."""
+    """The RDMA device port that an engine sends its KV through, and the host it is on.
+
+    `host` names the engine's host where the deployment knows it, such as a Kubernetes engine
+    pod's node; an engine without one is told apart by its kernel's boot ID.
+    """
 
     device: str
     port: int
+    host: str | None = None
 
     @classmethod
     def parse(cls, value: str) -> HcaPort:
@@ -614,10 +621,11 @@ class HcaPort:
         return cls(match[1], int(match[2]))
 
     def counters(self) -> dict[str, Any]:
-        """The port's transmit counter, in the kernel's 4-octet words, and the host's boot ID.
+        """The port's transmit counter, in the kernel's 4-octet words, the host's boot ID, and
+        the host's name when it has one.
 
         A counter that cannot be read leaves `port_xmit_data` null and names the reason in
-        `counter_error`; the port and boot ID still tell which engines share the host. An RDMA
+        `counter_error`; the port and the host still tell which engines share the host. An RDMA
         device that a network namespace other than the host's sees has no port counters.
         """
         boot_id = BOOT_ID.read_text().strip()
@@ -625,6 +633,8 @@ class HcaPort:
             raise ValueError(f"{BOOT_ID} is empty")
         counter = INFINIBAND / self.device / "ports" / str(self.port) / "counters/port_xmit_data"
         reading: dict[str, Any] = {"device": self.device, "port": self.port, "boot_id": boot_id}
+        if self.host is not None:
+            reading["host"] = self.host
         try:
             words = counter.read_text().strip()
         except OSError as exc:
@@ -819,6 +829,11 @@ def main(argv: list[str] | None = None) -> int:
         help="HCA port the engine sends KV through, even to engines on its own host; "
         "enables the HCA counter route",
     )
+    parser.add_argument(
+        "--hca-host",
+        help="the engine's host by name, such as its Kubernetes node, which the HCA counter "
+        "route reports so engines whose hosts share a kernel are told apart",
+    )
     process_owner = parser.add_mutually_exclusive_group()
     process_owner.add_argument(
         "--engine-container", help="engine container whose start time identifies the process"
@@ -849,6 +864,10 @@ def main(argv: list[str] | None = None) -> int:
             hca = HcaPort.parse(args.hca)
         except ValueError as exc:
             parser.error(f"--hca: {exc}")
+    if args.hca_host is not None:
+        if hca is None or not args.hca_host.strip():
+            parser.error("--hca-host names the host of --hca's port")
+        hca = dataclasses.replace(hca, host=args.hca_host)
     from ..cli_errors import failure
 
     backend = load_backend(args.backend)

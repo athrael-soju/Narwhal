@@ -248,8 +248,29 @@ def refuse_published(home: Path) -> None:
         raise AlreadyPublished(str(read_json(home / PUBLISHED).get("attempt")))
 
 
-def publish(home: Path, attempt: Path) -> Path:
-    """Name `attempt` in `home`, unless another attempt published first."""
+def _share(path: Path, mode: int) -> None:
+    os.chown(path, -1, os.getegid(), follow_symlinks=False)
+    path.chmod(mode)
+
+
+def share(home: Path, attempt: Path) -> None:
+    """Let the sidecar's own group read a pod's attempt, and nothing else of the sidecar's.
+
+    The gate Jobs that copy and verify the published attempt run with that group as a
+    supplementary one; the engine container, and any other user, reads none of it. The attempt
+    holds what those Jobs copy into the run directory anyway, and no credential.
+    """
+    for directory in (home.parent, home, home / ATTEMPTS):
+        _share(directory, 0o750)
+    for path in [attempt, *sorted(attempt.rglob("*"))]:
+        if path.is_symlink():
+            raise ValueError(f"{path} is a symbolic link; a capture writes none")
+        _share(path, 0o750 if path.is_dir() else 0o640)
+
+
+def publish(home: Path, attempt: Path, *, shared: bool = False) -> Path:
+    """Name `attempt` in `home`, unless another attempt published first. A `shared` record
+    is readable by the sidecar's group, as `share` leaves the attempt."""
     if attempt.parent != home / ATTEMPTS or ATTEMPT_NAME.fullmatch(attempt.name) is None:
         raise ValueError(f"{attempt} is not a capture attempt of {home}")
     destination = home / PUBLISHED
@@ -260,6 +281,8 @@ def publish(home: Path, attempt: Path) -> Path:
     temporary = destination.with_name(destination.name + f".tmp-{uuid.uuid4().hex}")
     try:
         write_private_json(temporary, record)
+        if shared:
+            _share(temporary, 0o640)
         try:
             os.link(temporary, destination)
         except FileExistsError:
@@ -306,7 +329,9 @@ def capture(
             )
             raise failed from error
     try:
-        publish(home, attempt)
+        if pod_evidence is not None:
+            share(home, attempt)
+        publish(home, attempt, shared=pod_evidence is not None)
     except AlreadyPublished as error:
         # Another attempt passed and published while this one ran.
         write_private_json(

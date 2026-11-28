@@ -119,11 +119,11 @@ def add_commands(commands: Any) -> None:
     """Register `deploy` beneath the installed root command."""
     deploy = commands.add_parser(
         "deploy",
-        help="Deploy a fleet on SSH hosts, or run one of its stages alone",
-        description="Deploy a fleet on SSH hosts. plan checks the inputs and prints what run "
-        "would do, run takes the hosts to a ready router pair and resumes at the stage that "
-        "did not "
-        "pass, status reports the run and down stops what it started. discover inspects the "
+        help="Deploy a fleet on SSH hosts or a Kubernetes cluster, or run one of its stages alone",
+        description="Deploy a fleet on SSH hosts, or on a Kubernetes cluster with --target "
+        "kubernetes. plan checks the inputs and prints what run would do, run takes the fleet "
+        "to a ready router pair and resumes at the stage that did not pass, status reports the "
+        "run and down stops what it started. On SSH hosts, discover inspects the "
         "hosts and writes the generated configuration, access checks every login, package "
         "writes the wheel and role files, install copies and installs them, transfer-measure "
         "measures KV handoffs, cache-groups groups the engines that share a fabric budget, "
