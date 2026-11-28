@@ -30,6 +30,7 @@ SOURCE = Path(fleet_resource.__file__)
 NEW_VARIABLES = {
     "NARWHAL_KUBERNETES_FLEET_UID": "cluster",
     "NARWHAL_KUBERNETES_API_KEY_SECRET": "credential",
+    "NARWHAL_KUBERNETES_CONTROL_TOKEN_SECRET": "control_credential",
     "NARWHAL_KUBERNETES_ROUTERS": "router",
     "NARWHAL_KUBERNETES_HAPROXY": "router",
     "NARWHAL_KUBERNETES_SIDECAR_IMAGE": "discovery",
@@ -71,6 +72,8 @@ CREDENTIALS = (
     "NARWHAL_CREDS",
     "NARWHAL_DB_PASSWORD_FILE",
     "NARWHAL_PASSWD",
+    "NARWHAL_ROUTER_TOKEN",
+    "NARWHAL_CONTROL_TOKEN",
 )
 CLAIM = "narwhal-state"
 # The narwhal chart's default: a claim and nothing else.

@@ -11,7 +11,7 @@ metadata:
     helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
   annotations:
     "helm.sh/resource-policy": "keep"
-    "narwhal.example.com/schema-sha256": "66902d970fcb37de96aa1889b5f3d2df8093d948cc3c1cef999dab722969b006"
+    "narwhal.example.com/schema-sha256": "a4037cf319f467dec56fd97cc12294a47323e3685ae86cb7459163c76daec29d"
 spec:
   group: "narwhal.example.com"
   names:
@@ -337,7 +337,7 @@ spec:
                             pattern: "^NARWHAL_[A-Z0-9_]+$"
                             x-kubernetes-validations:
                               - rule: "!self.matches(r'^NARWHAL_(NODE_[0-9]+_)?(KUBERNETES_.*|KUBECTL|HELM|ENGINE_(IMAGE|MODEL_NAME|PORT|LAUNCH_CONFIG)|ATTEST_PORT|MODEL_(TREE_SHA256|PATH|SHA256|DIR)|URL|ATTESTATION_URL|IP|FABRIC_.*|RDMA_.*|RUN_DIR|ROUTER_.*|TTFT_S|TPOT_S|FIRST_TOKEN_MARGIN_S|PROFILE_.*|CALIBRATION_.*|STAGE_.*|TRIAL_.*|SSH.*|HOSTS|FLEET|LAUNCH_CONFIG|WHEEL.*|REQUIREMENTS.*|TOOLS_COMMIT|DEPLOYMENT_.*|ROLE|POD_.*|NODE_NAME|.*(SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY).*|(.*_)?(TOKENS?|KEYS?|CREDS)(_.*)?)$')"
-                                message: "another field of the fleet sets this variable, or it names a credential, which belongs in engines.apiKeySecret"
+                                message: "another field of the fleet sets this variable, or it names a credential, which belongs in engines.apiKeySecret or controlTokenSecret"
                           value:
                             type: "string"
                             description: "The variable's value"
@@ -553,6 +553,23 @@ spec:
                   required:
                     - "storageClassName"
                     - "size"
+                controlTokenSecret:
+                  type: "object"
+                  description: "The Secret that holds the routers' control token, which the routes that change membership, trust or lifecycle require: at least 32 random bytes, as 64 hex digits or 43 base64url characters. Name a new Secret to rotate the token."
+                  properties:
+                    name:
+                      type: "string"
+                      description: "The Secret's name"
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                    key:
+                      type: "string"
+                      description: "The key in the Secret"
+                      maxLength: 253
+                      pattern: "^[-._A-Za-z0-9]+$"
+                  required:
+                    - "name"
+                    - "key"
                 haproxy:
                   type: "object"
                   description: "The HAProxy load balancer in front of the routers"
@@ -726,6 +743,7 @@ spec:
                 - "calibration"
                 - "fabric"
                 - "routers"
+                - "controlTokenSecret"
             status:
               type: "object"
               description: "What the controller observed. Per-instance detail stays in the run record."

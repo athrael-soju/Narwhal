@@ -2,6 +2,7 @@
 store: the fleet's objects, Jobs adopted across a restart, failures that cannot wait, and the
 engine API key kept in its Secret."""
 
+import base64
 import contextlib
 import copy
 import hashlib
@@ -26,8 +27,10 @@ from narwhal.deployment.hosts import Host
 from narwhal.deployment.kubernetes_graph import KUBERNETES_GRAPH
 from narwhal.deployment.runner import Stop
 from narwhal.dev import cli
+from narwhal.serving.control_token import ROUTER_TOKEN_ENV
 from tests.deployment.kubernetes_cluster import (
     CONFIG_MAP,
+    CONTROL_SECRET,
     DEPLOYMENT,
     JOB,
     NAMESPACE,
@@ -1041,7 +1044,7 @@ class ReviewTests(KubernetesTest):
     def test_a_key_edited_in_place_reruns_the_engines_and_the_routers(self):
         self.assertEqual(self.deploy("run")[0], 0)
         kept = json.loads((self.run / kubernetes_target.CREDENTIAL_FILE).read_text())
-        self.assertEqual(set(kept), {"salt", "hmac"})
+        self.assertEqual(set(kept), {"salt", "hmac", "control_hmac"})
         self.rig.set_key("rotated-in-place")
         code, result = self.deploy("plan")
         # Plan reads no key, so it cannot see the edit; run can.
@@ -1348,6 +1351,90 @@ class CredentialTests(KubernetesTest):
         self.assertEqual(key["valueFrom"]["secretKeyRef"]["name"], "engine-key-v2")
 
 
+class ControlTokenTests(KubernetesTest):
+    """The routers' control token stays in its Secret, reaches the routers and the Jobs that
+    call their control routes, and a change of it restarts the routers alone."""
+
+    def test_no_object_log_or_run_file_holds_the_token(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        token = CONTROL_SECRET.encode()
+        for path in self.run.rglob("*"):
+            if path.is_file():
+                with self.subTest(path=str(path.relative_to(self.run))):
+                    self.assertNotIn(token, path.read_bytes())
+                    self.assertNotIn(hashlib.sha256(token).hexdigest().encode(), path.read_bytes())
+        for kind in DERIVED:
+            for obj in self.rig.store.live(kind, NAMESPACE):
+                self.assertNotIn(CONTROL_SECRET, json.dumps(obj))
+        for job in self.rig.jobs.values():
+            for data in self.rig.files(job["entry"]).values():
+                self.assertNotIn(token, data, job["entry"]["name"])
+            self.assertNotIn(CONTROL_SECRET, json.dumps(job["job"]))
+        for logs in self.rig.store._logs.values():
+            self.assertNotIn(CONTROL_SECRET, logs)
+
+    def test_the_routers_and_the_router_checks_read_the_token_from_its_secret(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        held = {
+            job["entry"]["kind"]
+            for job in self.rig.jobs.values()
+            if ROUTER_TOKEN_ENV in job["entry"]["env"]
+        }
+        self.assertEqual(held, {"key-check", "router-check"})
+        [router] = [obj for obj in self.derived() if obj["metadata"]["name"] == "router"]
+        env = router["spec"]["template"]["spec"]["containers"][0]["env"]
+        [token] = [item for item in env if item["name"] == ROUTER_TOKEN_ENV]
+        self.assertEqual(token["valueFrom"]["secretKeyRef"], self.rig.control_secret)
+
+    def test_a_token_edited_in_place_restarts_only_the_routers(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        kept = json.loads((self.run / kubernetes_target.CREDENTIAL_FILE).read_text())
+        self.rig.set_key("d4" * 32, self.rig.control_secret)
+        code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(set(result["data"]["ran"]), {"router-start"})
+        now = json.loads((self.run / kubernetes_target.CREDENTIAL_FILE).read_text())
+        self.assertEqual((now["salt"], now["hmac"]), (kept["salt"], kept["hmac"]))
+        self.assertNotEqual(now["control_hmac"], kept["control_hmac"])
+        self.assertEqual(self.deploy("run")[1]["data"]["ran"], [])
+
+    def test_a_new_secret_restarts_only_the_routers(self):
+        self.assertEqual(self.deploy("run")[0], 0)
+        self.rig.store.create(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": "router-token-v2", "namespace": NAMESPACE},
+                "data": {"token": base64.b64encode(b"e5" * 32).decode()},
+            }
+        )
+        self.rig.control_secret = {"name": "router-token-v2", "key": "token"}
+        rotated = {fleet_resource.CONTROL_TOKEN_SECRET_ENV: "router-token-v2/token"}
+        with patch.dict(os.environ, rotated):
+            code, plan = self.deploy("plan")
+            self.assertEqual(code, 0, plan)
+            self.assertEqual(
+                {row["stage"] for row in plan["data"]["stages"] if row["runs"]}, {"router-start"}
+            )
+            code, result = self.deploy("run")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(set(result["data"]["ran"]), {"router-start"})
+        [router] = [obj for obj in self.derived() if obj["metadata"]["name"] == "router"]
+        env = router["spec"]["template"]["spec"]["containers"][0]["env"]
+        [token] = [item for item in env if item["name"] == ROUTER_TOKEN_ENV]
+        self.assertEqual(token["valueFrom"]["secretKeyRef"]["name"], "router-token-v2")
+
+    def test_a_fleet_without_the_token_secret_or_an_environment_holding_it_is_refused(self):
+        for change, message in (
+            ({fleet_resource.CONTROL_TOKEN_SECRET_ENV: ""}, "spec.controlTokenSecret"),
+            ({ROUTER_TOKEN_ENV: CONTROL_SECRET}, "holds the router control token"),
+        ):
+            with self.subTest(message), patch.dict(os.environ, change):
+                code, result = self.deploy("plan")
+            self.assertEqual(code, 2, result)
+            self.assertTrue(any(message in e["message"] for e in result["errors"]), result)
+
+
 class InputTests(KubernetesTest):
     def test_each_input_edit_reruns_the_stages_its_fact_names(self):
         self.assertEqual(self.deploy("run")[0], 0)
@@ -1384,6 +1471,10 @@ class InputTests(KubernetesTest):
                 self.assertEqual(moved, {fact})
         self.assertEqual(
             kubernetes_target.fact_of("NARWHAL_KUBERNETES_API_KEY_SECRET"), "credential"
+        )
+        self.assertEqual(
+            kubernetes_target.fact_of(fleet_resource.CONTROL_TOKEN_SECRET_ENV),
+            "control_credential",
         )
         self.assertEqual(kubernetes_target.fact_of("NARWHAL_KUBERNETES_FLEET_UID"), "cluster")
         self.assertEqual(kubernetes_target.fact_of("NARWHAL_KUBECTL"), "cluster")
