@@ -154,6 +154,6 @@ chart-check: $(BOOTSTRAP) chart-tools
 chart-e2e-tools:
 	$(PYTHON) tools/maintenance/chart_tools.py --e2e $(CHART_TOOLS)
 
-# Needs Docker and about 6 GB of memory; creates and deletes its own kind cluster.
+# Needs Docker and about 3 GB of memory; creates and deletes its own kind cluster.
 chart-e2e: $(BOOTSTRAP) chart-e2e-tools
 	$(VENV_PYTHON) tools/maintenance/chart_e2e.py --tools $(CHART_TOOLS)
